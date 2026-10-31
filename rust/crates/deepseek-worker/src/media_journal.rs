@@ -444,8 +444,25 @@ impl MediaJournal {
             if count != 1 {
                 return Err(invalid());
             }
-            let published = media_library::publish(&self.root, after, Some(claim.lease_until_unix))
-                .map_err(|_| Status::unavailable("EFFECT_UNKNOWN"))?;
+            let processing = crate::media_processing::has_processing(
+                &self.creation_staging,
+                claim,
+                &row.planned,
+            )?;
+            let published = if processing {
+                crate::media_processing::publish(
+                    &self.root,
+                    &self.creation_staging,
+                    claim,
+                    &row.planned,
+                    &row.before,
+                    after,
+                    true,
+                )?
+            } else {
+                media_library::publish(&self.root, after, Some(claim.lease_until_unix))
+                    .map_err(|_| Status::unavailable("EFFECT_UNKNOWN"))?
+            };
             if !published {
                 let refused = media_library::refusal(
                     row.planned,
@@ -455,7 +472,9 @@ impl MediaJournal {
                 );
                 return self.settle(operation, "APPLYING", refused, key);
             }
-            self.finish_original_cleanup(&row)?;
+            if !processing {
+                self.finish_original_cleanup(&row)?;
+            }
             self.settle(operation, "APPLYING", row.planned, key)
         } else {
             if row.planned.state == MediaPatchEffectState::Applied as i32
@@ -495,6 +514,27 @@ impl MediaJournal {
         }
         if let Some(outcome) = self.terminal(&row)? {
             return Ok(Some(outcome));
+        }
+        if row.state == "APPLYING"
+            && crate::media_processing::has_processing(
+                &self.creation_staging,
+                &claim,
+                &row.planned,
+            )?
+        {
+            let _reconciliation = mutation_scope(None, &self.root).map_err(|_| invalid())?;
+            crate::media_processing::publish(
+                &self.root,
+                &self.creation_staging,
+                &claim,
+                &row.planned,
+                &row.before,
+                row.after.as_ref().ok_or_else(invalid)?,
+                false,
+            )?;
+            return self
+                .settle(operation, "APPLYING", row.planned, key)
+                .map(Some);
         }
         if row.state == "APPLYING"
             && row.after.as_ref().is_some_and(|after| {

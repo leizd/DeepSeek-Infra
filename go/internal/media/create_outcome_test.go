@@ -7,6 +7,7 @@ import (
 	commonv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/commonv1"
 	mediav1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/mediav1"
 	"google.golang.org/protobuf/proto"
+	"net/http"
 	"testing"
 )
 
@@ -58,6 +59,42 @@ func TestMediaCreateSignedResultRequiresOriginalDigestFenceAndShape(t *testing.T
 			sign(outcome)
 			if VerifyOutcome(outcome, claim, public) == nil {
 				t.Fatal("signed invalid creation accepted")
+			}
+		})
+	}
+	for _, status := range []uint32{400, 422, 500, 599} {
+		t.Run("applied-processing-failure-"+http.StatusText(int(status)), func(t *testing.T) {
+			failure := proto.Clone(base).(*mediav1.MediaPatchOutcome)
+			failure.HttpStatus, failure.ErrorCode, failure.ErrorMessage = status, "invalid_payload", "Original processing failure"
+			sign(failure)
+			if err := VerifyOutcome(failure, claim, public); err != nil {
+				t.Fatal("applied failed record/source was rejected as if it had no effect", err)
+			}
+			for name, change := range map[string]func(*mediav1.MediaPatchOutcome){
+				"no-record":      func(o *mediav1.MediaPatchOutcome) { o.Created = nil },
+				"no-code":        func(o *mediav1.MediaPatchOutcome) { o.ErrorCode = "" },
+				"unknown-effect": func(o *mediav1.MediaPatchOutcome) { o.ErrorCode = "EFFECT_UNKNOWN" },
+				"no-message":     func(o *mediav1.MediaPatchOutcome) { o.ErrorMessage = "" },
+				"false-success":  func(o *mediav1.MediaPatchOutcome) { o.HttpStatus = 200 },
+				"non-error":      func(o *mediav1.MediaPatchOutcome) { o.HttpStatus = 399 },
+				"invalid-status": func(o *mediav1.MediaPatchOutcome) { o.HttpStatus = 600 },
+				"false-absence": func(o *mediav1.MediaPatchOutcome) {
+					o.State = mediav1.MediaPatchEffectState_MEDIA_PATCH_EFFECT_STATE_REFUSED
+				},
+				"foreign-epoch": func(o *mediav1.MediaPatchOutcome) { o.Created.OriginalFence.ExecutionEpoch++ },
+			} {
+				t.Run(name, func(t *testing.T) {
+					invalid := proto.Clone(failure).(*mediav1.MediaPatchOutcome)
+					change(invalid)
+					sign(invalid)
+					if VerifyOutcome(invalid, claim, public) == nil {
+						t.Fatal("invalid processing failure accepted")
+					}
+				})
+			}
+			failure.ErrorMessage += " tampered"
+			if VerifyOutcome(failure, claim, public) == nil {
+				t.Fatal("processing error mutated after signing")
 			}
 		})
 	}

@@ -22,6 +22,11 @@ def fixtures() -> list[dict[str, Any]]:
     return list(json.loads((create.ROOT / "tests/native/media_processing_reference_v1.json").read_bytes()))
 
 
+def failure_fixture() -> dict[str, Any]:
+    return dict(type="pdf", title="Retained failed PDF processing", projectId="original-processing-reference",
+                process=True, text="not a PDF")
+
+
 def require_reference(report: dict[str, Any], backend: str) -> None:
     create.require(report.get("status") == "PASS" and report.get("backend") == backend and
                    report.get("embeddingProvider") == "hash", "MEDIA_PROCESS_ORIGINAL_CONFIGURATION_DIFFERS")
@@ -41,6 +46,11 @@ def require_reference(report: dict[str, Any], backend: str) -> None:
         create.require(row["forceStatus"] == 200 and row["publicReadsMatch"] is True and len(row["search"]) > 0,
                        "MEDIA_PROCESS_ORIGINAL_FORCE_SEARCH_OR_READ_MISSING")
         create.require(len(row["indexedRows"]) == len(segments), "MEDIA_PROCESS_ORIGINAL_INDEX_ROWS_MISSING")
+    failed = report.get("failedCase")
+    create.require(isinstance(failed, dict) and failed.get("status") == 422 and failed.get("publicReadsMatch") is True and
+                   failed.get("media", {}).get("status") == "failed" and failed.get("segments") == [] and
+                   failed.get("indexedRows") == [] and failed.get("sourceSha256") == hashlib.sha256(b"not a PDF").hexdigest(),
+                   "MEDIA_PROCESS_ORIGINAL_FAILED_EFFECT_MISSING")
 
 
 def original(profile: Path, diagnostic: Path, backend: str) -> dict[str, Any]:
@@ -51,7 +61,7 @@ def original(profile: Path, diagnostic: Path, backend: str) -> dict[str, Any]:
     env.update(DEEPSEEK_INFRA_ROOT=str(profile), LOCAL_RAG_ENABLED="true", LOCAL_RAG_BACKEND=backend,
                PYTHONDONTWRITEBYTECODE="1", PYTHONUTF8="1")
     run = subprocess.run([sys.executable, "-B", "-c", ORACLE], cwd=create.ROOT, env=env,
-                         input=json.dumps(fixtures(), ensure_ascii=True).encode(), capture_output=True, timeout=180)
+                         input=json.dumps(dict(cases=fixtures(), failedCase=failure_fixture()), ensure_ascii=True).encode(), capture_output=True, timeout=180)
     create.require(len(run.stderr) <= create.LIMIT, "MEDIA_PROCESS_ORIGINAL_DIAGNOSTIC_BOUND")
     diagnostic.write_bytes(run.stderr)
     create.require(run.returncode == 0 and len(run.stdout) <= create.LIMIT, "MEDIA_PROCESS_ORIGINAL_ORACLE_FAILED")
@@ -122,6 +132,7 @@ def verify(origin: str, token: str, profile: Path, mirror: Path, out: Path, repo
         report["mediaProcessingOriginalReferences"].append(dict(backend=backend, cases=6, forceCases=6, status="PASS",
             actualIndexAndSearchVerified=True, vectorTableAvailable=reference["vectorTableAvailable"]))
     report["nativeMediaProcessingCases"] = []
+    created = []
     for payload, expected in zip(fixtures(), references["sqlite"]["cases"]):
         status, body, _ = create.exchange(origin, "/api/media", "POST", token, payload)
         row = dict(case=payload["type"], originalStatus=expected["status"], nativeStatus=status,
@@ -140,6 +151,36 @@ def verify(origin: str, token: str, profile: Path, mirror: Path, out: Path, repo
         status, segment_body, _ = create.exchange(origin, "/api/media/" + media["mediaId"] + "/segments", "GET", token)
         create.require(status == 200, "MEDIA_PROCESS_PUBLIC_SEGMENTS_UNAVAILABLE")
         compare_processing(media, segment_body["segments"], read_index(profile, references["sqlite"]["ragDatabaseRelativePath"], media), expected)
+        row.update(createProcessingStatus="PASS", createdSegments=len(segment_body["segments"]), mediaId=media["mediaId"])
+        created.append((row, expected, media, suffix, source))
+    # Every retained creation case must complete before force is exercised.
+    # A later force failure cannot erase which actual create/index paths ran.
+    report["nativeMediaProcessingCreatesVerified"] = len(created)
+    report["nativeMediaCreationProcessingSubstepQualified"] = len(created) == 6
+    failed_expected = references["sqlite"]["failedCase"]
+    status, failed_body, headers = create.exchange(origin, "/api/media", "POST", token, failure_fixture())
+    report["nativeMediaProcessingFailedCase"] = dict(status="FAIL", nativeStatus=status, body=failed_body)
+    create.require(status == failed_expected["status"] and create.same_json(failed_body, failed_expected["errorBody"]),
+                   "MEDIA_PROCESS_FAILED_PUBLIC_ERROR_DIFFERS")
+    list_status, listed, _ = create.exchange(origin, "/api/media?projectId=original-processing-reference", "GET", token)
+    create.require(list_status == 200, "MEDIA_PROCESS_FAILED_RECORD_LIST_UNAVAILABLE")
+    matches = [m for m in listed["media"] if m["title"] == failure_fixture()["title"]]
+    create.require(len(matches) == 1, "MEDIA_PROCESS_FAILED_EFFECT_DISAPPEARED")
+    failed_media = matches[0]
+    suffix = Path(failed_expected["media"]["path"]).suffix
+    create.require(create.same_json(create.canonical_media(failed_media, suffix), create.canonical_media(failed_expected["media"], suffix)),
+                   "MEDIA_PROCESS_FAILED_RECORD_DIFFERS")
+    read_status, retained_failed, _ = create.exchange(origin, "/api/media/" + failed_media["mediaId"], "GET", token)
+    segment_status, failed_segments, _ = create.exchange(origin, "/api/media/" + failed_media["mediaId"] + "/segments", "GET", token)
+    create.require(read_status == segment_status == 200 and retained_failed["media"] == failed_media and failed_segments["segments"] == [],
+                   "MEDIA_PROCESS_FAILED_READS_DIFFER")
+    source = profile / ".media" / failed_media["path"]
+    create.require(source.resolve(strict=True).is_relative_to((profile / ".media").resolve()) and
+                   hashlib.sha256(source.read_bytes()).hexdigest() == failed_expected["sourceSha256"], "MEDIA_PROCESS_FAILED_SOURCE_DIFFERS")
+    create.require(read_index(profile, references["sqlite"]["ragDatabaseRelativePath"], failed_media) == [], "MEDIA_PROCESS_FAILED_UNEXPECTED_INDEX")
+    report["nativeMediaProcessingFailedCase"].update(status="PASS", retainedFailedRecord=True, originalSourceRetained=True,
+        originalPublicErrorRetained=True, operationId=headers.get("x-deepseek-operation-id"))
+    for row, expected, media, suffix, source in created:
         status, force_body, _ = create.exchange(origin, "/api/media/" + media["mediaId"] + "/process?force=true", "POST", token, {})
         create.require(status == 200, "MEDIA_PROCESS_FORCE_PUBLIC_RESULT_DIFFERS")
         forced_media = force_body["media"]
@@ -169,7 +210,7 @@ assert local_rag.LOCAL_RAG_ENABLED and local_rag.LOCAL_RAG_EMBEDDING_PROVIDER=="
 assert not any(dataclasses.asdict(load_rust_flags()).values())
 client=TestClient(create_app(),base_url="http://127.0.0.1")
 headers={"Authorization":"Bearer "+settings.auth.token}
-cases=json.loads(__import__("sys").stdin.read())
+request=json.loads(__import__("sys").stdin.read());cases=request["cases"];failed_payload=request["failedCase"]
 rows=[]
 try:
  for payload in cases:
@@ -198,16 +239,33 @@ try:
   assert reads.status_code==retained.status_code==200 and reads.json()["media"]==value["media"] and retained.json()["segments"]==value["segments"]
   rows.append(dict(type=payload["type"],status=200,media=media,segments=before,search=[dataclasses.asdict(row) for row in found],
                    forceStatus=forced.status_code,forced=value,publicReadsMatch=True,sourceSha256=original_hash))
+ failed_response=client.post("/api/media",json=failed_payload,headers=headers)
+ assert failed_response.status_code==422,failed_response.text
+ listed=client.get("/api/media",params={"projectId":failed_payload["projectId"]},headers=headers)
+ assert listed.status_code==200
+ failed_records=[m for m in listed.json()["media"] if m["title"]==failed_payload["title"]]
+ assert len(failed_records)==1
+ failed_media=failed_records[0];assert failed_media["status"]=="failed"
+ failed_read=client.get("/api/media/"+failed_media["mediaId"],headers=headers)
+ failed_segments=client.get("/api/media/"+failed_media["mediaId"]+"/segments",headers=headers)
+ assert failed_read.status_code==failed_segments.status_code==200 and failed_read.json()["media"]==failed_media
+ assert failed_segments.json()["segments"]==[]
+ failed_source=library.media_dir()/failed_media["path"]
+ assert failed_source.read_bytes()==b"not a PDF"
+ failed_case=dict(status=failed_response.status_code,errorBody=failed_response.json(),media=failed_media,segments=[],
+     publicReadsMatch=True,sourceSha256=hashlib.sha256(failed_source.read_bytes()).hexdigest())
  import sqlite3
  database_relative=str(local_rag.LOCAL_RAG_DB.relative_to(root))
  with sqlite3.connect(local_rag.LOCAL_RAG_DB.as_uri()+"?mode=ro",uri=True) as conn:
   conn.row_factory=sqlite3.Row
   for row in rows:
    row["indexedRows"]=[dict(item) for item in conn.execute("SELECT item_id,collection,source_id,project_id,chunk_index,name,kind,scope,text,embedding,metadata FROM rag_items WHERE collection=? AND source_id=? AND project_id=? ORDER BY chunk_index",("media",row["media"]["mediaId"],row["media"]["projectId"]))]
+  failed_case["indexedRows"]=[dict(item) for item in conn.execute("SELECT item_id FROM rag_items WHERE collection=? AND source_id=?",("media",failed_media["mediaId"]))]
+  assert not failed_case["indexedRows"]
  status=local_rag.status()
  assert status["backend"]==os.environ["LOCAL_RAG_BACKEND"]
  if status["backend"]=="sqlite_vec":assert status["sqliteVecAvailable"] and status["vectorTableAvailable"]
  print(json.dumps(dict(status="PASS",backend=status["backend"],embeddingProvider=status["embeddingProvider"],
-     indexedMedia=status["indexedMedia"],vectorTableAvailable=status["vectorTableAvailable"],cases=rows,ragDatabaseRelativePath=database_relative),ensure_ascii=True))
+     indexedMedia=status["indexedMedia"],vectorTableAvailable=status["vectorTableAvailable"],cases=rows,failedCase=failed_case,ragDatabaseRelativePath=database_relative),ensure_ascii=True))
 finally:client.close()
 '''

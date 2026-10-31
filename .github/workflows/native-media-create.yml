@@ -142,6 +142,8 @@ jobs:
       id: media-unit
       run: 'set -o pipefail
 
+        python scripts/rust_build.py --toolchain 1.85.0 -- test --locked -p deepseek-policy --test media_processing 2>&1 | tee artifacts/native-media-create/rust-media-processing-core-tests.log
+
         python scripts/rust_build.py --toolchain 1.85.0 -- test --locked -p deepseek-worker --lib media_ 2>&1 | tee artifacts/native-media-create/rust-media-tests.log
 
         '

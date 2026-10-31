@@ -897,6 +897,9 @@ fn create_claim(
     claim
 }
 
+#[path = "media_processing_tests.rs"]
+mod processing;
+
 #[test]
 fn media_create_original_result_and_source_survive_close_and_replay_without_republishing() {
     let (root, key, mut journal, claim) = fixture();

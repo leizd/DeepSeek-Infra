@@ -127,6 +127,9 @@ func (p *mediaCreateWirePeer) ExecuteCreate(_ context.Context, r *mediav1.Execut
 		}
 	}
 	fields["mediaId"] = claim.Intent.MediaId
+	if p.mode == "processing-failure" {
+		fields["status"] = "failed"
+	}
 	value, err := mediamodel.FromJSON(fields)
 	if err != nil {
 		return nil, err
@@ -151,6 +154,11 @@ func (p *mediaCreateWirePeer) ExecuteCreate(_ context.Context, r *mediav1.Execut
 		outcome.HttpStatus = 400
 		outcome.ErrorCode = "invalid_payload"
 		outcome.ErrorMessage = "Isolated registration refusal"
+	}
+	if p.mode == "processing-failure" {
+		outcome.HttpStatus = 422
+		outcome.ErrorCode = "invalid_payload"
+		outcome.ErrorMessage = "Could not extract text from this PDF"
 	}
 	canonical, err := mediamodel.Encode(outcome)
 	if err != nil {
@@ -218,7 +226,7 @@ func mediaCreateTLSRequest(t *testing.T, server *httptest.Server, payload []byte
 }
 
 func TestMediaPublicCreateTLS(t *testing.T) {
-	for _, mode := range []string{"success", "large", "lost", "unknown", "refused", "forged", "service-auth-refused", "stage-rejected", "stage-manifest-mismatch", "result-unavailable", "result-missing", "result-mismatch", "result-invalid"} {
+	for _, mode := range []string{"success", "large", "lost", "unknown", "refused", "forged", "service-auth-refused", "stage-rejected", "stage-manifest-mismatch", "result-unavailable", "result-missing", "result-mismatch", "result-invalid", "processing-failure"} {
 		t.Run(mode, func(t *testing.T) {
 			control, peer, server := mediaCreateTLSFixture(t, mode)
 			if mode == "service-auth-refused" {
@@ -272,6 +280,13 @@ func TestMediaPublicCreateTLS(t *testing.T) {
 				metadata, ok := record["metadata"].(map[string]any)
 				if !ok || metadata["flag"] != false || metadata["zero"] != json.Number("0") || metadata["blob"] != blob {
 					t.Fatal("typed public metadata differs")
+				}
+			} else if mode == "processing-failure" {
+				if code != 422 || body["code"] != "invalid_payload" || body["error"] != "Could not extract text from this PDF" {
+					t.Fatal("applied processing failure lost its original error", code, body)
+				}
+				if pending, err := control.PendingMediaPatch(); err != nil || pending != nil {
+					t.Fatal("known applied failure incorrectly reserved an unknown effect", pending, err)
 				}
 			} else if mode == "refused" {
 				if code != 400 || body["code"] != "invalid_payload" {

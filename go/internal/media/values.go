@@ -296,7 +296,13 @@ func VerifyOutcome(outcome *mediav1.MediaPatchOutcome, claim *mediav1.MediaPatch
 		return ErrInvalid
 	}
 	if outcome.State == mediav1.MediaPatchEffectState_MEDIA_PATCH_EFFECT_STATE_APPLIED {
-		if outcome.HttpStatus != 200 || len(outcome.BeforeSha256) != 32 || len(outcome.AfterSha256) != 32 || outcome.ErrorCode != "" || outcome.ErrorMessage != "" {
+		success := outcome.HttpStatus == 200 && outcome.ErrorCode == "" && outcome.ErrorMessage == ""
+		// Processing may fail after the original CREATE has retained its source
+		// and failed record. That signed applied effect is never a no-effect
+		// refusal, nor permission to issue a new creation operation.
+		processingFailure := claim.Intent.Kind == mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_CREATE &&
+			outcome.HttpStatus >= 400 && outcome.HttpStatus < 600 && outcome.ErrorCode != "" && outcome.ErrorCode != "EFFECT_UNKNOWN" && outcome.ErrorMessage != ""
+		if (!success && !processingFailure) || len(outcome.BeforeSha256) != 32 || len(outcome.AfterSha256) != 32 {
 			return ErrInvalid
 		}
 		if claim.Intent.Kind == mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_CREATE {

@@ -43,6 +43,12 @@ func mediaCreatedRecord(w http.ResponseWriter, r *http.Request, client *worker.C
 		mediaUnknown(w, outcome.OperationId)
 		return nil, false
 	}
+	if outcome.HttpStatus != http.StatusOK {
+		// An applied processing failure retains the created/failed record and
+		// original operation, while preserving the original public error.
+		policyWriteError(w, int(outcome.HttpStatus), outcome.ErrorCode, outcome.ErrorMessage)
+		return nil, false
+	}
 	return value, true
 }
 

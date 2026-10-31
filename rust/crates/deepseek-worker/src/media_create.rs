@@ -48,7 +48,7 @@ pub(super) fn operation_dir(staging: &Path, operation: &str) -> Result<PathBuf, 
     Ok(path)
 }
 
-fn sync_directory(path: &Path) -> Result<(), Status> {
+pub(super) fn sync_directory(path: &Path) -> Result<(), Status> {
     #[cfg(unix)]
     fs::File::open(path)
         .and_then(|file| file.sync_all())
@@ -385,6 +385,7 @@ pub(super) fn plan(
         ..Default::default()
     };
     let now = crate::service::unix_now_seconds().map_err(|_| invalid())?;
+    let mut process = false;
     let prepared = match (&payload.registration, &payload.upload) {
         (Some(object), None) => {
             let value = media_values::to_json(
@@ -392,15 +393,13 @@ pub(super) fn plan(
                     kind: Some(Kind::ObjectValue(object.clone())),
                 },
             )?;
-            if value.get("process").is_some_and(python_truthy) {
-                return Err(Status::unimplemented("MEDIA_PROCESSING_NOT_READY"));
-            }
+            process = value.get("process").is_some_and(python_truthy);
             registration(&value, &intent.media_id, now)
         }
         (None, Some(value)) => upload(value, &intent.media_id, now),
         _ => return Err(invalid()),
     };
-    let prepared = match prepared {
+    let mut prepared = match prepared {
         Ok(value) => value,
         Err(error) => {
             return Ok((
@@ -409,6 +408,13 @@ pub(super) fn plan(
             ));
         }
     };
+    if process {
+        prepared = crate::media_processing::prepare(prepared, now)?;
+        let effect = prepared.processing.as_ref().ok_or_else(invalid)?;
+        result.http_status = effect.final_http_status;
+        result.error_code = effect.final_error_code.clone();
+        result.error_message = effect.final_error_message.clone();
+    }
     let mut items = media_library::normalized_items(before);
     if items
         .iter()

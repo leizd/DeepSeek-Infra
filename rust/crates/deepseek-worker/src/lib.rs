@@ -34,6 +34,7 @@ mod media_delete;
 mod media_journal;
 mod media_library;
 mod media_patch;
+mod media_processing;
 mod media_values;
 mod mutation_request;
 mod native_origin;

@@ -13537,3 +13537,40 @@ These are original95/95/80/95 floors for that source, not this child or a PR
 merge candidate. The earlier immutable-message fix9834e0bc separately passed
 94 Go/race families and all27 retained-message subcases in41045355443.
 No PR outside the daily09:00 schedule, no main merge, release or real data.
+# Current checkpoint: retained JSON media processing candidate, 2026-10-31
+
+The isolated processing candidate now connects the native six-kind processor
+and exact legacy index projection to the original Go-admitted CREATE. Its
+Rust-only typed preparation binds the processing/final records, segments,
+embedding rows and final public error to the original action/epoch. The journal
+publishes `processing`, retains/confirms source and segment bytes, commits the
+index plus an original-operation marker in one Rust-owned transaction, then
+publishes the final record and signs the outcome. A processing failure retains
+the failed record/source as an applied effect; it does not claim no mutation.
+Historical unprocessed CREATE/PATCH/DELETE bytes and recovery paths remain.
+
+This is a candidate awaiting exact-source cloud compilation and actual HTTP
+qualification, not a readiness claim. Four new Rust journal regressions cover
+the six kinds, retained failed processing, an unresolved source conflict and a
+lost terminal commit; Go signature/TLS regressions preserve the applied-error
+boundary. The actual observer now checks all six creation/index paths and a
+failed PDF's original422/source/failed record before the still-required force
+requests. No original force/index/search or95%/80% threshold is removed.
+
+The pure processor parent fbf3d56e is separately running full Rust tests/coverage.
+Its source-generated bindings came from pinned push run41156749232 at a3482c28;
+that code-generation result is not runtime or PR-candidate validation. At older
+source4688a38c, the original default Go profile is16247/17098=95.022810%; its full
+CI has progressed to Android Go and is not yet qualified as a whole. Never pool
+those revisions or workflow events into one exact-source result.
+
+Standalone force, multipart processing/OCR options, ONNX/provider embedding,
+actual binary OCR/PDF and telemetry, index failure/dimension migration behavior,
+processing-specific process kills and all intermediate recovery phases,
+Windows/Android durability, aggregate legal library capacity and backup
+interactions still require implementation/qualification. Preserve uncertain
+effects as EFFECT_UNKNOWN and reconcile the same original operation. Full
+server/desktop/Android/background functionality, retained MCP test execution,
+zero production Python/server TypeScript, CI/Evidence/platform/release remain
+required. Overall migration remains ACTIVE/NOT_READY; keep local native builds,
+caches and Docker validation in the cloud and retain the original dirty root.

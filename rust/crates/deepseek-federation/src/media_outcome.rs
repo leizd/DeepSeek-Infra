@@ -19,6 +19,16 @@ impl ControlSigningKey {
         let deletion = outcome.operation_id.starts_with("media-delete-");
         let patch = outcome.operation_id.starts_with("media-patch-");
         let creation = outcome.operation_id.starts_with("media-create-");
+        let public_success = outcome.http_status == 200
+            && outcome.error_code.is_empty()
+            && outcome.error_message.is_empty();
+        // A CREATE processor error retains a failed record/source, so its
+        // terminal effect is applied even though the public request failed.
+        let processing_failure = creation
+            && (400..600).contains(&outcome.http_status)
+            && !outcome.error_code.is_empty()
+            && outcome.error_code != "EFFECT_UNKNOWN"
+            && !outcome.error_message.is_empty();
         let applied_shape = if creation {
             outcome.media.is_none()
                 && outcome.deleted_count == 0
@@ -46,11 +56,9 @@ impl ControlSigningKey {
             || !outcome.signature.is_empty()
             || !(applied || refused)
             || (applied
-                && (outcome.http_status != 200
+                && (!(public_success || processing_failure)
                     || !applied_shape
-                    || outcome.after_sha256.len() != 32
-                    || !outcome.error_code.is_empty()
-                    || !outcome.error_message.is_empty()))
+                    || outcome.after_sha256.len() != 32))
             || (refused
                 && (!(400..500).contains(&outcome.http_status)
                     || outcome.media.is_some()
