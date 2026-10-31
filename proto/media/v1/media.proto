@@ -264,6 +264,9 @@ message MediaStoredIndexRow {
   string embedding_json = 2;
   string metadata_json = 3;
   MediaStoredVectorRow vector = 4;
+  // Preserve the original SQLite signed INTEGER, including legacy negatives.
+  // New processor rows still use the unsigned enumerated chunk in record.
+  sint64 chunk_index = 5;
 }
 
 message MediaStoredVectorRow {
