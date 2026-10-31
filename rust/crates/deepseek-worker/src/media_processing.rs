@@ -424,13 +424,14 @@ fn finish_index(
     schema(&connection, effect)?;
     let intent = claim.intent.as_ref().ok_or_else(unknown)?;
     let key = format!("native_media_processing:{}", intent.operation_id);
-    let digest = deepseek_policy::core_utils::encode_lower_hex(
-        &outcome
-            .created
-            .as_ref()
-            .ok_or_else(unknown)?
-            .preparation_sha256,
-    );
+    let digest = outcome
+        .created
+        .as_ref()
+        .ok_or_else(unknown)?
+        .preparation_sha256
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|_| unknown())?;
