@@ -172,6 +172,8 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
             "PATH", "HOME", "LANG", "LC_ALL", "TZ", "SSL_CERT_FILE", "SSL_CERT_DIR", "TMPDIR"}}
         launch_env.update(DEEPSEEK_NATIVE_BIN=str(binaries), DEEPSEEK_INFRA_ROOT=str(profile),
             DEEPSEEK_INFRA_STATIC_DIR=str(ROOT / "static"), LOCAL_RAG_ENABLED="false")
+        if getattr(args, "verify_processing", False):
+            launch_env.update(LOCAL_RAG_ENABLED="true", LOCAL_RAG_BACKEND="sqlite")
         child: subprocess.Popen[bytes] | None = None
         identities: list[dict[str, Any]] = []
 
@@ -266,9 +268,13 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
                 if original_sha is not None:
                     retained_file = profile / ".media" / original_body["media"]["path"]
                     require(hashlib.sha256(retained_file.read_bytes()).hexdigest() == original_sha, "MEDIA_CREATE_CASE_RESTART_SOURCE_DIFFERS")
-            report.update(status="PASS", actualNativeJSONWebpageCreateQualified=True, publicReadAndRestartRetained=True,
+            report.update(actualNativeJSONWebpageCreateQualified=True, publicReadAndRestartRetained=True,
                 allSixJSONMediaKindsQualified=True, largeJSONRecordBeyondControlRowQualified=True,
                 **observation_counts(report, len(observations)))
+            if getattr(args, "verify_processing", False):
+                import verify_native_media_processing as processing
+                processing.verify(origin, token, profile, mirror / "processing", args.out, report)
+            report["status"] = "PASS"
         finally:
             stop()
 
@@ -280,6 +286,7 @@ def main() -> int:
     parser.add_argument("--go-cache", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--verify-uploads", action="store_true", help="also verify original multipart ingestion boundaries")
+    parser.add_argument("--verify-processing", action="store_true", help="require real processing/index/force parity after retained creation checks")
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
     report: dict[str, Any] = dict(kind="native-media-create-process-v1", status="FAIL", sourceCommit=os.environ.get("GITHUB_SHA"),
