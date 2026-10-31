@@ -115,7 +115,16 @@ func TestMediaPublicProcessAdmissionRejectsUnboundRequestsBeforeCreatingOperatio
 			if err = json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 				t.Fatal(err)
 			}
-			if w.Code != test.status || body["code"] != test.code {
+			actualCode := body["code"]
+			if test.name == "nested-path" {
+				// Preserve the existing notImplemented envelope on unmatched paths.
+				nested, ok := body["error"].(map[string]any)
+				if !ok || nested["message"] != "this public /api path is not served by the Go control plane yet" {
+					t.Fatal("unmatched-path error envelope changed", body)
+				}
+				actualCode = nested["code"]
+			}
+			if w.Code != test.status || actualCode != test.code {
 				t.Fatalf("%d %s want %d/%s", w.Code, w.Body.String(), test.status, test.code)
 			}
 			pending, e := control.PendingMediaPatch()

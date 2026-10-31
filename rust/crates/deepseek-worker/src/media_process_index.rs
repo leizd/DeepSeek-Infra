@@ -8,6 +8,7 @@ use deepseek_protocol::generated::deepseek::media::v1::{
     MediaProcessingPreparation, MediaStoredIndexRow, MediaStoredVectorRow,
 };
 use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};
+use std::fmt::Write as _;
 use std::{fs, path::Path, time::Duration};
 use tonic::Status;
 
@@ -268,8 +269,10 @@ pub(super) fn finish(
         .ok_or_else(unknown)?
         .preparation_sha256
         .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect::<String>();
+        .fold(String::with_capacity(64), |mut output, b| {
+            write!(&mut output, "{b:02x}").expect("writing hexadecimal to String cannot fail");
+            output
+        });
     let clear_key = format!("native_media_process:{}:clear", intent.operation_id);
     let final_key = format!("native_media_process:{}:final", intent.operation_id);
     let tx = c

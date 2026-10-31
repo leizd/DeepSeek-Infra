@@ -61,11 +61,11 @@ fn source_relative(record: &Value) -> Result<String, Status> {
     let metadata = &record["metadata"];
     let reads = match record["type"].as_str().unwrap_or("") {
         "image" | "screenshot" | "pdf" => true,
-        "webpage" => !metadata
+        "webpage" => metadata
             .get("webpageText")
             .filter(|v| python_truthy(v))
             .or_else(|| metadata.get("text").filter(|v| python_truthy(v)))
-            .is_some_and(|v| !text_or_empty(Some(v)).trim().is_empty()),
+            .is_none_or(|v| text_or_empty(Some(v)).trim().is_empty()),
         _ => false,
     };
     if !reads {

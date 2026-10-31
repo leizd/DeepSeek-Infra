@@ -364,6 +364,7 @@ mod tests {
                 ..Default::default()
             }),
             create: None,
+            process: None,
         };
         let fence = ActionFence {
             action_id: intent.operation_id.clone(),

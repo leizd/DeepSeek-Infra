@@ -16,6 +16,7 @@ use deepseek_protocol::generated::deepseek::media::v1::{
 };
 use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};
 use serde_json::{Value, json};
+use std::fmt::Write as _;
 use std::{fs, path::Path, time::Duration};
 use tonic::Status;
 
@@ -451,8 +452,10 @@ fn finish_index(
         .ok_or_else(unknown)?
         .preparation_sha256
         .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
+        .fold(String::with_capacity(64), |mut output, byte| {
+            write!(&mut output, "{byte:02x}").expect("writing hexadecimal to String cannot fail");
+            output
+        });
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|_| unknown())?;
