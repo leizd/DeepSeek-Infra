@@ -52,6 +52,7 @@ func TestMediaProcessRequestBindsOptionsAndSeparatesMutationKinds(t *testing.T) 
 		"unknown-option":     func(i *mediav1.MediaPatchIntent) { i.Process.ProtoReflect().SetUnknown([]byte{0x20, 1}) },
 		"long-correlation":   func(i *mediav1.MediaPatchIntent) { i.Process.CorrelationId = strings.Repeat("a", 65) },
 		"unsafe-correlation": func(i *mediav1.MediaPatchIntent) { i.Process.CorrelationId = "unsafe\ncorrelation" },
+		"unknown-kind":       func(i *mediav1.MediaPatchIntent) { i.Kind = mediav1.MediaMutationKind(99); i.Process = nil },
 	} {
 		t.Run(name, func(t *testing.T) {
 			i := proto.Clone(base).(*mediav1.MediaPatchIntent)
@@ -92,6 +93,23 @@ func TestMediaProcessSignedResultBindsSegmentsAndRejectsCrossKindResults(t *test
 	if err := VerifyOutcome(base, claim, public); err != nil {
 		t.Fatal("valid empty segments rejected", err)
 	}
+	t.Run("unknown-signed-kind", func(t *testing.T) {
+		unknown := proto.Clone(claim).(*mediav1.MediaPatchClaim)
+		unknown.Intent.Kind, unknown.Intent.Process = mediav1.MediaMutationKind(99), nil
+		outcome := proto.Clone(base).(*mediav1.MediaPatchOutcome)
+		outcome.Processed = nil
+		sign(outcome)
+		if VerifyOutcome(outcome, unknown, public) == nil {
+			t.Fatal("an otherwise signed unknown mutation kind was accepted")
+		}
+	})
+	t.Run("retained-request-digest-mismatch", func(t *testing.T) {
+		changed := proto.Clone(claim).(*mediav1.MediaPatchClaim)
+		changed.Intent.Process.Force = !changed.Intent.Process.Force
+		if VerifyOutcome(base, changed, public) == nil {
+			t.Fatal("a valid signature settled a claim whose intent no longer matches its digest")
+		}
+	})
 	for _, status := range []uint32{200, 400, 422, 500, 599} {
 		valid := proto.Clone(base).(*mediav1.MediaPatchOutcome)
 		valid.HttpStatus = status

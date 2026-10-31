@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	mediamodel "github.com/leizd/DeepSeek-Infra/go/internal/media"
@@ -11,6 +12,7 @@ import (
 	mediav1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/mediav1"
 	"google.golang.org/protobuf/proto"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -128,6 +130,7 @@ func TestMediaDispatchRejectsStaleClaimsAndNeverReissuesAFreshPermit(t *testing.
 	}
 }
 func TestMediaSignedHistoricalOutcomeSettlesAfterExpiryAndCannotBeChanged(t *testing.T) {
+	t.Run("process-dispatch-plan-binding", exerciseMediaProcessPlanBinding)
 	c, now, key := mediaControl(t)
 	claim, err := c.AdmitMediaPatch(mediaIntent("media-patch-one"))
 	if err != nil {
@@ -169,6 +172,70 @@ func TestMediaSignedHistoricalOutcomeSettlesAfterExpiryAndCannotBeChanged(t *tes
 	}
 	if _, err := c.db.Exec("UPDATE control_media_operations SET intent=X'00' WHERE operation_id=?", claim.Intent.OperationId); err == nil {
 		t.Fatal("immutable intent changed")
+	}
+}
+
+func exerciseMediaProcessPlanBinding(t *testing.T) {
+	c, now, key := mediaControl(t)
+	intent := &mediav1.MediaPatchIntent{SchemaVersion: 1, OperationId: "media-process-" + strings.Repeat("a", 32),
+		MediaId: "media_one", Kind: mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_PROCESS,
+		Process: &mediav1.MediaProcessOptions{Force: true, CorrelationId: "process-store"}}
+	claim, err := c.AdmitMediaPatch(intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof := mediaProof(t, claim, key)
+	proof.Media = nil
+	empty := sha256.Sum256(nil)
+	proof.Processed = &mediav1.MediaProcessedResult{RecordBytes: 100, RecordSha256: bytes.Repeat([]byte{3}, 32),
+		PreparationSha256: bytes.Repeat([]byte{4}, 32), OriginalFence: proto.Clone(claim.Fence).(*commonv1.ActionFence),
+		SegmentsSha256: empty[:]}
+	signMediaProof(t, proof, key)
+	unsigned := proto.Clone(proof).(*mediav1.MediaPatchOutcome)
+	unsigned.Signature = nil
+	encoded, err := mediamodel.Encode(unsigned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	planned := sha256.Sum256(encoded)
+	request := mediaBegin(claim)
+	request.PreparationSha256 = planned[:]
+	permit, err := c.BeginMediaPatchDispatch(request)
+	if err != nil || !permit.Fresh {
+		t.Fatal("the original processing plan could not dispatch", err)
+	}
+	for name, change := range map[string]func(*mediav1.MediaPatchOutcome){
+		"private-preparation": func(o *mediav1.MediaPatchOutcome) { o.Processed.PreparationSha256[0] ^= 1 },
+		"index-count":         func(o *mediav1.MediaPatchOutcome) { o.Processed.Indexed++ },
+		"record-digest":       func(o *mediav1.MediaPatchOutcome) { o.Processed.RecordSha256[0] ^= 1 },
+		"segment-digest":      func(o *mediav1.MediaPatchOutcome) { o.Processed.SegmentsSha256[0] ^= 1 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := proto.Clone(proof).(*mediav1.MediaPatchOutcome)
+			change(changed)
+			signMediaProof(t, changed, key)
+			if _, err := c.RecordMediaPatchOutcome(changed); !errors.Is(err, ErrMediaClaimDenied) {
+				t.Fatal("a valid signature substituted another processing plan", err)
+			}
+			pending, err := c.PendingMediaPatch()
+			if err != nil || pending == nil || pending.State != "DISPATCHED" || !proto.Equal(pending.Intent, intent) || !proto.Equal(pending.Fence, claim.Fence) {
+				t.Fatal("rejected evidence changed or released the original claim", err)
+			}
+		})
+	}
+	*now = claim.LeaseUntilUnix + 1
+	if already, err := c.RecordMediaPatchOutcome(proof); err != nil || already {
+		t.Fatal("the original signed processing result could not settle after expiry", err)
+	}
+	if already, err := c.RecordMediaPatchOutcome(proof); err != nil || !already {
+		t.Fatal("the exact original processing receipt was not retained", err)
+	}
+	retained, err := c.GetMediaPatchClaim(intent.OperationId, claim.Fence)
+	if err != nil || retained.State != "APPLIED" || !proto.Equal(retained.Intent, intent) || retained.WriterFencingToken != claim.WriterFencingToken {
+		t.Fatal("settlement rebound the original processing operation", err)
+	}
+	if pending, err := c.PendingMediaPatch(); err != nil || pending != nil {
+		t.Fatal("the settled processing operation retained the publication barrier", err)
 	}
 }
 func TestMediaPreparedRefusalCanSettleWithoutInventingADispatch(t *testing.T) {

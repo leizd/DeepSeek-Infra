@@ -249,6 +249,33 @@ func TestMediaPublicProcessTLSBindsResultsAndRecoversOnlyTheOriginalOperation(t 
 }
 
 func TestMediaPublicProcessSettlesPendingOriginalBeforeAnotherExplicitRequest(t *testing.T) {
+	t.Run("unavailable-control-never-admits-or-dispatches", func(t *testing.T) {
+		control, peer, server := mediaProcessTLSFixture(t, "success")
+		control.Close()
+		request, err := http.NewRequest(http.MethodPost, server.URL+"/api/media/media_existing/process", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("Authorization", "Bearer "+strings.Repeat("m", 32))
+		request.Header.Set("X-DeepSeek-Request-ID", "closed.process")
+		response, err := server.Client().Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer response.Body.Close()
+		var body map[string]any
+		if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if response.StatusCode != 503 || body["code"] != "EFFECT_UNKNOWN" || response.Header.Get("X-DeepSeek-Operation-Id") != "" {
+			t.Fatal("unavailable control invented an admitted operation or success", response.StatusCode, body)
+		}
+		peer.mu.Lock()
+		defer peer.mu.Unlock()
+		if peer.executed != 0 || peer.queried != 0 || peer.readCalls != 0 || peer.stageCalls != 0 {
+			t.Fatal("unavailable control sent an effect, query or CREATE staging request")
+		}
+	})
 	control, peer, server := mediaProcessTLSFixture(t, "success")
 	i := &mediav1.MediaPatchIntent{SchemaVersion: 1, OperationId: "media-process-" + strings.Repeat("a", 32), MediaId: "media_existing", Kind: mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_PROCESS, Process: &mediav1.MediaProcessOptions{Force: true}}
 	claim, err := control.AdmitMediaPatch(i)

@@ -1,3 +1,13 @@
+# Current exact-source coverage correction, 2026-10-31
+
+- [ ] Run the expanded assertions inside the same105 required Go families.
+- [ ] Re-establish the original Go95% gate: parent020065e measured
+  16416/17293=94.928584%,13 covered statements short; no exclusions or lower floor.
+- [ ] Qualify full exact-source CI/Evidence/Android-Go, physical PROCESS recovery
+  and all unchanged product/platform acceptance. Parent runs remain separate.
+
+---
+
 # Current PROCESS checkpoint, 2026-10-31
 
 - [x] Qualify parent020065e's two105-family Go/race corpora,53 Rust media tests,

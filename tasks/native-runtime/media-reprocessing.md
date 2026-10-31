@@ -120,6 +120,19 @@ This probe does not yet cover every clear/segment/index commit boundary,
 physical power loss, Windows/Android durability, all configuration/provider/OCR
 paths or the entire processing pipeline. Those requirements remain open.
 
+## Original Go floor correction
+
+Full CI41195790266 at020065e has now ended: native-Go measured
+16416/17293=94.928583820043%, below the unchanged95% floor by13 covered
+statements. The downstream Evidence/RC gates failed and Android-Go coverage did
+not run. The new child only extends existing Go tests to cover secured/bounded
+result reads, valid hashes on malformed typed contents, changed intent digests,
+unavailable control before RPC, and store-level PROCESS plan binding and
+historical settlement/replay. No production code, original test family, filter,
+pin, schema, signature or coverage denominator is changed. All new runtime and
+coverage results remain CLOUD_PENDING. Parent7228a63a's separate actual crash
+run41197847611 cannot be assigned to this exact child.
+
 ## Remaining acceptance
 
 Exact-source compilation,105 Go/race families, all Rust tests and original

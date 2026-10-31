@@ -49,7 +49,18 @@ func TestMediaProcessResultRequiresBoundRecordSegmentsCountAndOriginalFence(t *t
 	empty := sha256.Sum256(nil)
 	fence := &commonv1.ActionFence{ActionId: "media-process-" + strings.Repeat("a", 32), ExecutionEpoch: 1}
 	base := &mediav1.MediaPatchOutcome{OperationId: fence.ActionId, OriginalFence: fence, Processed: &mediav1.MediaProcessedResult{OriginalFence: proto.Clone(fence).(*commonv1.ActionFence), RecordBytes: uint64(len(raw)), RecordSha256: recordHash[:], SegmentsSha256: empty[:]}}
-	for _, name := range []string{"valid-empty", "nil-outcome", "missing-binding", "mixed-create", "missing-fence", "foreign-fence", "wrong-operation", "record-hash", "record-size", "segment-hash", "segment-size", "missing-response", "missing-record", "missing-segments", "wrong-index-count", "unknown-response", "transport-loss", "nil-context", "conflicting-auth"} {
+	t.Run("unsecured-result-clients", func(t *testing.T) {
+		f := &mediaCreateClientFixture{response: response}
+		for _, client := range []*Client{nil, {}, {tlsSecured: true, mediaCreation: f}, {bearerAttached: true, mediaCreation: f}, {tlsSecured: true, bearerAttached: true}} {
+			if got, err := client.ReadMediaProcessResult(context.Background(), base); !errors.Is(err, ErrWorkerTLSRequired) || got != nil {
+				t.Fatal("unsecured retained result was accepted", err)
+			}
+		}
+		if f.read != 0 || f.opened != 0 {
+			t.Fatal("unsecured client reached the producer")
+		}
+	})
+	for _, name := range []string{"valid-empty", "nil-outcome", "missing-binding", "mixed-create", "missing-fence", "foreign-fence", "wrong-operation", "record-hash", "record-size", "record-zero", "record-over-bound", "segments-over-bound", "record-digest-size", "segment-digest-size", "segment-hash", "segment-size", "missing-response", "missing-record", "missing-segments", "wrong-index-count", "unknown-response", "transport-loss", "nil-context", "conflicting-auth", "invalid-record-utf8", "bound-invalid-record", "bound-unknown-record", "bound-invalid-segments"} {
 		t.Run(name, func(t *testing.T) {
 			o := proto.Clone(base).(*mediav1.MediaPatchOutcome)
 			r := proto.Clone(response).(*mediav1.ReadMediaCreateResultResponse)
@@ -73,6 +84,16 @@ func TestMediaProcessResultRequiresBoundRecordSegmentsCountAndOriginalFence(t *t
 				o.Processed.RecordSha256 = empty[:]
 			case "record-size":
 				o.Processed.RecordBytes++
+			case "record-zero":
+				o.Processed.RecordBytes = 0
+			case "record-over-bound":
+				o.Processed.RecordBytes = mediamodel.MaxCreatePayloadBytes + 1
+			case "segments-over-bound":
+				o.Processed.SegmentsBytes = mediamodel.MaxCreatePayloadBytes + 1
+			case "record-digest-size":
+				o.Processed.RecordSha256 = o.Processed.RecordSha256[:31]
+			case "segment-digest-size":
+				o.Processed.SegmentsSha256 = o.Processed.SegmentsSha256[:31]
 			case "segment-hash":
 				o.Processed.SegmentsSha256 = recordHash[:]
 			case "segment-size":
@@ -93,6 +114,29 @@ func TestMediaProcessResultRequiresBoundRecordSegmentsCountAndOriginalFence(t *t
 				ctx = nil
 			case "conflicting-auth":
 				ctx = metadata.NewOutgoingContext(ctx, metadata.Pairs("authorization", "Bearer conflicting"))
+			case "invalid-record-utf8":
+				r.Media.Members[0].Key = "\xff"
+			case "bound-invalid-record":
+				r.Media.Members[0].Value = &mediav1.MediaValue{}
+			case "bound-unknown-record":
+				r.Media.ProtoReflect().SetUnknown([]byte{0x20, 1})
+			case "bound-invalid-segments":
+				r.Segments.Values = []*mediav1.MediaValue{{}}
+			}
+			if strings.HasPrefix(name, "bound-") {
+				// Correct hashes do not make malformed typed contents safe to return.
+				for _, item := range []struct {
+					message proto.Message
+					size    *uint64
+					digest  *[]byte
+				}{{r.Media, &o.Processed.RecordBytes, &o.Processed.RecordSha256}, {r.Segments, &o.Processed.SegmentsBytes, &o.Processed.SegmentsSha256}} {
+					encoded, marshalErr := (proto.MarshalOptions{Deterministic: true}).Marshal(item.message)
+					if marshalErr != nil {
+						t.Fatal(marshalErr)
+					}
+					hash := sha256.Sum256(encoded)
+					*item.size, *item.digest = uint64(len(encoded)), hash[:]
+				}
 			}
 			got, e := c.ReadMediaProcessResult(ctx, o)
 			if name == "valid-empty" {

@@ -1,3 +1,28 @@
+# Current checkpoint: restore the original Go coverage gate, 2026-10-31
+
+The exact-source original CI41195790266 at020065e completed37 jobs with
+33success, one skipped and three failures. Native-Go failed only its original
+95% statement gate:16416/17293=94.928583820043%,13 additional covered statements
+short. Evidence Assembly and RC readiness were consequently not qualified;
+Android-Go coverage did not run. Keep all original95/95/95/80 floors.
+
+This candidate adds assertions to existing mandatory Go families: real control
+unavailability before any effect RPC, secured retained-result clients, bounded
+sizes, malformed typed results with correct hashes, unknown kinds and a changed
+claim digest. The store package now directly exercises original PROCESS
+preparation-digest binding, rejection of re-signed substituted results, historical
+settlement after lease expiry and exact receipt replay. It uses the existing
+disposable unit signer, not a production custody key. Production code is unchanged.
+The new Go assertions and coverage remain CLOUD_PENDING.
+
+Parent7228a63a's24 actual PROCESS crash cases are running separately in
+native-media-recovery run41197847611. Neither that parent run nor the older
+020065e Rust/HTTP proofs qualifies this exact child. All full-product and
+platform/recovery/ownership/zero-Python/MCP/provider/security/performance/
+CI/Evidence/release requirements remain open; retain ACTIVE/NOT_READY.
+
+---
+
 # Current checkpoint: exact-source PROCESS proof and physical crash observer, 2026-10-31
 
 Parent `020065e` has qualified105/105 focused Go/race families in two independent
