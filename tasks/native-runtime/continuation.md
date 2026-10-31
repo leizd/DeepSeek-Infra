@@ -1,3 +1,43 @@
+# Current checkpoint: bind PROCESS index phase evidence, 2026-10-31
+
+At parent8b26c0ff/run41203337217 the nine original recovery steps pass. Both
+new backend cases reach actual worker SIGKILL, exit every original process and
+automatically settle the same original Go/Rust operation as APPLIED. They then
+fail MEDIA_PROCESS_CRASH_NAMESPACE_METADATA_CHANGED. They do not qualify the
+24-case corpus: only the first webpage-processing case ran on each backend.
+
+The observer compared the entire rag_meta map to its pre-operation value. The
+production transaction deliberately adds clear/final phase markers under the
+original operation ID, each containing the original preparation SHA256. An
+offline reproduction confirms the old observer rejects exactly those additions;
+the old cloud reports did not retain the two index snapshots, so the actual
+metadata values still need independent confirmation in a new run.
+
+This child permits exactly those two new keys, bound to the witnessed original
+operation and preparation, and still requires all original namespace keys,
+foreign operation markers, rows and vectors unchanged. A nonempty target project
+also preserves same-media rows/vectors belonging to another project. Both index
+snapshots are now retained before assertions, including on failure. Nineteen
+focused regressions first fail; the complete178-case observer corpus has175
+passed and the same three host skips. No production source, workflow, original
+recovery case or coverage floor changes. Actual24-case and this child's complete
+CI/Evidence/platform results remain CLOUD_PENDING.
+
+Parent8b's complete Rust workflow has two successful jobs; report qualification
+is recorded separately. Its full CI is still in the complete Go race step after
+the original Go95 gate succeeded; exact profile/Android-Go totals remain pending.
+Those parent observations are not qualifications of this new source.
+
+The full server/desktop/Android/background migration remains ACTIVE/NOT_READY.
+Every original recovery phase, OCR/provider/configuration/capacity/backup feature,
+retained MCP test engine without a Python exception, production ownership,
+zero-Python/server-TypeScript, platform, security, performance and exact-source
+CI/Evidence/release requirement remains open. Keep compilation and containers in
+GitHub Actions, preserve the dirty workspace, and keep PR handling in the daily
+09:00 Asia/Shanghai batch only.
+
+---
+
 # Current checkpoint: external recovery observer corrections, 2026-10-31
 
 Native recovery run41197847611 at7228a63a has164 verified report files. The new

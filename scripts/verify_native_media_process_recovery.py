@@ -131,11 +131,23 @@ def index_snapshot(profile: Path, backend: str) -> dict[str, Any]:
     return dict(rows=rows, metadata=meta, vectors=vectors)
 
 
-def require_unrelated_index(before: dict[str, Any], after: dict[str, Any], media_id: str) -> None:
+def require_unrelated_index(before: dict[str, Any], after: dict[str, Any], media_id: str,
+                            original_process: dict[str, Any] | None = None, *, project_id: str = "") -> None:
     def unrelated(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        return [row for row in rows if not (row["collection"] == "media" and row["source_id"] == media_id)]
+        return [row for row in rows if not (row["collection"] == "media" and row["source_id"] == media_id
+                                           and (not project_id or row["project_id"] == project_id))]
+    expected_metadata = dict(before["metadata"])
+    if original_process is not None:
+        operation, preparation = original_process.get("operationId"), original_process.get("preparationSha256")
+        require(isinstance(operation, str) and re.fullmatch(r"media-process-[0-9a-f]{32}", operation) is not None
+                and isinstance(preparation, str) and re.fullmatch(r"[0-9a-f]{64}", preparation) is not None,
+                "MEDIA_PROCESS_CRASH_INDEX_ORIGINAL_BINDING_INVALID")
+        for phase in ("clear", "final"):
+            key = f"native_media_process:{operation}:{phase}"
+            require(key not in expected_metadata, "MEDIA_PROCESS_CRASH_INDEX_ORIGINAL_MARKER_PREEXISTED")
+            expected_metadata[key] = preparation
     require(unrelated(before["rows"]) == unrelated(after["rows"]), "MEDIA_PROCESS_CRASH_UNRELATED_ROWS_CHANGED")
-    require(before["metadata"] == after["metadata"], "MEDIA_PROCESS_CRASH_NAMESPACE_METADATA_CHANGED")
+    require(expected_metadata == after["metadata"], "MEDIA_PROCESS_CRASH_NAMESPACE_METADATA_CHANGED")
     if before["vectors"] is not None:
         require(after["vectors"] is not None and unrelated(before["vectors"]) == unrelated(after["vectors"]),
                 "MEDIA_PROCESS_CRASH_UNRELATED_VECTORS_CHANGED")
@@ -245,6 +257,7 @@ def run_case(args: argparse.Namespace, binaries: Path, scratch: Path, oracle: Pa
             shutil.copytree(oracle / name, profile / name)
         original_files = retained_files(profile, media_id)
         original_index = index_snapshot(profile, args.backend)
+        (out / "index-before-process.json").write_text(json.dumps(original_index, ensure_ascii=True, indent=2) + "\n", encoding="utf8")
         token = runtime.launch("mutation-launch")
         writer_before = create.patch.reads.writer(profile)[0]
         library = recovery.owned_file(profile / ".media/library.json", profile)
@@ -323,12 +336,12 @@ def run_case(args: argparse.Namespace, binaries: Path, scratch: Path, oracle: Pa
             recovery.require_same_publication(at_crash, file_witness(library, profile))
         final_public = public_result(runtime, token, expected, reference)
         final_index = index_snapshot(profile, args.backend)
-        require_unrelated_index(original_index, final_index, media_id)
+        (out / "index-after-recovery.json").write_text(json.dumps(final_index, ensure_ascii=True, indent=2) + "\n", encoding="utf8")
+        require_unrelated_index(original_index, final_index, media_id, before_rust, project_id=expected["media"].get("projectId", ""))
         require(retained_files(profile, media_id) == original_files, "MEDIA_PROCESS_CRASH_RECOVERY_RECREATED_SOURCE")
         final_library = file_witness(library, profile)
         final_segments = file_witness(profile / f".media/segments/{media_id}.json", profile)
         (out / "after-recovery-library.json").write_bytes(library.read_bytes())
-        (out / "index-after-recovery.json").write_text(json.dumps(final_index, ensure_ascii=True, indent=2) + "\n", encoding="utf8")
         runtime.stop()
         token = runtime.launch("retained-launch")
         retained_go, retained_rust = recovery.control_snapshot(profile), recovery.journal_snapshot(profile, mutation="process")

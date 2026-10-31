@@ -165,6 +165,80 @@ def test_process_crash_run_fails_before_any_local_native_command(monkeypatch: py
         probe.run(None, {})
 
 
+def process_index_markers(journal: dict[str, Any]) -> dict[str, str]:
+    return {f"native_media_process:{journal['operationId']}:{phase}": journal["preparationSha256"]
+            for phase in ("clear", "final")}
+
+
+def process_index_fixture() -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    _, journal, _ = original()
+    rows = [dict(item_id="foreign", collection="media", source_id="other", project_id="p", chunk_index=-7),
+            dict(item_id="other-project", collection="media", source_id="target", project_id="other", chunk_index=42),
+            dict(item_id="target", collection="media", source_id="target", project_id="p", chunk_index=0)]
+    before: dict[str, Any] = dict(rows=rows, vectors=copy.deepcopy(rows), metadata={
+        "embedding_provider": "hash", "embedding_dimensions": "64", "unrelated-key": "retained",
+        "native_media_process:media-process-" + "b" * 32 + ":clear": "6" * 64})
+    after = copy.deepcopy(before)
+    after["metadata"].update(process_index_markers(journal))
+    after["rows"][-1]["chunk_index"] = 1
+    after["vectors"][-1]["chunk_index"] = 1
+    return before, after, journal
+
+
+def test_process_recovery_accepts_only_both_exact_original_index_transaction_markers() -> None:
+    before, after, journal = process_index_fixture()
+    untouched_before, untouched_after = copy.deepcopy(before), copy.deepcopy(after)
+    probe.require_unrelated_index(before, after, "target", journal, project_id="p")
+    assert (before, after) == (untouched_before, untouched_after)
+
+
+@pytest.mark.parametrize("damage", ["missing-clear", "missing-final", "clear-digest", "final-digest", "foreign-operation",
+                                    "extra-phase", "provider", "dimensions", "foreign-metadata", "removed-metadata",
+                                    "foreign-marker", "other-project-row", "other-project-vector"])
+def test_process_recovery_rejects_changed_namespace_or_unbound_transaction_markers(damage: str) -> None:
+    before, after, journal = process_index_fixture()
+    keys = list(process_index_markers(journal))
+    if damage.startswith("missing-"):
+        after["metadata"].pop(keys[0 if damage == "missing-clear" else 1])
+    elif damage.endswith("-digest"):
+        after["metadata"][keys[0 if damage == "clear-digest" else 1]] = "0" * 64
+    elif damage == "foreign-operation":
+        after["metadata"][keys[0].replace("a" * 32, "c" * 32)] = after["metadata"].pop(keys[0])
+    elif damage == "extra-phase":
+        after["metadata"][keys[0].replace(":clear", ":other")] = "5" * 64
+    elif damage == "provider":
+        after["metadata"]["embedding_provider"] = "different"
+    elif damage == "dimensions":
+        after["metadata"]["embedding_dimensions"] = "65"
+    elif damage == "foreign-metadata":
+        after["metadata"]["unrelated-key"] = "changed"
+    elif damage == "removed-metadata":
+        after["metadata"].pop("unrelated-key")
+    elif damage == "foreign-marker":
+        after["metadata"]["native_media_process:media-process-" + "b" * 32 + ":clear"] = "changed"
+    else:
+        after["vectors" if damage == "other-project-vector" else "rows"][1]["chunk_index"] = 0
+    with pytest.raises(probe.create.patch.ProbeFailure):
+        probe.require_unrelated_index(before, after, "target", journal, project_id="p")
+
+
+@pytest.mark.parametrize("damage", ["operation", "preparation", "missing-preparation", "preexisting-clear", "preexisting-final"])
+def test_process_recovery_refuses_invalid_or_preexisting_original_markers(damage: str) -> None:
+    before, after, journal = process_index_fixture()
+    if damage == "operation":
+        journal["operationId"] = "media-create-" + "a" * 32
+    elif damage == "preparation":
+        journal["preparationSha256"] = "not-a-digest"
+    elif damage == "missing-preparation":
+        journal.pop("preparationSha256")
+    else:
+        phase = damage.removeprefix("preexisting-")
+        key = f"native_media_process:{journal['operationId']}:{phase}"
+        before["metadata"][key] = after["metadata"][key]
+    with pytest.raises(probe.create.patch.ProbeFailure):
+        probe.require_unrelated_index(before, after, "target", journal, project_id="p")
+
+
 def test_process_crash_runtime_cannot_launch_outside_cloud_even_on_linux(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(probe.sys, "platform", "linux")
     monkeypatch.delenv("GITHUB_ACTIONS", raising=False)

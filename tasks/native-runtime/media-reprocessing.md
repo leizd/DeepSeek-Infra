@@ -155,6 +155,25 @@ production dependency or control/data authority change is added. Ten focused
 offline regressions reproduced the failures; actual24-case re-execution and the
 inherited Go coverage regressions remain CLOUD_PENDING at this exact source.
 
+## Original PROCESS index phase markers
+
+The parent8b run41203337217 passes all nine original recovery steps. Both new
+backend cases reach real SIGKILL and automatic original-operation APPLIED, then
+fail full rag_meta equality. They do not establish the24-case corpus. The actual
+production index transaction adds two phase markers for the original operation;
+an offline reproduction confirms these legitimate additions fail that equality.
+The prior report lacks raw before/after index metadata, so a new cloud run must
+confirm the actual values rather than inferring complete success from APPLIED.
+
+The corrected observer accepts only the exact original operation's new clear and
+final keys with its original preparation SHA256, rejects preexisting/rebound/
+missing/extra markers, and retains all namespace values and foreign markers.
+Foreign project rows and vector bytes remain protected even for the same media
+ID. Snapshot reports are written before assertions. The full178-case offline
+observer suite passes175 with the original3 host skips; production source and
+all workflow cases/filters/floors are unchanged. All24 actual crash cases, later
+commit boundaries and complete child-source qualification remain CLOUD_PENDING.
+
 ## Remaining acceptance
 
 Exact-source compilation,105 Go/race families, all Rust tests and original

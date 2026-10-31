@@ -1,3 +1,19 @@
+# Current PROCESS index-evidence correction, 2026-10-31
+
+- [x] Preserve parent8b's exact SIGKILL/reconciliation failures and reproduce the
+  observer's rejection of legitimate original-operation phase markers offline.
+- [x] Require exactly the original clear/final preparation hashes, preserve every
+  namespace value and unrelated project row/vector, and retain before/after
+  index reports before assertions;19 focused RED regressions now pass.
+- [ ] Run and independently qualify all24 actual PROCESS crash cases and all
+  original recovery steps at this exact child, without borrowing parent results.
+- [ ] Complete original Go95/Android-Go95/Rust80/Python95 and full CI/Evidence;
+  qualify default Go totals after the parent's successful95 step separately.
+- [ ] Complete the unchanged full product/platform/recovery/MCP/provider/config/
+  capacity/ownership/zero-Python/security/performance acceptance; keep NOT_READY.
+
+---
+
 # Current PROCESS recovery and coverage correction, 2026-10-31
 
 - [x] Capture source7228a63a's exact observer RED and reproduce10 failures
