@@ -273,6 +273,7 @@ fn registration(
         record: Some(record),
         source_suffix,
         source_bytes,
+        processing: None,
     })
 }
 
@@ -341,6 +342,7 @@ fn upload(
         record: Some(record),
         source_suffix,
         source_bytes: payload.data.clone(),
+        processing: None,
     })
 }
 

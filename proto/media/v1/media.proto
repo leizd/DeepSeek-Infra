@@ -175,6 +175,50 @@ message MediaCreatePreparation {
   MediaObject record = 1;
   string source_suffix = 2;
   bytes source_bytes = 3;
+  // Rust-only, content-bound preparation. Absent retains every historical
+  // preparation byte/hash; callers cannot supply this through the Stage API.
+  MediaProcessingPreparation processing = 4;
+}
+
+// Prepared media processing effects, not an execution permit. The existing
+// original action/epoch, Go dispatch permit and Rust journal still authorize
+// every publication. Private index/segment effects must complete before the
+// signed terminal outcome; an unresolved effect cannot imply a new operation.
+message MediaProcessingPreparation {
+  uint32 schema_version = 1;
+  MediaObject processing_record = 2;
+  MediaArray segments = 3;
+  repeated MediaIndexItem index_items = 4;
+  bool index_enabled = 5;
+  string index_backend = 6;
+  uint32 embedding_dimensions = 7;
+  bool force = 8;
+  // The final record is MediaCreatePreparation.record, including a retained
+  // failed record when processing itself fails. Public errors are distinct
+  // from claiming no effect; their implementation must retain that distinction.
+  uint32 final_http_status = 9;
+  string final_error_code = 10;
+  string final_error_message = 11;
+}
+
+// Exact legacy rag_items projection in Rust custody. Embeddings use the frozen
+// f64 little-endian representation; metadata remains an explicitly typed tree.
+// No private key, API credential, caller-selected path or SQL statement crosses
+// this preparation boundary.
+message MediaIndexItem {
+  string item_id = 1;
+  string collection = 2;
+  string source_id = 3;
+  string project_id = 4;
+  uint32 chunk_index = 5;
+  string name = 6;
+  string kind = 7;
+  string scope = 8;
+  string text = 9;
+  bytes embedding_f64le = 10;
+  MediaObject metadata = 11;
+  int64 updated_at_millis = 12;
+  sint64 vector_id = 13;
 }
 
 message MediaCreateStageRequest {
