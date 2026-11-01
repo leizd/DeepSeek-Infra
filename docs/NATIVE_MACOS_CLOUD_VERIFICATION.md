@@ -4,6 +4,40 @@
 [中文](../README.md) / [English](../README.en.md)
 <!-- docs-language-switcher:end -->
 
+## AppKit/WebKit implementation under verification, 2026-11-01
+
+The actual9ace5f9 run41280489970 cross-built both architectures successfully.
+Intel and Apple silicon each executed the native test and failed at the same
+unimplemented production window entry. Both original job logs are retained;
+this is an observed runtime baseline, not a syntax-only failure.
+
+The follow-up implements the native AppKit window and WKWebView on the initial
+thread with the existing pinned purego package and CGO disabled. It retains the
+private URL handoff, native event queue, context cancellation, atomic launcher
+close guard, file chooser, JavaScript dialogs, native downloads and edit menus.
+Browser opening uses the existing UI executable in a separate initial-thread
+mode with a bounded lifetime and sanitized environment; no URL enters argv and
+no backend/provider/loader credentials are inherited.
+
+A canonical profile path derives a stable, distinct public CFBundleIdentifier.
+The UI re-execs at the same supervised PID into one private profile-owned app
+bundle before Foundation initializes its main bundle. This uses WebKit's public
+persistent default data store on macOS13+, without private API, a global ATS
+exception, an ephemeral profile or an implicit minimum-OS upgrade. Executable
+updates replace one owned file atomically and retain the same identifier; owned
+bundle member links and a different profile owner are refused. Default WebKit
+data remains in the operating system's bundle-specific Library locations;
+legacy profile migration/backup and actual restart persistence still need proof.
+
+The cloud gate retains the complete original Windows job and visible-window
+workload and adds native profile identity/update/link-denial and browser
+credential tests on both actual architectures. Local source checks cannot
+qualify Cocoa behavior. This implementation is not yet runtime accepted.
+Actual file dialogs/downloads/close-confirmation/default-browser behavior,
+persistent state across app restarts, the full Rust/Go product workload, backend
+closure, supported OS versions, packaging/signing and full migration remain open.
+All broad readiness and feature flags remain false/NOT_READY until proven.
+
 The firstd1266c7 submission failed workflow validation before any native Mac
 test ran: runner.temp is unavailable in job-level env. The corrected source
 uses an ignored workspace profile path and passes actionlint. The real failing

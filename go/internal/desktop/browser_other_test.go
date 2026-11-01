@@ -1,4 +1,4 @@
-//go:build !windows && (!linux || android || deepseek_android)
+//go:build !windows && (!darwin || ios) && (!linux || android || deepseek_android)
 
 package desktop
 

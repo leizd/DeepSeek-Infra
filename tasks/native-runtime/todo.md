@@ -1,3 +1,21 @@
+# Current checkpoint: implement the retained native macOS window, 2026-11-01
+
+Actual9ace5f9 run41280489970 executes Intel and Apple silicon and fails at the
+same unavailable production window entry; the Linux cross-build and original
+Windows job pass. The source follow-up adds AppKit/WKWebView, a private stable
+profile bundle and main-thread browser mode using the existing purego pin and
+no cgo/Python/business bridge. Native chooser/download/dialog/edit/close hooks
+are implemented but unqualified until actual runtime evidence is collected.
+The original Windows job, toolchain pins and coverage floors are unchanged.
+
+Parentb98c81b full CI41255611520 is now independently qualified: all37 jobs,
+Go16433/17293, AndroidGo16753/17631, Rust94391/114522,
+Python83525/87385, complete race corpora and50 Evidence hashes. Those passes
+belong only to that source. The9ace5f9 recovery matrix is still live and cannot
+qualify this new source. The complete retained media/MCP/ownership/recovery/
+platform/package/zero-Python/server-TypeScript/security/performance obligations
+remain ACTIVE/NOT_READY. No main merge, PR change, release or real data operation.
+
 # Current full PROCESS matrix follow-up, 2026-11-01
 
 - [x] Retain7478c31's original9 and11 actual SQLite PASS, five real initial-inode

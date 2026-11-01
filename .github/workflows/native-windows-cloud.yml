@@ -265,6 +265,11 @@ jobs:
           for name in ['deepseek-desktop','desktop.test']:(root/arch/name).chmod(0o700)
           Path('artifacts/macos-window/build-receipt.json').write_bytes((root/'build-receipt.json').read_bytes())
           PY
+      - name: Verify native bundle identity, update isolation, link denial and browser credential boundaries
+        run: |
+          set -euo pipefail
+          set -o pipefail
+          "artifacts/macos-fixtures/$DEEPSEEK_MACOS_ARCH/desktop.test" -test.v -test.count=1 -test.timeout=60s -test.run='^TestNativeMac(Bundle|Browser)' 2>&1 | tee artifacts/macos-window/profile-browser-test.log
       - name: Exercise a real visible window, authenticated WebKit DOM and cancellation
         run: |
           set -euo pipefail
@@ -276,7 +281,11 @@ jobs:
           report=json.loads(Path(os.environ['DEEPSEEK_MACOS_REPORT']).read_bytes())
           assert report['sourceCommit']==os.environ['GITHUB_SHA'] and report['runId']==os.environ['GITHUB_RUN_ID']
           assert report['architecture']==os.environ['DEEPSEEK_MACOS_ARCH']
-          assert all(report[k] is True for k in ['visible','titleMatched','authenticatedDOMObserved','contextCancellationSettled'])
+          assert all(report[k] is True for k in ['visible','titleMatched','authenticatedDOMObserved','contextCancellationSettled','nativeMainThreadObserved','persistentDataStoreObserved'])
+          receipt=json.loads(Path('artifacts/macos-window/build-receipt.json').read_bytes())
+          binary=next(row for row in receipt['binaries'] if row['path']==os.environ['DEEPSEEK_MACOS_ARCH']+'/desktop.test')
+          assert report['actualExecutableSha256']==binary['sha256']
+          assert report['bundleIdentifier'].startswith('com.deepseekinfra.profile.p')
           assert report['windowId']>0 and report['contentWidth']>=760 and report['contentHeight']>=520
           assert report['productionApplicationWorkloadQualified'] is False and report['fullMigrationQualified'] is False and report['readiness']=='NOT_READY'
           PY

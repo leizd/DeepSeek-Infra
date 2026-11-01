@@ -4,8 +4,10 @@ package desktop
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -25,6 +27,12 @@ func init() { runtime.LockOSThread() }
 var macUITasks = make(chan func())
 
 func TestMain(m *testing.M) {
+	if profile := os.Getenv("DEEPSEEK_MACOS_PROFILE"); profile != "" {
+		if _, err := ensureMacAppBundle(profile); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+	}
 	done := make(chan int, 1)
 	go func() { done <- m.Run() }()
 	for {
@@ -112,6 +120,20 @@ fetch('/loaded?width='+innerWidth+'&height='+innerHeight+'&text='+document.body.
 				return nil, err
 			}
 			app := objc.ID(objc.GetClass("NSApplication")).Send(objc.RegisterName("sharedApplication"))
+			if !objc.Send[bool](objc.ID(objc.GetClass("NSThread")), objc.RegisterName("isMainThread")) {
+				view.Destroy()
+				return nil, errors.New("native macOS window is not on the initial main thread")
+			}
+			receipt["nativeMainThreadObserved"] = true
+			bundle := objc.ID(objc.GetClass("NSBundle")).Send(objc.RegisterName("mainBundle"))
+			receipt["bundleIdentifier"] = macText(bundle.Send(objc.RegisterName("bundleIdentifier")))
+			executable, executableErr := os.Executable()
+			bytes, readErr := os.ReadFile(executable)
+			if executableErr != nil || readErr != nil {
+				view.Destroy()
+				return nil, errors.New("cannot bind the actual macOS executable")
+			}
+			receipt["actualExecutableSha256"] = fmt.Sprintf("%x", sha256.Sum256(bytes))
 			windows := app.Send(objc.RegisterName("windows"))
 			title := objc.ID(objc.GetClass("NSString")).Send(objc.RegisterName("stringWithUTF8String:"), Title)
 			count := objc.Send[uint64](windows, objc.RegisterName("count"))
@@ -122,6 +144,12 @@ fetch('/loaded?width='+innerWidth+'&height='+innerHeight+'&text='+document.body.
 					continue
 				}
 				content := candidate.Send(objc.RegisterName("contentView"))
+				if !objc.Send[bool](content, objc.RegisterName("isKindOfClass:"), objc.GetClass("WKWebView")) {
+					view.Destroy()
+					return nil, errors.New("native window content is not WKWebView")
+				}
+				store := content.Send(objc.RegisterName("configuration")).Send(objc.RegisterName("websiteDataStore"))
+				receipt["persistentDataStoreObserved"] = objc.Send[bool](store, objc.RegisterName("isPersistent"))
 				frame := objc.Send[macTestRect](content, objc.RegisterName("frame"))
 				receipt["windowId"] = objc.Send[int64](candidate, objc.RegisterName("windowNumber"))
 				receipt["visible"] = true
