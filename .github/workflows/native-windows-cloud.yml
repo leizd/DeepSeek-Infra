@@ -291,6 +291,11 @@ jobs:
           assert report['windowId']>0 and report['contentWidth']>=760 and report['contentHeight']>=520
           assert report['productionApplicationWorkloadQualified'] is False and report['fullMigrationQualified'] is False and report['readiness']=='NOT_READY'
           PY
+      - name: Verify real WebKit storage across native UI restarts and isolated profiles
+        run: |
+          set -euo pipefail
+          set -o pipefail
+          "artifacts/macos-fixtures/$DEEPSEEK_MACOS_ARCH/desktop.test" -test.v -test.count=1 -test.timeout=120s -test.run='^TestNativeMacPersistentProfilesAcrossActualUIRestarts$' 2>&1 | tee artifacts/macos-window/profile-persistence-test.log
       - name: Retain reports only for local collection
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

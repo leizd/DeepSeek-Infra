@@ -4,6 +4,27 @@
 [中文](../README.md) / [English](../README.en.md)
 <!-- docs-language-switcher:end -->
 
+## Actual profile restart probe
+
+Source475124e is now qualified for its controlled visible/authenticated native
+window fixture on Intel and Apple silicon, including exact executable identity,
+main-thread Regular state, original Cocoa callback completions and cancellation.
+This leaves actual stored state across process restarts unproven.
+
+The additional test starts three independent UI processes at one origin: A
+writes controlled WebKit localStorage/IndexedDB and a persistent HttpOnly cookie,
+A restarts and reads those values, then B must have none. Read pages receive no
+expected value to echo. The parent records actual value hashes and cookie
+presence/absence, requires one original DOM report, and validates each child's
+source/binary, supervised PID across bundle exec, actual visible window, native
+callbacks, signal-driven shutdown and successful process exit. There is no SQL
+seed, alternate storage implementation, sleep, or retry. Profile executables and
+browser data remain exclusively in the cloud; flat JSON/log reports are retained.
+The test-only helper exists solely in the integration test binary, never in the
+production application. Existing native tests/window timeout and Windows job
+remain unchanged. Cold power loss, legacy state migration, real binary upgrades,
+all UI/product features, packaging/signing and full readiness remain unqualified.
+
 ## Activation state verification under qualification
 
 The actual2410572 Intel/Apple-silicon runs pass class/selector registration but

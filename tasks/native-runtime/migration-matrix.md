@@ -1,3 +1,35 @@
+# Current checkpoint: qualify native Mac profile continuity, 2026-11-01
+
+Source475124e run41284368750 now passes both actual Intel/Apple-silicon native
+window jobs. Ten top-level native tests across both architectures, including
+12 activation-state subcases, are independently bound to the exact source,
+SDK/build receipt, actual copied binary SHA and ten report members. Each actual
+window is visible on the main thread in Regular activation state; authenticated
+WebKit DOM, original native action/response completions and dispatched context
+shutdown pass. Profile restart/persistence, complete desktop and product flags
+remain false. Complete CI41284373617 and Rust41284378865 remain independent
+current-source jobs; parent082e recovery41282782837 is a different source.
+
+The follow-up adds only test/verification code. On each actual architecture it
+starts three separate native UI processes at the same HTTP origin: profileA
+writes controlled localStorage/IndexedDB and a persistent HttpOnly cookie; a new
+profileA process must read all original values; a distinct profileB must expose
+none. Only the writer's page receives the expected value, and all reads use the
+actual WebKit storage APIs. Cookie presence and raw value hashes are independently
+recorded, including complete absence for B. Each child must retain its supervised
+PID through bundle exec, show a real native window, complete original callbacks,
+settle SIGTERM and exit cleanly. Every child binary/source/run/phase and report
+is rebound by the parent. No direct SQL seed, storage fallback, retry or sleep
+substitutes for actual state retention. Executables/profiles stay in the cloud;
+only bounded reports and logs return. Original Windows/window jobs, 60s window
+bound, pins, coverage floors and all existing tests remain required.
+
+This new probe has not executed yet and grants no persistence qualification.
+Cold/physical power loss, legacy profile migration, real binary upgrades, full
+Rust/Go product/UI/backend/platform/package and the complete ownership/recovery/
+feature/zero-Python/server-TypeScript/security/performance migration remain open.
+ACTIVE/NOT_READY.
+
 # Current checkpoint: verify native Mac activation state, 2026-11-01
 
 Actual2410572 run41283592581 verifies all required classes and registered

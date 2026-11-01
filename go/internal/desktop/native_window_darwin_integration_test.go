@@ -33,6 +33,13 @@ func TestMain(m *testing.M) {
 			os.Exit(2)
 		}
 	}
+	if os.Getenv("DEEPSEEK_MACOS_PROFILE_CHILD") == "1" {
+		if err := runMacProfileChild(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
 	done := make(chan int, 1)
 	go func() { done <- m.Run() }()
 	for {
