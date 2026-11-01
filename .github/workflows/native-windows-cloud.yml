@@ -10,6 +10,12 @@ on:
       - "tests/test_native_windows_cloud_gate.py"
       - "docs/NATIVE_WINDOWS_CLOUD_VERIFICATION.md"
   workflow_dispatch:
+    inputs:
+      verify_macos:
+        description: 'Also execute the native Go window on actual Intel and Apple silicon macOS runners'
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -122,4 +128,165 @@ jobs:
             artifacts/windows-native-cloud/*.jsonl
             artifacts/windows-native-cloud/*.log
           if-no-files-found: warn
+          retention-days: 7
+
+  macos-build:
+    if: github.event_name == 'workflow_dispatch' && inputs.verify_macos
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    env:
+      CGO_ENABLED: '0'
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Install the unchanged checksum-pinned Linux Go cross compiler
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib,json,os,shutil,tarfile,urllib.request
+          from pathlib import Path
+          pin=json.loads(Path('release/native_runtime_toolchain_v1.json').read_bytes())['go']
+          artifact=pin['artifacts']['linux_amd64']
+          archive=Path(os.environ['RUNNER_TEMP'])/artifact['filename']
+          with urllib.request.urlopen('https://go.dev/dl/'+artifact['filename'],timeout=60) as response,archive.open('wb') as target:
+              shutil.copyfileobj(response,target,1024**2)
+          assert hashlib.file_digest(archive.open('rb'),'sha256').hexdigest()==artifact['sha256']
+          destination=Path(os.environ['RUNNER_TEMP'])/'macos-window-go'
+          with tarfile.open(archive) as source:
+              source.extractall(destination,filter='data')
+          with open(os.environ['GITHUB_PATH'],'a') as path:
+              path.write(str(destination/'go/bin')+'\n')
+          PY
+      - name: Cross compile the real Go desktop program and native test host for both architectures
+        run: |
+          set -euo pipefail
+          export GOCACHE="$RUNNER_TEMP/macos-window-go-cache"
+          export GOMODCACHE="$RUNNER_TEMP/macos-window-go-modules"
+          out="$GITHUB_WORKSPACE/artifacts/macos-fixtures"
+          mkdir -p "$out"
+          go version | tee "$out/go-version.txt"
+          python scripts/capture_evidence_context.py --out "$out/source-context.json"
+          cd go
+          for arch in amd64 arm64; do
+            mkdir -p "$out/$arch"
+            GOOS=darwin GOARCH="$arch" go build -trimpath -o "$out/$arch/deepseek-desktop" ./cmd/deepseek-desktop
+            GOOS=darwin GOARCH="$arch" go test -c -trimpath -tags=native_desktop_integration -o "$out/$arch/desktop.test" ./internal/desktop
+          done
+          cd ..
+          python - <<'PY'
+          import hashlib,json,os,subprocess
+          from pathlib import Path
+          root=Path('artifacts/macos-fixtures')
+          pin=json.loads(Path('release/native_runtime_toolchain_v1.json').read_bytes())['go']
+          version=subprocess.check_output(['go','version'],text=True).strip()
+          assert version.startswith('go version go'+pin['version']+' linux/amd64')
+          rows=[]
+          for arch in ['amd64','arm64']:
+              for name in ['deepseek-desktop','desktop.test']:
+                  path=root/arch/name
+                  rows.append(dict(path=arch+'/'+name,architecture=arch,bytes=path.stat().st_size,sha256=hashlib.file_digest(path.open('rb'),'sha256').hexdigest()))
+          value=dict(sourceCommit=os.environ['GITHUB_SHA'],sourceTree=subprocess.check_output(['git','rev-parse','HEAD^{tree}'],text=True).strip(),runId=os.environ['GITHUB_RUN_ID'],attempt=os.environ['GITHUB_RUN_ATTEMPT'],goVersion=version,linuxGoArchiveSha256=pin['artifacts']['linux_amd64']['sha256'],cgoEnabled=False,binaries=rows,fullMigrationQualified=False)
+          (root/'build-receipt.json').write_text(json.dumps(value,indent=2)+'\n')
+          PY
+      - name: Keep executable fixtures inside the cloud
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: native-macos-fixtures-${{ github.sha }}
+          path: artifacts/macos-fixtures/
+          if-no-files-found: error
+          retention-days: 3
+
+  macos-window:
+    if: github.event_name == 'workflow_dispatch' && inputs.verify_macos
+    needs: macos-build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: amd64
+            runner: macos-15-intel
+          - architecture: arm64
+            runner: macos-15
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    env:
+      CGO_ENABLED: '0'
+      GOTOOLCHAIN: local
+      DEEPSEEK_MACOS_ARCH: ${{ matrix.architecture }}
+      DEEPSEEK_MACOS_PROFILE: ${{ runner.temp }}/native-macos-disposable-profile
+      DEEPSEEK_MACOS_REPORT: ${{ github.workspace }}/artifacts/macos-window/result.json
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: native-macos-fixtures-${{ github.sha }}
+          path: artifacts/macos-fixtures
+      - name: Verify exact source, runtime architecture and every executable before running it
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/macos-window
+          python scripts/capture_evidence_context.py --out artifacts/macos-window/source-context.json
+          python - <<'PY'
+          import hashlib,json,os,platform,struct,subprocess
+          from pathlib import Path
+          assert os.environ['GITHUB_ACTIONS']=='true' and os.environ['RUNNER_ENVIRONMENT']=='github-hosted'
+          assert platform.system()=='Darwin' and os.environ['RUNNER_OS']=='macOS'
+          arch=os.environ['DEEPSEEK_MACOS_ARCH']
+          assert platform.machine()=={'amd64':'x86_64','arm64':'arm64'}[arch]
+          root=Path('artifacts/macos-fixtures').resolve()
+          receipt=json.loads((root/'build-receipt.json').read_bytes())
+          tree=subprocess.check_output(['git','rev-parse','HEAD^{tree}'],text=True).strip()
+          assert (receipt['sourceCommit'],receipt['sourceTree'],receipt['runId'],receipt['attempt'])==(os.environ['GITHUB_SHA'],tree,os.environ['GITHUB_RUN_ID'],os.environ['GITHUB_RUN_ATTEMPT'])
+          pin=json.loads(Path('release/native_runtime_toolchain_v1.json').read_bytes())['go']
+          assert receipt['linuxGoArchiveSha256']==pin['artifacts']['linux_amd64']['sha256'] and receipt['cgoEnabled'] is False
+          assert receipt['goVersion'].startswith('go version go'+pin['version']+' linux/amd64')
+          assert {(r['architecture'],r['path']) for r in receipt['binaries']}=={(a,a+'/'+n) for a in ['amd64','arm64'] for n in ['deepseek-desktop','desktop.test']}
+          for row in receipt['binaries']:
+              path=root/row['path'];assert path.is_file() and not path.is_symlink() and path.resolve().is_relative_to(root)
+              assert path.stat().st_size==row['bytes'] and hashlib.file_digest(path.open('rb'),'sha256').hexdigest()==row['sha256']
+              magic,cpu=struct.unpack('<II',path.open('rb').read(8))
+              assert (magic,cpu)==(0xfeedfacf,{'amd64':0x1000007,'arm64':0x100000c}[row['architecture']])
+          for name in ['deepseek-desktop','desktop.test']:(root/arch/name).chmod(0o700)
+          Path('artifacts/macos-window/build-receipt.json').write_bytes((root/'build-receipt.json').read_bytes())
+          PY
+      - name: Exercise a real visible window, authenticated WebKit DOM and cancellation
+        run: |
+          set -euo pipefail
+          set -o pipefail
+          "artifacts/macos-fixtures/$DEEPSEEK_MACOS_ARCH/desktop.test" -test.v -test.count=1 -test.timeout=60s -test.run='^TestNativeMacWindowBootAndCancel$' 2>&1 | tee artifacts/macos-window/window-test.log
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          report=json.loads(Path(os.environ['DEEPSEEK_MACOS_REPORT']).read_bytes())
+          assert report['sourceCommit']==os.environ['GITHUB_SHA'] and report['runId']==os.environ['GITHUB_RUN_ID']
+          assert report['architecture']==os.environ['DEEPSEEK_MACOS_ARCH']
+          assert all(report[k] is True for k in ['visible','titleMatched','authenticatedDOMObserved','contextCancellationSettled'])
+          assert report['windowId']>0 and report['contentWidth']>=760 and report['contentHeight']>=520
+          assert report['productionApplicationWorkloadQualified'] is False and report['fullMigrationQualified'] is False and report['readiness']=='NOT_READY'
+          PY
+      - name: Retain reports only for local collection
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: native-macos-window-${{ matrix.architecture }}-${{ github.sha }}
+          path: |
+            artifacts/macos-window/*.json
+            artifacts/macos-window/*.log
+          if-no-files-found: error
           retention-days: 7

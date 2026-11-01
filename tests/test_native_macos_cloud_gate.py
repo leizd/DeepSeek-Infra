@@ -1,0 +1,71 @@
+"""Source pipeline contracts; these do not build or qualify a local macOS host."""
+import ast
+import hashlib
+import json
+from pathlib import Path
+import re
+from typing import Any
+
+import yaml
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def workflow() -> dict[Any, Any]:
+    return yaml.safe_load((ROOT / ".github/workflows/native-windows-cloud.yml").read_bytes())
+
+
+def test_optional_macos_probe_preserves_the_complete_original_windows_job() -> None:
+    value = workflow()
+    original = json.dumps(value["jobs"]["windows-app"], sort_keys=True, separators=(",", ":")).encode()
+    assert hashlib.sha256(original).hexdigest() == "8108d2be47dea2b3ee06cd760950a5d338fecea0f2e68a881106f7870f4ac537"
+    trigger = value.get("on", value.get(True))
+    assert isinstance(trigger, dict)
+    assert trigger["workflow_dispatch"]["inputs"]["verify_macos"] == {
+        "description": "Also execute the native Go window on actual Intel and Apple silicon macOS runners",
+        "type": "boolean", "required": False, "default": False,
+    }
+
+
+def test_macos_probe_uses_exact_pinned_cross_compilation_and_both_real_runtime_architectures() -> None:
+    jobs = workflow()["jobs"]
+    build, runtime = jobs["macos-build"], jobs["macos-window"]
+    assert build["runs-on"] == "ubuntu-24.04" and build["env"]["CGO_ENABLED"] == "0"
+    assert build["env"]["GOTOOLCHAIN"] == "local" and runtime["needs"] == "macos-build"
+    assert runtime["strategy"]["fail-fast"] is False
+    assert runtime["strategy"]["matrix"]["include"] == [
+        {"architecture": "amd64", "runner": "macos-15-intel"}, {"architecture": "arm64", "runner": "macos-15"},
+    ]
+    source = "\n".join(step.get("run", "") for step in build["steps"])
+    for required in ["release/native_runtime_toolchain_v1.json", "artifact['sha256']", "go test -c", "GOOS=darwin", "go build -trimpath"]:
+        assert required in source
+    for job in [build, runtime]:
+        assert job["if"] == "github.event_name == 'workflow_dispatch' && inputs.verify_macos"
+        assert job["defaults"]["run"]["shell"] == "bash"
+        for step in job["steps"]:
+            if step.get("uses", "").startswith("actions/checkout@"):
+                assert step["with"]["persist-credentials"] is False
+
+
+def test_macos_gate_requires_actual_native_test_success_and_exports_only_reports_for_collection() -> None:
+    job = workflow()["jobs"]["macos-window"]
+    source = "\n".join(step.get("run", "") for step in job["steps"])
+    for required in ["platform.machine()", "sourceCommit", "sourceTree", "linuxGoArchiveSha256", "hashlib.file_digest",
+                     "0xfeedfacf", "TestNativeMacWindowBootAndCancel", "set -o pipefail", "authenticatedDOMObserved",
+                     "contextCancellationSettled", "productionApplicationWorkloadQualified", "NOT_READY"]:
+        assert required in source
+    upload = job["steps"][-1]
+    assert upload["if"] == "always()"
+    assert set(upload["with"]["path"].splitlines()) == {"artifacts/macos-window/*.json", "artifacts/macos-window/*.log"}
+    assert "fixtures" not in upload["with"]["path"]
+
+
+def test_embedded_python_is_executable_source_and_writes_real_newlines() -> None:
+    programs = []
+    for name in ["macos-build", "macos-window"]:
+        for step in workflow()["jobs"][name]["steps"]:
+            programs.extend(re.findall(r"python - <<'PY'\n(.*?)\nPY", step.get("run", ""), re.DOTALL))
+    assert len(programs) == 4
+    for program in programs:
+        compile(program, "embedded-macos-workflow.py", "exec")
+        assert not any(isinstance(node, ast.Constant) and node.value == "\\n" for node in ast.walk(ast.parse(program)))
