@@ -5,6 +5,7 @@ Python is an offline observer. It is absent from the launched app's owned tree.
 from __future__ import annotations
 
 import argparse
+from collections.abc import Iterator
 import ctypes
 import errno
 import hashlib
@@ -30,6 +31,8 @@ ROOT = Path(__file__).resolve().parents[1]
 ROLES = {*fixture.GO_ROLES, "deepseek-worker", "deepseek-gateway"}
 ORIGINAL = "Native macOS file workload\n原生桌面持久化验证\nRetained across an actual app restart.\n".encode()
 BSD = struct.Struct("=12I16s32s6I2Q")
+RESPONSE_METHODS = {"control-before.json": "GET", "react-index.txt": "GET", "file-upload.json": "POST",
+    "file-reader.json": "POST", "file-source-before.txt": "GET", "file-source-after.txt": "GET", "control-after.json": "GET"}
 
 
 def require_cloud(environment: dict[str, str], target: str) -> None:
@@ -147,14 +150,97 @@ def actual_window(pids: set[int]) -> dict[str, Any] | None:
     return None
 
 
-def request(origin: str, uri: str, token: str, data: bytes | None = None, content_type: str | None = None) -> bytes:
+def record_response(out: Path, name: str, raw: bytes, token: str, *, method: str, uri: str, status: int) -> dict[str, Any]:
+    if (name not in RESPONSE_METHODS or method != RESPONSE_METHODS[name] or type(status) is not int or status != 200
+            or not token or token.encode() in raw or token in uri or not uri.startswith("/")
+            or any(char in uri for char in "\r\n\x00") or len(raw) > 8 * 1024**2):
+        raise RuntimeError("MACOS_WORKLOAD_RESPONSE_CAPTURE_REFUSED")
+    path = out / name
+    try:
+        with path.open("xb") as stream:
+            stream.write(raw)
+    except OSError as error:
+        raise RuntimeError("MACOS_WORKLOAD_RESPONSE_CAPTURE_REFUSED") from error
+    return dict(path=name, bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest(), method=method, uri=uri, status=status)
+
+
+def response_strings(value: Any) -> Iterator[str]:
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for child in value.values():
+            yield from response_strings(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from response_strings(child)
+
+
+def verify_workload_responses(out: Path, report: dict[str, Any]) -> dict[str, Any]:
+    """Recompute workload evidence from response bytes; never infer it from PASS flags."""
+    try:
+        rows = report.get("responses")
+        if not isinstance(rows, dict) or set(rows) != set(RESPONSE_METHODS):
+            raise RuntimeError("MACOS_WORKLOAD_RESPONSE_SET_INVALID")
+        file_id = report["retainedFileId"]
+        if not isinstance(file_id, str) or not file_id:
+            raise RuntimeError("MACOS_WORKLOAD_RESPONSE_FILE_ID_INVALID")
+        source_uri = "/api/file-source?" + urlencode(dict(fileId=file_id))
+        uris = {"control-before.json": "/api/control/status", "control-after.json": "/api/control/status",
+            "react-index.txt": "/", "file-upload.json": "/api/file-text", "file-reader.json": "/api/file-reader",
+            "file-source-before.txt": source_uri, "file-source-after.txt": source_uri}
+        captured = {}
+        for name, method in RESPONSE_METHODS.items():
+            row = rows[name]
+            path = out / name
+            if path.is_symlink() or not path.is_file():
+                raise RuntimeError("MACOS_WORKLOAD_RESPONSE_FILE_INVALID")
+            raw = path.read_bytes()
+            if row != dict(path=name, bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest(),
+                           method=method, uri=uris[name], status=200) or len(raw) > 8 * 1024**2:
+                raise RuntimeError("MACOS_WORKLOAD_RESPONSE_BINDING_INVALID")
+            captured[name] = raw
+        upload = json.loads(captured["file-upload.json"])
+        if len(upload["files"]) != 1 or upload["files"][0]["fileId"] != file_id:
+            raise RuntimeError("MACOS_WORKLOAD_RESPONSE_UPLOAD_ID_INVALID")
+        for name in ["control-before.json", "control-after.json"]:
+            if json.loads(captured[name]).get("ok") is not True:
+                raise RuntimeError("MACOS_WORKLOAD_RESPONSE_CONTROL_NOT_READY")
+        reader_text = "\n".join(response_strings(json.loads(captured["file-reader.json"])))
+        if "Native macOS file workload" not in reader_text or "原生桌面持久化验证" not in reader_text:
+            raise RuntimeError("MACOS_WORKLOAD_RESPONSE_READER_INVALID")
+        before, after = captured["file-source-before.txt"], captured["file-source-after.txt"]
+        if before != ORIGINAL or after != before or report["originalFileSha256"] != hashlib.sha256(before).hexdigest():
+            raise RuntimeError("MACOS_WORKLOAD_RESPONSE_RETAINED_BYTES_DIFFER")
+        html = captured["react-index.txt"]
+        fixture_rows = json.loads((out / "product-fixture.json").read_bytes())["files"]
+        indexes = [row for row in fixture_rows if row["path"] == "static/ui/index.html"]
+        if (len(indexes) != 1 or indexes[0]["sha256"] != hashlib.sha256(html).hexdigest()
+                or indexes[0]["bytes"] != len(html) or b'<div id="root"' not in html or b"/assets/" not in html
+                or report["originalReactResponseSha256"] != hashlib.sha256(html).hexdigest()):
+            raise RuntimeError("MACOS_WORKLOAD_RESPONSE_ORIGINAL_UI_DIFFERS")
+        return dict(responseCount=7, retainedFileId=file_id, originalFileSha256=hashlib.sha256(before).hexdigest(),
+                    originalReactSha256=hashlib.sha256(html).hexdigest())
+    except (OSError, ValueError, KeyError, TypeError, IndexError) as error:
+        raise RuntimeError("MACOS_WORKLOAD_RESPONSE_INVALID") from error
+
+
+def request(origin: str, uri: str, token: str, data: bytes | None = None, content_type: str | None = None, *,
+            evidence: tuple[Path, dict[str, Any], str] | None = None) -> bytes:
     headers = {"Authorization": "Bearer " + token}
     if content_type:
         headers["Content-Type"] = content_type
-    with urlopen(Request(origin + uri, data=data, headers=headers), timeout=15) as response:
+    sent = Request(origin + uri, data=data, headers=headers)
+    with urlopen(sent, timeout=15) as response:
         if response.status != 200:
             raise RuntimeError("MACOS_NATIVE_HTTP_STATUS_UNEXPECTED")
-        return response.read(8 * 1024**2)
+        raw = response.read(8 * 1024**2 + 1)
+        if len(raw) > 8 * 1024**2:
+            raise RuntimeError("MACOS_NATIVE_HTTP_RESPONSE_TOO_LARGE")
+        if evidence is not None:
+            out, report, name = evidence
+            row = record_response(out, name, raw, token, method=sent.get_method(), uri=uri, status=response.status)
+            report.setdefault("responses", {})[name] = row
+        return raw
 
 
 def wait_ready(process: subprocess.Popen[bytes], origin: str, profile: Path, native: NativeProcesses,
@@ -255,7 +341,8 @@ def main() -> int:
             token, first, window = wait_ready(process, origin, profile, native, checksums)
             tokens.append(token)
             initial = profile_proof(profile)
-            html = request(origin, "/", token)
+            request(origin, "/api/control/status", token, evidence=(out, report, "control-before.json"))
+            html = request(origin, "/", token, evidence=(out, report, "react-index.txt"))
             if b'<div id="root"' not in html or b"/assets/" not in html:
                 raise RuntimeError("MACOS_ORIGINAL_REACT_APPLICATION_NOT_SERVED")
             boundary = "native-mac-disposable-file-boundary"
@@ -263,19 +350,22 @@ def main() -> int:
                     "Content-Type: text/plain\r\n\r\n").encode() + ORIGINAL + (
                     "\r\n--" + boundary + '\r\nContent-Disposition: form-data; name="ocrEnabled"\r\n\r\nfalse\r\n--' + boundary + "--\r\n").encode()
             # Exactly one upload; an uncertain effect is never retried.
-            uploaded = json.loads(request(origin, "/api/file-text", token, body, "multipart/form-data; boundary=" + boundary))
+            uploaded = json.loads(request(origin, "/api/file-text", token, body, "multipart/form-data; boundary=" + boundary,
+                                          evidence=(out, report, "file-upload.json")))
             files = uploaded.get("files", [])
             if len(files) != 1 or not isinstance(files[0].get("fileId"), str) or not files[0]["fileId"]:
                 raise RuntimeError("MACOS_NATIVE_FILE_UPLOAD_FAILED")
             file_id = files[0]["fileId"]
-            reader = json.loads(request(origin, "/api/file-reader", token, json.dumps(dict(fileId=file_id)).encode(), "application/json"))
+            reader = json.loads(request(origin, "/api/file-reader", token, json.dumps(dict(fileId=file_id)).encode(), "application/json",
+                                        evidence=(out, report, "file-reader.json")))
             if "原生桌面持久化验证" not in json.dumps(reader, ensure_ascii=False):
                 raise RuntimeError("MACOS_NATIVE_FILE_READER_DIFFERS")
             uri = "/api/file-source?" + urlencode(dict(fileId=file_id))
-            if request(origin, uri, token) != ORIGINAL:
+            original_source = request(origin, uri, token, evidence=(out, report, "file-source-before.txt"))
+            if original_source != ORIGINAL:
                 raise RuntimeError("MACOS_NATIVE_FILE_SOURCE_DIFFERS")
             report.update(initialProcesses=first, initialWindow=window, initialNativeOrigin=initial,
-                          retainedFileId=file_id, originalFileSha256=hashlib.sha256(ORIGINAL).hexdigest(),
+                          retainedFileId=file_id, originalFileSha256=hashlib.sha256(original_source).hexdigest(),
                           originalReactResponseSha256=hashlib.sha256(html).hexdigest(), successfulFileUploads=1)
             stop(process, first, native)
             report["firstGracefulShutdownStoppedOriginalNativeTree"] = True
@@ -283,12 +373,14 @@ def main() -> int:
             token, second, window = wait_ready(process, origin, profile, native, checksums)
             tokens.append(token)
             restarted = profile_proof(profile)
+            request(origin, "/api/control/status", token, evidence=(out, report, "control-after.json"))
             if any(initial[k] != restarted[k] for k in ["originSha256", "publicationSha256", "publicFiles"]):
                 raise RuntimeError("MACOS_RESTART_REPLACED_ORIGINAL_PROVENANCE")
             if restarted["writerFence"] <= initial["writerFence"]:
                 raise RuntimeError("MACOS_RESTART_DID_NOT_ADVANCE_ORIGINAL_WRITER")
-            if request(origin, uri, token) != ORIGINAL:
+            if request(origin, uri, token, evidence=(out, report, "file-source-after.txt")) != ORIGINAL:
                 raise RuntimeError("MACOS_RESTART_LOST_ORIGINAL_FILE")
+            report["rawWorkloadResponseVerification"] = verify_workload_responses(out, report)
             stop(process, second, native)
             report.update(status="PASS", restartedProcesses=second, restartedWindow=window, restartedNativeOrigin=restarted,
                           originalNativeOriginRetained=True, originalFileRetainedAfterAppRestart=True, writerFenceAdvanced=True,

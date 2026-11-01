@@ -40,6 +40,24 @@ from a process list. The direct dynamic dependencies and actual build logs are
 retained. Only JSON/text/log reports return to the local host; executable
 fixtures, profiles, compiler outputs and caches remain in the cloud.
 
+The observer also retains seven original HTTP response bodies: healthy control
+status before/after, the served React index, the single upload result, the reader
+result, and the file source before/after the complete app restart. Each receipt
+records the actual returned status and received bytes with its method, URI,
+length and SHA256. The upload file ID must bind both source URIs; the original
+UTF-8 bytes must survive restart unchanged; and the served React index must match
+the exact static build fixture. Authentication headers are never recorded, and
+a response containing the ephemeral bearer is refused before writing. Existing
+evidence files cannot be overwritten. A separate raw-body checker recomputes
+these relationships without relying on the producer's PASS fields.
+
+Source `6fd0a5de` has six successful platform jobs, including the actual app
+workload on both Mac architectures, but its seven-member reports did not retain
+these original HTTP response bodies. Its
+process/window/build observations remain useful; that older success must not be
+used as independently rechecked file-response/persistence evidence for this
+child source. This stronger child gate must execute again on both actual Macs.
+
 The public ABI references are [Apple proc_bsdinfo](https://github.com/apple/darwin-xnu/blob/main/bsd/sys/proc_info.h)
 and [WindowServer window information](https://developer.apple.com/documentation/coregraphics/cgwindowlistcopywindowinfo(_:_:)).
 The observer checks its libproc ABI against its own actual PID, parent and UID

@@ -1,3 +1,27 @@
+# Current checkpoint: retain the actual Mac workload responses, 2026-11-01
+
+Source6fd0a5de has all6 platform jobs successful, including both actual Mac
+five-binary app workloads and complete restarts. Each seven-member report has real
+process/window/build/provenance observations but omits the original HTTP
+response bodies; it is not sufficient for an independent file-byte recheck.
+The stronger child records seven exact response bodies and actual status/method/
+URI/length/SHA256, binds the upload ID to both reads, compares retained bytes
+across restart, and binds served React HTML to the original static fixture.
+Missing/altered/misbound responses and success flags alone are refused; bearer
+content is refused before writing and evidence is never overwritten.
+
+No production Go/Rust/Proto, API behavior, timeout, original platform job, test
+corpus or coverage floor changes. The same actual two-architecture app gate
+will be rerun for this child before raw business qualification. Current parent
+019c847c retains independent original9+all24PROCESS recovery and window/profile
+evidence; no parent result transfers to the child. Full feature/ownership/
+cutover/recovery, zero production Python/server TypeScript, platform/package/
+upgrade/legacy/backup/supported-OS, security/performance and exact CI/Evidence
+remain ACTIVE/NOT_READY, including the retained MCP pytest engine.
+
+See [the actual Mac product gate](../../docs/NATIVE_MACOS_PRODUCT_CLOUD_VERIFICATION.md).
+No out-of-schedule PR, original-root source application or local native build.
+
 # Current checkpoint: run the complete Mac native application, 2026-11-01
 
 Exact source019c847c independently passes the original9 and all24 PROCESS
