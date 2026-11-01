@@ -110,15 +110,18 @@ fetch('/loaded?width='+innerWidth+'&height='+innerHeight+'&text='+document.body.
 	}
 	finished := make(chan completion, 1)
 	macUITasks <- func() {
+		var actualView *macWindow
 		receipt := map[string]any{"scope": "controlled native Go macOS window, authenticated fixture DOM and cancellation only",
 			"sourceCommit": os.Getenv("GITHUB_SHA"), "runId": os.Getenv("GITHUB_RUN_ID"), "attempt": os.Getenv("GITHUB_RUN_ATTEMPT"),
 			"architecture": runtime.GOARCH, "pid": os.Getpid(), "productionApplicationWorkloadQualified": false,
 			"persistentProfileQualified": false, "allDesktopFeaturesQualified": false, "fullMigrationQualified": false, "readiness": "NOT_READY"}
 		err := show(ctx, server.URL+"/?desktop=1&token=native-macos-fixture-only", profile, func(path string) (window, error) {
 			view, err := newPlatformWindow(path)
+			t.Logf("native protocol metadata availability: %v", macRuntime.protocolAvailability)
 			if err != nil {
 				return nil, err
 			}
+			actualView = view.(*macWindow)
 			app := objc.ID(objc.GetClass("NSApplication")).Send(objc.RegisterName("sharedApplication"))
 			if !objc.Send[bool](objc.ID(objc.GetClass("NSThread")), objc.RegisterName("isMainThread")) {
 				view.Destroy()
@@ -160,6 +163,15 @@ fetch('/loaded?width='+innerWidth+'&height='+innerHeight+'&text='+document.body.
 			view.Destroy()
 			return nil, errors.New("real visible macOS application window not observed")
 		})
+		receipt["protocolMetadataAvailability"] = macRuntime.protocolAvailability
+		if actualView != nil {
+			receipt["nativeNavigationActionCallbacks"] = actualView.navigationActions
+			receipt["nativeNavigationResponseCallbacks"] = actualView.navigationResponses
+			receipt["nativeDispatchCallbacks"] = actualView.queueDrains
+			if err == nil && (actualView.navigationActions == 0 || actualView.navigationResponses == 0 || actualView.queueDrains == 0) {
+				err = errors.New("actual native macOS callback round trips were not observed")
+			}
+		}
 		finished <- completion{err, receipt}
 	}
 	var browser browserObservation

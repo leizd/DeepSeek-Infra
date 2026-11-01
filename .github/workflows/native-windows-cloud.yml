@@ -286,6 +286,8 @@ jobs:
           binary=next(row for row in receipt['binaries'] if row['path']==os.environ['DEEPSEEK_MACOS_ARCH']+'/desktop.test')
           assert report['actualExecutableSha256']==binary['sha256']
           assert report['bundleIdentifier'].startswith('com.deepseekinfra.profile.p')
+          assert set(report['protocolMetadataAvailability'])=={'NSWindowDelegate','NSApplicationDelegate','WKUIDelegate','WKNavigationDelegate','WKDownloadDelegate'}
+          assert all(type(report[k]) is int and report[k]>0 for k in ['nativeNavigationActionCallbacks','nativeNavigationResponseCallbacks','nativeDispatchCallbacks'])
           assert report['windowId']>0 and report['contentWidth']>=760 and report['contentHeight']>=520
           assert report['productionApplicationWorkloadQualified'] is False and report['fullMigrationQualified'] is False and report['readiness']=='NOT_READY'
           PY

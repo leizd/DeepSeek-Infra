@@ -4,6 +4,21 @@
 [中文](../README.md) / [English](../README.en.md)
 <!-- docs-language-switcher:end -->
 
+## Callback metadata correction under verification
+
+Source082e4d5 runs native profile and browser-credential tests successfully on
+both architectures, then rejects optional Objective-C protocol metadata before
+window creation. The follow-up retains available formal conformance and all
+public callback implementations, requires the actual classes and registered
+selectors, and records which metadata the system publishes. The window probe
+must observe real navigation action/response completions and UI dispatch before
+it can pass, in addition to the existing visible WebKit/authentication/layout/
+exact-executable/cancellation requirements. Broad feature/readiness flags remain
+false. This is not a bypass of a missing API or a substitute browser window.
+
+- [Apple Objective-C protocol conformance](https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/ObjectiveC/Chapters/ocProtocols.html)
+- [WebKit public UI delegate selector dispatch](https://github.com/WebKit/WebKit/blob/main/Source/WebKit/UIProcess/Cocoa/UIDelegate.mm)
+
 ## AppKit/WebKit implementation under verification, 2026-11-01
 
 The actual9ace5f9 run41280489970 cross-built both architectures successfully.

@@ -1,3 +1,30 @@
+# Current checkpoint: bind native Mac callback capability, 2026-11-01
+
+The082e4d5 source cross-builds the real desktop program/test host for Intel and
+Apple silicon. All three native profile/update/link-denial/browser-environment
+tests pass on both architectures. Both actual window tests then fail at the
+blanket Objective-C protocol-metadata requirement before a visible window.
+Their original logs remain retained. This is not native-window qualification.
+
+Apple permits Objective-C conformance by implementing the declared methods;
+WebKit selects its public delegate callbacks with respondsToSelector. The
+follow-up records optional formal metadata, still adopts it when published,
+and always registers every required callback. Every required platform class
+and every registered selector must actually exist or startup fails. The actual
+window gate now also requires positive Cocoa navigation-action, navigation-
+response and main-thread dispatch callback counts, so neither an absent handler
+nor a default WebKit navigation can substitute for the implemented round trip.
+Unknown/retired delegates cancel navigation. No test, deadline, pin or original
+Windows job is removed. Native blocks are still completed through their original
+Apple ABI and must succeed on both architectures.
+
+The082e4d5 media recovery matrix remains live; its hidden-Vite transfer fix is
+retained byte-for-byte. This new source still requires exact-source native Mac,
+recovery and complete CI/Evidence/platform verification. Profile restart/legacy
+migration, real retained UI/product/backend lifecycle, all supported OS releases,
+packaging/signing and the entire ownership/recovery/feature/zero-Python/server-
+TypeScript/security/performance matrix remain mandatory. ACTIVE/NOT_READY.
+
 # Current checkpoint: preserve the cloud fixture file set, 2026-11-01
 
 Source9ace5f9 recovery run41280484842 completes all nine original cases, but

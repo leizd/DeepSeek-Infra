@@ -40,10 +40,11 @@ type macBlockHeader struct {
 }
 
 var macRuntime struct {
-	once            sync.Once
-	err             error
-	delegate        objc.Class
-	copyBlockHeader func(*macBlockHeader, uintptr, uintptr) uintptr
+	once                 sync.Once
+	err                  error
+	delegate             objc.Class
+	copyBlockHeader      func(*macBlockHeader, uintptr, uintptr) uintptr
+	protocolAvailability map[string]bool
 }
 var macWindows sync.Map
 
@@ -52,14 +53,15 @@ type macDownload struct {
 	temporary, destination string
 }
 type macWindow struct {
-	app, host, browser, delegate, pool objc.ID
-	mu                                 sync.Mutex
-	queue                              []func()
-	closed                             bool
-	closeGuard                         func() bool
-	runErr                             error
-	downloads                          map[objc.ID]macDownload
-	released                           bool
+	app, host, browser, delegate, pool                  objc.ID
+	mu                                                  sync.Mutex
+	queue                                               []func()
+	closed                                              bool
+	closeGuard                                          func() bool
+	runErr                                              error
+	downloads                                           map[objc.ID]macDownload
+	released                                            bool
+	navigationActions, navigationResponses, queueDrains uint64
 }
 
 func macSEL(name string) objc.SEL  { return objc.RegisterName(name) }
@@ -100,16 +102,25 @@ func loadMacRuntime() error {
 			return
 		}
 		purego.RegisterFunc(&macRuntime.copyBlockHeader, pointer)
-		protocols := make([]*objc.Protocol, 0, 5)
-		for _, name := range []string{"NSWindowDelegate", "NSApplicationDelegate", "WKUIDelegate", "WKNavigationDelegate", "WKDownloadDelegate"} {
-			protocol := objc.GetProtocol(name)
-			if protocol == nil {
-				macRuntime.err = errors.New("native macOS protocol unavailable")
+		for _, name := range []string{"NSObject", "NSApplication", "NSWindow", "WKWebView", "WKWebsiteDataStore", "WKWebViewConfiguration", "WKDownload", "NSOpenPanel", "NSSavePanel", "NSAlert"} {
+			if objc.GetClass(name) == 0 {
+				macRuntime.err = errors.New("native macOS class unavailable: " + name)
 				return
 			}
-			protocols = append(protocols, protocol)
 		}
-		macRuntime.delegate, macRuntime.err = objc.RegisterClass("DeepSeekNativeWindowDelegateV1", objc.GetClass("NSObject"), protocols, nil, []objc.MethodDef{
+		protocols := make([]*objc.Protocol, 0, 5)
+		macRuntime.protocolAvailability = make(map[string]bool)
+		for _, name := range []string{"NSWindowDelegate", "NSApplicationDelegate", "WKUIDelegate", "WKNavigationDelegate", "WKDownloadDelegate"} {
+			protocol := objc.GetProtocol(name)
+			macRuntime.protocolAvailability[name] = protocol != nil
+			// Formal protocol metadata need not be published by a framework.
+			// Register every callback regardless; WebKit dispatches by selector.
+			// https://github.com/WebKit/WebKit/blob/main/Source/WebKit/UIProcess/Cocoa/UIDelegate.mm
+			if protocol != nil {
+				protocols = append(protocols, protocol)
+			}
+		}
+		methods := []objc.MethodDef{
 			{Cmd: macSEL("drainNativeQueue:"), Fn: macDrainQueue},
 			{Cmd: macSEL("windowShouldClose:"), Fn: macWindowShouldClose},
 			{Cmd: macSEL("applicationShouldTerminate:"), Fn: macApplicationShouldTerminate},
@@ -128,7 +139,17 @@ func loadMacRuntime() error {
 			{Cmd: macSEL("webView:didFailProvisionalNavigation:withError:"), Fn: macNavigationFailed},
 			{Cmd: macSEL("webView:didFailNavigation:withError:"), Fn: macNavigationFailed},
 			{Cmd: macSEL("webViewWebContentProcessDidTerminate:"), Fn: macWebProcessTerminated},
-		})
+		}
+		macRuntime.delegate, macRuntime.err = objc.RegisterClass("DeepSeekNativeWindowDelegateV1", objc.GetClass("NSObject"), protocols, nil, methods)
+		if macRuntime.err != nil {
+			return
+		}
+		for _, method := range methods {
+			if !objc.Send[bool](objc.ID(macRuntime.delegate), macSEL("instancesRespondToSelector:"), method.Cmd) {
+				macRuntime.err = errors.New("native macOS delegate callback unavailable")
+				return
+			}
+		}
 	})
 	return macRuntime.err
 }
@@ -234,6 +255,7 @@ func macDrainQueue(self objc.ID, _ objc.SEL, _ objc.ID) {
 	if w == nil {
 		return
 	}
+	w.queueDrains++
 	w.mu.Lock()
 	pending := w.queue
 	w.queue = nil
@@ -430,14 +452,26 @@ func macNewWebView(self objc.ID, _ objc.SEL, _ objc.ID, _ objc.ID, action objc.I
 	}
 	return 0
 }
-func macNavigationAction(_ objc.ID, _ objc.SEL, _ objc.ID, action objc.ID, completion objc.Block) {
+func macNavigationAction(self objc.ID, _ objc.SEL, _ objc.ID, action objc.ID, completion objc.Block) {
+	w := macView(self)
+	if w == nil {
+		macComplete(completion, 0)
+		return
+	}
+	w.navigationActions++
 	policy := uintptr(1)
 	if objc.Send[bool](action, macSEL("shouldPerformDownload")) {
 		policy = 2
 	}
 	macComplete(completion, policy)
 }
-func macNavigationResponse(_ objc.ID, _ objc.SEL, _ objc.ID, response objc.ID, completion objc.Block) {
+func macNavigationResponse(self objc.ID, _ objc.SEL, _ objc.ID, response objc.ID, completion objc.Block) {
+	w := macView(self)
+	if w == nil {
+		macComplete(completion, 0)
+		return
+	}
+	w.navigationResponses++
 	policy := uintptr(1)
 	if !objc.Send[bool](response, macSEL("canShowMIMEType")) {
 		policy = 2
