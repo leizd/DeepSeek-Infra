@@ -202,7 +202,8 @@ def original_creation_fixture(profile: Path, diagnostic: Path, media: list[dict[
 def proc_state(pid: int) -> str | None:
     try:
         raw = Path(f"/proc/{pid}/stat").read_text()
-    except FileNotFoundError:
+    except (FileNotFoundError, ProcessLookupError):
+        # procfs may return ESRCH when the task exits between open and read.
         return None
     return raw[raw.rfind(")") + 2:].split()[0]
 

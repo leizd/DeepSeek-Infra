@@ -1,3 +1,22 @@
+# Current checkpoint: observe procfs exit races without weakening crash evidence, 2026-11-01
+
+Exact source df16f983 recovery run41288289654 passes eight original cases
+but fails vector DELETE after all seven SIGKILL sends succeed. Its24 PROCESS
+cases are not qualified. Both procfs stat readers now accept ESRCH as a task
+that exited during read, alongside ENOENT; permission/I/O errors propagate,
+pidfd/start-time refusal and mandatory actual worker/launcher termination stay
+unchanged. Five functional RED cases reproduce the gap;15 new cases pass.
+See [the bounded failure and regression review](../../docs/NATIVE_MEDIA_PROC_EXIT_REVIEW.md).
+
+The df16f983 controlled Intel/Apple-silicon visible window and three-process
+profile continuity/isolation probes pass independently; full macOS product
+behavior is not qualified. Parent082e4d57 has separate9+24 recovery evidence;
+no parent result qualifies this cumulative child. New exact-source cloud
+CI/Rust/recovery/Windows/Android qualification and all retained product, unique
+writer, recovery, zero-Python/server-TypeScript, platform/package, security and
+performance requirements remain ACTIVE/NOT_READY. No PR is updated outside
+the daily09:00 scheduled run. Original local checkout remains preserved.
+
 # Current checkpoint: audit the bounded native Mac process entries, 2026-11-01
 
 Source475124e native Mac/Windows workflow41284368750 passes all four jobs,

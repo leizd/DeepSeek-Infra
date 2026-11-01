@@ -120,7 +120,8 @@ def check_reads(origin: str, token: str, cases: list[dict[str, Any]],
 def process_identity(pid: int) -> str | None:
     try:
         return (Path("/proc") / str(pid) / "stat").read_text().rsplit(")", 1)[1].split()[19]
-    except FileNotFoundError:
+    except (FileNotFoundError, ProcessLookupError):
+        # A process exiting after procfs open makes the read fail with ESRCH.
         return None
 
 
