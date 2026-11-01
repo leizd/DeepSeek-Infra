@@ -578,6 +578,113 @@ def _native_browser_hook_contract(path: Path, root: Path, text: str) -> bool:
                                                      "number < 1 || number > 65535", "strings.ContainsAny(raw"]))
 
 
+def _ordered_source_tokens(text: str, tokens: list[str]) -> bool:
+    position = 0
+    for token in tokens:
+        found = text.find(token, position)
+        if found < 0:
+            return False
+        position = found + len(token)
+    return True
+
+
+def _go_process_replacements(text: str) -> list[str]:
+    """Recognize direct, aliased and dot-imported syscall/unix replacement APIs."""
+    namespaces = {"syscall", "unix"}
+    dot_import = False
+    imports = re.findall(r'(?:^|[\s;(])(?:(\w+|\.)\s+)?"(syscall|golang\.org/x/sys/unix)"', text)
+    for alias, module in imports:
+        if alias == ".":
+            dot_import = True
+        elif alias and alias not in {"import", "_"}:
+            namespaces.add(alias)
+        else:
+            namespaces.add("unix" if module.endswith("/unix") else "syscall")
+    calls = re.findall(r"\b(?:" + "|".join(re.escape(name) for name in sorted(namespaces)) + r")\.Exec\s*\(", text)
+    if dot_import:
+        calls.extend(re.findall(r"(?<![.\w])Exec\s*\(", text))
+    return calls
+
+
+def _native_macos_browser_hook_contract(path: Path, root: Path, text: str) -> bool:
+    """A bounded native UI helper may hand a validated URL to NSWorkspace only."""
+    if path.relative_to(root).as_posix() != "go/internal/desktop/browser_darwin.go" or not text.startswith("//go:build darwin && !ios\n"):
+        return False
+    calls = re.findall(r"exec\.Command(?:Context)?\s*\(([^)]*)\)", text)
+    if [re.sub(r"\s+", "", call) for call in calls] != ["ctx,helper"]:
+        return False
+    if "os.Environ()" in text or re.search(r"command\.(?:Args|Path|ExtraFiles|SysProcAttr|Dir|Cancel)\s*=", text):
+        return False
+    if not _ordered_source_tokens(text, [
+        "if err := validateBrowserURL(raw); err != nil", "executable, err := os.Executable()",
+        'helper := filepath.Join(filepath.Dir(executable), "deepseek-desktop")', "stat, err := os.Lstat(helper)",
+        "if err != nil || !stat.Mode().IsRegular() || stat.Mode().Perm()&0o111 == 0",
+        "context.WithTimeout(context.Background(), 8*time.Second)", "defer cancel()",
+        "command := exec.CommandContext(ctx, helper)", "command.Env = macBrowserEnvironment(raw)",
+        "command.WaitDelay = time.Second", "if err := command.Run(); err != nil",
+    ]):
+        return False
+    keys = re.search(r"for _, key := range \[\]string\{([^}]+)\}", text)
+    if keys is None or re.findall(r'"([^\"]+)"', keys.group(1)) != [
+        "PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE", "__CF_USER_TEXT_ENCODING",
+    ]:
+        return False
+    if 'return append(result, "DEEPSEEK_DESKTOP_KIND=browser", "DEEPSEEK_BROWSER_URL="+raw)' not in text:
+        return False
+    validator = path.with_name("browser.go")
+    main = root / "go/cmd/deepseek-desktop/main_darwin.go"
+    if not validator.is_file() or not main.is_file():
+        return False
+    validation = validator.read_text(encoding="utf-8")
+    if not all(token in validation for token in [
+        'u.Scheme != "http"', 'u.Scheme != "https"', "u.User != nil", "net.ParseIP(u.Hostname())",
+        "url.ParseQuery(u.RawQuery)", "number < 1 || number > 65535", "strings.ContainsAny(raw",
+    ]):
+        return False
+    entry = main.read_text(encoding="utf-8")
+    body = re.search(r"func main\(\) \{(.*?)\n\}", entry, re.DOTALL)
+    expected = ('var err error if os.Getenv("DEEPSEEK_DESKTOP_KIND") == "browser" {'
+                'err = desktop.OpenMacBrowserOnInitialThread(os.Getenv("DEEPSEEK_BROWSER_URL"))'
+                '} else { err = run() } if err != nil { fmt.Fprintln(os.Stderr, err) os.Exit(1) }')
+    if (not entry.startswith("//go:build darwin && !ios\n") or "func init() { runtime.LockOSThread() }" not in entry
+            or body is None or re.sub(r"\s+", "", body.group(1)) != re.sub(r"\s+", "", expected)):
+        return False
+    opener = re.search(r"func OpenMacBrowserOnInitialThread\([^\n]*\) error \{(.*?)\n\}", text, re.DOTALL)
+    return opener is not None and _ordered_source_tokens(opener.group(1), [
+        "if err := validateBrowserURL(raw); err != nil", "if err := loadMacRuntime(); err != nil",
+        'macClass("NSURL").Send(macSEL("URLWithString:"), macString(raw))',
+        'macClass("NSWorkspace").Send(macSEL("sharedWorkspace"))',
+        'if url == 0 || !objc.Send[bool](workspace, macSEL("openURL:"), url)',
+    ])
+
+
+def _native_macos_bundle_exec_contract(path: Path, root: Path, text: str) -> bool:
+    """Only the current native UI bytes may replace its same supervised PID."""
+    if path.relative_to(root).as_posix() != "go/internal/desktop/profile_darwin.go" or not text.startswith("//go:build darwin && !ios\n"):
+        return False
+    if len(_go_process_replacements(text)) != 1 or '"os/exec"' in text:
+        return False
+    wrapper = re.search(r"func ensureMacAppBundle\([^\n]*\) \(macAppBundle, error\) \{(.*?)\n\}", text, re.DOTALL)
+    if wrapper is None or not _ordered_source_tokens(wrapper.group(1), [
+        "executable, err := os.Executable()", "result, err := prepareMacAppBundle(profile, executable)",
+        "if filepath.Clean(executable) == result.executable", "return result, nil",
+        "if err := syscall.Exec(result.executable, os.Args, os.Environ()); err != nil",
+    ]):
+        return False
+    if len(re.findall(r"result\.executable\s*=", text)) != 1:
+        return False
+    return all(token in text for token in [
+        "if !filepath.IsAbs(profile) || !filepath.IsAbs(executable)", "macPrivateDirectory(profile)",
+        "filepath.EvalSymlinks(profile)", 'result.executable = filepath.Join(bin, "deepseek-desktop")',
+        "!stat.Mode().IsRegular()", "source, err := os.Open(executable)", "stat, err := source.Stat()",
+        "stat.Size() <= 0 || stat.Size() > 256*1024*1024",
+        "macAtomicFile(result.executable, io.LimitReader(source, 256*1024*1024+1), 0o700)",
+        "info.Mode()&os.ModeSymlink != 0", "stat.Uid != uint32(os.Geteuid())", "os.Chmod(path, 0o700)",
+        "io.Copy(file, io.LimitReader(source, 256*1024*1024+1))", "copied > 256*1024*1024",
+        "file.Chmod(mode)", "file.Sync()", "file.Close()", "os.Rename(name, destination)",
+    ])
+
+
 def _native_android_guardian_contract(path: Path, root: Path, text: str) -> bool:
     """The old-kernel guardian alone may start a bounded child without Cmd.Wait."""
     if path.relative_to(root).as_posix() != "go/internal/launch/guardian_android_compat.go":
@@ -636,12 +743,19 @@ def check_process_tree_isolation(root: Path) -> GateCheckResult:
     go_violations: list[str] = []
     native_supervisors = 0
     browser_handlers = 0
+    platform_ui_reexecs = 0
     for go_file in go_root.rglob("*.go"):
         if "_test.go" in go_file.name:
             continue
         text = go_file.read_text(encoding="utf-8")
-        if '"os/exec"' in text or re.search(r"\bos\.StartProcess\s*\(", text):
-            if re.search(r"\bos\.StartProcess\s*\(", text):
+        replacements = _go_process_replacements(text)
+        if '"os/exec"' in text or re.search(r"\bos\.StartProcess\s*\(", text) or replacements:
+            if replacements:
+                if _native_macos_bundle_exec_contract(go_file, root, text):
+                    platform_ui_reexecs += 1
+                else:
+                    go_violations.append(f"{go_file.relative_to(root)} replaces a process outside the bounded native UI bundle")
+            elif re.search(r"\bos\.StartProcess\s*\(", text):
                 if _native_android_guardian_contract(go_file, root, text):
                     native_supervisors += 1
                 else:
@@ -650,7 +764,8 @@ def check_process_tree_isolation(root: Path) -> GateCheckResult:
                     or _native_managed_initializer_contract(go_file, root, text)
                     or _native_linux_guardian_contract(go_file, root, text)):
                 native_supervisors += 1
-            elif _native_browser_hook_contract(go_file, root, text):
+            elif (_native_browser_hook_contract(go_file, root, text)
+                    or _native_macos_browser_hook_contract(go_file, root, text)):
                 browser_handlers += 1
             else:
                 go_violations.append(f"{go_file.relative_to(root)} imports os/exec outside the bounded native supervisor")
@@ -659,7 +774,7 @@ def check_process_tree_isolation(root: Path) -> GateCheckResult:
         return GateCheckResult(
             name="process_tree_isolation",
             passed=False,
-            details=f"Go production code imports os/exec: {'; '.join(go_violations)}",
+            details=f"Go production code imports os/exec or replaces a process: {'; '.join(go_violations)}",
         )
 
     return GateCheckResult(
@@ -672,6 +787,7 @@ def check_process_tree_isolation(root: Path) -> GateCheckResult:
             "external_executors_detected": 0,
             "native_supervisors_checked": native_supervisors,
             "platform_browser_handlers_checked": browser_handlers,
+            "platform_ui_reexecs_checked": platform_ui_reexecs,
             "external_executor_scope": "forbidden business/interpreter executors; platform browser hooks counted separately",
             "scope": "source_contract",
         },

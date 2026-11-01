@@ -1,3 +1,36 @@
+# Current checkpoint: audit the bounded native Mac process entries, 2026-11-01
+
+Source475124e native Mac/Windows workflow41284368750 passes all four jobs,
+including the independently qualified two-architecture visible WebKit window.
+Its complete CI41284373617 fails all three Python-version jobs on the same
+zero-Python source-contract error: the new bounded native Mac browser helper's
+os/exec import was not recognized. Coverage still reports95.58%; the original
+95% gate is not lowered. Parent082e recovery41282782837 has all14 jobs green
+(original9 and12 PROCESS cells), and its original reports are being separately
+verified. None of these results qualify this cumulative child source.
+
+The source admission fix permits exactly the known native desktop browser
+helper with its fixed sibling program, validated local/IP HTTP URL, no URL argv,
+exact session-only environment,8s deadline,1s WaitDelay and checked exit. The
+initial-thread browser entry must select NSWorkspace only. It also audits the
+new same-PID bundle self-exec separately: only current native executable bytes,
+private owned/non-linked profile, bounded atomic copy and unchanged argv/env are
+admitted. Generic direct/aliased/dot-import syscall/unix Exec, arbitrary paths,
+interpreters, extra arguments, inherited provider credentials, omitted waits or
+guards remain refused. The original eight source checks remain eight, and
+runtime/deployment/provider verification remains explicitly false/UNVERIFIED.
+26 focused cases plus the nine original gate tests pass;24 negative boundaries
+remain refused. Functional RED evidence excludes the metadata-only missing
+counter and preliminary fixtures. Production runtime code is unchanged.
+
+This cumulative child retains the frozen3dd2b28 actual profile restart probe:
+three independent native UI processes per architecture, original browser-state
+hashes, namespace absence, supervised PID and source/binary/callback/shutdown
+bindings. That new probe is still unexecuted and grants no persistence result.
+Full exact-source CI/Evidence/recovery/platform and all retained feature/
+ownership/package/zero-Python/server-TypeScript/security/performance obligations
+remain ACTIVE/NOT_READY. No PR is changed outside the daily scheduled run.
+
 # Current checkpoint: qualify native Mac profile continuity, 2026-11-01
 
 Source475124e run41284368750 now passes both actual Intel/Apple-silicon native
