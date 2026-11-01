@@ -269,7 +269,7 @@ jobs:
         run: |
           set -euo pipefail
           set -o pipefail
-          "artifacts/macos-fixtures/$DEEPSEEK_MACOS_ARCH/desktop.test" -test.v -test.count=1 -test.timeout=60s -test.run='^TestNativeMac(Bundle|Browser)' 2>&1 | tee artifacts/macos-window/profile-browser-test.log
+          "artifacts/macos-fixtures/$DEEPSEEK_MACOS_ARCH/desktop.test" -test.v -test.count=1 -test.timeout=60s -test.run='^TestNativeMac(Bundle|Browser|ActivationPolicy)' 2>&1 | tee artifacts/macos-window/profile-browser-test.log
       - name: Exercise a real visible window, authenticated WebKit DOM and cancellation
         run: |
           set -euo pipefail
@@ -281,7 +281,7 @@ jobs:
           report=json.loads(Path(os.environ['DEEPSEEK_MACOS_REPORT']).read_bytes())
           assert report['sourceCommit']==os.environ['GITHUB_SHA'] and report['runId']==os.environ['GITHUB_RUN_ID']
           assert report['architecture']==os.environ['DEEPSEEK_MACOS_ARCH']
-          assert all(report[k] is True for k in ['visible','titleMatched','authenticatedDOMObserved','contextCancellationSettled','nativeMainThreadObserved','persistentDataStoreObserved'])
+          assert all(report[k] is True for k in ['visible','titleMatched','authenticatedDOMObserved','contextCancellationSettled','nativeMainThreadObserved','persistentDataStoreObserved','regularActivationPolicyObserved'])
           receipt=json.loads(Path('artifacts/macos-window/build-receipt.json').read_bytes())
           binary=next(row for row in receipt['binaries'] if row['path']==os.environ['DEEPSEEK_MACOS_ARCH']+'/desktop.test')
           assert report['actualExecutableSha256']==binary['sha256']

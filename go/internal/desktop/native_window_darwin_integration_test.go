@@ -128,6 +128,7 @@ fetch('/loaded?width='+innerWidth+'&height='+innerHeight+'&text='+document.body.
 				return nil, errors.New("native macOS window is not on the initial main thread")
 			}
 			receipt["nativeMainThreadObserved"] = true
+			receipt["regularActivationPolicyObserved"] = objc.Send[int64](app, objc.RegisterName("activationPolicy")) == 0
 			bundle := objc.ID(objc.GetClass("NSBundle")).Send(objc.RegisterName("mainBundle"))
 			receipt["bundleIdentifier"] = macText(bundle.Send(objc.RegisterName("bundleIdentifier")))
 			executable, executableErr := os.Executable()

@@ -1,3 +1,25 @@
+# Current checkpoint: verify native Mac activation state, 2026-11-01
+
+Actual2410572 run41283592581 verifies all required classes and registered
+callbacks on Intel/Apple silicon. The system publishes NSWindow/WKUI/navigation
+protocols but omits formal NSApplication/WKDownload delegate metadata; both
+platforms get beyond that corrected check, then fail the activation setter
+return check. The actual visible-window workload still has not passed.
+
+The follow-up requires the public activationPolicy getter to report Regular.
+An already-Regular app needs no policy switch. A setter's true return without
+Regular state is rejected, and a false return is accepted only when the actual
+required state is observed. A missing app or non-main-thread creation fails.
+Six native logic cases cover these outcomes. The actual native window gate also
+requires Regular state together with all existing visible/DOM/cookie/real native
+callback/exact executable/cancellation checks. No supported UI state is inferred
+from a setter return, and no window or capability failure is ignored.
+
+Parent082e4d5 recovery run41282782837 remains independently live. Exact-source
+native Mac/recovery/full CI/Evidence, retained profile/UI/product/backend/platform/
+package/ownership/recovery/zero-Python/server-TypeScript/security/performance work
+remains required. Full migration remains ACTIVE/NOT_READY.
+
 # Current checkpoint: bind native Mac callback capability, 2026-11-01
 
 The082e4d5 source cross-builds the real desktop program/test host for Intel and

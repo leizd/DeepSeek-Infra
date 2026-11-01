@@ -4,6 +4,21 @@
 [中文](../README.md) / [English](../README.en.md)
 <!-- docs-language-switcher:end -->
 
+## Activation state verification under qualification
+
+The actual2410572 Intel/Apple-silicon runs pass class/selector registration but
+fail the activation-policy setter check. The follow-up reads the public current
+policy, keeps an already-Regular app, and otherwise requires the policy to be
+Regular after the switch. A true setter result alone never qualifies a wrong
+state. A missing app and creation off the initial main thread remain errors.
+Six native state-machine cases are added without removing existing tests; the
+real visible/authenticated/callback/cancellation gate requires the actual
+Regular policy as an additional observation. Native window acceptance remains
+unqualified until both architectures actually pass all those requirements.
+
+- [Apple activationPolicy getter](https://developer.apple.com/documentation/appkit/nsapplication/activationpolicy())
+- [Apple activation policy setter](https://developer.apple.com/documentation/appkit/nsapplication/setactivationpolicy(_:))
+
 ## Callback metadata correction under verification
 
 Source082e4d5 runs native profile and browser-credential tests successfully on

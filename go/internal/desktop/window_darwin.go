@@ -4,6 +4,7 @@ package desktop
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"structs"
@@ -175,6 +176,9 @@ func newPlatformWindow(profile string) (window, error) {
 	if err := loadMacRuntime(); err != nil {
 		return nil, err
 	}
+	if !objc.Send[bool](macClass("NSThread"), macSEL("isMainThread")) {
+		return nil, errors.New("native macOS window requires the initial main thread")
+	}
 	pool := macClass("NSAutoreleasePool").Send(macSEL("new"))
 	mainBundle := macClass("NSBundle").Send(macSEL("mainBundle"))
 	if macText(mainBundle.Send(macSEL("bundleIdentifier"))) != bundle.identifier {
@@ -190,8 +194,14 @@ func newPlatformWindow(profile string) (window, error) {
 		}
 	}()
 	w.app = macClass("NSApplication").Send(macSEL("sharedApplication"))
-	if !objc.Send[bool](w.app, macSEL("setActivationPolicy:"), int64(0)) {
-		return nil, errors.New("cannot activate native macOS application")
+	if w.app == 0 {
+		return nil, errors.New("native macOS application unavailable")
+	}
+	if err := ensureMacRegularActivationPolicy(
+		func() int64 { return objc.Send[int64](w.app, macSEL("activationPolicy")) },
+		func() bool { return objc.Send[bool](w.app, macSEL("setActivationPolicy:"), int64(0)) },
+	); err != nil {
+		return nil, err
 	}
 	w.delegate = objc.ID(macRuntime.delegate).Send(macSEL("new"))
 	macWindows.Store(w.delegate, w)
@@ -224,6 +234,23 @@ func newPlatformWindow(profile string) (window, error) {
 	w.app.Send(macSEL("activateIgnoringOtherApps:"), true)
 	ready = true
 	return w, nil
+}
+
+// The required result is a regular application, including an already configured
+// app bundle. Verify the public getter rather than treating a setter return as
+// evidence of a different or missing state.
+// https://developer.apple.com/documentation/appkit/nsapplication/activationpolicy()
+func ensureMacRegularActivationPolicy(read func() int64, change func() bool) error {
+	before := read()
+	if before == 0 {
+		return nil
+	}
+	changed := change()
+	after := read()
+	if after != 0 {
+		return fmt.Errorf("cannot activate native macOS application (before=%d after=%d switched=%t)", before, after, changed)
+	}
+	return nil
 }
 
 func (w *macWindow) Navigate(raw string) {
