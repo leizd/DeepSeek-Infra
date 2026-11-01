@@ -67,7 +67,7 @@ def test_embedded_python_is_executable_source_and_writes_real_newlines() -> None
     for name in ["macos-build", "macos-window"]:
         for step in workflow()["jobs"][name]["steps"]:
             programs.extend(re.findall(r"python - <<'PY'\n(.*?)\nPY", step.get("run", ""), re.DOTALL))
-    assert len(programs) == 4
+    assert len(programs) == 5
     for program in programs:
         compile(program, "embedded-macos-workflow.py", "exec")
         assert not any(isinstance(node, ast.Constant) and node.value == "\\n" for node in ast.walk(ast.parse(program)))

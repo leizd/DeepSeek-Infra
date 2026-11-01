@@ -1,3 +1,28 @@
+# Current checkpoint: reproduce cancellation inside a real Mac modal loop, 2026-11-01
+
+Source597f9f9a independently qualifies both actual Mac application/file/restart
+workloads:28report members,14original HTTP responses,20native process snapshots
+and4owned app frames. Original bytes, upload ID, static React hash and public
+writer fencing1to2 are checked. Actual DOM interaction and native modal behavior
+remain separate. Complete CI41309085900 is still observed, not assumed green.
+
+Apple distinguishes stopping a modal loop from stopping the outer application
+loop. Native Destroy currently has no explicit modal exit. The new actual
+WebKit JavaScript-alert probe observes a real visible modal on the initial
+thread, then cancels only the original application context and requires the
+original callbacks and app loop to settle within5seconds. It never substitutes
+a test abort. Production Go/Rust/Proto remain byte-identical for this baseline;
+no runtime failure or fix is claimed until actual Intel/ARM execution. Existing
+window/profile/Windows gates and15minute/45second bounds are preserved.
+See [the actual modal cancellation case](../../docs/NATIVE_MACOS_MODAL_CANCELLATION.md).
+
+All retained product/ownership/cutover/recovery, real DOM/chooser/dialog/download/
+user-close, platform/package/upgrade/legacy/backup/supported-OS, zero production
+Python/server TypeScript, security/performance and exact CI/Evidence obligations
+remain ACTIVE/NOT_READY; the retained MCP pytest engine remains unfinished.
+No local native build, out-of-schedule PR, main merge, release, production data
+operation or original-workspace source application is included.
+
 # Current checkpoint: retain the actual Mac workload responses, 2026-11-01
 
 Source6fd0a5de has all6 platform jobs successful, including both actual Mac

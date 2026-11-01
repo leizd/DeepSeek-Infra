@@ -337,6 +337,26 @@ jobs:
           set -euo pipefail
           set -o pipefail
           "artifacts/macos-fixtures/$DEEPSEEK_MACOS_ARCH/desktop.test" -test.v -test.count=1 -test.timeout=120s -test.run='^TestNativeMacPersistentProfilesAcrossActualUIRestarts$' 2>&1 | tee artifacts/macos-window/profile-persistence-test.log
+      - name: Verify a real JavaScript modal cannot strand original context cancellation
+        env:
+          DEEPSEEK_MACOS_MODAL_REPORT: ${{ github.workspace }}/artifacts/macos-window/modal-cancellation.json
+        run: |
+          set -euo pipefail
+          "artifacts/macos-fixtures/$DEEPSEEK_MACOS_ARCH/desktop.test" -test.v -test.count=1 -test.timeout=45s -test.run='^TestNativeMacJavaScriptModalCancellationSettlesApplication$' 2>&1 | tee artifacts/macos-window/modal-cancel-test.log
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          report=json.loads(Path(os.environ['DEEPSEEK_MACOS_MODAL_REPORT']).read_bytes())
+          assert report['sourceCommit']==os.environ['GITHUB_SHA'] and report['runId']==os.environ['GITHUB_RUN_ID']
+          assert report['architecture']==os.environ['DEEPSEEK_MACOS_ARCH'] and report['status']=='PASS'
+          assert all(report[k] is True for k in ['actualJavaScriptModalObserved','nativeMainThreadObserved','contextCancellationSettled'])
+          assert report['testAbortUsed'] is False and report['actualModalWindowId']>0
+          assert all(report[k]>0 for k in ['nativeNavigationActionCallbacks','nativeNavigationResponseCallbacks','nativeDispatchCallbacks'])
+          receipt=json.loads(Path('artifacts/macos-window/build-receipt.json').read_bytes())
+          binary=next(row for row in receipt['binaries'] if row['path']==os.environ['DEEPSEEK_MACOS_ARCH']+'/desktop.test')
+          assert report['actualExecutableSha256']==binary['sha256']
+          assert report['fullMigrationQualified'] is False and report['readiness']=='NOT_READY'
+          PY
       - name: Retain reports only for local collection
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
