@@ -10,6 +10,7 @@ import argparse
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from datetime import datetime, timezone
+from functools import lru_cache
 import json
 import os
 from pathlib import Path
@@ -32,8 +33,76 @@ ROOT = Path(__file__).resolve().parents[1]
 PHASES = ("processing", "final")
 KINDS = ("webpage", "image", "screenshot", "pdf", "audio", "video")
 BOUND = 4 * 1024**2
+PROCESS_IMMUTABLE_RUST = (*recovery.IMMUTABLE_RUST, "processPreparationSha256")
 require = recovery.require
 digest = recovery.digest
+
+
+@lru_cache(maxsize=1)
+def process_plan_types() -> tuple[Any, Any]:
+    from google.protobuf import descriptor_pool, message_factory
+    import native_runtime_contract
+
+    files = native_runtime_contract.load_binary_descriptor(ROOT / "proto/generated/descriptor.pb")
+    pool = descriptor_pool.DescriptorPool()
+    pending = {item.name: item for item in files.file}
+    loaded: set[str] = set()
+    while pending:
+        ready = [name for name, item in pending.items() if set(item.dependency) <= loaded]
+        require(bool(ready), "MEDIA_PROCESS_CRASH_PLAN_DESCRIPTOR_INCOMPLETE")
+        for name in ready:
+            pool.Add(pending.pop(name))
+            loaded.add(name)
+    claim = message_factory.GetMessageClass(pool.FindMessageTypeByName("deepseek.media.v1.MediaPatchClaim"))
+    outcome = message_factory.GetMessageClass(pool.FindMessageTypeByName("deepseek.media.v1.MediaPatchOutcome"))
+    return claim, outcome
+
+
+def process_journal_snapshot(root: Path, allow_empty: bool = False) -> dict[str, Any] | None:
+    """Bind index phase markers to the inner private file, through the original outer plan."""
+    snapshot = recovery.journal_snapshot(root, allow_empty=allow_empty, mutation="process")
+    if snapshot is None:
+        return None
+    paths = list(root.rglob("media-effects.sqlite3"))
+    require(len(paths) == 1, "MEDIA_RUST_JOURNAL_REQUIRED")
+    with closing(recovery.readonly(paths[0], root)) as db:
+        rows = db.execute("SELECT operation_id,claim,planned FROM media_operations LIMIT 2").fetchall()
+    require(len(rows) == 1, "MEDIA_ORIGINAL_RUST_ROW_REQUIRED")
+    operation, raw_claim, raw_plan = rows[0]
+    require(operation == snapshot["operationId"] and isinstance(raw_claim, bytes) and isinstance(raw_plan, bytes)
+            and 0 < len(raw_claim) <= BOUND and 0 < len(raw_plan) <= BOUND
+            and digest(raw_claim) == snapshot["claimSha256"]
+            and digest(raw_plan) == snapshot["plannedSha256"] == snapshot["preparationSha256"],
+            "MEDIA_PROCESS_CRASH_OUTER_PLAN_REBOUND")
+    from google.protobuf.message import DecodeError
+
+    claim_type, plan_type = process_plan_types()
+    try:
+        claim, plan = claim_type.FromString(raw_claim), plan_type.FromString(raw_plan)
+    except DecodeError as error:
+        raise create.patch.ProbeFailure("MEDIA_PROCESS_CRASH_PLAN_PROTOBUF_INVALID") from error
+    process_kind = claim.intent.DESCRIPTOR.fields_by_name["kind"].enum_type.values_by_name["MEDIA_MUTATION_KIND_PROCESS"].number
+    applied = plan.DESCRIPTOR.fields_by_name["state"].enum_type.values_by_name["MEDIA_PATCH_EFFECT_STATE_APPLIED"].number
+    require(claim.schema_version == claim.intent.schema_version == plan.schema_version == 1
+            and claim.intent.operation_id == claim.fence.action_id == plan.operation_id == operation
+            and claim.intent.kind == process_kind and claim.fence.execution_epoch > 0
+            and plan.original_fence == claim.fence and plan.processed.original_fence == claim.fence
+            and plan.request_sha256 == claim.request_sha256 and len(plan.request_sha256) == 32
+            and digest(claim.intent.SerializeToString(deterministic=True)) == claim.request_sha256.hex()
+            and plan.before_sha256.hex() == snapshot["beforeSha256"]
+            and plan.after_sha256.hex() == snapshot["afterSha256"]
+            and plan.state == applied and not plan.signature and plan.HasField("processed") and not plan.HasField("created"),
+            "MEDIA_PROCESS_CRASH_TYPED_PLAN_REBOUND")
+    inner = plan.processed.preparation_sha256
+    require(len(inner) == 32, "MEDIA_PROCESS_CRASH_PRIVATE_PREPARATION_DIGEST_INVALID")
+    private_paths = [p for p in root.rglob("process.pb") if p.parent.name == operation]
+    require(len(private_paths) == 1, "MEDIA_PROCESS_CRASH_PRIVATE_PREPARATION_REQUIRED")
+    private = recovery.owned_file(private_paths[0], root)
+    with private.open("rb") as stream:
+        private_bytes = stream.read(BOUND + 1)
+    require(0 < len(private_bytes) <= BOUND, "MEDIA_PROCESS_CRASH_PRIVATE_PREPARATION_BOUND")
+    require(digest(private_bytes) == inner.hex(), "MEDIA_PROCESS_CRASH_PRIVATE_PREPARATION_CHANGED")
+    return dict(snapshot, processPreparationSha256=inner.hex())
 
 
 def held_phase(raw: bytes, journal: dict[str, Any], control: dict[str, Any], media_id: str, phase: str) -> bool:
@@ -70,10 +139,13 @@ def held_phase(raw: bytes, journal: dict[str, Any], control: dict[str, Any], med
 
 def require_recovered(before_go: dict[str, Any], before_rust: dict[str, Any], after_go: dict[str, Any],
                       after_rust: dict[str, Any], writer_before: int, writer_after: int) -> None:
+    preparation = before_rust.get("processPreparationSha256")
+    require(isinstance(preparation, str) and re.fullmatch(r"[0-9a-f]{64}", preparation) is not None,
+            "MEDIA_PROCESS_CRASH_PRIVATE_PREPARATION_DIGEST_INVALID")
     require(type(writer_before) is type(writer_after) is int and writer_after > writer_before,
             "MEDIA_PROCESS_CRASH_WRITER_NOT_ADVANCED")
     require(recovery.same_original(before_go, after_go, recovery.IMMUTABLE_GO)
-            and recovery.same_original(before_rust, after_rust, recovery.IMMUTABLE_RUST),
+            and recovery.same_original(before_rust, after_rust, PROCESS_IMMUTABLE_RUST),
             "MEDIA_PROCESS_CRASH_ORIGINAL_REBOUND")
     require(after_go.get("state") == after_rust.get("state") == "APPLIED", "MEDIA_PROCESS_CRASH_ORIGINAL_NOT_RECONCILED")
     outcome = after_go.get("outcomeSha256")
@@ -138,7 +210,7 @@ def require_unrelated_index(before: dict[str, Any], after: dict[str, Any], media
                                            and (not project_id or row["project_id"] == project_id))]
     expected_metadata = dict(before["metadata"])
     if original_process is not None:
-        operation, preparation = original_process.get("operationId"), original_process.get("preparationSha256")
+        operation, preparation = original_process.get("operationId"), original_process.get("processPreparationSha256")
         require(isinstance(operation, str) and re.fullmatch(r"media-process-[0-9a-f]{32}", operation) is not None
                 and isinstance(preparation, str) and re.fullmatch(r"[0-9a-f]{64}", preparation) is not None,
                 "MEDIA_PROCESS_CRASH_INDEX_ORIGINAL_BINDING_INVALID")
@@ -280,7 +352,7 @@ def run_case(args: argparse.Namespace, binaries: Path, scratch: Path, oracle: Pa
         report["tracedWorkerThreads"] = recovery.wait_for(attached, 5, "MEDIA_PROCESS_CRASH_ATTACH_FAILED")
 
         def observed() -> Any:
-            journal = recovery.journal_snapshot(profile, True, mutation="process")
+            journal = process_journal_snapshot(profile, allow_empty=True)
             control = recovery.control_snapshot(profile, True)
             if journal is None or control is None or journal["state"] == "PREPARED":
                 return None
@@ -312,19 +384,20 @@ def run_case(args: argparse.Namespace, binaries: Path, scratch: Path, oracle: Pa
                 report["interruptedRequestException"] = type(error).__name__
         require(retained_files(profile, media_id) == original_files, "MEDIA_PROCESS_CRASH_SOURCE_OR_FOREIGN_SEGMENTS_CHANGED")
         crashed_go = recovery.control_snapshot(profile)
-        crashed_rust = recovery.journal_snapshot(profile, mutation="process")
+        crashed_rust = process_journal_snapshot(profile)
         require(crashed_go is not None and crashed_rust is not None and crashed_go["state"] == "DISPATCHED"
                 and crashed_rust["state"] == "APPLYING", "MEDIA_PROCESS_CRASH_PRETERMINAL_ORIGINAL_MISSING")
         require(recovery.same_original(before_go, crashed_go, recovery.IMMUTABLE_GO)
-                and recovery.same_original(before_rust, crashed_rust, recovery.IMMUTABLE_RUST), "MEDIA_PROCESS_CRASH_IDENTITY_CHANGED_BEFORE_RESTART")
+                and recovery.same_original(before_rust, crashed_rust, PROCESS_IMMUTABLE_RUST), "MEDIA_PROCESS_CRASH_IDENTITY_CHANGED_BEFORE_RESTART")
         token = runtime.launch("recovery-launch")
 
         def reconciled() -> Any:
             go = recovery.control_snapshot(profile)
-            rust = recovery.journal_snapshot(profile, mutation="process")
-            require(go is not None and rust is not None, "MEDIA_PROCESS_CRASH_ORIGINAL_DISAPPEARED")
+            rust = process_journal_snapshot(profile)
+            if go is None or rust is None:
+                raise create.patch.ProbeFailure("MEDIA_PROCESS_CRASH_ORIGINAL_DISAPPEARED")
             require(recovery.same_original(before_go, go, recovery.IMMUTABLE_GO)
-                    and recovery.same_original(before_rust, rust, recovery.IMMUTABLE_RUST), "MEDIA_PROCESS_CRASH_RECONCILIATION_REBOUND")
+                    and recovery.same_original(before_rust, rust, PROCESS_IMMUTABLE_RUST), "MEDIA_PROCESS_CRASH_RECONCILIATION_REBOUND")
             report.update(afterRestartGo=go, afterRestartRust=rust)
             return (go, rust) if go["state"] == rust["state"] == "APPLIED" else None
 
@@ -344,8 +417,9 @@ def run_case(args: argparse.Namespace, binaries: Path, scratch: Path, oracle: Pa
         (out / "after-recovery-library.json").write_bytes(library.read_bytes())
         runtime.stop()
         token = runtime.launch("retained-launch")
-        retained_go, retained_rust = recovery.control_snapshot(profile), recovery.journal_snapshot(profile, mutation="process")
-        require(retained_go is not None and retained_rust is not None, "MEDIA_PROCESS_CRASH_RETAINED_ORIGINAL_MISSING")
+        retained_go, retained_rust = recovery.control_snapshot(profile), process_journal_snapshot(profile)
+        if retained_go is None or retained_rust is None:
+            raise create.patch.ProbeFailure("MEDIA_PROCESS_CRASH_RETAINED_ORIGINAL_MISSING")
         require_recovered(before_go, before_rust, retained_go, retained_rust, writer_before, create.patch.reads.writer(profile)[0])
         require(retained_go == after_go and retained_rust == after_rust, "MEDIA_PROCESS_CRASH_RETAINED_RECEIPT_CHANGED")
         require(public_result(runtime, token, expected, reference) == final_public, "MEDIA_PROCESS_CRASH_RETAINED_PUBLIC_READ_CHANGED")

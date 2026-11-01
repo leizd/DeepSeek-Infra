@@ -1,3 +1,19 @@
+# Current original PROCESS plan witness, 2026-11-01
+
+- [x] Verify the parent's180 raw reports and explain both actual metadata
+  failures using unchanged namespace values and two inner-digest phase markers.
+- [x] Bind the inner preparation through the original typed plan/request/fences
+  and actual private file bytes; preserve all original recovery cases and floors.
+- [ ] Re-run and independently qualify all24 PROCESS crash cases plus the nine
+  original recovery cases at this exact new source.
+- [ ] Complete exact-source original Go95/Android-Go95/Rust80/Python95/full race,
+  CI/Evidence and platform reports without transferring parent qualifications.
+- [ ] Implement the retained macOS window host and complete all remaining
+  product/platform/MCP/OCR/provider/config/capacity/backup/ownership/zero-Python/
+  security/performance acceptance; keep the full objective ACTIVE/NOT_READY.
+
+---
+
 # Current PROCESS index-evidence correction, 2026-10-31
 
 - [x] Preserve parent8b's exact SIGKILL/reconciliation failures and reproduce the

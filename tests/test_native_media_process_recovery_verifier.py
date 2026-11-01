@@ -28,6 +28,7 @@ def original() -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
                    intentSha256="1" * 64, requestSha256=bytes([7] * 32).hex(), claimTokenSha256="2" * 64,
                    ownerSha256="3" * 64, state="DISPATCHED", outcomeSha256=None)
     journal = dict(operationId=operation, state="APPLYING", claimSha256="4" * 64, preparationSha256="5" * 64,
+                   processPreparationSha256="c" * 64,
                    beforeSha256="6" * 64, afterSha256="8" * 64, plannedSha256="9" * 64, outcomeSha256=None)
     return library, journal, control
 
@@ -166,7 +167,7 @@ def test_process_crash_run_fails_before_any_local_native_command(monkeypatch: py
 
 
 def process_index_markers(journal: dict[str, Any]) -> dict[str, str]:
-    return {f"native_media_process:{journal['operationId']}:{phase}": journal["preparationSha256"]
+    return {f"native_media_process:{journal['operationId']}:{phase}": journal["processPreparationSha256"]
             for phase in ("clear", "final")}
 
 
@@ -228,9 +229,9 @@ def test_process_recovery_refuses_invalid_or_preexisting_original_markers(damage
     if damage == "operation":
         journal["operationId"] = "media-create-" + "a" * 32
     elif damage == "preparation":
-        journal["preparationSha256"] = "not-a-digest"
+        journal["processPreparationSha256"] = "not-a-digest"
     elif damage == "missing-preparation":
-        journal.pop("preparationSha256")
+        journal.pop("processPreparationSha256")
     else:
         phase = damage.removeprefix("preexisting-")
         key = f"native_media_process:{journal['operationId']}:{phase}"
@@ -246,6 +247,125 @@ def test_process_crash_runtime_cannot_launch_outside_cloud_even_on_linux(monkeyp
     with pytest.raises(probe.create.patch.ProbeFailure, match="VERIFICATION_IS_CLOUD_ONLY"):
         runtime.launch("refused-local-launch")
     assert list(tmp_path.iterdir()) == []
+
+
+def prepared_process_profile(tmp_path: Path, damage: str = "") -> tuple[Path, bytes, bytes]:
+    from google.protobuf import descriptor_pb2, descriptor_pool, message_factory
+
+    files = descriptor_pb2.FileDescriptorSet.FromString((ROOT / "proto/generated/descriptor.pb").read_bytes())
+    pool = descriptor_pool.DescriptorPool()
+    for item in files.file:
+        pool.Add(item)
+    def message(name: str) -> Any:
+        return message_factory.GetMessageClass(pool.FindMessageTypeByName("deepseek.media.v1." + name))()
+    operation = "media-process-" + "a" * 32
+    private = message("MediaProcessPreparation")
+    private.source_relative_path = "objects/media_target/source.txt"
+    private.source_sha256 = hashlib.sha256(b"").digest()
+    private_bytes = private.SerializeToString(deterministic=True)
+    path = tmp_path / "worker-staging" / operation / "process.pb"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(private_bytes)
+    claim = message("MediaPatchClaim")
+    claim.schema_version = claim.intent.schema_version = 1
+    claim.intent.operation_id = claim.fence.action_id = operation
+    claim.intent.media_id = "media_target"
+    claim.intent.kind = 3
+    claim.fence.execution_epoch = 1
+    claim.request_sha256 = hashlib.sha256(claim.intent.SerializeToString(deterministic=True)).digest()
+    plan = message("MediaPatchOutcome")
+    plan.schema_version = 1
+    plan.operation_id = operation
+    plan.original_fence.CopyFrom(claim.fence)
+    plan.request_sha256 = claim.request_sha256
+    plan.state = plan.DESCRIPTOR.fields_by_name["state"].enum_type.values_by_name["MEDIA_PATCH_EFFECT_STATE_APPLIED"].number
+    plan.before_sha256, plan.after_sha256 = (hashlib.sha256(v).digest() for v in [b"before", b"after"])
+    plan.processed.preparation_sha256 = hashlib.sha256(private_bytes).digest()
+    plan.processed.original_fence.CopyFrom(claim.fence)
+    if damage == "claim-operation":
+        claim.intent.operation_id = "media-process-" + "b" * 32
+    elif damage == "claim-kind":
+        claim.intent.kind = 1
+    elif damage == "plan-operation":
+        plan.operation_id = "media-process-" + "b" * 32
+    elif damage == "outer-fence":
+        plan.original_fence.execution_epoch = 2
+    elif damage == "inner-fence":
+        plan.processed.original_fence.execution_epoch = 2
+    elif damage == "request":
+        plan.request_sha256 = bytes([8]) * 32
+    elif damage == "intent-digest":
+        claim.request_sha256 = plan.request_sha256 = bytes([8]) * 32
+    elif damage in {"before", "after"}:
+        setattr(plan, damage + "_sha256", bytes([8]) * 32)
+    elif damage == "missing-process":
+        plan.ClearField("processed")
+    elif damage == "inner-digest-size":
+        plan.processed.preparation_sha256 = b"x" * 31
+    elif damage == "signature":
+        plan.signature = b"x" * 64
+    elif damage == "private-bytes":
+        path.write_bytes(private_bytes + b"changed")
+    elif damage == "private-missing":
+        path.unlink()
+    elif damage == "duplicate-private":
+        other = tmp_path / "other-staging" / operation / "process.pb"
+        other.parent.mkdir(parents=True)
+        other.write_bytes(private_bytes)
+    if damage in {"claim-operation", "claim-kind"}:
+        claim.request_sha256 = hashlib.sha256(claim.intent.SerializeToString(deterministic=True)).digest()
+        plan.request_sha256 = claim.request_sha256
+    raw_plan = plan.SerializeToString(deterministic=True)
+    if damage == "invalid-planned-protobuf":
+        raw_plan += b"\x80"
+    outer = hashlib.sha256(raw_plan).digest() if damage != "outer-digest" else b"x" * 32
+    db_path = tmp_path / "worker-journal" / "media-effects.sqlite3"
+    db_path.parent.mkdir()
+    with sqlite3.connect(db_path) as db:
+        db.execute("PRAGMA application_id=1146309968")
+        db.execute("CREATE TABLE media_operations(operation_id,state,claim,preparation_sha256,before_bytes,after_bytes,planned,outcome)")
+        db.execute("INSERT INTO media_operations VALUES(?,?,?,?,?,?,?,NULL)",
+                   (operation, "APPLYING", claim.SerializeToString(deterministic=True), outer, b"before", b"after", raw_plan))
+    return path, private_bytes, db_path.read_bytes()
+
+
+def test_process_journal_binds_the_inner_private_file_hash_not_the_outer_plan_hash(tmp_path: Path) -> None:
+    path, private, original_db = prepared_process_profile(tmp_path)
+    observed = probe.process_journal_snapshot(tmp_path)
+    assert observed is not None
+    assert observed["processPreparationSha256"] == hashlib.sha256(private).hexdigest()
+    assert observed["preparationSha256"] == observed["plannedSha256"] != observed["processPreparationSha256"]
+    assert path.read_bytes() == private
+    assert (tmp_path / "worker-journal/media-effects.sqlite3").read_bytes() == original_db
+
+
+@pytest.mark.parametrize("damage", ["claim-operation", "claim-kind", "plan-operation", "outer-fence", "inner-fence", "request",
+                                    "intent-digest", "before", "after", "missing-process", "inner-digest-size", "signature", "private-bytes",
+                                    "private-missing", "duplicate-private", "outer-digest", "invalid-planned-protobuf"])
+def test_process_journal_rejects_rebound_missing_or_corrupt_private_preparation(tmp_path: Path, damage: str) -> None:
+    prepared_process_profile(tmp_path, damage)
+    with pytest.raises(probe.create.patch.ProbeFailure):
+        probe.process_journal_snapshot(tmp_path)
+
+
+def test_process_recovery_cannot_change_the_private_preparation_binding() -> None:
+    before_go, before_rust, after_go, after_rust = settled()
+    after_rust["processPreparationSha256"] = "d" * 64
+    with pytest.raises(probe.create.patch.ProbeFailure, match="ORIGINAL_REBOUND"):
+        probe.require_recovered(before_go, before_rust, after_go, after_rust, 7, 8)
+
+
+@pytest.mark.parametrize("damage", ["missing-before", "missing-after", "missing-both", "invalid-both", "bool-both"])
+def test_process_recovery_requires_an_observed_valid_private_preparation(damage: str) -> None:
+    before_go, before_rust, after_go, after_rust = settled()
+    if damage.startswith("missing-"):
+        for row in ([before_rust] if damage == "missing-before" else [after_rust] if damage == "missing-after" else [before_rust, after_rust]):
+            row.pop("processPreparationSha256")
+    else:
+        for row in [before_rust, after_rust]:
+            row["processPreparationSha256"] = True if damage == "bool-both" else "not-a-digest"
+    with pytest.raises(probe.create.patch.ProbeFailure):
+        probe.require_recovered(before_go, before_rust, after_go, after_rust, 7, 8)
 
 
 @pytest.mark.parametrize("status,healthy", [(200, True), (200, False), (503, False)])

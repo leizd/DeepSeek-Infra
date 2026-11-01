@@ -174,6 +174,24 @@ observer suite passes175 with the original3 host skips; production source and
 all workflow cases/filters/floors are unchanged. All24 actual crash cases, later
 commit boundaries and complete child-source qualification remain CLOUD_PENDING.
 
+## Inner preparation versus outer planned outcome
+
+The parentb98 recovery report retains both index snapshots for each failing
+backend. All original metadata is unchanged; exactly clear/final markers for
+the original operation are added. Their common digest is not the outer journal
+preparation_sha256. The original plan's processed.preparation_sha256 binds the
+inner process.pb file, as the production index transaction requires.
+
+The corrected read-only observer decodes the frozen existing Protobuf plan,
+checks its outer digest, operation, request-intent digest and original fences,
+and verifies the actual private file's bounded bytes against the inner digest.
+It never obtains the accepted hash from the index being checked. The observed
+inner hash is immutable before/after the real kill and complete restarts. No raw
+private payload or signing key is exported. Existing namespace and cross-project
+row/vector protections remain. The202-case offline corpus passes199 with the
+original3 host skips; all24 actual new-source crash cases remain CLOUD_PENDING.
+There is no production dependency, workflow/floor/filter/pin or protocol change.
+
 ## Remaining acceptance
 
 Exact-source compilation,105 Go/race families, all Rust tests and original

@@ -1,3 +1,18 @@
+# Current evidence boundary, 2026-11-01
+
+The PROCESS crash observer now distinguishes the outer unsigned outcome digest
+from the inner retained preparation digest; all24 actual cases must still pass
+at the corrected source. Parentb98's scoped public force/read/restart and
+controlled Windows app/file tests are separate integration evidence. Android
+reports cover dual-ABI packaging and x86_64 API24/26/28/30/34 execution, not ARM64
+execution or all retained features. No product/platform row is promoted to
+complete acceptance by these observations. macOS's native window host remains
+unimplemented. Full ownership/cutover, MCP test engine, remaining media/provider/
+configuration/capacity/recovery phases, all production packages and zero-Python/
+server-TypeScript/security/performance/CI/Evidence requirements remain open.
+
+---
+
 # Current checkpoint: standalone PROCESS implementation, 2026-10-31
 
 The separate PROCESS contract at `7c1a6b12` passed pinned cloud source generation

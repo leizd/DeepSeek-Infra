@@ -1,3 +1,56 @@
+# Current checkpoint: bind the inner PROCESS preparation, 2026-11-01
+
+The parentb98 run41255601880 passes all nine original recovery cases, but both
+new backend cases fail on their first webpage-processing metadata check after
+real worker SIGKILL and automatic original-operation APPLIED. The180 verified
+reports now retain both index snapshots: every original namespace value is
+unchanged; exactly the original operation's clear/final keys are added, both with
+the same inner preparation digest. It differs from the outer journal digest.
+
+The previous observer incorrectly used the journal preparation_sha256, which
+binds the complete unsigned planned outcome. Index phase markers instead bind
+processed.preparation_sha256 inside that outcome: the SHA256 of process.pb.
+This correction reads the original journal through a read-only connection,
+decodes its existing versioned Protobuf using the frozen descriptor and existing
+pinned offline tooling, verifies the original operation/fences/request hash and
+library hashes, then hashes the retained private preparation file. No private
+signing key or raw claim/plan/private payload is exported. The inner digest is
+captured before SIGKILL and remains immutable during recovery and another full
+restart; index comparison still permits exactly two new original-bound keys.
+All old namespace values, foreign operation markers, unrelated rows and vectors
+remain protected. No production Go/Rust, protocol, workflow, pin, filter, timeout
+or original coverage floor changes. The actual24-case re-run remains pending.
+
+The new observer corpus has202 tests:199passed and the original3 host skips.
+Original-parent comparisons reproduce the wrong-digest check and absent binding;
+typed fixtures reject corrupt plans, rebound fences/requests and missing/changed
+private files. Full Ruff and Linux/Win32 mypy cover1002 files under the original
+configuration. One earlier asynchronous RED capture actually passed and is
+explicitly excluded; frozen-parent RED and the separate intent-hash RED are
+preserved. No local Go/Cargo build/test or Docker stack runs.
+
+Parentb98 has two qualified105-family/624-case focused Go race corpora and actual
+six-kind force/read/restart execution; controlled Windows app/file restart and
+five Android x86_64 emulator levels have separate source-bound evidence. Android
+packages include both arm64-v8a/x86_64, but ARM64 device execution, all desktop/
+Android features, production promotion and global zero-Python acceptance are
+not inferred. Its complete Rust jobs pass; current report qualification is
+recorded separately. Its full CI still awaits the complete Go race/Android flow.
+Earlier parent8b's37 original CI jobs and50 Evidence artifacts are qualified at
+Go95.026889%, Android-Go95.014463%, full-CI Rust82.421718% and Python95.583910%.
+These parent results do not qualify this new source.
+
+The full server/desktop/Android/background migration remains ACTIVE/NOT_READY.
+Retain every recovery commit phase, provider/OCR/credentials/progress/config/
+capacity/backup feature, the unchanged MCP test-engine requirement, ownership,
+zero-Python/server-TypeScript, platform/security/performance/CI/Evidence/release
+acceptance. macOS still has an unavailable native window host and remains an
+implementation task. Preserve the dirty root and keep all compiler/cache/image
+work in GitHub Actions. Do not merge main, release, touch real data or mutate PRs
+outside the daily09:00 Asia/Shanghai batch.
+
+---
+
 # Current checkpoint: bind PROCESS index phase evidence, 2026-10-31
 
 At parent8b26c0ff/run41203337217 the nine original recovery steps pass. Both
