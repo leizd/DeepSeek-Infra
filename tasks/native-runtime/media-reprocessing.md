@@ -4,6 +4,19 @@
 [中文](../../README.md) / [English](../../README.en.md)
 <!-- docs-language-switcher:end -->
 
+## Original PROCESS publication sequence, 2026-11-01
+
+The f12d170 recovery run41261832532 retains original9 PASS and only2/24
+PROCESS PASS (webpage-processing on each backend). Both final cases fail;
+20 were not executed. A final inode can reuse the initial inode after two
+atomic replacements. The follow-up observes the processing predecessor and
+unchanged original operation/epoch/claim/outer plan/inner preparation before
+accepting a distinct final inode. Missing phases, in-place writes, changed
+bindings and mixed file versions remain refused. The actual24-case cloud
+corpus, all original gates and the full product requirements remain pending.
+Offline218 PASS/three original host skips is separate evidence. NOT_READY.
+
+
 
 This is one unfinished part of the complete server, desktop, Android and
 background Rust/Go migration. Overall readiness remains **NOT_READY**. Source

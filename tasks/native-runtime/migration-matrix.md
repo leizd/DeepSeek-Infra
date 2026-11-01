@@ -1,3 +1,17 @@
+# Current publication-sequence evidence boundary, 2026-11-01
+
+At source f12d170, run41261832532 passes the original nine cases and only the
+webpage-processing case on each index backend; both final cases fail and20
+cases never run. The follow-up observer requires an observed processing
+predecessor, unchanged original operation/fences/plan/private preparation and
+a different final inode from that live predecessor, allowing initial inode
+reuse after two real replacements. It preserves denial of in-place writes,
+missing phases, changed claims and unrelated namespace/rows/vectors. All24
+cases, tracer behavior, timeouts, production code and original floors remain.
+Offline218 PASS/three original host skips and1002-file type checks do not
+qualify actual recovery, full CI, a PR candidate or a product/platform row.
+All remaining matrix entries below remain open; overall ACTIVE/NOT_READY.
+
 # Current evidence boundary, 2026-11-01
 
 The PROCESS crash observer now distinguishes the outer unsigned outcome digest

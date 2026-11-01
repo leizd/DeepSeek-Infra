@@ -137,6 +137,54 @@ def held_phase(raw: bytes, journal: dict[str, Any], control: dict[str, Any], med
     return True
 
 
+class PublicationObserver:
+    """Witness each replacement against its live predecessor, before inode reuse."""
+
+    def __init__(self, initial: dict[str, Any], media_id: str, phase: str):
+        require(phase in PHASES, "MEDIA_PROCESS_CRASH_PHASE_INVALID")
+        self.initial, self.media_id, self.phase = dict(initial), media_id, phase
+        self.processing: dict[str, Any] | None = None
+        self.predecessor = dict(initial)
+
+    def observe(self, raw: bytes, journal: dict[str, Any], control: dict[str, Any], witness: dict[str, Any]) -> bool:
+        require(witness.get("sha256") == digest(raw), "MEDIA_PROCESS_CRASH_PUBLICATION_BYTES_REBOUND")
+        if held_phase(raw, journal, control, self.media_id, "processing"):
+            require(witness["inode"] != self.initial["inode"], "MEDIA_PROCESS_CRASH_REAL_RENAME_NOT_OBSERVED")
+            if self.processing is None:
+                self.processing = dict(publication=dict(witness), go=dict(control), rust=dict(journal))
+            else:
+                require(self.processing["publication"] == witness
+                        and recovery.same_original(self.processing["go"], control, recovery.IMMUTABLE_GO)
+                        and recovery.same_original(self.processing["rust"], journal, PROCESS_IMMUTABLE_RUST),
+                        "MEDIA_PROCESS_CRASH_PROCESSING_PREDECESSOR_CHANGED")
+            return self.phase == "processing"
+        if self.phase != "final" or not held_phase(raw, journal, control, self.media_id, "final"):
+            return False
+        if self.processing is None:
+            raise create.patch.ProbeFailure("MEDIA_PROCESS_CRASH_PROCESSING_PREDECESSOR_NOT_OBSERVED")
+        require(recovery.same_original(self.processing["go"], control, recovery.IMMUTABLE_GO)
+                and recovery.same_original(self.processing["rust"], journal, PROCESS_IMMUTABLE_RUST),
+                "MEDIA_PROCESS_CRASH_PHASE_ORIGINAL_REBOUND")
+        self.predecessor = dict(self.processing["publication"])
+        require(witness["inode"] != self.predecessor["inode"], "MEDIA_PROCESS_CRASH_REAL_RENAME_NOT_OBSERVED")
+        return True
+
+
+def read_publication(path: Path, profile: Path) -> tuple[bytes, dict[str, Any]] | None:
+    """Read bytes and identity from one descriptor; retry a concurrent replacement."""
+    path = recovery.owned_file(path, profile)
+    with path.open("rb") as stream:
+        before = os.fstat(stream.fileno())
+        raw = stream.read(BOUND + 1)
+        after = os.fstat(stream.fileno())
+    require(len(raw) <= BOUND, "MEDIA_PROCESS_CRASH_LIBRARY_BOUND")
+    current = path.stat()
+    identities = [(stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns) for stat in (before, after, current)]
+    if identities[0] != identities[1] or identities[1] != identities[2]:
+        return None
+    return raw, dict(sha256=digest(raw), inode=after.st_ino, mtimeNs=after.st_mtime_ns)
+
+
 def require_recovered(before_go: dict[str, Any], before_rust: dict[str, Any], after_go: dict[str, Any],
                       after_rust: dict[str, Any], writer_before: int, writer_after: int) -> None:
     preparation = before_rust.get("processPreparationSha256")
@@ -334,6 +382,8 @@ def run_case(args: argparse.Namespace, binaries: Path, scratch: Path, oracle: Pa
         writer_before = create.patch.reads.writer(profile)[0]
         library = recovery.owned_file(profile / ".media/library.json", profile)
         before_library = file_witness(library, profile)
+        report["initialPublication"] = dict(before_library)
+        publication = PublicationObserver(before_library, media_id, phase)
         other_media = [row for row in json.loads(library.read_bytes())["media"] if row["mediaId"] != media_id]
         worker = next(row for row in runtime.identities if row["executable"] == "deepseek-worker")
         with (out / "trace-stderr.log").open("wb") as log:
@@ -356,21 +406,24 @@ def run_case(args: argparse.Namespace, binaries: Path, scratch: Path, oracle: Pa
             control = recovery.control_snapshot(profile, True)
             if journal is None or control is None or journal["state"] == "PREPARED":
                 return None
-            raw = library.read_bytes()
-            if not held_phase(raw, journal, control, media_id, phase):
+            observed_file = read_publication(library, profile)
+            if observed_file is None:
                 return None
-            return journal, control, raw, file_witness(library, profile)
+            raw, witness = observed_file
+            if not publication.observe(raw, journal, control, witness):
+                return None
+            return journal, control, raw, witness
 
         with ThreadPoolExecutor(max_workers=1) as pool:
             report.update(writeRequestsSent=1, writeRequestsAfterRestart=0)
             response = pool.submit(create.exchange, runtime.origin, "/api/media/" + media_id + "/process?force=true", "POST", token, {})
             before_rust, before_go, held_bytes, at_crash = recovery.wait_for(observed, 15, "MEDIA_PROCESS_CRASH_PUBLICATION_NOT_HELD")
             require(not response.done(), "MEDIA_PROCESS_CRASH_RESPONSE_PRECEDED_KILL")
-            require(at_crash["inode"] != before_library["inode"], "MEDIA_PROCESS_CRASH_REAL_RENAME_NOT_OBSERVED")
             require(before_go["claimWriterFence"] == writer_before, "MEDIA_PROCESS_CRASH_ORIGINAL_WRITER_DIFFERS")
             require([row for row in json.loads(held_bytes)["media"] if row["mediaId"] != media_id] == other_media,
                     "MEDIA_PROCESS_CRASH_UNRELATED_MEDIA_CHANGED")
             report.update(beforeCrashGo=before_go, beforeCrashRust=before_rust, publicationAtCrash=at_crash,
+                          publicationPredecessor=publication.predecessor, processingPhaseObserved=publication.processing,
                           realRenameObserved=True, heldPhase=phase, interruptedOutcome="EFFECT_UNKNOWN")
             (out / "at-crash-library.json").write_bytes(held_bytes)
             runtime.kill(worker)

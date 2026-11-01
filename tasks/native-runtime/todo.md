@@ -1,3 +1,17 @@
+# Current PROCESS publication-sequence follow-up, 2026-11-01
+
+- [x] Bind f12d170 run41261832532 to196 actual reports: original9 PASS,
+  processing2 PASS, final2 FAIL, remaining20 not executed; retain the raw failure.
+- [x] Reproduce valid initial-inode reuse with two real atomic replacements;
+  require every live predecessor and unchanged original Go/Rust bindings.
+- [x] Keep in-place/missed-phase/rebinding denials and bounded coherent reads;
+  offline218 PASS/three original host skips, original Linux/Win32 type checks.
+- [ ] Run and independently qualify all24 PROCESS cases and original9 at the
+  new exact source; no prior-source or two-case result substitutes for this.
+- [ ] Complete all original CI/Evidence/coverage/platform gates and the full
+  server/desktop/Android/background migration, including macOS, retained MCP,
+  media/OCR/provider/config/capacity/backup/recovery and zero-Python readiness.
+
 # Current original PROCESS plan witness, 2026-11-01
 
 - [x] Verify the parent's180 raw reports and explain both actual metadata

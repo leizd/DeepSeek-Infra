@@ -4,6 +4,7 @@ import copy
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import sqlite3
 import sys
@@ -31,6 +32,141 @@ def original() -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
                    processPreparationSha256="c" * 64,
                    beforeSha256="6" * 64, afterSha256="8" * 64, plannedSha256="9" * 64, outcomeSha256=None)
     return library, journal, control
+
+
+def publication_sequence() -> tuple[Any, bytes, bytes, dict[str, Any], dict[str, Any], dict[str, Any]]:
+    library, journal, control = original()
+    processing = json.dumps(library).encode()
+    library["media"][0]["status"] = "ready"
+    final = json.dumps(library).encode()
+    journal["afterSha256"] = hashlib.sha256(final).hexdigest()
+    initial = dict(sha256="d" * 64, inode=10, mtimeNs=1)
+    observer = probe.PublicationObserver(initial, "media_target", "final")
+    return observer, processing, final, journal, control, initial
+
+
+def test_final_publication_accepts_initial_inode_reuse_only_after_observed_processing_replacement() -> None:
+    observer, processing, final, journal, control, initial = publication_sequence()
+    middle = dict(sha256=hashlib.sha256(processing).hexdigest(), inode=11, mtimeNs=2)
+    assert not observer.observe(processing, journal, control, middle)
+    assert observer.observe(final, journal, control, dict(sha256=hashlib.sha256(final).hexdigest(), inode=initial["inode"], mtimeNs=3))
+    assert observer.processing == dict(publication=middle, go=control, rust=journal)
+
+
+def test_final_publication_refuses_to_infer_a_missed_processing_phase() -> None:
+    observer, _, final, journal, control, _ = publication_sequence()
+    with pytest.raises(probe.create.patch.ProbeFailure, match="PROCESSING_PREDECESSOR_NOT_OBSERVED"):
+        observer.observe(final, journal, control, dict(sha256=hashlib.sha256(final).hexdigest(), inode=12, mtimeNs=3))
+
+
+@pytest.mark.parametrize("phase", ["processing", "final"])
+def test_publication_cannot_qualify_an_in_place_write_at_either_boundary(phase: str) -> None:
+    observer, processing, final, journal, control, initial = publication_sequence()
+    middle = dict(sha256=hashlib.sha256(processing).hexdigest(), inode=11, mtimeNs=2)
+    if phase == "final":
+        assert not observer.observe(processing, journal, control, middle)
+        raw, witness = final, dict(sha256=hashlib.sha256(final).hexdigest(), inode=middle["inode"], mtimeNs=3)
+    else:
+        raw, witness = processing, dict(middle, inode=initial["inode"])
+    with pytest.raises(probe.create.patch.ProbeFailure, match="REAL_RENAME_NOT_OBSERVED"):
+        observer.observe(raw, journal, control, witness)
+
+
+@pytest.mark.parametrize("side,key", [("go", "operationId"), ("go", "epoch"), ("go", "claimWriterFence"),
+                                      ("go", "requestSha256"), ("rust", "claimSha256"), ("rust", "plannedSha256"),
+                                      ("rust", "processPreparationSha256")])
+def test_final_publication_cannot_change_original_identity_between_the_two_real_phases(side: str, key: str) -> None:
+    observer, processing, final, journal, control, _ = publication_sequence()
+    assert not observer.observe(processing, journal, control, dict(sha256=hashlib.sha256(processing).hexdigest(), inode=11, mtimeNs=2))
+    changed = copy.deepcopy(control if side == "go" else journal)
+    changed[key] = 2 if isinstance(changed[key], int) else "e" * 64
+    with pytest.raises(probe.create.patch.ProbeFailure):
+        observer.observe(final, changed if side == "rust" else journal, changed if side == "go" else control,
+                         dict(sha256=hashlib.sha256(final).hexdigest(), inode=12, mtimeNs=3))
+
+
+def test_publication_bytes_must_match_the_same_file_witness() -> None:
+    observer, processing, _, journal, control, _ = publication_sequence()
+    with pytest.raises(probe.create.patch.ProbeFailure, match="PUBLICATION_BYTES_REBOUND"):
+        observer.observe(processing, journal, control, dict(sha256="e" * 64, inode=11, mtimeNs=2))
+
+
+def test_real_atomic_replacements_can_return_to_the_initial_inode(tmp_path: Path) -> None:
+    observer, processing, final, journal, control, _ = publication_sequence()
+    library, retained, staged = (tmp_path / name for name in ["library.json", "retained-original", "next"])
+    library.write_bytes(b"initial")
+    os.link(library, retained)
+    observer = probe.PublicationObserver(probe.file_witness(library, tmp_path), "media_target", "final")
+    staged.write_bytes(processing)
+    os.replace(staged, library)
+    middle = probe.file_witness(library, tmp_path)
+    assert not observer.observe(library.read_bytes(), journal, control, middle)
+    retained.write_bytes(final)
+    os.replace(retained, library)
+    assert observer.observe(library.read_bytes(), journal, control, probe.file_witness(library, tmp_path))
+
+
+def test_repeated_processing_observation_retains_one_unchanged_predecessor() -> None:
+    observer, processing, _, journal, control, _ = publication_sequence()
+    witness = dict(sha256=hashlib.sha256(processing).hexdigest(), inode=11, mtimeNs=2)
+    assert not observer.observe(processing, journal, control, witness)
+    assert not observer.observe(processing, journal, control, witness)
+    with pytest.raises(probe.create.patch.ProbeFailure, match="PROCESSING_PREDECESSOR_CHANGED"):
+        observer.observe(processing, journal, control, dict(witness, inode=12))
+
+
+def test_processing_crash_still_stops_at_its_first_real_replacement() -> None:
+    _, processing, _, journal, control, initial = publication_sequence()
+    observer = probe.PublicationObserver(initial, "media_target", "processing")
+    assert observer.observe(processing, journal, control, dict(sha256=hashlib.sha256(processing).hexdigest(), inode=11, mtimeNs=2))
+
+
+def test_publication_reader_binds_bytes_and_identity_from_the_same_file(tmp_path: Path) -> None:
+    library = tmp_path / "library.json"
+    library.write_bytes(b"publication")
+    result = probe.read_publication(library, tmp_path)
+    assert result == (b"publication", probe.file_witness(library, tmp_path))
+
+
+@pytest.mark.parametrize("mutation", ["replacement", "in-place"])
+def test_publication_reader_retries_concurrent_change_instead_of_mixing_file_versions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str,
+) -> None:
+    library = tmp_path / "library.json"
+    library.write_bytes(b"before")
+    fstat, path_stat, calls = os.fstat, Path.stat, 0
+    replaced = False
+
+    def changed(fd: int) -> os.stat_result:
+        nonlocal calls
+        calls += 1
+        if calls == 2 and mutation == "in-place":
+            library.write_bytes(b"different-length")
+        return fstat(fd)
+
+    def changed_path(path: Path, *args: Any, **kwargs: Any) -> os.stat_result:
+        nonlocal replaced
+        # Replace after the descriptor closes: Windows forbids replacing the
+        # open Python file, while this later race is real on both platforms.
+        if mutation == "replacement" and calls == 2 and path == library and not replaced:
+            replaced = True
+            next_file = tmp_path / "next"
+            next_file.write_bytes(b"after")
+            os.replace(next_file, library)
+        return path_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(probe.os, "fstat", changed)
+    monkeypatch.setattr(Path, "stat", changed_path)
+    assert probe.read_publication(library, tmp_path) is None
+    assert calls == 2
+
+
+def test_publication_reader_keeps_the_original_library_byte_bound(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    library = tmp_path / "library.json"
+    library.write_bytes(b"12345")
+    monkeypatch.setattr(probe, "BOUND", 4)
+    with pytest.raises(probe.create.patch.ProbeFailure, match="LIBRARY_BOUND"):
+        probe.read_publication(library, tmp_path)
 
 
 @pytest.mark.parametrize("phase", ["processing", "final"])

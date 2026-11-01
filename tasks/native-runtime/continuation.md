@@ -1,3 +1,30 @@
+# Current checkpoint: witness each publication predecessor, 2026-11-01
+
+Source f12d1701946046fb8562791d662b38bfdb4371dc, tree
+5d48008d488afec80767baf15d7002e1fd160911, recovery run41261832532
+is terminal FAIL. Its196 hash-verified reports retain all nine original PASS
+cases and the first webpage-processing PASS on each of SQLite and SQLiteVec.
+Both next webpage-final cases fail the original initial-inode inequality;
+the remaining20 PROCESS cases were not executed. These two passes are not the
+required24-case recovery qualification or complete source CI.
+
+The PROCESS observer now requires the real processing publication before the
+final publication, binds their original Go/Rust operation, epoch, claim, plan
+and inner preparation, and compares each inode to its immediate predecessor.
+A final inode may equal the initial inode after two atomic replacements. Missing
+processing evidence and in-place writes at either boundary still fail closed.
+A single descriptor binds bounded library bytes to their file identity; a
+concurrent replacement or in-place change is retried rather than mixed.
+The original tracer, delays, timeouts, all24 cases, production code, protocol,
+workflows and coverage floors are unchanged. Local observer regression has
+218 PASS and the same three host skips; Linux/Win32 mypy each check1002 files.
+
+Still required: all24 actual cloud cases and original nine at this new source,
+full exact-source Go95/Android-Go95/Rust80/Python95/race/CI/Evidence and platform
+qualification, plus the full retained feature, ownership, recovery, package,
+zero-Python/server-TypeScript, security and performance matrix. macOS window
+implementation and the retained MCP test engine remain open. ACTIVE/NOT_READY.
+
 # Current checkpoint: bind the inner PROCESS preparation, 2026-11-01
 
 The parentb98 run41255601880 passes all nine original recovery cases, but both
