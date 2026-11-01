@@ -16,6 +16,11 @@ on:
         type: boolean
         required: false
         default: false
+      verify_macos_product:
+        description: 'Build and run the actual Go/Rust Mac app, retained file workload and whole-app restart'
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -131,7 +136,7 @@ jobs:
           retention-days: 7
 
   macos-build:
-    if: github.event_name == 'workflow_dispatch' && inputs.verify_macos
+    if: github.event_name == 'workflow_dispatch' && (inputs.verify_macos || inputs.verify_macos_product)
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     defaults:
@@ -203,6 +208,42 @@ jobs:
           path: artifacts/macos-fixtures/
           if-no-files-found: error
           retention-days: 3
+
+      - name: Install the original Node major for the actual product frontend
+        if: inputs.verify_macos_product
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24'
+      - name: Build both actual Go product architectures and original React static tree
+        if: inputs.verify_macos_product
+        run: |
+          set -euo pipefail
+          export GOCACHE="$RUNNER_TEMP/macos-window-go-cache"
+          export GOMODCACHE="$RUNNER_TEMP/macos-window-go-modules"
+          npm ci --prefix frontend
+          npm run build --prefix frontend
+          out="$GITHUB_WORKSPACE/artifacts/macos-product-fixtures"
+          mkdir -p "$out"
+          cd go
+          for arch in amd64 arm64; do
+            mkdir -p "$out/$arch"
+            cp "$GITHUB_WORKSPACE/artifacts/macos-fixtures/$arch/deepseek-desktop" "$out/$arch/deepseek-desktop"
+            for name in deepseekd deepseek-launch; do
+              GOOS=darwin GOARCH="$arch" go build -trimpath -o "$out/$arch/$name" "./cmd/$name"
+            done
+          done
+          cd ..
+          cp -R static "$out/static"
+          python scripts/prepare_native_macos_product.py --seal --fixture "$out"
+      - name: Keep the complete native Go and static product fixture inside the cloud
+        if: inputs.verify_macos_product
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: native-macos-product-fixtures-${{ github.sha }}
+          path: artifacts/macos-product-fixtures
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 2
 
   macos-window:
     if: github.event_name == 'workflow_dispatch' && inputs.verify_macos
@@ -304,5 +345,83 @@ jobs:
           path: |
             artifacts/macos-window/*.json
             artifacts/macos-window/*.log
+          if-no-files-found: error
+          retention-days: 7
+
+
+  macos-product:
+    if: github.event_name == 'workflow_dispatch' && inputs.verify_macos_product
+    needs: macos-build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: amd64
+            runner: macos-15-intel
+          - architecture: arm64
+            runner: macos-15
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    env:
+      CGO_ENABLED: '0'
+      GOTOOLCHAIN: local
+      DEEPSEEK_MACOS_ARCH: ${{ matrix.architecture }}
+      CARGO_BUILD_JOBS: '2'
+      CARGO_INCREMENTAL: '0'
+      CARGO_TARGET_DIR: ${{ github.workspace }}/artifacts/macos-product-cargo-target
+      CARGO_HOME: ${{ github.workspace }}/artifacts/macos-product-cargo-home
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: native-macos-product-fixtures-${{ github.sha }}
+          path: artifacts/macos-product-fixtures
+      - name: Verify exact source, all native fixture hashes and the hidden Vite manifest
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/macos-product
+          python scripts/prepare_native_macos_product.py --verify --fixture artifacts/macos-product-fixtures
+          test "$(uname -m)" = "${{ matrix.architecture == 'arm64' && 'arm64' || 'x86_64' }}"
+          xcodebuild -version | tee artifacts/macos-product/apple-sdk.log
+      - name: Install the unchanged Rust compiler and record the actual native host
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.85.0 --profile minimal
+          rustc +1.85.0 -vV | tee artifacts/macos-product/rust-toolchain.log
+          rustc +1.85.0 -vV | grep -Fx "host: ${{ matrix.architecture == 'arm64' && 'aarch64' || 'x86_64' }}-apple-darwin"
+      - name: Build the actual native Rust worker and public gateway on this Mac
+        run: |
+          set -euo pipefail
+          python scripts/rust_build.py --toolchain 1.85.0 --target-dir "$CARGO_TARGET_DIR" -- build --locked -p deepseek-worker -p deepseek-gateway --bins 2>&1 | tee artifacts/macos-product/rust-build.log
+      - name: Run the actual five-binary app, file workload and graceful complete restart
+        run: |
+          set -euo pipefail
+          bin="$RUNNER_TEMP/macos-product-bin"
+          mkdir -p "$bin"
+          for name in deepseekd deepseek-launch deepseek-desktop; do
+            cp "artifacts/macos-product-fixtures/$DEEPSEEK_MACOS_ARCH/$name" "$bin/$name"
+          done
+          for name in deepseek-worker deepseek-gateway; do
+            cp "$CARGO_TARGET_DIR/debug/$name" "$bin/$name"
+          done
+          chmod 700 "$bin/"*
+          for name in deepseekd deepseek-launch deepseek-desktop deepseek-worker deepseek-gateway; do
+            otool -L "$bin/$name"
+          done | tee artifacts/macos-product/direct-dynamic-dependencies.log
+          python scripts/verify_native_macos_product.py --bin "$bin" --fixture artifacts/macos-product-fixtures --profile "$RUNNER_TEMP/disposable-native-macos-product-profile" --out artifacts/macos-product
+      - name: Return only native product reports; leave binaries, profile and compiler output in cloud
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: native-macos-product-${{ matrix.architecture }}-${{ github.sha }}
+          path: artifacts/macos-product
           if-no-files-found: error
           retention-days: 7

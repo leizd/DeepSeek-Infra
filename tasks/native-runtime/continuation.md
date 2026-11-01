@@ -1,3 +1,29 @@
+# Current checkpoint: run the complete Mac native application, 2026-11-01
+
+Exact source019c847c independently passes the original9 and all24 PROCESS
+recovery cases, with568 raw report members and all12 final inode-alias cases
+verified. Its Windows/Mac workflow41300405420 has all4 jobs successful; the
+exact-source Intel/Apple-silicon window and three-process persistent-profile
+probes are independently qualified. Rust and Android jobs are successful;
+complete CI and each exact-source raw qualification remain separate.
+
+The next gate builds actual Go control/launcher/desktop binaries with the
+original checksum-pinned Linux compiler, then builds real Rust worker/gateway
+on both actual Mac architectures. It starts the original whole app, binds
+real process ancestry/start identity/UID/binary hashes and WindowServer frame,
+performs one authenticated public file workload, gracefully stops all observed
+processes, and requires original file/provenance continuity with advanced writer
+fencing after a complete restart. Stores are never seeded and signing keys are
+not inspected. The original Windows job and existing window limits remain
+unchanged. This new product gate is unexecuted until its exact cloud run passes.
+See [the concrete Mac product gate](../../docs/NATIVE_MACOS_PRODUCT_CLOUD_VERIFICATION.md).
+
+Retained React DOM/native UI/default-browser/upgrade/legacy-profile/backup/all-OS
+behavior, whole-product ownership/recovery/features, zero production Python and
+server TypeScript, security/performance, exact-source CI/Evidence and the retained
+MCP pytest engine still require completion. No scope or coverage floor is
+reduced. Full migration stays ACTIVE/NOT_READY; no out-of-schedule PR is changed.
+
 # Current checkpoint: observe procfs exit races without weakening crash evidence, 2026-11-01
 
 Exact source df16f983 recovery run41288289654 passes eight original cases

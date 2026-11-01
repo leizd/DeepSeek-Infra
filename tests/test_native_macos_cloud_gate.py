@@ -40,8 +40,9 @@ def test_macos_probe_uses_exact_pinned_cross_compilation_and_both_real_runtime_a
     source = "\n".join(step.get("run", "") for step in build["steps"])
     for required in ["release/native_runtime_toolchain_v1.json", "artifact['sha256']", "go test -c", "GOOS=darwin", "go build -trimpath"]:
         assert required in source
+    assert runtime["if"] == "github.event_name == 'workflow_dispatch' && inputs.verify_macos"
+    assert build["if"] == "github.event_name == 'workflow_dispatch' && (inputs.verify_macos || inputs.verify_macos_product)"
     for job in [build, runtime]:
-        assert job["if"] == "github.event_name == 'workflow_dispatch' && inputs.verify_macos"
         assert job["defaults"]["run"]["shell"] == "bash"
         for step in job["steps"]:
             if step.get("uses", "").startswith("actions/checkout@"):
