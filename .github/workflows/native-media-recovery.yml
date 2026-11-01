@@ -232,6 +232,7 @@ jobs:
       with:
         name: native-media-fixture-binaries-${{ github.sha }}
         path: ${{ runner.temp }}/native-media-fixture-bin/
+        include-hidden-files: true
         if-no-files-found: error
         retention-days: 3
     - name: Remove the temporary tracer capability

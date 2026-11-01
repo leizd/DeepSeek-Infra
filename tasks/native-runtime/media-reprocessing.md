@@ -1,3 +1,30 @@
+# Current checkpoint: preserve the cloud fixture file set, 2026-11-01
+
+Source9ace5f9 recovery run41280484842 completes all nine original cases, but
+all12 new matrix cells fail before PROCESS execution because their downloaded
+file set lacks the source-built ui/.vite/manifest.json. Its hash/size/path are
+present in the retained producer receipt. The pinned artifact uploader excludes
+hidden files by default. This is a fixture-transfer failure, not24 qualified
+crash cases; the exact file-set check correctly refuses incomplete input.
+
+The follow-up enables hidden-file inclusion only for the existing dedicated
+cloud binary/UI fixture path. The producer includes exactly the two built native
+programs and the built UI; no runtime profile, private signing state or cache is
+copied. Exact source/tree/run/attempt, all members, hashes, ELF headers, linkage,
+timeouts, original9, all24 PROCESS cases and original coverage floors remain
+required. An offline regression executes the actual consumer with inert files:
+the original transfer fails at the same file-set assertion; corrected transfer
+succeeds, and five missing/extra/modified/mixed/duplicate inputs remain refused.
+These are Python verifier tests, never locally built/executed native programs.
+
+The cumulative source also contains thea8c0241 AppKit/WebKit implementation.
+Both real Mac architecture tests, persistent/retained UI functionality, complete
+exact-source CI/Evidence and the full product ownership/recovery/feature/package/
+zero-Python/server-TypeScript/security/performance matrix remain open. All broad
+readiness flags stay false and the migration remains ACTIVE/NOT_READY.
+
+Artifact semantics: [pinned upload-artifact documentation](https://github.com/actions/upload-artifact/blob/ea165f8d65b6e75b540449e92b4886f43607fa02/README.md).
+
 # Standalone native media reprocessing
 
 <!-- docs-language-switcher:start -->
