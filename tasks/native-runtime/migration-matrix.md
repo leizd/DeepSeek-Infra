@@ -1,3 +1,15 @@
+# Current complete-corpus boundary, 2026-11-01
+
+Source7478c31 has original9 PASS and11 actual SQLite PROCESS PASS, including
+five real final-inode reuses preserved through recovery. The20-minute serial
+step times out before the last case completes; SQLiteVec cannot begin while a
+listener remains. All24 and the full workflow are therefore unqualified.
+The follow-up isolates every required backend/kind pair and aggregates all24
+plus original9 at one source/tree/run/attempt without changing original bounds
+or coverage floors. Selected2-case cells never claim whole-backend readiness.
+The macOS workflow context is corrected, but no native Mac baseline or host is
+yet qualified. All remaining product/platform rows below stay open. NOT_READY.
+
 # Current publication-sequence evidence boundary, 2026-11-01
 
 At source f12d170, run41261832532 passes the original nine cases and only the

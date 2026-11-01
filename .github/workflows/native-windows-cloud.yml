@@ -224,7 +224,7 @@ jobs:
       CGO_ENABLED: '0'
       GOTOOLCHAIN: local
       DEEPSEEK_MACOS_ARCH: ${{ matrix.architecture }}
-      DEEPSEEK_MACOS_PROFILE: ${{ runner.temp }}/native-macos-disposable-profile
+      DEEPSEEK_MACOS_PROFILE: ${{ github.workspace }}/artifacts/native-macos-disposable-profile
       DEEPSEEK_MACOS_REPORT: ${{ github.workspace }}/artifacts/macos-window/result.json
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262

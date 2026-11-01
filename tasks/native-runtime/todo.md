@@ -1,3 +1,16 @@
+# Current full PROCESS matrix follow-up, 2026-11-01
+
+- [x] Retain7478c31's original9 and11 actual SQLite PASS, five real initial-inode
+  reuses and the20-minute timeout/SQLiteVec preflight failure;24 is not qualified.
+- [x] Partition both backends and all six kinds into12 required independent
+  cells; retain both phases, original29 other steps,60/20-minute bounds and floors.
+- [x] Require all24 exact cases and original9 in one fail-closed aggregate,
+  including private plan/fence/outcome/process/publication and binary/UI bindings.
+- [x] Correct the invalid job-level macOS runner context using actionlint;
+  native macOS execution and implementation remain unfinished.
+- [ ] Freeze, upload and actually qualify this complete new matrix source,
+  then finish full original CI/Evidence/platform and the entire retained product.
+
 # Current PROCESS publication-sequence follow-up, 2026-11-01
 
 - [x] Bind f12d170 run41261832532 to196 actual reports: original9 PASS,

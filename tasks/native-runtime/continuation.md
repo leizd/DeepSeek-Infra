@@ -1,3 +1,32 @@
+# Current checkpoint: isolate the complete PROCESS corpus, 2026-11-01
+
+The7478c31 source run41264942053 is terminal FAIL: original9 PASS and11
+SQLite PROCESS PASS. All five completed final cases actually reuse the initial
+inode, retain a different live processing predecessor, and preserve the final
+publication across recovery. SQLite reaches the unchanged20-minute serial step
+limit during video-final; its residual listener prevents SQLiteVec preflight.
+There are13 unqualified cases. The286 reports and raw timeout remain retained.
+
+The source follow-up keeps all29 other original steps and the60-minute job
+limit, and moves PROCESS to12 required backend/kind cells on independent
+runners, max four at once, each with the original20-minute cap and both phases.
+The default verifier still selects all six kinds. An explicitly selected cell
+cannot claim a complete backend qualification. The final required aggregator
+checks original9 plus all24 unique same-source/tree/run/attempt cases, their
+original Go/Rust fences, private plan binding, signed outcome, native process
+identities, actual kill, predecessor and retained final publication. Missing,
+duplicate, mixed or partial evidence fails. Native binaries and the built UI
+stay in the cloud and are hash-verified before execution; only reports return.
+
+Thed1266c7 macOS baseline did not execute: GitHub rejected its workflow because
+runner.temp is not allowed in job-level env. The profile now uses the allowed
+github.workspace context; checksum-verified actionlint confirms the correction.
+This is a workflow fix, not a native-window implementation or runtime PASS.
+The real macOS baseline, AppKit/WebKit host and complete retained features are
+still required. Full exact-source CI/Evidence/coverage/platform, ownership,
+MCP/media/provider/config/capacity/recovery/package/zero-Python/server-TypeScript/
+security/performance migration remain ACTIVE/NOT_READY.
+
 # Current checkpoint: witness each publication predecessor, 2026-11-01
 
 Source f12d1701946046fb8562791d662b38bfdb4371dc, tree

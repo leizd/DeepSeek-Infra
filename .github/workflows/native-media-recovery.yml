@@ -120,6 +120,11 @@ jobs:
       run: 'python -m pytest -q --no-cov -p no:cacheprovider tests/test_native_media_recovery_verifier.py tests/test_native_media_patch_verifier.py tests/test_native_media_delete_verifier.py tests/test_native_media_process_recovery_verifier.py
 
         '
+    - name: Verify the full matrix evidence and macOS workflow source contracts
+      run: 'python -m pytest -q --no-cov -p no:cacheprovider tests/test_native_media_process_matrix.py
+        tests/test_native_macos_cloud_gate.py
+
+        '
     - name: Build actual production worker and edge without test hooks
       id: build
       run: 'set -o pipefail
@@ -196,18 +201,39 @@ jobs:
       run: |
         set -o pipefail
         python scripts/verify_native_media_recovery.py --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --strace "$RUNNER_TEMP/native-media-recovery-strace" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --mutation delete --backend sqlite_vec --out artifacts/native-media-recovery/delete-crash-vector 2>&1 | tee artifacts/native-media-recovery/delete-crash-vector.log
-    - name: Recover each original PROCESS after actual processing and final publication SIGKILL on SQLite
-      if: always() && steps.build.outcome == 'success'
-      timeout-minutes: 20
-      run: |
-        set -o pipefail
-        python scripts/verify_native_media_process_recovery.py --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --strace "$RUNNER_TEMP/native-media-recovery-strace" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --backend sqlite --out artifacts/native-media-recovery/process-crash-sqlite 2>&1 | tee artifacts/native-media-recovery/process-crash-sqlite.log
-    - name: Recover each original PROCESS after actual processing and final publication SIGKILL on SQLiteVec
-      if: always() && steps.build.outcome == 'success'
-      timeout-minutes: 20
-      run: |
-        set -o pipefail
-        python scripts/verify_native_media_process_recovery.py --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --strace "$RUNNER_TEMP/native-media-recovery-strace" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --backend sqlite_vec --out artifacts/native-media-recovery/process-crash-sqlite-vec 2>&1 | tee artifacts/native-media-recovery/process-crash-sqlite-vec.log
+    - name: Bind the two source-built Rust binaries for all required PROCESS cells
+      run: "set -euo pipefail\npython - <<'PY'\nimport hashlib,json,os,shutil,subprocess\n\
+        from pathlib import Path\ndestination=Path(os.environ['RUNNER_TEMP'])/'native-media-fixture-bin'\n\
+        destination.mkdir()\nrows=[]\nfor name in ['deepseek-worker','deepseek-gateway']:\n\
+        \    source=Path(os.environ['CARGO_TARGET_DIR'])/'debug'/name\n    target=destination/name\n\
+        \    shutil.copyfile(source,target)\n    target.chmod(0o700)\n    with target.open('rb')\
+        \ as stream: digest=hashlib.file_digest(stream,'sha256').hexdigest()\n    assert\
+        \ target.open('rb').read(4)==b'\\x7fELF'\n    rows.append(dict(name=name,sha256=digest,bytes=target.stat().st_size))\n\
+        \    linked=subprocess.run(['ldd',str(target)],capture_output=True,text=True)\n\
+        \    linkage=linked.stdout+linked.stderr\n    assert linked.returncode==0 or 'not\
+        \ a dynamic executable' in linkage\n    assert 'not found' not in linkage\n  \
+        \  for line in linkage.splitlines():\n        resolved=line.split('=>',1)[-1].strip().split('\
+        \ ',1)[0]\n        if resolved.startswith('/'):\n            assert resolved.startswith(('/lib/','/lib64/','/usr/lib/','/usr/lib64/')),\
+        \ 'Non-system runtime dependency requires an explicit package'\nui=Path('static/ui')\n\
+        assert (ui/'index.html').is_file() and not ui.is_symlink()\nassert all(not p.is_symlink()\
+        \ for p in ui.rglob('*'))\nshutil.copytree(ui,destination/'ui')\nfiles=[]\nfor\
+        \ path in sorted(destination.rglob('*')):\n    if path.is_file():\n        with\
+        \ path.open('rb') as stream: digest=hashlib.file_digest(stream,'sha256').hexdigest()\n\
+        \        files.append(dict(path=path.relative_to(destination).as_posix(),sha256=digest,bytes=path.stat().st_size))\n\
+        version=subprocess.check_output(['rustc','--version'],text=True).strip()\nassert\
+        \ version.startswith('rustc 1.85.0 ')\nresult=dict(sourceCommit=os.environ['GITHUB_SHA'],sourceTree=subprocess.check_output(['git','rev-parse','HEAD^{tree}'],text=True).strip(),runId=os.environ['GITHUB_RUN_ID'],attempt=os.environ['GITHUB_RUN_ATTEMPT'],rustVersion=version,binaries=rows,files=files,requiredElfDependenciesResolved=True)\n\
+        data=(json.dumps(result,indent=2)+'\\n').encode()\n(destination/'native-binaries.json').write_bytes(data)\n\
+        Path('artifacts/native-media-recovery/native-binaries.json').write_bytes(data)\n\
+        PY\n"
+      if: success() && steps.build.outcome == 'success'
+    - name: Share only native executables between cloud jobs
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      if: success() && steps.build.outcome == 'success'
+      with:
+        name: native-media-fixture-binaries-${{ github.sha }}
+        path: ${{ runner.temp }}/native-media-fixture-bin/
+        if-no-files-found: error
+        retention-days: 3
     - name: Remove the temporary tracer capability
       if: always()
       run: |
@@ -240,3 +266,209 @@ jobs:
       with:
         path: ${{ env.CARGO_TARGET_DIR }}
         key: ${{ steps.target.outputs.cache-primary-key }}
+
+  media-process-recovery:
+    name: PROCESS ${{ matrix.backend }} ${{ matrix.media_kind }}
+    needs: media-recovery
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        backend:
+        - sqlite
+        - sqlite_vec
+        media_kind:
+        - webpage
+        - image
+        - screenshot
+        - pdf
+        - audio
+        - video
+    env:
+      CGO_ENABLED: '0'
+      GOTOOLCHAIN: local
+      GOMAXPROCS: '2'
+      GOCACHE: ${{ github.workspace }}/artifacts/process-go-cache
+      GOMODCACHE: ${{ github.workspace }}/artifacts/process-go-modules
+      MEDIA_BACKEND: ${{ matrix.backend }}
+      MEDIA_KIND: ${{ matrix.media_kind }}
+      DEEPSEEK_EVIDENCE_SOURCE_CONTEXT: ${{ github.workspace }}/artifacts/native-media-process/source-context.json
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      with:
+        python-version: '3.12'
+    - name: Bind the cell to the actual checked-out source
+      run: 'mkdir -p artifacts/native-media-process
+
+        python scripts/capture_evidence_context.py --out artifacts/native-media-process/source-context.json
+
+        '
+    - name: Install official syscall tracing and offline oracle tooling
+      run: 'sudo apt-get update -qq
+
+        sudo apt-get install --yes --no-install-recommends strace libcap2-bin
+
+        python -m pip install -r requirements.txt -r requirements-dev.txt -r requirements-native-protocol.txt
+
+        '
+    - name: Install the repository's checksum-pinned Go for the real signing producer
+      run: 'archive="$RUNNER_TEMP/go1.27.1.linux-amd64.tar.gz"
+
+        install_dir="$RUNNER_TEMP/agent-signing-go-1.27.1"
+
+        curl --fail --location --silent --show-error --output "$archive" https://go.dev/dl/go1.27.1.linux-amd64.tar.gz
+
+        echo "63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445  $archive"
+        | sha256sum --check --strict
+
+        mkdir -p "$install_dir"
+
+        tar -xzf "$archive" -C "$install_dir"
+
+        echo "$install_dir/go/bin" >> "$GITHUB_PATH"
+
+        '
+    - name: Verify Go modules before the isolated process probe
+      working-directory: go
+      run: 'test "$(go env GOVERSION)" = "go1.27.1"
+
+        go mod download
+
+        go mod verify
+
+        '
+    - name: Install the pinned offline vector oracle
+      run: python -m pip install --no-deps sqlite-vec==0.1.9
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: native-media-fixture-binaries-${{ github.sha }}
+        path: ${{ runner.temp }}/native-media-fixture-bin
+    - name: Verify the same source and every received native executable
+      run: "set -euo pipefail\npython - <<'PY'\nimport hashlib,json,os,shutil,struct,subprocess\n\
+        from pathlib import Path\nroot=Path(os.environ['RUNNER_TEMP'])/'native-media-fixture-bin'\n\
+        receipt=json.loads((root/'native-binaries.json').read_bytes())\ntree=subprocess.check_output(['git','rev-parse','HEAD^{tree}'],text=True).strip()\n\
+        assert (receipt['sourceCommit'],receipt['sourceTree'],receipt['runId'],receipt['attempt'])==(os.environ['GITHUB_SHA'],tree,os.environ['GITHUB_RUN_ID'],os.environ['GITHUB_RUN_ATTEMPT'])\n\
+        assert {r['name'] for r in receipt['binaries']}=={'deepseek-worker','deepseek-gateway'}\
+        \ and len(receipt['binaries'])==2\nassert receipt['requiredElfDependenciesResolved']\
+        \ is True\nexpected={r['path'] for r in receipt['files']}\nassert len(expected)==len(receipt['files'])\
+        \ and not root.is_symlink() and all(not p.is_symlink() for p in root.rglob('*'))\n\
+        assert 'ui/index.html' in expected and {'deepseek-worker','deepseek-gateway'}<=expected\n\
+        assert {p.relative_to(root).as_posix() for p in root.rglob('*') if p.is_file()}==expected|{'native-binaries.json'}\n\
+        for row in receipt['files']:\n    path=root/row['path'];assert not path.is_symlink()\
+        \ and path.resolve().is_relative_to(root.resolve())\n    with path.open('rb')\
+        \ as stream: digest=hashlib.file_digest(stream,'sha256').hexdigest()\n    assert\
+        \ digest==row['sha256'] and path.stat().st_size==row['bytes']\nfor row in receipt['binaries']:\n\
+        \    path=root/row['name'];assert path.is_file() and not path.is_symlink() and\
+        \ path.resolve().is_relative_to(root.resolve())\n    with path.open('rb') as\
+        \ stream: digest=hashlib.file_digest(stream,'sha256').hexdigest()\n    assert\
+        \ digest==row['sha256'] and path.stat().st_size==row['bytes']\n    with path.open('rb')\
+        \ as stream: header=stream.read(20)\n    assert header[:6]==b'\\x7fELF\\x02\\\
+        x01' and struct.unpack('<H',header[18:20])[0]==62\n    path.chmod(0o700)\ndestination=Path('static/ui')\n\
+        assert not destination.exists()\nshutil.copytree(root/'ui',destination)\nfor\
+        \ row in receipt['files']:\n    if row['path'].startswith('ui/'):\n        with\
+        \ (Path('static')/row['path']).open('rb') as stream: assert hashlib.file_digest(stream,'sha256').hexdigest()==row['sha256']\n\
+        Path('artifacts/native-media-process/binary-context.json').write_bytes((root/'native-binaries.json').read_bytes())\n\
+        PY\n"
+    - name: Permit only the temporary official tracer to attach
+      run: 'tracer="$RUNNER_TEMP/native-media-recovery-strace"
+
+        test ! -e "$tracer"
+
+        install --mode=0755 /usr/bin/strace "$tracer"
+
+        cmp --silent /usr/bin/strace "$tracer"
+
+        sudo setcap cap_sys_ptrace=ep "$tracer"
+
+        getcap "$tracer" | tee artifacts/native-media-process/tracer-capabilities.txt
+
+        sha256sum /usr/bin/strace "$tracer" > artifacts/native-media-process/tracer-checksums.txt
+
+        '
+    - name: Run both original publication phases for this required backend and media
+        kind
+      timeout-minutes: 20
+      run: 'set -euo pipefail
+
+        python scripts/verify_native_media_process_recovery.py --worker "$RUNNER_TEMP/native-media-fixture-bin/deepseek-worker"
+        --edge "$RUNNER_TEMP/native-media-fixture-bin/deepseek-gateway" --strace "$RUNNER_TEMP/native-media-recovery-strace"
+        --go-cache "$GOCACHE" --backend "$MEDIA_BACKEND" --media-kind "$MEDIA_KIND"
+        --out artifacts/native-media-process 2>&1 | tee artifacts/native-media-process/cell.log
+
+        '
+    - name: Remove the temporary tracer capability
+      if: always()
+      run: "tracer=\"$RUNNER_TEMP/native-media-recovery-strace\"\nif [ -f \"$tracer\"\
+        \ ]; then\n  if [ -n \"$(getcap \"$tracer\")\" ]; then sudo setcap -r \"$tracer\"\
+        ; fi\n  test -z \"$(getcap \"$tracer\")\"\n  echo temporary-tracer-capability-removed\
+        \ > artifacts/native-media-process/tracer-capability-cleanup.txt\nfi\n"
+    - name: Retain the exact cell's reports without executable fixtures or caches
+      if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: native-media-process-${{ matrix.backend }}-${{ matrix.media_kind }}-${{
+          github.sha }}
+        path: artifacts/native-media-process/
+        if-no-files-found: error
+        retention-days: 7
+  media-process-evidence:
+    name: Require original nine and every actual PROCESS matrix cell
+    if: always()
+    needs:
+    - media-recovery
+    - media-process-recovery
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      with:
+        python-version: '3.12'
+    - name: Require successful original and matrix jobs
+      env:
+        REQUIRED_RESULTS: ${{ toJSON(needs) }}
+      run: 'python - <<''PY''
+
+        import json,os
+
+        results=json.loads(os.environ[''REQUIRED_RESULTS''])
+
+        assert set(results)=={''media-recovery'',''media-process-recovery''} and all(r[''result'']==''success''
+        for r in results.values())
+
+        PY
+
+        '
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: native-media-recovery-${{ github.sha }}
+        path: artifacts/media-process-inputs/original
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        pattern: native-media-process-*-${{ github.sha }}
+        path: artifacts/media-process-inputs
+        merge-multiple: false
+    - name: Verify the complete same-source corpus and all original identities
+      run: 'set -euo pipefail
+
+        export DEEPSEEK_SOURCE_TREE="$(git rev-parse ''HEAD^{tree}'')"
+
+        python scripts/verify_native_media_process_matrix.py --inputs artifacts/media-process-inputs
+        --out artifacts/native-media-process-evidence/result.json
+
+        '
+    - name: Retain complete corpus evidence as reports
+      if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: native-media-recovery-matrix-${{ github.sha }}
+        path: artifacts/native-media-process-evidence/*.json
+        if-no-files-found: warn
+        retention-days: 7

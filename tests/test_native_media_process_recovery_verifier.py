@@ -34,6 +34,21 @@ def original() -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     return library, journal, control
 
 
+def test_unselected_process_corpus_still_requires_all_six_original_kinds() -> None:
+    assert probe.selected_kinds(None) == ("webpage", "image", "screenshot", "pdf", "audio", "video")
+
+
+@pytest.mark.parametrize("kind", ["webpage", "image", "screenshot", "pdf", "audio", "video"])
+def test_one_matrix_cell_selects_exactly_its_explicit_original_kind(kind: str) -> None:
+    assert probe.selected_kinds(kind) == (kind,)
+
+
+@pytest.mark.parametrize("invalid", ["", "all", "unknown", "webpage,image", True, ["webpage"], 1])
+def test_invalid_process_selector_cannot_silently_reduce_or_replace_the_corpus(invalid: Any) -> None:
+    with pytest.raises(probe.create.patch.ProbeFailure, match="MEDIA_PROCESS_CRASH_KIND_INVALID"):
+        probe.selected_kinds(invalid)
+
+
 def publication_sequence() -> tuple[Any, bytes, bytes, dict[str, Any], dict[str, Any], dict[str, Any]]:
     library, journal, control = original()
     processing = json.dumps(library).encode()

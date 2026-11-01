@@ -38,6 +38,13 @@ require = recovery.require
 digest = recovery.digest
 
 
+def selected_kinds(kind: str | None) -> tuple[str, ...]:
+    if kind is None:
+        return KINDS
+    require(type(kind) is str and kind in KINDS, "MEDIA_PROCESS_CRASH_KIND_INVALID")
+    return (kind,)
+
+
 @lru_cache(maxsize=1)
 def process_plan_types() -> tuple[Any, Any]:
     from google.protobuf import descriptor_pool, message_factory
@@ -503,6 +510,7 @@ def run_case(args: argparse.Namespace, binaries: Path, scratch: Path, oracle: Pa
 
 def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
     require(sys.platform == "linux" and os.environ.get("GITHUB_ACTIONS") == "true", "MEDIA_PROCESS_CRASH_VERIFICATION_IS_CLOUD_ONLY")
+    kinds = selected_kinds(getattr(args, "media_kind", None))
     source = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     require(source == os.environ.get("GITHUB_SHA"), "MEDIA_PROCESS_CRASH_SOURCE_DIFFERS")
     require(not subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=no"], cwd=ROOT), "MEDIA_PROCESS_CRASH_SOURCE_DIRTY")
@@ -532,17 +540,20 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
         (args.out / "original-processing.json").write_text(json.dumps(reference, ensure_ascii=True, indent=2) + "\n", encoding="utf8")
         cases = {row["type"]: row for row in reference["cases"]}
         require(set(cases) == set(KINDS), "MEDIA_PROCESS_CRASH_ORIGINAL_KINDS_MISSING")
-        for kind in KINDS:
+        for kind in kinds:
             for phase in PHASES:
                 case = dict(status="FAIL", mediaKind=kind, phase=phase, backend=args.backend,
                             sourceCommit=source, runId=os.environ.get("GITHUB_RUN_ID"), fullMigrationQualified=False)
                 report["cases"].append(case)
                 run_case(args, binaries, scratch, oracle, reference, cases[kind], phase, case)
-        require(len(report["cases"]) == 12 and all(case["status"] == "PASS" for case in report["cases"]),
+        require(len(report["cases"]) == len(kinds) * len(PHASES) and all(case["status"] == "PASS" for case in report["cases"]),
                 "MEDIA_PROCESS_CRASH_CASES_INCOMPLETE")
-        report.update(status="PASS", actualProcessingAndFinalPublicationSIGKILLQualified=True,
-                      originalOperationAutonomousRecoveryQualified=True, actualNativeBackendQualified=args.backend,
-                      nativeSQLiteVecStandaloneForceRecoveryHTTPQualified=args.backend == "sqlite_vec", completedCases=12)
+        complete_backend = kinds == KINDS
+        report.update(status="PASS", selectedProcessingAndFinalPublicationSIGKILLQualified=True,
+                      actualProcessingAndFinalPublicationSIGKILLQualified=complete_backend,
+                      originalOperationAutonomousRecoveryQualified=complete_backend, actualNativeBackendQualified=args.backend,
+                      nativeSQLiteVecStandaloneForceRecoveryHTTPQualified=complete_backend and args.backend == "sqlite_vec",
+                      selectedMediaKinds=list(kinds), requiredCases=len(kinds) * len(PHASES), completedCases=len(report["cases"]))
 
 
 def main() -> int:
@@ -552,17 +563,23 @@ def main() -> int:
     parser.add_argument("--strace", type=Path, required=True)
     parser.add_argument("--go-cache", type=Path, required=True)
     parser.add_argument("--backend", choices=("sqlite", "sqlite_vec"), required=True)
+    parser.add_argument("--media-kind", choices=KINDS, help="One required matrix cell; omitted retains the complete six-kind backend corpus")
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
+    kinds = selected_kinds(args.media_kind)
     args.out.mkdir(parents=True, exist_ok=True)
     report: dict[str, Any] = dict(kind="native-media-process-crash-v1", status="FAIL", cases=[], backend=args.backend,
                                  sourceCommit=os.environ.get("GITHUB_SHA"), runId=os.environ.get("GITHUB_RUN_ID"),
                                  event=os.environ.get("GITHUB_EVENT_NAME"), attempt=os.environ.get("GITHUB_RUN_ATTEMPT"),
                                  actualProcessingAndFinalPublicationSIGKILLQualified=False, originalOperationAutonomousRecoveryQualified=False,
+                                  selectedProcessingAndFinalPublicationSIGKILLQualified=False, selectedMediaKinds=list(kinds),
+                                  requiredCases=len(kinds) * len(PHASES),
                                  nativeSQLiteVecStandaloneForceRecoveryHTTPQualified=False, allProcessingCrashPhasesQualified=False,
                                  scope="Six standalone force/read/recovery kinds on one backend at two real library-publication boundaries only",
                                  physicalPowerLossQualified=False, fullProcessingPipelineQualified=False, fullMigrationQualified=False,
                                  readiness="NOT_READY", checkedAt=datetime.now(timezone.utc).isoformat())
+    if args.media_kind is not None:
+        report["scope"] = "One explicit original media kind on one backend at both actual library-publication boundaries; the full matrix is still required"
     try:
         run(args, report)
     except Exception as error:

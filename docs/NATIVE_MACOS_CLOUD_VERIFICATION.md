@@ -4,6 +4,13 @@
 [中文](../README.md) / [English](../README.en.md)
 <!-- docs-language-switcher:end -->
 
+The firstd1266c7 submission failed workflow validation before any native Mac
+test ran: runner.temp is unavailable in job-level env. The corrected source
+uses an ignored workspace profile path and passes actionlint. The real failing
+baseline and subsequent AppKit/WebKit implementation are still pending; this
+syntax correction is not platform acceptance.
+
+
 The complete Rust/Go migration remains **NOT_READY**. The existing native macOS
 window and default-browser entries return explicit unavailable errors. The first
 cloud fixture records that actual baseline before replacing the window host.

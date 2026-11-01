@@ -4,6 +4,22 @@
 [中文](../../README.md) / [English](../../README.en.md)
 <!-- docs-language-switcher:end -->
 
+## Complete recovery corpus partition, 2026-11-01
+
+At7478c31, original9 and11 actual SQLite cases pass, including five final
+publications that reuse the initial inode and remain unchanged on recovery.
+The serial20-minute limit interrupts video-final; the remaining listener stops
+SQLiteVec preflight. The full24-case gate has not passed. The follow-up requires
+all backend/kind pairs on independent cloud runners, max four in parallel, with
+both phases and the original20-minute per-cell cap. All29 other original steps
+and the60-minute original job remain. A final required gate checks all24
+same-source/tree/run/attempt cases plus original9 and original identity/effect/
+publication evidence. Binaries, built UI and compiler outputs remain in the
+cloud; exact binary and UI hashes are checked before each application starts.
+Selected cells report only selected-case success. Full pipeline and all other
+product/platform requirements remain NOT_READY.
+
+
 ## Original PROCESS publication sequence, 2026-11-01
 
 The f12d170 recovery run41261832532 retains original9 PASS and only2/24

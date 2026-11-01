@@ -18,7 +18,8 @@ def workflow() -> dict[Any, Any]:
 def test_optional_macos_probe_preserves_the_complete_original_windows_job() -> None:
     value = workflow()
     original = json.dumps(value["jobs"]["windows-app"], sort_keys=True, separators=(",", ":")).encode()
-    assert hashlib.sha256(original).hexdigest() == "8108d2be47dea2b3ee06cd760950a5d338fecea0f2e68a881106f7870f4ac537"
+    # Public SHA256 of the original workflow structure, not a credential.
+    assert hashlib.sha256(original).hexdigest() == "8108d2be47dea2b3ee06cd760950a5d338fecea0f2e68a881106f7870f4ac537"  # pragma: allowlist secret
     trigger = value.get("on", value.get(True))
     assert isinstance(trigger, dict)
     assert trigger["workflow_dispatch"]["inputs"]["verify_macos"] == {
@@ -69,3 +70,8 @@ def test_embedded_python_is_executable_source_and_writes_real_newlines() -> None
     for program in programs:
         compile(program, "embedded-macos-workflow.py", "exec")
         assert not any(isinstance(node, ast.Constant) and node.value == "\\n" for node in ast.walk(ast.parse(program)))
+
+
+def test_job_environment_does_not_use_the_step_only_runner_context() -> None:
+    for job in workflow()["jobs"].values():
+        assert not any("${{ runner." in str(value) for value in job.get("env", {}).values())
