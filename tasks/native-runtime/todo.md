@@ -1,3 +1,29 @@
+# Current checkpoint: implement retained online Skill execution, 2026-11-02
+
+Baselinec45a9c9d actually compiles and fails the new legal online request:
+run41370273799/job125039048704 reaches the expected HTTP501 instead of200,
+after authentication/owner checks. The original raw log and exact source are
+retained. This is functional RED, not a compile or fixture failure.
+
+The candidate reuses one native chat preparation and non-streaming cascade/tool
+execution path, makes Skill dispatch asynchronous, and retains every existing
+pre-execution owner check and terminal artifact/project/run/trace path. It keeps
+the original four output fields and fixes compare_search_results search policy.
+Six offline original-callable fixtures protect tool/memory/model/request shape.
+All20offline HTTP oracle cases and restart/owner/restore checks remain. The old
+extra501gap check becomes a separate real provider401/failed-journal/no-retry
+case on an empty fixture. Original33Rust checks remain plus one mandatory Skill
+step; no original80/95floor, test timeout or coverage omission is weakened.
+
+This changed Rust source is not qualified by parent6ff's actual platform proof
+or its independently verified1672tests/82.41997percent Rust result. Actual new
+native compilation/tests and complete CI/Evidence/platform acceptance stay in
+Actions. The original worktree/index/data remain preserved. Full retained
+server/desktop/Android/background ownership/recovery, original MCP test engine,
+zero-Python/server-TypeScript, provider/Fleet/capacity/security/performance and
+all remaining platform/upgrade/backup requirements stay ACTIVE/NOT_READY.
+See [the online Skill contract](../../docs/NATIVE_SKILLS_ONLINE_EXECUTION.md).
+
 # Current checkpoint: actual retained online Skill request baseline, 2026-11-02
 
 Parent6ff4b8ab independently passes both actual Mac CPUs and Windows lifecycle

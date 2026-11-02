@@ -432,7 +432,10 @@ async fn skills_registry_reads_and_validation_use_the_production_route() {
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["deleted"], "native-case");
-    assert_eq!(ACTION_NOT_MIGRATED, ["run"]);
+    // The separate real-provider integration case requires online success;
+    // this is only the retained action-registration inventory assertion.
+    let unregistered: [&str; 0] = [];
+    assert_eq!(ACTION_NOT_MIGRATED, unregistered);
     let (status, body) = post(
         &app,
         json!({"action":"run","skillId":"custom","input":{}}),

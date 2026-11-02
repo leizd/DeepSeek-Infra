@@ -139,6 +139,30 @@ jobs:
             artifacts/rust-cloud/source-context.json
           if-no-files-found: ignore
           retention-days: 7
+      - name: Verify retained Skill online request composition and HTTP lifecycle
+        if: matrix.mode == 'checks'
+        run: |
+          set -euo pipefail
+          python tasks/native-runtime/skills_online_payload_oracle.py --output "$RUNNER_TEMP/skills-online-payloads.json"
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          assert Path(os.environ['RUNNER_TEMP'],'skills-online-payloads.json').read_bytes()==Path('rust/crates/deepseek-policy/tests/fixtures/skills_online_payloads.json').read_bytes()
+          PY
+          python tasks/native-runtime/skills_run_routes_e2e.py --gateway "$CARGO_TARGET_DIR/debug/deepseek-gateway" --output artifacts/rust-cloud/skills-run-routes.json 2>&1 | tee artifacts/rust-cloud/skills-routes.log
+
+      - name: Preserve retained Skill request and HTTP evidence
+        if: always() && matrix.mode == 'checks'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: rust-cloud-skills-routes-${{ github.sha }}
+          path: |
+            artifacts/rust-cloud/skills-run-routes.json
+            artifacts/rust-cloud/skills-routes.log
+            artifacts/rust-cloud/source-context.json
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Verify authenticated retained media reads through default native startup and restart
         if: matrix.mode == 'checks'
         timeout-minutes: 15

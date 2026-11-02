@@ -137,7 +137,7 @@ impl Run {
         let allowed = schema::skill_allowed_tools(&self.skill)?;
         let project = text(&self.options, "projectId");
         let mut payload = json!({"apiKey":text(&self.options,"apiKey"),"tavilyApiKey":text(&self.options,"tavilyApiKey"),"systemPrompt":templates::system(&self.skill,&self.context),
-            "messages":[{"role":"user","content":templates::user(&self.result["input"]),"projectId":project}],"allowedTools":allowed,"searchEnabled":allowed.iter().any(|v|v=="web_search"||v=="compare_sources"),
+            "messages":[{"role":"user","content":templates::user(&self.result["input"]),"projectId":project}],"allowedTools":allowed,"searchEnabled":allowed.iter().any(|v|v=="web_search"||v=="compare_search_results"),
             "memoryEnabled":truth(&self.skill["memoryPolicy"],"read"),"memoryScope":if self.skill["memoryPolicy"]["scope"]=="project"&&!project.is_empty() {format!("project:{project}")} else {"global".into()},"skillRun":{"skillId":self.skill["skillId"],"projectId":project}});
         if truth(&self.options, "model") {
             payload["model"] = self.options["model"].clone();

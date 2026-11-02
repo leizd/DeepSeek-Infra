@@ -103,122 +103,24 @@ pub async fn api_chat(
             });
         }
     };
-    let Some(object) = raw.as_object() else {
-        return app_error(AppError {
-            message: "Chat payload must be an object".to_string(),
-            code: codes::INVALID_PAYLOAD,
-            status: 400,
-        });
-    };
-    // `{**payload, "localBaseUrl": request_base_url(request)}` — the route injects it,
-    // and the assembly reads it for the artifact download base.
-    let mut payload = object.clone();
-    payload.insert(
-        "localBaseUrl".to_string(),
-        json!(crate::openai_facade::request_base_url(&headers)),
-    );
-    let payload = Value::Object(payload);
-
-    let router = ModelRouterSettings::from_env();
-    let validated = match validate_deepseek_payload(&payload, &state.api_key_fallback, &router) {
-        Ok(validated) => validated,
+    let PreparedChat {
+        turn:
+            SearchChatTurn {
+                payload,
+                validated,
+                memory_state,
+                assembly,
+                streaming,
+            },
+        executor,
+        query,
+        mut config,
+        prefetch,
+        router,
+    } = match prepare_chat(&state, &headers, raw) {
+        Ok(prepared) => prepared,
         Err(error) => return app_error(error),
     };
-    let streaming =
-        deepseek_policy::core_utils::python_truthy(payload.get("stream").unwrap_or(&Value::Null));
-    let prefetch = payload.get("searchEnabled") == Some(&Value::Bool(true))
-        && deepseek_policy::search::forced_search_mode(&payload);
-    let query = deepseek_policy::core_utils::latest_user_query(&payload);
-    if prefetch && query.is_empty() {
-        return app_error(AppError {
-            message: "Search query is empty".into(),
-            code: codes::INVALID_PAYLOAD,
-            status: 400,
-        });
-    }
-
-    let assembly = match NativeAssembly::from_env() {
-        Ok(assembly) => assembly.with_router_settings(router.clone()),
-        Err(error) => return app_error(error),
-    };
-    // A `rag_vec` table would change which memories this turn retrieves, and this
-    // process cannot evaluate a `vec0` MATCH; the OpenAI route refuses for the same
-    // reason rather than serving the cosine fallback, whose hits differ in membership.
-    let memory_index = deepseek_policy::memory_index::MemoryIndex::open(assembly.root());
-    if memory_index
-        .as_ref()
-        .is_some_and(|index| index.vector_table_ready)
-    {
-        return app_error(AppError {
-            message: "The memory index has a rag_vec table, so sqlite-vec distances would \
-                      change which memories this turn retrieves; refusing rather than \
-                      serving the cosine fallback."
-                .to_string(),
-            code: CHAT_FILE_INDEX_NOT_READY,
-            status: 501,
-        });
-    }
-
-    let root = assembly.root().to_path_buf();
-    let owns_memory_store = may_write_native_store("memory_store");
-    let (memory_state, consulted_file_index) =
-        assembly.with_env(|env| -> Result<Value, AppError> {
-            validate_request_messages(&payload, &validated.messages, env.expander)?;
-            let latest_query = deepseek_policy::core_utils::latest_user_query(&payload);
-            if !owns_memory_store
-                && deepseek_policy::memory::has_explicit_memory_command(&latest_query)
-            {
-                return Err(AppError {
-                    message: "This turn asks for a long-term memory to be saved or deleted. The \
-                              memory store is still written by the Python runtime, so the native \
-                              route refuses rather than answering without saving."
-                        .to_string(),
-                    code: CHAT_MEMORY_WRITE_NOT_OWNED,
-                    status: 501,
-                });
-            }
-            let provider =
-                |query: &str, scopes: &[String]| -> std::collections::HashMap<String, i64> {
-                    match &memory_index {
-                        Some(index) => deepseek_policy::memory_index::memory_vector_hits(
-                            index,
-                            query,
-                            scopes,
-                            deepseek_policy::memory::MEMORY_RETRIEVE_LIMIT * 2,
-                        )
-                        .unwrap_or_default(),
-                        None => std::collections::HashMap::new(),
-                    }
-                };
-            let borrowed: &deepseek_policy::memory::VectorHits<'_> = &provider;
-            let memory_state = if owns_memory_store {
-                deepseek_policy::memory::prepare_memory_state(
-                    &payload,
-                    &root,
-                    &deepseek_policy::core_utils::SystemClock,
-                    Some(borrowed),
-                )
-            } else {
-                deepseek_policy::memory::prepare_memory_state_read_only(
-                    &payload,
-                    &root,
-                    Some(borrowed),
-                )
-            };
-            Ok(memory_state)
-        });
-    if consulted_file_index {
-        return app_error(deepseek_policy::file_store::vector_index_not_ready());
-    }
-    let memory_state = match memory_state {
-        Ok(memory_state) => memory_state,
-        Err(error) => return app_error(error),
-    };
-    let mut config = UpstreamConfig::from_env();
-    let executor = ToolRoundExecutor::from_env();
-    if let Some(provider) = executor.search_provider() {
-        provider.set_turn_query(query.clone());
-    }
     if streaming && payload.get("agentMode") == Some(&Value::Bool(true)) {
         return crate::chat_multi_agent::response(
             SearchChatTurn {
@@ -303,6 +205,174 @@ pub async fn api_chat(
         .unwrap_or_default()
         .to_string();
     ndjson_response(config, prepared.body, executor, upstream, &model, None)
+}
+
+// One preparation path for public chat and native callers such as Skills.
+struct PreparedChat {
+    turn: SearchChatTurn,
+    executor: ToolRoundExecutor,
+    query: String,
+    config: UpstreamConfig,
+    prefetch: bool,
+    router: ModelRouterSettings,
+}
+
+fn prepare_chat(
+    state: &ChatNdjsonState,
+    headers: &HeaderMap,
+    raw: Value,
+) -> Result<PreparedChat, AppError> {
+    let Some(object) = raw.as_object() else {
+        return Err(AppError {
+            message: "Chat payload must be an object".to_string(),
+            code: codes::INVALID_PAYLOAD,
+            status: 400,
+        });
+    };
+    // `{**payload, "localBaseUrl": request_base_url(request)}` — the route injects it,
+    // and the assembly reads it for the artifact download base.
+    let mut payload = object.clone();
+    payload.insert(
+        "localBaseUrl".to_string(),
+        json!(crate::openai_facade::request_base_url(headers)),
+    );
+    let payload = Value::Object(payload);
+
+    let router = ModelRouterSettings::from_env();
+    let validated = match validate_deepseek_payload(&payload, &state.api_key_fallback, &router) {
+        Ok(validated) => validated,
+        Err(error) => return Err(error),
+    };
+    let streaming =
+        deepseek_policy::core_utils::python_truthy(payload.get("stream").unwrap_or(&Value::Null));
+    let prefetch = payload.get("searchEnabled") == Some(&Value::Bool(true))
+        && deepseek_policy::search::forced_search_mode(&payload);
+    let query = deepseek_policy::core_utils::latest_user_query(&payload);
+    if prefetch && query.is_empty() {
+        return Err(AppError {
+            message: "Search query is empty".into(),
+            code: codes::INVALID_PAYLOAD,
+            status: 400,
+        });
+    }
+
+    let assembly = match NativeAssembly::from_env() {
+        Ok(assembly) => assembly.with_router_settings(router.clone()),
+        Err(error) => return Err(error),
+    };
+    // A `rag_vec` table would change which memories this turn retrieves, and this
+    // process cannot evaluate a `vec0` MATCH; the OpenAI route refuses for the same
+    // reason rather than serving the cosine fallback, whose hits differ in membership.
+    let memory_index = deepseek_policy::memory_index::MemoryIndex::open(assembly.root());
+    if memory_index
+        .as_ref()
+        .is_some_and(|index| index.vector_table_ready)
+    {
+        return Err(AppError {
+            message: "The memory index has a rag_vec table, so sqlite-vec distances would \
+                      change which memories this turn retrieves; refusing rather than \
+                      serving the cosine fallback."
+                .to_string(),
+            code: CHAT_FILE_INDEX_NOT_READY,
+            status: 501,
+        });
+    }
+
+    let root = assembly.root().to_path_buf();
+    let owns_memory_store = may_write_native_store("memory_store");
+    let (memory_state, consulted_file_index) =
+        assembly.with_env(|env| -> Result<Value, AppError> {
+            validate_request_messages(&payload, &validated.messages, env.expander)?;
+            let latest_query = deepseek_policy::core_utils::latest_user_query(&payload);
+            if !owns_memory_store
+                && deepseek_policy::memory::has_explicit_memory_command(&latest_query)
+            {
+                return Err(AppError {
+                    message: "This turn asks for a long-term memory to be saved or deleted. The \
+                              memory store is still written by the Python runtime, so the native \
+                              route refuses rather than answering without saving."
+                        .to_string(),
+                    code: CHAT_MEMORY_WRITE_NOT_OWNED,
+                    status: 501,
+                });
+            }
+            let provider =
+                |query: &str, scopes: &[String]| -> std::collections::HashMap<String, i64> {
+                    match &memory_index {
+                        Some(index) => deepseek_policy::memory_index::memory_vector_hits(
+                            index,
+                            query,
+                            scopes,
+                            deepseek_policy::memory::MEMORY_RETRIEVE_LIMIT * 2,
+                        )
+                        .unwrap_or_default(),
+                        None => std::collections::HashMap::new(),
+                    }
+                };
+            let borrowed: &deepseek_policy::memory::VectorHits<'_> = &provider;
+            let memory_state = if owns_memory_store {
+                deepseek_policy::memory::prepare_memory_state(
+                    &payload,
+                    &root,
+                    &deepseek_policy::core_utils::SystemClock,
+                    Some(borrowed),
+                )
+            } else {
+                deepseek_policy::memory::prepare_memory_state_read_only(
+                    &payload,
+                    &root,
+                    Some(borrowed),
+                )
+            };
+            Ok(memory_state)
+        });
+    if consulted_file_index {
+        return Err(deepseek_policy::file_store::vector_index_not_ready());
+    }
+    let memory_state = match memory_state {
+        Ok(memory_state) => memory_state,
+        Err(error) => return Err(error),
+    };
+    let config = UpstreamConfig::from_env();
+    let executor = ToolRoundExecutor::from_env();
+    if let Some(provider) = executor.search_provider() {
+        provider.set_turn_query(query.clone());
+    }
+    Ok(PreparedChat {
+        turn: SearchChatTurn {
+            payload,
+            validated,
+            memory_state,
+            assembly,
+            streaming,
+        },
+        executor,
+        query,
+        config,
+        prefetch,
+        router,
+    })
+}
+
+/// Reuse validation, memory/context, search, model cascade and tool execution.
+/// The caller keeps its own authenticated route and durable terminal records.
+pub(crate) async fn complete_payload(
+    state: ChatNdjsonState,
+    headers: HeaderMap,
+    mut payload: Value,
+) -> Result<Value, AppError> {
+    if let Some(fields) = payload.as_object_mut() {
+        fields.insert("stream".into(), Value::Bool(false));
+    }
+    let PreparedChat {
+        turn,
+        executor,
+        query,
+        config,
+        prefetch,
+        router,
+    } = prepare_chat(&state, &headers, payload)?;
+    crate::chat_cascade::complete(turn, &executor, query, config, prefetch, &router).await
 }
 
 /// Captured request context shared by complete cloud stages and stream producers.

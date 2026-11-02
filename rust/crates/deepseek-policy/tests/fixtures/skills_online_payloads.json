@@ -1,0 +1,496 @@
+{
+  "scope": "offline Python _llm_output request composition only; no network or production execution",
+  "cases": [
+    {
+      "name": "no-tools",
+      "skill": {
+        "skillId": "online-payload",
+        "name": "在线 Skill 参数",
+        "description": "离线原函数参数对照",
+        "version": "1.0",
+        "systemPrompt": "保留输入并说明依据。",
+        "inputSchema": {
+          "type": "object"
+        },
+        "outputSchema": {
+          "type": "object",
+          "required": [
+            "content"
+          ]
+        },
+        "allowedTools": [],
+        "memoryPolicy": {
+          "scope": "none",
+          "read": false,
+          "write": false
+        },
+        "browserPolicy": {
+          "allowClick": false,
+          "allowType": false,
+          "allowDownload": false,
+          "requireConfirmation": true
+        },
+        "artifactPolicy": {
+          "autoSave": false,
+          "types": []
+        },
+        "projectBinding": {
+          "enabled": false
+        },
+        "exampleInputs": [],
+        "disabled": false
+      },
+      "input": {
+        "topic": "中文输入",
+        "details": {
+          "values": [
+            1,
+            true,
+            null
+          ],
+          "note": "保留内容"
+        }
+      },
+      "options": {
+        "apiKey": "fixture-online-key",
+        "tavilyApiKey": "fixture-search-key",
+        "model": "",
+        "persist": false,
+        "securityApproved": true
+      },
+      "expectedRequest": {
+        "apiKey": "fixture-online-key",
+        "tavilyApiKey": "fixture-search-key",
+        "systemPrompt": "保留输入并说明依据。\n\n[Skill contract]\n\nYou are running inside DeepSeek Infra Skill System.\n\nUse only the tools granted to this Skill. Tool calls still pass through Tool Policy.\n\nHonor the input schema, output schema, memory policy, artifact policy, and project binding.",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Run this Skill with the following JSON input:\n\n{\n  \"topic\": \"中文输入\",\n  \"details\": {\n    \"values\": [\n      1,\n      true,\n      null\n    ],\n    \"note\": \"保留内容\"\n  }\n}",
+            "projectId": ""
+          }
+        ],
+        "allowedTools": [],
+        "searchEnabled": false,
+        "memoryEnabled": false,
+        "memoryScope": "global",
+        "skillRun": {
+          "skillId": "online-payload",
+          "projectId": ""
+        }
+      }
+    },
+    {
+      "name": "web-search",
+      "skill": {
+        "skillId": "online-payload",
+        "name": "在线 Skill 参数",
+        "description": "离线原函数参数对照",
+        "version": "1.0",
+        "systemPrompt": "保留输入并说明依据。",
+        "inputSchema": {
+          "type": "object"
+        },
+        "outputSchema": {
+          "type": "object",
+          "required": [
+            "content"
+          ]
+        },
+        "allowedTools": [
+          "web_search"
+        ],
+        "memoryPolicy": {
+          "scope": "none",
+          "read": false,
+          "write": false
+        },
+        "browserPolicy": {
+          "allowClick": false,
+          "allowType": false,
+          "allowDownload": false,
+          "requireConfirmation": true
+        },
+        "artifactPolicy": {
+          "autoSave": false,
+          "types": []
+        },
+        "projectBinding": {
+          "enabled": false
+        },
+        "exampleInputs": [],
+        "disabled": false
+      },
+      "input": {
+        "topic": "中文输入",
+        "details": {
+          "values": [
+            1,
+            true,
+            null
+          ],
+          "note": "保留内容"
+        }
+      },
+      "options": {
+        "apiKey": "fixture-online-key",
+        "tavilyApiKey": "fixture-search-key",
+        "model": "deepseek-v4-pro",
+        "persist": false,
+        "securityApproved": true
+      },
+      "expectedRequest": {
+        "apiKey": "fixture-online-key",
+        "tavilyApiKey": "fixture-search-key",
+        "model": "deepseek-v4-pro",
+        "systemPrompt": "保留输入并说明依据。\n\n[Skill contract]\n\nYou are running inside DeepSeek Infra Skill System.\n\nUse only the tools granted to this Skill. Tool calls still pass through Tool Policy.\n\nHonor the input schema, output schema, memory policy, artifact policy, and project binding.",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Run this Skill with the following JSON input:\n\n{\n  \"topic\": \"中文输入\",\n  \"details\": {\n    \"values\": [\n      1,\n      true,\n      null\n    ],\n    \"note\": \"保留内容\"\n  }\n}",
+            "projectId": ""
+          }
+        ],
+        "allowedTools": [
+          "web_search"
+        ],
+        "searchEnabled": true,
+        "memoryEnabled": false,
+        "memoryScope": "global",
+        "skillRun": {
+          "skillId": "online-payload",
+          "projectId": ""
+        }
+      }
+    },
+    {
+      "name": "compare-search",
+      "skill": {
+        "skillId": "online-payload",
+        "name": "在线 Skill 参数",
+        "description": "离线原函数参数对照",
+        "version": "1.0",
+        "systemPrompt": "保留输入并说明依据。",
+        "inputSchema": {
+          "type": "object"
+        },
+        "outputSchema": {
+          "type": "object",
+          "required": [
+            "content"
+          ]
+        },
+        "allowedTools": [
+          "compare_search_results"
+        ],
+        "memoryPolicy": {
+          "scope": "none",
+          "read": false,
+          "write": false
+        },
+        "browserPolicy": {
+          "allowClick": false,
+          "allowType": false,
+          "allowDownload": false,
+          "requireConfirmation": true
+        },
+        "artifactPolicy": {
+          "autoSave": false,
+          "types": []
+        },
+        "projectBinding": {
+          "enabled": false
+        },
+        "exampleInputs": [],
+        "disabled": false
+      },
+      "input": {
+        "topic": "中文输入",
+        "details": {
+          "values": [
+            1,
+            true,
+            null
+          ],
+          "note": "保留内容"
+        }
+      },
+      "options": {
+        "apiKey": "fixture-online-key",
+        "tavilyApiKey": "fixture-search-key",
+        "model": "deepseek-v4-pro",
+        "persist": false,
+        "securityApproved": true
+      },
+      "expectedRequest": {
+        "apiKey": "fixture-online-key",
+        "tavilyApiKey": "fixture-search-key",
+        "model": "deepseek-v4-pro",
+        "systemPrompt": "保留输入并说明依据。\n\n[Skill contract]\n\nYou are running inside DeepSeek Infra Skill System.\n\nUse only the tools granted to this Skill. Tool calls still pass through Tool Policy.\n\nHonor the input schema, output schema, memory policy, artifact policy, and project binding.",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Run this Skill with the following JSON input:\n\n{\n  \"topic\": \"中文输入\",\n  \"details\": {\n    \"values\": [\n      1,\n      true,\n      null\n    ],\n    \"note\": \"保留内容\"\n  }\n}",
+            "projectId": ""
+          }
+        ],
+        "allowedTools": [
+          "compare_search_results"
+        ],
+        "searchEnabled": true,
+        "memoryEnabled": false,
+        "memoryScope": "global",
+        "skillRun": {
+          "skillId": "online-payload",
+          "projectId": ""
+        }
+      }
+    },
+    {
+      "name": "both-search",
+      "skill": {
+        "skillId": "online-payload",
+        "name": "在线 Skill 参数",
+        "description": "离线原函数参数对照",
+        "version": "1.0",
+        "systemPrompt": "保留输入并说明依据。",
+        "inputSchema": {
+          "type": "object"
+        },
+        "outputSchema": {
+          "type": "object",
+          "required": [
+            "content"
+          ]
+        },
+        "allowedTools": [
+          "web_search",
+          "compare_search_results"
+        ],
+        "memoryPolicy": {
+          "scope": "none",
+          "read": false,
+          "write": false
+        },
+        "browserPolicy": {
+          "allowClick": false,
+          "allowType": false,
+          "allowDownload": false,
+          "requireConfirmation": true
+        },
+        "artifactPolicy": {
+          "autoSave": false,
+          "types": []
+        },
+        "projectBinding": {
+          "enabled": false
+        },
+        "exampleInputs": [],
+        "disabled": false
+      },
+      "input": {
+        "topic": "中文输入",
+        "details": {
+          "values": [
+            1,
+            true,
+            null
+          ],
+          "note": "保留内容"
+        }
+      },
+      "options": {
+        "apiKey": "fixture-online-key",
+        "tavilyApiKey": "fixture-search-key",
+        "model": "",
+        "persist": false,
+        "securityApproved": true
+      },
+      "expectedRequest": {
+        "apiKey": "fixture-online-key",
+        "tavilyApiKey": "fixture-search-key",
+        "systemPrompt": "保留输入并说明依据。\n\n[Skill contract]\n\nYou are running inside DeepSeek Infra Skill System.\n\nUse only the tools granted to this Skill. Tool calls still pass through Tool Policy.\n\nHonor the input schema, output schema, memory policy, artifact policy, and project binding.",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Run this Skill with the following JSON input:\n\n{\n  \"topic\": \"中文输入\",\n  \"details\": {\n    \"values\": [\n      1,\n      true,\n      null\n    ],\n    \"note\": \"保留内容\"\n  }\n}",
+            "projectId": ""
+          }
+        ],
+        "allowedTools": [
+          "web_search",
+          "compare_search_results"
+        ],
+        "searchEnabled": true,
+        "memoryEnabled": false,
+        "memoryScope": "global",
+        "skillRun": {
+          "skillId": "online-payload",
+          "projectId": ""
+        }
+      }
+    },
+    {
+      "name": "memory-global",
+      "skill": {
+        "skillId": "online-payload",
+        "name": "在线 Skill 参数",
+        "description": "离线原函数参数对照",
+        "version": "1.0",
+        "systemPrompt": "保留输入并说明依据。",
+        "inputSchema": {
+          "type": "object"
+        },
+        "outputSchema": {
+          "type": "object",
+          "required": [
+            "content"
+          ]
+        },
+        "allowedTools": [],
+        "memoryPolicy": {
+          "scope": "global",
+          "read": true,
+          "write": false
+        },
+        "browserPolicy": {
+          "allowClick": false,
+          "allowType": false,
+          "allowDownload": false,
+          "requireConfirmation": true
+        },
+        "artifactPolicy": {
+          "autoSave": false,
+          "types": []
+        },
+        "projectBinding": {
+          "enabled": false
+        },
+        "exampleInputs": [],
+        "disabled": false
+      },
+      "input": {
+        "topic": "中文输入",
+        "details": {
+          "values": [
+            1,
+            true,
+            null
+          ],
+          "note": "保留内容"
+        }
+      },
+      "options": {
+        "apiKey": "fixture-online-key",
+        "tavilyApiKey": "fixture-search-key",
+        "model": "",
+        "persist": false,
+        "securityApproved": true
+      },
+      "expectedRequest": {
+        "apiKey": "fixture-online-key",
+        "tavilyApiKey": "fixture-search-key",
+        "systemPrompt": "保留输入并说明依据。\n\n[Skill contract]\n\nYou are running inside DeepSeek Infra Skill System.\n\nUse only the tools granted to this Skill. Tool calls still pass through Tool Policy.\n\nHonor the input schema, output schema, memory policy, artifact policy, and project binding.",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Run this Skill with the following JSON input:\n\n{\n  \"topic\": \"中文输入\",\n  \"details\": {\n    \"values\": [\n      1,\n      true,\n      null\n    ],\n    \"note\": \"保留内容\"\n  }\n}",
+            "projectId": ""
+          }
+        ],
+        "allowedTools": [],
+        "searchEnabled": false,
+        "memoryEnabled": true,
+        "memoryScope": "global",
+        "skillRun": {
+          "skillId": "online-payload",
+          "projectId": ""
+        }
+      }
+    },
+    {
+      "name": "filtered-browser",
+      "skill": {
+        "skillId": "online-payload",
+        "name": "在线 Skill 参数",
+        "description": "离线原函数参数对照",
+        "version": "1.0",
+        "systemPrompt": "保留输入并说明依据。",
+        "inputSchema": {
+          "type": "object"
+        },
+        "outputSchema": {
+          "type": "object",
+          "required": [
+            "content"
+          ]
+        },
+        "allowedTools": [
+          "browser_click",
+          "browser_type_text",
+          "web_search"
+        ],
+        "memoryPolicy": {
+          "scope": "none",
+          "read": false,
+          "write": false
+        },
+        "browserPolicy": {
+          "allowClick": false,
+          "allowType": true,
+          "allowDownload": false,
+          "requireConfirmation": true
+        },
+        "artifactPolicy": {
+          "autoSave": false,
+          "types": []
+        },
+        "projectBinding": {
+          "enabled": false
+        },
+        "exampleInputs": [],
+        "disabled": false
+      },
+      "input": {
+        "topic": "中文输入",
+        "details": {
+          "values": [
+            1,
+            true,
+            null
+          ],
+          "note": "保留内容"
+        }
+      },
+      "options": {
+        "apiKey": "fixture-online-key",
+        "tavilyApiKey": "fixture-search-key",
+        "model": "",
+        "persist": false,
+        "securityApproved": true
+      },
+      "expectedRequest": {
+        "apiKey": "fixture-online-key",
+        "tavilyApiKey": "fixture-search-key",
+        "systemPrompt": "保留输入并说明依据。\n\n[Skill contract]\n\nYou are running inside DeepSeek Infra Skill System.\n\nUse only the tools granted to this Skill. Tool calls still pass through Tool Policy.\n\nHonor the input schema, output schema, memory policy, artifact policy, and project binding.",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Run this Skill with the following JSON input:\n\n{\n  \"topic\": \"中文输入\",\n  \"details\": {\n    \"values\": [\n      1,\n      true,\n      null\n    ],\n    \"note\": \"保留内容\"\n  }\n}",
+            "projectId": ""
+          }
+        ],
+        "allowedTools": [
+          "browser_type_text",
+          "web_search"
+        ],
+        "searchEnabled": true,
+        "memoryEnabled": false,
+        "memoryScope": "global",
+        "skillRun": {
+          "skillId": "online-payload",
+          "projectId": ""
+        }
+      }
+    }
+  ]
+}
