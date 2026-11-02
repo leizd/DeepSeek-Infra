@@ -1,3 +1,26 @@
+# Current checkpoint: retain strict Rust lint for online Skill execution, 2026-11-02
+
+Parente59b7143's complete CI and full Rust checks both stop at the original
+Clippy-Dwarnings gate. Exact logs identify only two question_mark suggestions
+in the extracted native chat preparation. This child replaces those two
+identity error matches with? propagation; validation order, error values and
+all shared Skill/chat behavior remain. No lint allowance or gate is removed.
+
+The actual c45a9c9d online HTTP501 functional RED remains the baseline. The
+original33Rust checks plus the new mandatory Skill/oracle step, all-feature
+tests,15crate80floor,20offline HTTP cases, original-callable fixtures and real
+provider success/rejection cases all remain required. First qualify the full
+bounded Rust workflow; then run complete CI and both-Mac/Windows product gates
+on this same immutable source. These later gates are staged, never waived.
+
+No native compilation runs locally. Python executable inputs match the parent
+whose original Linux/Win32 mypy each passed1014files; formatting, source inventory
+and docs are checked on this child. Parent source results do not qualify this
+Rust edit. Every original retained server/desktop/Android/background feature,
+ownership/recovery/cutover, zero-Python/server-TypeScript, original MCP engine,
+platform/upgrade/backup/capacity/security/performance and exact CI/Evidence
+requirement stays ACTIVE/NOT_READY. Original worktree/index/data are preserved.
+
 # Current checkpoint: implement retained online Skill execution, 2026-11-02
 
 Baselinec45a9c9d actually compiles and fails the new legal online request:

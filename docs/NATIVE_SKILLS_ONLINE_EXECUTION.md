@@ -56,3 +56,15 @@ This case is not all-Skill parity or full-product readiness. Full original
 ownership/recovery/cutover, every retained capability and platform, zero production
 Python/server TypeScript, original MCP test engine, complete exact-source
 CI/Evidence, coverage, security and performance remain required. **NOT_READY**.
+
+
+## Strict lint follow-up
+
+Source `e59b7143` reached compilation in both full CI and the complete Rust
+workflow. Both original Clippy commands refused two identity error matches in
+chat preparation. The follow-up uses standard `?` propagation at those sites,
+with no lint allowance, changed error value or weakened gate. Native feature
+success remains unqualified until this source's original all-feature tests,
+coverage and additional actual Skill/oracle case complete. Full CI and real
+platform gates run on this same frozen source after the bounded Rust gate;
+they remain required. **NOT_READY**.

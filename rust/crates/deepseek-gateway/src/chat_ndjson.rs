@@ -239,10 +239,7 @@ fn prepare_chat(
     let payload = Value::Object(payload);
 
     let router = ModelRouterSettings::from_env();
-    let validated = match validate_deepseek_payload(&payload, &state.api_key_fallback, &router) {
-        Ok(validated) => validated,
-        Err(error) => return Err(error),
-    };
+    let validated = validate_deepseek_payload(&payload, &state.api_key_fallback, &router)?;
     let streaming =
         deepseek_policy::core_utils::python_truthy(payload.get("stream").unwrap_or(&Value::Null));
     let prefetch = payload.get("searchEnabled") == Some(&Value::Bool(true))
@@ -329,10 +326,7 @@ fn prepare_chat(
     if consulted_file_index {
         return Err(deepseek_policy::file_store::vector_index_not_ready());
     }
-    let memory_state = match memory_state {
-        Ok(memory_state) => memory_state,
-        Err(error) => return Err(error),
-    };
+    let memory_state = memory_state?;
     let config = UpstreamConfig::from_env();
     let executor = ToolRoundExecutor::from_env();
     if let Some(provider) = executor.search_provider() {
