@@ -378,6 +378,7 @@ mod tests {
             }),
             create: None,
             process: None,
+            max_outcome_schema_version: 0,
         };
         let fence = ActionFence {
             action_id: intent.operation_id.clone(),
