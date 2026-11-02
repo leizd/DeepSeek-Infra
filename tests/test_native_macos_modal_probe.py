@@ -33,3 +33,13 @@ def test_probe_does_not_substitute_a_manual_abort_for_the_original_application_c
     assert "cancel()" in source and '"testAbortUsed": false' in source
     assert 'macSEL("abortModal")' not in source and 'macSEL("stopModal")' not in source
     assert "NATIVE_MODAL_CONTEXT_CANCELLATION_DID_NOT_SETTLE" in source
+
+
+def test_all_modal_cases_keep_real_observation_and_the_original_failure_bounds() -> None:
+    workflow = yaml.safe_load((ROOT / ".github/workflows/native-windows-cloud.yml").read_text())
+    step = next(step for step in workflow["jobs"]["macos-window"]["steps"] if TEST in step.get("run", ""))
+    assert "for kind in alert confirm prompt nested; do" in step["run"]
+    assert "observedOwnedModalDepth" in step["run"] and "nestedStopConfirmationDeclined" in step["run"]
+    assert "remainingOwnedModalDepth" in step["run"] and "-test.timeout=45s" in step["run"]
+    source = (ROOT / "go/internal/desktop/native_modal_darwin_integration_test.go").read_text()
+    assert "!actual.ConfirmStop()" in source and "time.After(5 * time.Second)" in source

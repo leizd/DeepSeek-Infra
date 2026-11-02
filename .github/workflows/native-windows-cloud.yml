@@ -342,20 +342,29 @@ jobs:
           DEEPSEEK_MACOS_MODAL_REPORT: ${{ github.workspace }}/artifacts/macos-window/modal-cancellation.json
         run: |
           set -euo pipefail
-          "artifacts/macos-fixtures/$DEEPSEEK_MACOS_ARCH/desktop.test" -test.v -test.count=1 -test.timeout=45s -test.run='^TestNativeMacJavaScriptModalCancellationSettlesApplication$' 2>&1 | tee artifacts/macos-window/modal-cancel-test.log
+          for kind in alert confirm prompt nested; do
+            DEEPSEEK_MACOS_MODAL_KIND="$kind" DEEPSEEK_MACOS_PROFILE="$DEEPSEEK_MACOS_PROFILE-$kind" DEEPSEEK_MACOS_MODAL_REPORT="${DEEPSEEK_MACOS_MODAL_REPORT%.json}-$kind.json" \
+              "artifacts/macos-fixtures/$DEEPSEEK_MACOS_ARCH/desktop.test" -test.v -test.count=1 -test.timeout=45s -test.run='^TestNativeMacJavaScriptModalCancellationSettlesApplication$' 2>&1 | tee "artifacts/macos-window/$kind-modal-cancel-test.log"
+          done
           python - <<'PY'
           import json,os
           from pathlib import Path
-          report=json.loads(Path(os.environ['DEEPSEEK_MACOS_MODAL_REPORT']).read_bytes())
-          assert report['sourceCommit']==os.environ['GITHUB_SHA'] and report['runId']==os.environ['GITHUB_RUN_ID']
-          assert report['architecture']==os.environ['DEEPSEEK_MACOS_ARCH'] and report['status']=='PASS'
-          assert all(report[k] is True for k in ['actualJavaScriptModalObserved','nativeMainThreadObserved','contextCancellationSettled'])
-          assert report['testAbortUsed'] is False and report['actualModalWindowId']>0
-          assert all(report[k]>0 for k in ['nativeNavigationActionCallbacks','nativeNavigationResponseCallbacks','nativeDispatchCallbacks'])
           receipt=json.loads(Path('artifacts/macos-window/build-receipt.json').read_bytes())
           binary=next(row for row in receipt['binaries'] if row['path']==os.environ['DEEPSEEK_MACOS_ARCH']+'/desktop.test')
-          assert report['actualExecutableSha256']==binary['sha256']
-          assert report['fullMigrationQualified'] is False and report['readiness']=='NOT_READY'
+          for kind in ['alert','confirm','prompt','nested']:
+              path=Path(os.environ['DEEPSEEK_MACOS_MODAL_REPORT'])
+              report=json.loads(path.with_name(path.stem+'-'+kind+path.suffix).read_bytes())
+              assert report['sourceCommit']==os.environ['GITHUB_SHA'] and report['runId']==os.environ['GITHUB_RUN_ID']
+              assert report['architecture']==os.environ['DEEPSEEK_MACOS_ARCH'] and report['status']=='PASS' and report['modalKind']==kind
+              assert all(report[k] is True for k in ['actualJavaScriptModalObserved','nativeMainThreadObserved','contextCancellationSettled'])
+              assert report['testAbortUsed'] is False and report['actualModalWindowId']>0 and report['remainingOwnedModalDepth']==0
+              assert report['observedOwnedModalDepth']==(2 if kind=='nested' else 1)
+              if kind=='nested':
+                  assert report['nestedStopConfirmationDeclined'] is True
+                  assert report['outerJavaScriptModalWindowId']>0 and report['outerJavaScriptModalWindowId']!=report['actualModalWindowId']
+              assert all(report[k]>0 for k in ['nativeNavigationActionCallbacks','nativeNavigationResponseCallbacks','nativeDispatchCallbacks'])
+              assert report['actualExecutableSha256']==binary['sha256']
+              assert report['fullMigrationQualified'] is False and report['readiness']=='NOT_READY'
           PY
       - name: Retain reports only for local collection
         if: always()

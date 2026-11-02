@@ -1,3 +1,29 @@
+# Current checkpoint: repair verified native Mac modal cancellation, 2026-11-02
+
+Baseline3303e0b4 actually failed on both Intel and Apple silicon in
+[run41312771718](https://github.com/leizd/DeepSeek-Infra/actions/runs/41312771718):
+real visible modal/main thread observed, Destroy reached, original context
+cancellation did not settle within5seconds. Production window bytes were
+unchanged in that baseline. Both original raw failure reports are retained.
+
+This repair tracks all owned AppKit modal stack levels, aborts each current
+modal during cancellation, then stops and wakes the outer application loop
+after the final level returns. Accepted results cannot escape a cancelled host.
+Actual cloud cases cover alert/confirm/prompt plus an original stop-confirmation
+nested inside a real JavaScript alert. TestMain preserves a failing test's
+nonzero exit even when the native initial thread is stuck. Original5second,
+45second and15minute bounds and all prior window/profile/Windows gates remain.
+This source is not runtime-qualified until its own cloud reports pass.
+
+Parent597f9f9a complete CI41309085900 now reports37successful jobs; raw complete
+gate qualification remains separate, and parent results do not qualify this
+changed native source. Full migration remains NOT_READY: complete source CI,
+retained capabilities/ownership/recovery/zero-Python/server-TypeScript,
+Mac UI/install/upgrade/backup/supported OS, Android ARM64 execution and original
+MCP test-engine parity all remain required. Native builds stay in Actions and
+the original local worktree/index/runtime data remain unchanged.
+See [modal evidence and scope](../../docs/NATIVE_MACOS_MODAL_CANCELLATION.md).
+
 # Current checkpoint: reproduce cancellation inside a real Mac modal loop, 2026-11-01
 
 Source597f9f9a independently qualifies both actual Mac application/file/restart

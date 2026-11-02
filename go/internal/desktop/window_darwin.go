@@ -62,6 +62,7 @@ type macWindow struct {
 	runErr                                              error
 	downloads                                           map[objc.ID]macDownload
 	released                                            bool
+	modalDepth                                          int // initial-thread-owned AppKit modal stack
 	navigationActions, navigationResponses, queueDrains uint64
 }
 
@@ -323,13 +324,49 @@ func (w *macWindow) Destroy() {
 		w.host.Send(macSEL("setDelegate:"), objc.ID(0))
 		w.host.Send(macSEL("close"))
 	}
+	w.stopApplication()
+}
+
+// stop: inside runModal only exits that modal loop. Abort the active modal,
+// then let runModal unwind each owned level before stopping the outer loop.
+// https://developer.apple.com/documentation/appkit/nsapplication/stop(_:)
+// https://developer.apple.com/documentation/appkit/nsapplication/abortmodal()
+func (w *macWindow) stopApplication() {
 	if w.app != 0 {
+		if w.modalDepth > 0 {
+			panel := w.app.Send(macSEL("modalWindow"))
+			w.app.Send(macSEL("abortModal"))
+			if panel != 0 {
+				panel.Send(macSEL("orderOut:"), objc.ID(0))
+			}
+			return
+		}
 		w.app.Send(macSEL("stop:"), objc.ID(0))
 		// NSApplication.stop returns only after its next event. Wake a loop which
 		// is idle, including cancellation without a user-generated mouse event.
 		event := macClass("NSEvent").Send(macSEL("otherEventWithType:location:modifierFlags:timestamp:windowNumber:context:subtype:data1:data2:"), uint64(15), macPoint{}, uint64(0), float64(0), int64(0), objc.ID(0), int16(0), int64(0), int64(0))
 		w.app.Send(macSEL("postEvent:atStart:"), event, true)
 	}
+}
+
+func (w *macWindow) runModal(panel objc.ID) int64 {
+	w.mu.Lock()
+	closed := w.closed
+	w.mu.Unlock()
+	if closed {
+		return -1001 // NSModalResponseAbort; a closed window cannot start a dialog.
+	}
+	w.modalDepth++
+	result := objc.Send[int64](panel, macSEL("runModal"))
+	w.modalDepth--
+	w.mu.Lock()
+	closed = w.closed
+	w.mu.Unlock()
+	if closed {
+		w.stopApplication()
+		return -1001 // Cancellation cannot accept a file or confirmation result.
+	}
+	return result
 }
 
 func (w *macWindow) Run() error {
@@ -385,7 +422,7 @@ func macApplicationShouldTerminate(self objc.ID, _ objc.SEL, _ objc.ID) int64 {
 func (w *macWindow) ConfirmStop() bool {
 	alert := macAlert("停止 DeepSeek 服务？", "关闭启动器会停止本次启动的后台服务。", "停止并退出", "取消")
 	defer alert.Send(macSEL("release"))
-	return objc.Send[int64](alert, macSEL("runModal")) == 1000
+	return w.runModal(alert) == 1000
 }
 func macAlert(title, message string, buttons ...string) objc.ID {
 	alert := macClass("NSAlert").Send(macSEL("new"))
@@ -423,7 +460,8 @@ func (w *macWindow) installMenus() {
 }
 
 func macOpenPanel(self objc.ID, _ objc.SEL, _ objc.ID, parameters objc.ID, _ objc.ID, completion objc.Block) {
-	if macView(self) == nil {
+	w := macView(self)
+	if w == nil {
 		macComplete(completion, 0)
 		return
 	}
@@ -432,24 +470,24 @@ func macOpenPanel(self objc.ID, _ objc.SEL, _ objc.ID, parameters objc.ID, _ obj
 	panel.Send(macSEL("setCanChooseDirectories:"), objc.Send[bool](parameters, macSEL("allowsDirectories")))
 	panel.Send(macSEL("setAllowsMultipleSelection:"), objc.Send[bool](parameters, macSEL("allowsMultipleSelection")))
 	var result objc.ID
-	if objc.Send[int64](panel, macSEL("runModal")) == 1 {
+	if w.runModal(panel) == 1 {
 		result = panel.Send(macSEL("URLs"))
 	}
 	macComplete(completion, uintptr(result))
 }
 func macJavaScriptAlert(self objc.ID, _ objc.SEL, _ objc.ID, message objc.ID, _ objc.ID, completion objc.Block) {
-	if macView(self) != nil {
+	if w := macView(self); w != nil {
 		alert := macAlert(Title, macText(message), "确定")
-		alert.Send(macSEL("runModal"))
+		w.runModal(alert)
 		alert.Send(macSEL("release"))
 	}
 	macComplete(completion)
 }
 func macJavaScriptConfirm(self objc.ID, _ objc.SEL, _ objc.ID, message objc.ID, _ objc.ID, completion objc.Block) {
 	var accepted uintptr
-	if macView(self) != nil {
+	if w := macView(self); w != nil {
 		alert := macAlert(Title, macText(message), "确定", "取消")
-		if objc.Send[int64](alert, macSEL("runModal")) == 1000 {
+		if w.runModal(alert) == 1000 {
 			accepted = 1
 		}
 		alert.Send(macSEL("release"))
@@ -458,12 +496,12 @@ func macJavaScriptConfirm(self objc.ID, _ objc.SEL, _ objc.ID, message objc.ID, 
 }
 func macJavaScriptPrompt(self objc.ID, _ objc.SEL, _ objc.ID, prompt, defaultText objc.ID, _ objc.ID, completion objc.Block) {
 	var result objc.ID
-	if macView(self) != nil {
+	if w := macView(self); w != nil {
 		alert := macAlert(Title, macText(prompt), "确定", "取消")
 		input := macClass("NSTextField").Send(macSEL("alloc")).Send(macSEL("initWithFrame:"), macRect{Size: macSize{Width: 320, Height: 26}})
 		input.Send(macSEL("setStringValue:"), macString(macText(defaultText)))
 		alert.Send(macSEL("setAccessoryView:"), input)
-		if objc.Send[int64](alert, macSEL("runModal")) == 1000 {
+		if w.runModal(alert) == 1000 {
 			result = input.Send(macSEL("stringValue"))
 		}
 		macComplete(completion, uintptr(result))
@@ -519,7 +557,7 @@ func macDownloadDestination(self objc.ID, _ objc.SEL, download objc.ID, _ objc.I
 	panel := macClass("NSSavePanel").Send(macSEL("savePanel"))
 	panel.Send(macSEL("setNameFieldStringValue:"), macString(filepath.Base(macText(suggested))))
 	panel.Send(macSEL("setCanCreateDirectories:"), true)
-	if objc.Send[int64](panel, macSEL("runModal")) != 1 {
+	if w.runModal(panel) != 1 {
 		macComplete(completion, 0)
 		return
 	}
@@ -561,7 +599,7 @@ func macDownloadFinished(self objc.ID, _ objc.SEL, download objc.ID) {
 	if err != nil {
 		_ = os.Remove(item.temporary)
 		alert := macAlert(Title, "无法保存下载文件。", "确定")
-		alert.Send(macSEL("runModal"))
+		w.runModal(alert)
 		alert.Send(macSEL("release"))
 	}
 }
@@ -576,7 +614,7 @@ func macDownloadFailed(self objc.ID, _ objc.SEL, download objc.ID, _ objc.ID, _ 
 		item.object.Send(macSEL("release"))
 	}
 	alert := macAlert(Title, "下载未完成，请检查连接后重试。", "确定")
-	alert.Send(macSEL("runModal"))
+	w.runModal(alert)
 	alert.Send(macSEL("release"))
 }
 func macNavigationFailed(self objc.ID, _ objc.SEL, _ objc.ID, _ objc.ID, nativeError objc.ID) {

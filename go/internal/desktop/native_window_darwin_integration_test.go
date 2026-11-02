@@ -40,15 +40,11 @@ func TestMain(m *testing.M) {
 		}
 		os.Exit(0)
 	}
-	done := make(chan int, 1)
-	go func() { done <- m.Run() }()
-	for {
-		select {
-		case task := <-macUITasks:
-			task()
-		case code := <-done:
-			os.Exit(code)
-		}
+	// A failed test must preserve its nonzero result even if AppKit is stranded
+	// on the initial thread. All test defers, including reports, precede m.Run.
+	go func() { os.Exit(m.Run()) }()
+	for task := range macUITasks {
+		task()
 	}
 }
 

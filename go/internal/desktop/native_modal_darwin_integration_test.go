@@ -29,6 +29,17 @@ func TestNativeMacJavaScriptModalCancellationSettlesApplication(t *testing.T) {
 	if profile == "" || reportPath == "" {
 		t.Fatal("native modal verification profile and report are required")
 	}
+	kind := os.Getenv("DEEPSEEK_MACOS_MODAL_KIND")
+	scripts := map[string]string{
+		"alert":   "alert('DeepSeek actual native modal cancellation fixture');",
+		"confirm": "confirm('DeepSeek actual native modal cancellation fixture');",
+		"prompt":  "prompt('DeepSeek actual native modal cancellation fixture', 'native prompt');",
+		"nested":  "alert('DeepSeek actual native modal cancellation fixture');",
+	}
+	script, supported := scripts[kind]
+	if !supported {
+		t.Fatal("an explicit supported JavaScript modal kind is required")
+	}
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -39,6 +50,7 @@ func TestNativeMacJavaScriptModalCancellationSettlesApplication(t *testing.T) {
 	}
 	report := map[string]any{"status": "FAIL", "sourceCommit": os.Getenv("GITHUB_SHA"), "runId": os.Getenv("GITHUB_RUN_ID"),
 		"attempt": os.Getenv("GITHUB_RUN_ATTEMPT"), "architecture": runtime.GOARCH, "pid": os.Getpid(),
+		"modalKind":              kind,
 		"actualExecutableSha256": fmt.Sprintf("%x", sha256.Sum256(bytes)),
 		"scope":                  "real WebKit JavaScript alert and original native context cancellation only", "testAbortUsed": false,
 		"contextCancellationSettled": false, "allDesktopFeaturesQualified": false, "fullMigrationQualified": false, "readiness": "NOT_READY"}
@@ -50,9 +62,7 @@ func TestNativeMacJavaScriptModalCancellationSettlesApplication(t *testing.T) {
 	}()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write([]byte(`<!doctype html><html><body><h1>Native modal cancellation fixture</h1><script>
-alert('DeepSeek actual native modal cancellation fixture');
-</script></body></html>`))
+		_, _ = fmt.Fprintf(w, "<!doctype html><html><body><h1>Native modal cancellation fixture</h1><script>%s</script></body></html>", script)
 	}))
 	defer server.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
@@ -60,6 +70,8 @@ alert('DeepSeek actual native modal cancellation fixture');
 	type modalObservation struct {
 		windowID int64
 		main     bool
+		depth    int
+		outerID  int64
 	}
 	type observer struct {
 		target, modes objc.ID
@@ -68,11 +80,15 @@ alert('DeepSeek actual native modal cancellation fixture');
 	type completion struct {
 		err                          error
 		actions, responses, dispatch uint64
+		modalDepth                   int
+		nestedDeclined               bool
 	}
 	created, modal, finished := make(chan observer, 1), make(chan modalObservation, 1), make(chan completion, 1)
 	macUITasks <- func() {
 		var actual *macWindow
 		var object, modes objc.ID
+		var nestedStarted, nestedDeclined bool
+		var outerModalID int64
 		runErr := show(ctx, server.URL, profile, func(path string) (window, error) {
 			view, createErr := newPlatformWindow(path)
 			if createErr != nil {
@@ -88,7 +104,20 @@ alert('DeepSeek actual native modal cancellation fixture');
 				if panel == 0 || !objc.Send[bool](panel, macSEL("isVisible")) {
 					return
 				}
-				seen := modalObservation{objc.Send[int64](panel, macSEL("windowNumber")), objc.Send[bool](macClass("NSThread"), macSEL("isMainThread"))}
+				if kind == "nested" {
+					if !nestedStarted && actual.modalDepth == 1 {
+						nestedStarted = true
+						outerModalID = objc.Send[int64](panel, macSEL("windowNumber"))
+						// Exercise the original production close-confirmation dialog
+						// inside the actual JavaScript modal, without dismissing either.
+						nestedDeclined = !actual.ConfirmStop()
+						return
+					}
+					if actual.modalDepth != 2 || objc.Send[int64](panel, macSEL("windowNumber")) == outerModalID {
+						return
+					}
+				}
+				seen := modalObservation{objc.Send[int64](panel, macSEL("windowNumber")), objc.Send[bool](macClass("NSThread"), macSEL("isMainThread")), actual.modalDepth, outerModalID}
 				select {
 				case modal <- seen:
 				default:
@@ -112,6 +141,8 @@ alert('DeepSeek actual native modal cancellation fixture');
 		result.err = runErr
 		if actual != nil {
 			result.actions, result.responses, result.dispatch = actual.navigationActions, actual.navigationResponses, actual.queueDrains
+			result.modalDepth = actual.modalDepth
+			result.nestedDeclined = nestedDeclined
 		}
 		if object != 0 {
 			object.Send(macSEL("release"))
@@ -138,19 +169,33 @@ alert('DeepSeek actual native modal cancellation fixture');
 			observed.target.Send(macSEL("performSelectorOnMainThread:withObject:waitUntilDone:modes:"),
 				macSEL("observeNativeModal:"), objc.ID(0), false, observed.modes)
 		case seen := <-modal:
-			if seen.windowID <= 0 || !seen.main {
+			wantDepth := 1
+			if kind == "nested" {
+				wantDepth = 2
+			}
+			if seen.windowID <= 0 || !seen.main || seen.depth != wantDepth {
 				t.Fatal("actual native modal was not observed on the initial thread")
+			}
+			if kind == "nested" && (seen.outerID <= 0 || seen.outerID == seen.windowID) {
+				t.Fatal("two distinct native modal windows were not observed")
 			}
 			report["actualModalWindowId"], report["nativeMainThreadObserved"] = seen.windowID, seen.main
 			report["actualJavaScriptModalObserved"] = true
+			report["observedOwnedModalDepth"] = seen.depth
+			report["outerJavaScriptModalWindowId"] = seen.outerID
 			ticker.Stop()
 			cancel()
 			select {
 			case result := <-finished:
-				if result.err != nil || result.actions == 0 || result.responses == 0 || result.dispatch == 0 {
+				if result.err != nil || result.actions == 0 || result.responses == 0 || result.dispatch == 0 || result.modalDepth != 0 {
 					t.Fatal("native modal cancellation or original callback path failed", result.err)
 				}
+				if kind == "nested" && !result.nestedDeclined {
+					t.Fatal("context cancellation accepted the nested production stop confirmation")
+				}
 				report["status"], report["contextCancellationSettled"] = "PASS", true
+				report["remainingOwnedModalDepth"] = result.modalDepth
+				report["nestedStopConfirmationDeclined"] = result.nestedDeclined
 				report["nativeNavigationActionCallbacks"], report["nativeNavigationResponseCallbacks"], report["nativeDispatchCallbacks"] = result.actions, result.responses, result.dispatch
 				return
 			case <-time.After(5 * time.Second):
