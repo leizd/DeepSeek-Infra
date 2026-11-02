@@ -132,6 +132,16 @@ def large_library_media(base: list[dict[str, Any]]) -> list[dict[str, Any]]:
         "metadata": {"capacity_left": left, "capacity_right": right}} for i in range(600))]
 
 
+def large_record_media(base: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    require(len(base) == 18, "MEDIA_PATCH_FIXTURE_CONTRACT_DIFFERS")
+    records: list[dict[str, Any]] = json.loads(json.dumps(base))
+    selected = next(row for row in records if isinstance(row, dict) and row.get("mediaId") == MEDIA_ID)
+    existing = selected.get("metadata")
+    selected["metadata"] = {**(existing if isinstance(existing, dict) else {}),
+                            **{f"retained_large_{i:02}": "r" * 120_000 for i in range(36)}}
+    return records
+
+
 def capacity_original_observation(profile: Path, diagnostic: Path) -> dict[str, Any]:
     """Read the actual original writer's retained file in an isolated oracle process."""
     environment = {key: value for key, value in os.environ.items() if key in {
@@ -342,9 +352,7 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
     if large_record_case:
         # The library is small; the original selected record alone exceeds both
         # old inline signing/transport bounds. The public PATCH body stays small.
-        fixture_media = json.loads(json.dumps(fixture_media))
-        selected = next(record for record in fixture_media if record.get("mediaId") == MEDIA_ID)
-        selected["metadata"].update({f"retained_large_{i:02}": "r" * 120_000 for i in range(36)})
+        fixture_media = large_record_media(fixture_media)
     report["patchSha256"] = hashlib.sha256(json.dumps(PATCH, sort_keys=True).encode()).hexdigest()
     request_body = wire_payload(PATCH)
     require(len(request_body) <= 1_000_000, "MEDIA_PATCH_FIXTURE_EXCEEDS_PUBLIC_LIMIT")

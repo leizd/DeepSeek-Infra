@@ -45,6 +45,41 @@ def test_large_fixture_retains_original_cases_and_accepts_all_metadata_in_origin
     # The full JSON is deliberately not serialized or written on this host.
 
 
+@pytest.mark.usefixtures("tmp_settings")
+def test_large_record_uses_original_default_metadata_and_preserves_other_duplicate_records(
+    capacity_verifier: ModuleType,
+) -> None:
+    from deepseek_infra.infra.media import schema
+
+    base = json.loads(capacity_verifier.FIXTURE.read_text(encoding="utf-8"))["media"]
+    selected = next(index for index, row in enumerate(base)
+                    if isinstance(row, dict) and row.get("mediaId") == capacity_verifier.MEDIA_ID)
+    assert "metadata" not in base[selected]  # The actual raw fixture which failed in the cloud.
+    original = json.dumps(base, ensure_ascii=False, sort_keys=True)
+    records = capacity_verifier.large_record_media(base)
+    assert len(records) == 18
+    assert json.dumps(base, ensure_ascii=False, sort_keys=True) == original
+    assert all(record == base[index] for index, record in enumerate(records) if index != selected)
+    normalized = schema.normalize_media_record(records[selected])
+    assert normalized["mediaId"] == capacity_verifier.MEDIA_ID and normalized["title"] == "Notes"
+    assert sum(len(value) for value in normalized["metadata"].values()) == 4_320_000
+    assert all(normalized["metadata"][f"retained_large_{index:02}"] == "r" * 120_000 for index in range(36))
+
+
+@pytest.mark.parametrize("selection", [["--large-library-case"], ["--field-case", "all-fields"],
+                                       ["--metadata-order-case", "nested"]])
+def test_large_record_case_rejects_combined_workloads_before_native_startup(
+    selection: list[str], capacity_verifier: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    output = tmp_path / "not-created"
+    monkeypatch.setattr(sys, "argv", ["verify_native_media_patch.py", "--worker", "worker", "--edge", "edge",
+        "--go-cache", "cache", "--out", str(output), "--large-record-case", *selection])
+    monkeypatch.setattr(capacity_verifier, "run", lambda *_: pytest.fail("conflicting case started native work"))
+    with pytest.raises(capacity_verifier.ProbeFailure, match="MEDIA_PATCH_LARGE_RECORD_CASE_SELECTION_CONFLICT"):
+        capacity_verifier.main()
+    assert not output.exists()
+
+
 @pytest.mark.parametrize("selection", [["--field-case", "all-fields"], ["--metadata-order-case", "nested"]])
 def test_large_library_case_cannot_silently_change_an_original_case(
     selection: list[str], capacity_verifier: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
