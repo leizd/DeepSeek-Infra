@@ -1,3 +1,25 @@
+# Current checkpoint: actual retained online Skill request baseline, 2026-11-02
+
+Parent6ff4b8ab independently passes both actual Mac CPUs and Windows lifecycle
+regressions, including8real modal-cancellation cases. Its complete CI and full
+Rust gates are still separate pending exact-source qualifications.
+
+The current production Skill run accepts offline requests but refuses every
+valid-key online request with501. A new test-only real provider-socket case
+requires legal online success through the production authenticated router,
+original content/model/usage/diagnostics and actual artifact/project/trace/run
+records. It also checks owner denial before effects, restart, environment key,
+path-ID precedence, persist=false, restore fence and conclusive upstream denial.
+Production implementation is unchanged; actual runtime RED is not assumed from
+the source assertions. All native compilation stays in Actions.
+
+The repair must reuse the native chat composition and existing Skill owner and
+terminal-record paths. No Python fallback, simplified parallel executor, hidden
+scope reduction or whole-product readiness is allowed. Full migration remains
+ACTIVE/NOT_READY with all original capability, ownership/recovery, platform,
+MCP, zero-Python/server-TypeScript, security/performance and CI/Evidence gates.
+See [the online Skill contract](../../docs/NATIVE_SKILLS_ONLINE_EXECUTION.md).
+
 # Current checkpoint: repair verified native Mac modal cancellation, 2026-11-02
 
 Baseline3303e0b4 actually failed on both Intel and Apple silicon in
