@@ -183,11 +183,26 @@ fn source_spool_and_index_failures_never_become_an_empty_store() {
 
 #[test]
 fn discarded_values_still_validate_numbers_utf8_and_original_json_depth() {
+    let valid_record = serde_json::to_string(&record("media_one", "Retained")).unwrap();
+    // deepseek-proof enables serde_json arbitrary_precision for this workspace.
+    // Valid ignored numbers must not turn an otherwise valid library empty.
+    for ignored in ["1e400", "1234567890123456789012345678901234567890"] {
+        let bytes = format!(r#"{{"media":[{valid_record}],"ignored":{ignored}}}"#);
+        assert!(serde_json::from_str::<Value>(&bytes).is_ok());
+        let records = Records::from_reader(bytes.as_bytes()).unwrap();
+        assert_eq!(records.len().unwrap(), 1);
+        assert_eq!(
+            retained(&records),
+            crate::media_library::normalized_items(bytes.as_bytes())
+        );
+    }
     for ignored in [
-        "1e400".to_string(),
+        "1e+".to_string(),
+        "01".to_string(),
+        "NaN".to_string(),
         format!("{}0{}", "[".repeat(140), "]".repeat(140)),
     ] {
-        let bytes = format!(r#"{{"media":[{{"mediaId":"media_one"}}],"ignored":{ignored}}}"#);
+        let bytes = format!(r#"{{"media":[{valid_record}],"ignored":{ignored}}}"#);
         assert!(serde_json::from_str::<Value>(&bytes).is_err());
         assert_eq!(
             Records::from_reader(bytes.as_bytes())
@@ -197,14 +212,21 @@ fn discarded_values_still_validate_numbers_utf8_and_original_json_depth() {
             0
         );
     }
-    let bytes = b"{\"media\":[{\"mediaId\":\"media_one\"}],\"ignored\":\"\xff\"}";
-    assert_eq!(
-        Records::from_reader(bytes.as_slice())
-            .unwrap()
-            .len()
-            .unwrap(),
-        0
-    );
+    for suffix in [
+        b",\"ignored\":\"\xff\"}".as_slice(),
+        b",\"ignored\":{\"\xff\":0}}".as_slice(),
+    ] {
+        let mut bytes = format!(r#"{{"media":[{valid_record}]"#).into_bytes();
+        bytes.extend_from_slice(suffix);
+        assert!(serde_json::from_slice::<Value>(&bytes).is_err());
+        assert_eq!(
+            Records::from_reader(bytes.as_slice())
+                .unwrap()
+                .len()
+                .unwrap(),
+            0
+        );
+    }
     for value in ["null", "true", "3", "\"text\"", "{}", "[]"] {
         let bytes = format!(r#"{{"media":[{{"mediaId":"media_discarded"}}],"media":{value}}}"#);
         assert_eq!(
