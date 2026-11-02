@@ -50,3 +50,16 @@ use and the original operation's durable recovery. Increasing an arbitrary
 cutoff alone is not full capacity compatibility. Unique writers, admission,
 epoch fencing, immutable bytes and proofs, `EFFECT_UNKNOWN`, retained recovery
 cases and every full-product requirement remain mandatory. **NOT_READY**.
+
+
+## Signability prerequisite
+
+Independent review identifies a separate boundary: planning currently permits
+4 MiB while the original purpose-bound signer accepts 2 MiB. Publication occurs
+before signing. A new actual-journal regression uses 18 legal metadata strings
+of 120000 characters; its original planned outcome lies between those bounds
+and is rejected by the unchanged signer. It requires unchanged file hashes and
+generation, PREPARED state and original signed-query closure. Runtime failure
+is unproven until this source's actual cloud result exists. The repair must use
+the same validator before publication without signing early; strict compact
+results and legal large-record success remain required. **NOT_READY**.

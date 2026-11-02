@@ -1,3 +1,29 @@
+# Current checkpoint: reproduce unsignable media publication before repair, 2026-11-02
+
+The actual large-library process RED70df4d57/run41390652958 preserves original
+HTTP200/610normalized records but native503/EFFECT_UNKNOWN for144182145bytes;
+native read/auth/control prerequisites pass. This failure stays recorded.
+
+Independent source review also finds planning permits4MiBoutcomes while the
+unchanged original signer accepts2MiB; publication currently precedes signing.
+This test-only child constructs18legal120000character metadata fields, calls
+the actual journal/unchanged signer and requires that an unsignable result
+cannot change library bytes or generation, stays PREPARED and can be closed by
+the original signed query. Until an actual run fails this guard, this new
+publication counterexample is UNPROVEN. Production code and every existing
+case/timeout/coverage floor stay unchanged. No local native build runs.
+
+Required follow-up: prevent publish-before-signability using the same original
+validator without signing early or weakening it; implement large-record legal
+success via strict compact-result custody/typed reads, bounded full-library
+images, explicit reversible journal migration, sealed chunk integrity and the
+PROCESSING recovery image, preserving complete parser/retention semantics.
+Neither refusal nor600record bulk success completes these requirements.
+All full server/desktop/Android/background features, authority/recovery/cutover,
+provider/Fleet, originalMCP, zeroPython/serverTypeScript, platform/upgrade/backup,
+security/performance and exactCI/Evidence remain ACTIVE/NOT_READY. Original
+worktree/index/data remain preserved; noPR/mainmerge/release/production action.
+
 # Current checkpoint: prove retained media capacity through real native HTTP, 2026-11-02
 
 Parent a28f238e has independently qualified full Rust1674 tests/82.53991798272402%

@@ -1033,3 +1033,58 @@ fn media_create_large_original_json_record_keeps_control_receipt_compact() {
     );
     assert!(read_library(root.path()).unwrap().len() > 4 * 1024 * 1024);
 }
+
+#[test]
+fn unsignable_media_plan_never_publishes_and_original_query_can_close_it() {
+    let (root, key, mut journal, claim) = fixture();
+    let path = media_library::library_path(root.path());
+    let mut document: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    let mut metadata = serde_json::Map::new();
+    for index in 0..18 {
+        metadata.insert(
+            format!("field_{index:02}"),
+            Value::String("m".repeat(120_000)),
+        );
+    }
+    document["media"][0]["metadata"] = Value::Object(metadata);
+    let before = serde_json::to_vec(&document).unwrap();
+    fs::write(&path, &before).unwrap();
+    let generation = fs::read(root.path().join(".workspace-generation")).ok();
+    let prepared = journal.prepare(&claim).unwrap();
+    let operation = &claim.intent.as_ref().unwrap().operation_id;
+    let retained = journal.retained(operation).unwrap().unwrap();
+    assert!(retained.planned.encoded_len() > 2 * 1024 * 1024);
+    assert!(retained.planned.encoded_len() < 4 * 1024 * 1024);
+    assert!(key.sign_media_patch_outcome(&retained.planned).is_err());
+    assert!(journal.publish(&claim, &prepared.digest, &key).is_err());
+    assert_eq!(
+        sha(&read_library(root.path()).unwrap()),
+        sha(&before),
+        "an outcome rejected by the original signer must not publish library bytes"
+    );
+    assert_eq!(
+        fs::read(root.path().join(".workspace-generation")).ok(),
+        generation
+    );
+    let state: String = journal
+        .connection
+        .query_row(
+            "SELECT state FROM media_operations WHERE operation_id=?1",
+            [operation],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(state, "PREPARED");
+    let closed = journal
+        .query(operation, claim.fence.as_ref().unwrap(), true, &key)
+        .unwrap()
+        .unwrap();
+    assert_eq!(closed.state, MediaPatchEffectState::Refused as i32);
+    assert_eq!(closed.error_code, "execution_interrupted");
+    assert_eq!(closed.signature.len(), 64);
+    assert_eq!(sha(&read_library(root.path()).unwrap()), sha(&before));
+    assert_eq!(
+        fs::read(root.path().join(".workspace-generation")).ok(),
+        generation
+    );
+}
