@@ -1,3 +1,22 @@
+# Current checkpoint: retain original Skill failure trace status, 2026-11-02
+
+Sourcec178badb passed strict Clippy and all-feature tests, but its new Skill
+process probe failed: it expected trace status failed. The original Python
+runner and unchanged Rust trace writer both specify error; the separate Skill
+run status remains failed. The actual report contains HTTP502, exactly one
+real provider request, one failed run, traceerror, no persisted key, no seeded
+SQL, and all20offline comparisons plus owner/recovery/restart guards passing.
+This child changes only that single probe expectation to the original contract.
+No production code, accepted state set, workflow, case or threshold changes.
+
+The complete34check/7coverage Rust workflow must pass on this frozen source,
+then complete37job CI and actual Windows/both-Mac product gates must qualify
+the same source. Parent tests or coverage never qualify this child. All original
+full-product, authority/recovery/cutover, zero-Python/server-TypeScript, original
+MCP, platform/upgrade/backup/capacity/security/performance and exact CI/Evidence
+requirements remain ACTIVE/NOT_READY. Build caches stay in Actions; original
+worktree/index/data stay preserved. No PR, main merge or release is performed.
+
 # Current checkpoint: retain strict Rust lint for online Skill execution, 2026-11-02
 
 Parente59b7143's complete CI and full Rust checks both stop at the original

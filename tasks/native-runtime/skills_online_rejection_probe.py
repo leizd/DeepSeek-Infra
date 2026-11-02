@@ -74,7 +74,7 @@ def verify_rejection(gateway: Path, source: Path) -> dict[str, Any]:
                         persisted=True
             qualified=(status==502 and key not in json.dumps(body) and len(requests)==1
                 and requests[0]=={'path':'/chat/completions','credentialMatched':True,'nonStreaming':True}
-                and len(runs)==1 and runs[0]['status']=='failed' and trace_statuses==['failed']
+                and len(runs)==1 and runs[0]['status']=='failed' and trace_statuses==['error']
                 and not list((root/'.generated').glob('*.md')) and not persisted)
             return {'qualified':qualified,'scope':'one actual native process, real isolated HTTP401 and real failed journals only',
                 'nativeStatus':status,'providerRequests':len(requests),'providerObservations':requests,

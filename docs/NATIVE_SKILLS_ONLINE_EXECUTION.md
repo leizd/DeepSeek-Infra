@@ -68,3 +68,16 @@ success remains unqualified until this source's original all-feature tests,
 coverage and additional actual Skill/oracle case complete. Full CI and real
 platform gates run on this same frozen source after the bounded Rust gate;
 they remain required. **NOT_READY**.
+
+
+## Failure trace contract follow-up
+
+The actual process report for source `c178badb` records native HTTP502, exactly
+one provider call, one Skill run with status `failed`, one trace with status
+`error`, no generated Markdown and no persisted credential. All20original
+offline comparisons and owner/recovery/restart guards also pass. The new probe
+incorrectly required trace status `failed`. Both the original Python exception
+path and unchanged Rust writer require `error`; the follow-up corrects only
+that assertion and keeps the separate failed-run assertion. No production
+behavior, accepted state set or gate is changed. This source still requires
+its own complete Rust workflow, full CI and platform qualification. **NOT_READY**.
