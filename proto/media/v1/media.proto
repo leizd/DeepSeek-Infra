@@ -68,6 +68,10 @@ message MediaPatchIntent {
   // Only PROCESS. The controller binds options to an existing media identity;
   // this is neither CREATE nor permission to replace an uncertain operation.
   MediaProcessOptions process = 7;
+  // Explicit controller capability, included in canonical request bytes.
+  // Zero retains the frozen v1 path; only 2 permits a compact v2 PATCH result.
+  // Old durable intents are never upgraded or rebound during recovery.
+  uint32 max_outcome_schema_version = 8;
 }
 
 message MediaProcessOptions {
@@ -149,6 +153,43 @@ message MediaPatchOutcome {
   // Only an applied PROCESS. Failed processing can retain a failed record and
   // original side effects; it cannot be represented as a no-effect refusal.
   MediaProcessedResult processed = 18;
+  // Only an applied schema-v2 PATCH. The v1 signer/verifier must reject this
+  // field. Its distinct signing domain binds a compact receipt to the exact
+  // retained typed record, without enlarging historical control rows.
+  MediaPatchedResult patched = 19;
+}
+
+message MediaPatchedResult {
+  bytes record_sha256 = 1;
+  uint64 record_bytes = 2;
+  bytes preparation_sha256 = 3;
+  deepseek.common.v1.ActionFence original_fence = 4;
+}
+
+// Rust-local binding; never an execution permit or caller-selected file path.
+// The original claim is normalized to CLAIMED just as in the effect journal.
+message MediaPatchPreparation {
+  uint32 schema_version = 1;
+  MediaPatchClaim claim = 2;
+  bytes record_sha256 = 3;
+  uint64 record_bytes = 4;
+}
+
+message ReadMediaPatchResultRequest {
+  uint32 schema_version = 1;
+  string operation_id = 2;
+  deepseek.common.v1.ActionFence original_fence = 3;
+}
+
+// First message: manifest only, zero offset, no data. Subsequent messages:
+// no manifest, contiguous byte offsets and 1..262144 bytes of the deterministic
+// encoded MediaObject. EOF must match the signed total length and SHA-256.
+// No JSON request/response, private key or authority crosses this transport.
+message MediaPatchResultChunk {
+  uint32 schema_version = 1;
+  MediaPatchedResult manifest = 2;
+  uint64 offset = 3;
+  bytes record_chunk = 4;
 }
 
 message MediaProcessedResult {
@@ -359,6 +400,7 @@ service MediaMutationWorker {
   rpc ExecuteCreate(ExecuteMediaPatchRequest) returns (MediaPatchOutcome);
   rpc ExecuteProcess(ExecuteMediaProcessRequest) returns (MediaPatchOutcome);
   rpc QueryPatch(QueryMediaPatchRequest) returns (QueryMediaPatchResponse);
+  rpc ReadPatchResult(ReadMediaPatchResultRequest) returns (stream MediaPatchResultChunk);
 }
 
 // Separate media-content transport. Existing PATCH/DELETE/control RPC limits,
