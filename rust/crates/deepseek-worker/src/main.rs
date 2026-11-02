@@ -182,7 +182,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(identity) = transport.tls_identity {
         builder = builder.tls_config(identity.server_tls_config())?;
     }
-    let media_maintenance = service.start_media_image_maintenance()?;
+    let media_maintenance = service.start_media_image_maintenance().await;
     let result = builder
         .add_service(ControlSignerBootstrapServer::new(service.clone()))
         .add_service(NativeOriginCustodyServer::new(service.clone()))

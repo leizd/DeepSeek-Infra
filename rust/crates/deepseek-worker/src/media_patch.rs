@@ -153,16 +153,10 @@ impl WorkerRpcService {
     }
     /// Start bounded private image retirement on a separate connection. Known
     /// terminal RPCs never wait for image I/O or this maintenance connection.
-    pub fn start_media_image_maintenance(
-        &self,
-    ) -> Result<Option<tokio::task::JoinHandle<()>>, Status> {
-        self.media_journal
-            .as_ref()
-            .map(|journal| {
-                let journal = journal.lock().map_err(|_| invalid())?;
-                Ok(journal.start_image_maintenance())
-            })
-            .transpose()
+    pub async fn start_media_image_maintenance(&self) -> Option<tokio::task::JoinHandle<()>> {
+        let journal = self.media_journal.as_ref()?;
+        let journal = journal.lock().await;
+        Some(journal.start_image_maintenance())
     }
     pub(super) fn media_caller<T>(&self, request: &Request<T>) -> Result<(), Status> {
         let identity = self
