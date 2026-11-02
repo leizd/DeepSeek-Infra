@@ -32,6 +32,10 @@ func Encode(message proto.Message) ([]byte, error) {
 	return b, nil
 }
 func RequestDigest(intent *mediav1.MediaPatchIntent) ([]byte, error) {
+	if intent != nil && (intent.MaxOutcomeSchemaVersion != 0 && intent.MaxOutcomeSchemaVersion != 2 ||
+		intent.MaxOutcomeSchemaVersion == 2 && intent.Kind != mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_UNSPECIFIED) {
+		return nil, ErrInvalid
+	}
 	if intent == nil || intent.SchemaVersion != 1 || intent.OperationId == "" || len(intent.OperationId) > 128 || intent.MediaId == "" || len(intent.MediaId) > 512 {
 		return nil, ErrInvalid
 	}
@@ -300,6 +304,12 @@ func toJSON(v *mediav1.MediaValue, depth int) (any, error) {
 	}
 }
 func VerifyOutcome(outcome *mediav1.MediaPatchOutcome, claim *mediav1.MediaPatchClaim, public []byte) error {
+	if outcome != nil && outcome.SchemaVersion == 2 {
+		return verifyCompactPatchOutcome(outcome, claim, public)
+	}
+	if outcome != nil && outcome.Patched != nil {
+		return ErrInvalid
+	}
 	if outcome == nil || claim == nil || claim.Intent == nil || claim.Fence == nil || outcome.SchemaVersion != 1 || outcome.OperationId != claim.Intent.OperationId || !proto.Equal(outcome.OriginalFence, claim.Fence) || !bytes.Equal(outcome.RequestSha256, claim.RequestSha256) || len(outcome.ProtoReflect().GetUnknown()) != 0 || len(public) != ed25519.PublicKeySize || outcome.FleetId != claim.FleetId || outcome.Environment != claim.Environment || outcome.WriterFencingToken != claim.WriterFencingToken || claim.FleetId == "" || claim.Environment == "" {
 		return ErrInvalid
 	}

@@ -279,7 +279,22 @@ impl MediaJournal {
         let signature = Signature::from_slice(&result.signature).map_err(|_| invalid())?;
         let mut unsigned = result.clone();
         unsigned.signature.clear();
-        let mut message = b"deepseek-infra:media-patch-outcome-v1\0".to_vec();
+        let domain: &[u8] = match result.schema_version {
+            1 if result.patched.is_none()
+                && !(row.planned.schema_version == 2
+                    && result.state == MediaPatchEffectState::Applied as i32) =>
+            {
+                b"deepseek-infra:media-patch-outcome-v1\0"
+            }
+            2 if result.state == MediaPatchEffectState::Applied as i32
+                && result.patched.is_some()
+                && unsigned == row.planned =>
+            {
+                b"deepseek-infra:media-patch-outcome-v2\0"
+            }
+            _ => return Err(invalid()),
+        };
+        let mut message = domain.to_vec();
         message.extend(unsigned.encode_to_vec());
         key.verify_strict(&message, &signature)
             .map_err(|_| invalid())?;
@@ -310,6 +325,10 @@ impl MediaJournal {
         } else {
             media_library::plan(&self.root, claim, &before)?
         };
+        let planned = crate::media_patch_result::prepare(&self.creation_staging, claim, planned)?;
+        if planned.encoded_len() > 4 * 1024 * 1024 {
+            return Err(Status::resource_exhausted("MEDIA_MESSAGE_LIMIT"));
+        }
         let digest = sha(&planned.encode_to_vec());
         self.connection
             .execute(
@@ -340,6 +359,30 @@ impl MediaJournal {
         Ok(())
     }
 
+    pub(super) fn patched_record(
+        &self,
+        claim: &MediaPatchClaim,
+    ) -> Result<
+        (
+            deepseek_protocol::generated::deepseek::media::v1::MediaPatchedResult,
+            fs::File,
+        ),
+        Status,
+    > {
+        let operation = &claim.intent.as_ref().ok_or_else(invalid)?.operation_id;
+        let row = self.retained(operation)?.ok_or_else(invalid)?;
+        if row.claim != normalized_claim(claim) || row.state != "APPLIED" {
+            return Err(invalid());
+        }
+        let terminal = self.terminal(&row)?.ok_or_else(invalid)?;
+        if terminal.schema_version != 2 || terminal.state != MediaPatchEffectState::Applied as i32 {
+            return Err(invalid());
+        }
+        let receipt = terminal.patched.ok_or_else(invalid)?;
+        let file = crate::media_patch_result::open_record(&self.creation_staging, claim, &receipt)?;
+        Ok((receipt, file))
+    }
+
     fn finish_original_cleanup(&self, row: &Retained) -> Result<(), Status> {
         use deepseek_protocol::generated::deepseek::media::v1::MediaMutationKind;
         let claim = MediaPatchClaim::decode(row.claim.as_slice()).map_err(|_| invalid())?;
@@ -351,6 +394,13 @@ impl MediaJournal {
                     && intent.patch.is_some()
                     && row.planned.deleted_count == 0 =>
             {
+                if let Some(patched) = row.planned.patched.as_ref() {
+                    crate::media_patch_result::open_record(
+                        &self.creation_staging,
+                        &claim,
+                        patched,
+                    )?;
+                }
                 Ok(())
             }
             MediaMutationKind::Delete
@@ -405,6 +455,13 @@ impl MediaJournal {
                 return Err(invalid());
             }
         }
+        if result.state == MediaPatchEffectState::Applied as i32 {
+            if let Some(patched) = result.patched.as_ref() {
+                let row = self.retained(operation)?.ok_or_else(invalid)?;
+                let claim = MediaPatchClaim::decode(row.claim.as_slice()).map_err(|_| invalid())?;
+                crate::media_patch_result::open_record(&self.creation_staging, &claim, patched)?;
+            }
+        }
         result.signature = key
             .sign_media_patch_outcome(&result)
             .map_err(|_| invalid())?;
@@ -454,6 +511,9 @@ impl MediaJournal {
         // issues no signature; actual signing remains after confirmed effects.
         key.validate_media_patch_outcome(&row.planned)
             .map_err(|_| invalid())?;
+        if let Some(patched) = row.planned.patched.as_ref() {
+            crate::media_patch_result::open_record(&self.creation_staging, claim, patched)?;
+        }
         if let Some(after) = row.after.as_ref() {
             if read_library(&self.root)? != row.before {
                 let refused = media_library::refusal(
@@ -617,11 +677,13 @@ impl MediaJournal {
             return self.settle(operation, "PREPARED", refused, key).map(Some);
         }
         let mut unknown = row.planned;
+        unknown.schema_version = 1;
         unknown.state = MediaPatchEffectState::Unknown as i32;
         unknown.media = None;
         unknown.deleted_count = 0;
         unknown.created = None;
         unknown.processed = None;
+        unknown.patched = None;
         unknown.http_status = 503;
         unknown.error_code = "EFFECT_UNKNOWN".into();
         unknown.error_message = "Media publication requires reconciliation".into();
@@ -633,3 +695,7 @@ impl MediaJournal {
 #[cfg(test)]
 #[path = "media_journal_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "media_patch_result_tests.rs"]
+mod patch_result_tests;

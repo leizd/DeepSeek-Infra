@@ -382,7 +382,7 @@ fn key() -> ControlSigningKey {
     )
     .unwrap()
 }
-fn fixture() -> (
+pub(super) fn fixture() -> (
     tempfile::TempDir,
     ControlSigningKey,
     MediaJournal,
@@ -414,6 +414,7 @@ fn fixture() -> (
         }),
         create: None,
         process: None,
+        max_outcome_schema_version: 0,
     };
     let claim = MediaPatchClaim {
         schema_version: 1,

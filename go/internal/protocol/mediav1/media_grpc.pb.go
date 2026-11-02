@@ -197,11 +197,12 @@ var MediaMutationControl_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	MediaMutationWorker_ExecutePatch_FullMethodName   = "/deepseek.media.v1.MediaMutationWorker/ExecutePatch"
-	MediaMutationWorker_ExecuteDelete_FullMethodName  = "/deepseek.media.v1.MediaMutationWorker/ExecuteDelete"
-	MediaMutationWorker_ExecuteCreate_FullMethodName  = "/deepseek.media.v1.MediaMutationWorker/ExecuteCreate"
-	MediaMutationWorker_ExecuteProcess_FullMethodName = "/deepseek.media.v1.MediaMutationWorker/ExecuteProcess"
-	MediaMutationWorker_QueryPatch_FullMethodName     = "/deepseek.media.v1.MediaMutationWorker/QueryPatch"
+	MediaMutationWorker_ExecutePatch_FullMethodName    = "/deepseek.media.v1.MediaMutationWorker/ExecutePatch"
+	MediaMutationWorker_ExecuteDelete_FullMethodName   = "/deepseek.media.v1.MediaMutationWorker/ExecuteDelete"
+	MediaMutationWorker_ExecuteCreate_FullMethodName   = "/deepseek.media.v1.MediaMutationWorker/ExecuteCreate"
+	MediaMutationWorker_ExecuteProcess_FullMethodName  = "/deepseek.media.v1.MediaMutationWorker/ExecuteProcess"
+	MediaMutationWorker_QueryPatch_FullMethodName      = "/deepseek.media.v1.MediaMutationWorker/QueryPatch"
+	MediaMutationWorker_ReadPatchResult_FullMethodName = "/deepseek.media.v1.MediaMutationWorker/ReadPatchResult"
 )
 
 // MediaMutationWorkerClient is the client API for MediaMutationWorker service.
@@ -213,6 +214,7 @@ type MediaMutationWorkerClient interface {
 	ExecuteCreate(ctx context.Context, in *ExecuteMediaPatchRequest, opts ...grpc.CallOption) (*MediaPatchOutcome, error)
 	ExecuteProcess(ctx context.Context, in *ExecuteMediaProcessRequest, opts ...grpc.CallOption) (*MediaPatchOutcome, error)
 	QueryPatch(ctx context.Context, in *QueryMediaPatchRequest, opts ...grpc.CallOption) (*QueryMediaPatchResponse, error)
+	ReadPatchResult(ctx context.Context, in *ReadMediaPatchResultRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[MediaPatchResultChunk], error)
 }
 
 type mediaMutationWorkerClient struct {
@@ -273,6 +275,25 @@ func (c *mediaMutationWorkerClient) QueryPatch(ctx context.Context, in *QueryMed
 	return out, nil
 }
 
+func (c *mediaMutationWorkerClient) ReadPatchResult(ctx context.Context, in *ReadMediaPatchResultRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[MediaPatchResultChunk], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &MediaMutationWorker_ServiceDesc.Streams[0], MediaMutationWorker_ReadPatchResult_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[ReadMediaPatchResultRequest, MediaPatchResultChunk]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type MediaMutationWorker_ReadPatchResultClient = grpc.ServerStreamingClient[MediaPatchResultChunk]
+
 // MediaMutationWorkerServer is the server API for MediaMutationWorker service.
 // All implementations must embed UnimplementedMediaMutationWorkerServer
 // for forward compatibility.
@@ -282,6 +303,7 @@ type MediaMutationWorkerServer interface {
 	ExecuteCreate(context.Context, *ExecuteMediaPatchRequest) (*MediaPatchOutcome, error)
 	ExecuteProcess(context.Context, *ExecuteMediaProcessRequest) (*MediaPatchOutcome, error)
 	QueryPatch(context.Context, *QueryMediaPatchRequest) (*QueryMediaPatchResponse, error)
+	ReadPatchResult(*ReadMediaPatchResultRequest, grpc.ServerStreamingServer[MediaPatchResultChunk]) error
 	mustEmbedUnimplementedMediaMutationWorkerServer()
 }
 
@@ -306,6 +328,9 @@ func (UnimplementedMediaMutationWorkerServer) ExecuteProcess(context.Context, *E
 }
 func (UnimplementedMediaMutationWorkerServer) QueryPatch(context.Context, *QueryMediaPatchRequest) (*QueryMediaPatchResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method QueryPatch not implemented")
+}
+func (UnimplementedMediaMutationWorkerServer) ReadPatchResult(*ReadMediaPatchResultRequest, grpc.ServerStreamingServer[MediaPatchResultChunk]) error {
+	return status.Error(codes.Unimplemented, "method ReadPatchResult not implemented")
 }
 func (UnimplementedMediaMutationWorkerServer) mustEmbedUnimplementedMediaMutationWorkerServer() {}
 func (UnimplementedMediaMutationWorkerServer) testEmbeddedByValue()                             {}
@@ -418,6 +443,17 @@ func _MediaMutationWorker_QueryPatch_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _MediaMutationWorker_ReadPatchResult_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(ReadMediaPatchResultRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(MediaMutationWorkerServer).ReadPatchResult(m, &grpc.GenericServerStream[ReadMediaPatchResultRequest, MediaPatchResultChunk]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type MediaMutationWorker_ReadPatchResultServer = grpc.ServerStreamingServer[MediaPatchResultChunk]
+
 // MediaMutationWorker_ServiceDesc is the grpc.ServiceDesc for MediaMutationWorker service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -446,7 +482,13 @@ var MediaMutationWorker_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _MediaMutationWorker_QueryPatch_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "ReadPatchResult",
+			Handler:       _MediaMutationWorker_ReadPatchResult_Handler,
+			ServerStreams: true,
+		},
+	},
 	Metadata: "media/v1/media.proto",
 }
 

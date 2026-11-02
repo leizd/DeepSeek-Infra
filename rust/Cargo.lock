@@ -847,6 +847,7 @@ dependencies = [
  "deepseek-storage",
  "deepseek-transfer",
  "ed25519-dalek",
+ "futures-util",
  "prost",
  "rcgen",
  "rusqlite",

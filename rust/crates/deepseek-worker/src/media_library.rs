@@ -73,6 +73,9 @@ pub(super) fn refusal(
     code: &str,
     message: &str,
 ) -> MediaPatchOutcome {
+    // A refusal is the frozen v1 no-effect envelope, including when its
+    // proposed successful result used the compact v2 PATCH representation.
+    result.schema_version = 1;
     result.state = MediaPatchEffectState::Refused as i32;
     result.http_status = status;
     result.media = None;
@@ -83,6 +86,7 @@ pub(super) fn refusal(
     result.deleted_count = 0;
     result.created = None;
     result.processed = None;
+    result.patched = None;
     result
 }
 pub(super) fn outcome(claim: &MediaPatchClaim, before: &[u8]) -> Result<MediaPatchOutcome, Status> {
@@ -106,6 +110,7 @@ pub(super) fn outcome(claim: &MediaPatchClaim, before: &[u8]) -> Result<MediaPat
         deleted_count: 0,
         created: None,
         processed: None,
+        patched: None,
     })
 }
 
@@ -181,7 +186,10 @@ pub(super) fn planned_bytes(
         return Err(Status::resource_exhausted("MEDIA_LIBRARY_LIMIT"));
     }
     result.after_sha256 = sha(&bytes);
-    if result.encoded_len() > 4 * 1024 * 1024 {
+    // PATCH's complete public record is retained in Rust custody before the
+    // journal checks the final compact RPC envelope. Other result shapes keep
+    // their existing transport check here.
+    if result.media.is_none() && result.encoded_len() > 4 * 1024 * 1024 {
         return Err(Status::resource_exhausted("MEDIA_MESSAGE_LIMIT"));
     }
     Ok((result, Some(bytes)))

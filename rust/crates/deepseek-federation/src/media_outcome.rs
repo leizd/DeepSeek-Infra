@@ -24,6 +24,9 @@ impl ControlSigningKey {
         &self,
         outcome: &MediaPatchOutcome,
     ) -> Result<Vec<u8>, FederationIdentityError> {
+        if outcome.schema_version == 2 {
+            return self.media_patch_outcome_v2_message(outcome);
+        }
         let invalid = || error("MEDIA_OUTCOME_INVALID");
         let fence = outcome.original_fence.as_ref().ok_or_else(invalid)?;
         deepseek_protocol::validate_fence(fence).map_err(|_| invalid())?;
@@ -82,6 +85,7 @@ impl ControlSigningKey {
                 && outcome.deleted_count == 0
         };
         if outcome.schema_version != 1
+            || outcome.patched.is_some()
             || !(patch || deletion || creation || processing)
             || outcome.operation_id != fence.action_id
             || outcome.operation_id.len() > 128
@@ -112,6 +116,49 @@ impl ControlSigningKey {
             return Err(invalid());
         }
         let mut message = b"deepseek-infra:media-patch-outcome-v1\0".to_vec();
+        message.extend(bytes);
+        Ok(message)
+    }
+
+    fn media_patch_outcome_v2_message(
+        &self,
+        outcome: &MediaPatchOutcome,
+    ) -> Result<Vec<u8>, FederationIdentityError> {
+        let invalid = || error("MEDIA_OUTCOME_INVALID");
+        let fence = outcome.original_fence.as_ref().ok_or_else(invalid)?;
+        deepseek_protocol::validate_fence(fence).map_err(|_| invalid())?;
+        let patched = outcome.patched.as_ref().ok_or_else(invalid)?;
+        if outcome.schema_version != 2
+            || !outcome.operation_id.starts_with("media-patch-")
+            || outcome.operation_id != fence.action_id
+            || outcome.operation_id.len() > 128
+            || outcome.request_sha256.len() != 32
+            || outcome.before_sha256.len() != 32
+            || outcome.after_sha256.len() != 32
+            || outcome.writer_fencing_token < 1
+            || self.binding["fleetId"].as_str() != Some(outcome.fleet_id.as_str())
+            || self.binding["environment"].as_str() != Some(outcome.environment.as_str())
+            || !outcome.signature.is_empty()
+            || outcome.state != MediaPatchEffectState::Applied as i32
+            || outcome.http_status != 200
+            || !outcome.error_code.is_empty()
+            || !outcome.error_message.is_empty()
+            || outcome.media.is_some()
+            || outcome.created.is_some()
+            || outcome.processed.is_some()
+            || outcome.deleted_count != 0
+            || patched.original_fence != outcome.original_fence
+            || patched.record_sha256.len() != 32
+            || patched.preparation_sha256.len() != 32
+            || patched.record_bytes == 0
+        {
+            return Err(invalid());
+        }
+        let bytes = outcome.encode_to_vec();
+        if bytes.len() > 2 * 1024 * 1024 {
+            return Err(invalid());
+        }
+        let mut message = b"deepseek-infra:media-patch-outcome-v2\0".to_vec();
         message.extend(bytes);
         Ok(message)
     }

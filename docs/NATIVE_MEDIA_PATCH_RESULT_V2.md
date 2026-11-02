@@ -1,5 +1,9 @@
 # Compact media PATCH result contract
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
 The retained v1 receipt and its 2 MiB signing limit stay frozen. A schema-v2
 applied PATCH uses the separate `deepseek-infra:media-patch-outcome-v2` domain
 (including its terminating NUL) and a `MediaPatchedResult`; it never contains an
@@ -24,6 +28,18 @@ complete signed length, SHA-256, manifest, canonical typed data and EOF before
 writing the HTTP success response. No record-size product limit is added by the
 stream contract. Transport chunks do not themselves establish bounded total
 record parsing memory; that still requires separate measurement and work.
+
+The implementation keeps backing records under a PATCH-specific directory whose
+fixed path component is SHA-256 of the complete operation identity. CREATE's
+separate 32-hex nonce path validator is unchanged. Backing records are immutable
+receipt custody, survive terminal settlement and are checked before publication,
+reconciliation and each result read. Missing or corrupt data never authorizes
+reconstruction from the current library or another execution attempt.
+On Unix, newly created custody directories and their links through the existing
+worker state directory are synchronized before PREPARED, followed by the
+immutable file and operation-directory synchronization. This source rule and
+process-restart tests do not establish power-loss recovery on every platform;
+Windows directory durability and platform crash qualification remain open.
 
 This additive protocol is not runtime qualification. Bulk library snapshots,
 bounded normalization, old unsignable APPLYING recovery, processing/index crash

@@ -1,3 +1,28 @@
+<!-- native-20261102-compact-patch-result:start -->
+## 2026-11-02 compact PATCH result increment: verification pending
+
+The uploaded additive protocol `9ae7ec4fd0b51172d2072da3fb391da04a5b4f5f`
+and cloud source-generation run `41410815212` have passed the pinned descriptor,
+legacy request digest and four-file generated-source boundary. This is source
+generation only. The current implementation adds an explicit capability in the
+canonical admitted intent, a distinct strict v2 signature domain, two separate
+record/dispatch commitments, immutable original typed-record custody and
+256 KiB result chunks. v1 refusals, signatures, inline-size rules and old durable
+intent bytes remain supported. Go settles the original receipt before reading;
+interrupted result reads never retry the write. Tests include >4 MiB records,
+retention-window exclusion, mixed v1/v2 replay, expired original effects,
+corrupted/missing preparations, exact dispatch matching and TLS response loss.
+Native execution is cloud-only and is not yet qualified for this increment.
+
+The actual 144 MB original-HTTP200/native-HTTP503 `EFFECT_UNKNOWN` failure from
+`b8211a50` remains open. Bulk snapshot streaming, bounded normalization and
+record decoding, old unsignable APPLYING recovery, PROCESS/index crash cases,
+storage growth and complete exact-source CI/platform/coverage/cutover remain
+required. Original MCP pytest functionality remains unfinished without a Python
+production exception. Full product readiness remains **NOT_READY**.
+
+<!-- native-20261102-compact-patch-result:end -->
+
 # Current checkpoint: validate the final receipt before media publication, 2026-11-02
 
 Parent70df's actual legal large-library HTTP200-versus-native503/EFFECT_UNKNOWN

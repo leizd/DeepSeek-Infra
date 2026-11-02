@@ -119,6 +119,13 @@ jobs:
           test "$(go env GOVERSION)" = "go1.27.1"
           go mod download
           go mod verify
+      - name: Exercise compact PATCH contracts and streamed result failures in Go
+        if: matrix.mode == 'checks'
+        working-directory: go
+        timeout-minutes: 15
+        run: |
+          set -o pipefail
+          CGO_ENABLED=0 go test -v -count=1 -timeout=10m -run 'CompactPatch|PatchResult' ./internal/media ./internal/worker ./internal/store ./internal/api 2>&1 | tee ../artifacts/rust-cloud/compact-patch-go.log
       - name: Build the production Rust worker and custody provisioner on the cloud runner
         if: matrix.mode == 'checks'
         run: |
@@ -193,6 +200,25 @@ jobs:
           path: |
             artifacts/rust-cloud/media-patch-process
             artifacts/rust-cloud/source-context.json
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Verify retained large media record through compact signed PATCH and streamed result
+        if: matrix.mode == 'checks'
+        timeout-minutes: 15
+        run: |
+          set -o pipefail
+          python scripts/verify_native_media_patch.py --large-record-case --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --out artifacts/rust-cloud/media-large-record-process 2>&1 | tee artifacts/rust-cloud/media-large-record-process.log
+      - name: Preserve real large record PATCH process evidence
+        if: always() && matrix.mode == 'checks'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: rust-cloud-media-large-record-${{ github.sha }}
+          path: |
+            artifacts/rust-cloud/media-large-record-process/*.json
+            artifacts/rust-cloud/media-large-record-process/*.txt
+            artifacts/rust-cloud/media-large-record-process/*.log
+            artifacts/rust-cloud/source-context.json
+            artifacts/rust-cloud/compact-patch-go.log
           if-no-files-found: ignore
           retention-days: 7
       - name: Verify retained large media library through actual native HTTP

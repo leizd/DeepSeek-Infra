@@ -26,6 +26,7 @@ from urllib.request import Request, urlopen
 import verify_agent_signing_process as signing
 import verify_native_default_bootstrap as bootstrap
 import verify_native_media_reads as reads
+from native_media_compact_receipt import compact_patch_observation
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "tests/fixtures/native_media_library_read_v1.json"
@@ -336,7 +337,14 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
     require(fixture["schemaVersion"] == 1 and len(fixture["media"]) == 18, "MEDIA_PATCH_FIXTURE_CONTRACT_DIFFERS")
     report["fixtureSha256"] = hashlib.sha256(FIXTURE.read_bytes()).hexdigest()
     capacity_case = bool(getattr(args, "large_library_case", False))
+    large_record_case = bool(getattr(args, "large_record_case", False))
     fixture_media = large_library_media(fixture["media"]) if capacity_case else fixture["media"]
+    if large_record_case:
+        # The library is small; the original selected record alone exceeds both
+        # old inline signing/transport bounds. The public PATCH body stays small.
+        fixture_media = json.loads(json.dumps(fixture_media))
+        selected = next(record for record in fixture_media if record.get("mediaId") == MEDIA_ID)
+        selected["metadata"].update({f"retained_large_{i:02}": "r" * 120_000 for i in range(36)})
     report["patchSha256"] = hashlib.sha256(json.dumps(PATCH, sort_keys=True).encode()).hexdigest()
     request_body = wire_payload(PATCH)
     require(len(request_body) <= 1_000_000, "MEDIA_PATCH_FIXTURE_EXCEEDS_PUBLIC_LIMIT")
@@ -530,6 +538,18 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
                     "NATIVE_MEDIA_PATCH_TIMESTAMP_OUTSIDE_REQUEST")
             effect_after = journal_observation(scratch)
             observation["effectBeforeRestart"] = effect_after
+            if large_record_case:
+                public_record = actual.get("media", {})
+                require(len(json.dumps(public_record).encode()) > 4 * 1024**2,
+                        "MEDIA_PATCH_LARGE_RECORD_DID_NOT_CROSS_INLINE_BOUNDS")
+                require(all(public_record.get("metadata", {}).get(f"retained_large_{i:02}") == "r" * 120_000
+                            for i in range(36)), "MEDIA_PATCH_LARGE_RECORD_DATA_DIFFERS")
+                observed = compact_patch_observation(scratch)
+                require(observed["schemaVersion"] == 2 and observed["outcomeBytes"] < 4096
+                        and observed["signatureBytes"] == 64 and observed["recordBytes"] > 4 * 1024**2,
+                        "MEDIA_PATCH_LARGE_RECORD_DID_NOT_USE_BOUND_COMPACT_RECEIPT")
+                report["compactPatchReceipt"] = observed
+                report["allLargeRecordMetadataReturned"] = True
             if report.get("metadataOrderCase") == "maximum-array":
                 require(effect_after["claimBytes"] > 2 * 1024**2,
                         "LARGE_MEDIA_INPUT_DID_NOT_CROSS_TYPED_NATIVE_BOUNDARY")
@@ -571,7 +591,7 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
 
 
 def main() -> int:
-    global PATCH
+    global PATCH, LIMIT
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--worker", type=Path, required=True)
     parser.add_argument("--edge", type=Path, required=True)
@@ -581,10 +601,16 @@ def main() -> int:
                         default="baseline")
     parser.add_argument("--field-case", choices=tuple(FIELD_PATCHES))
     parser.add_argument("--large-library-case", action="store_true", help="Generate a legal144MB isolated library on the cloud runner only")
+    parser.add_argument("--large-record-case", action="store_true", help="Exercise a retained legal record larger than4MiB through actual native HTTP")
     args = parser.parse_args()
     require(not args.field_case or args.metadata_order_case == "baseline", "MEDIA_PATCH_CASE_SELECTION_CONFLICT")
     require(not args.large_library_case or not args.field_case and args.metadata_order_case == "baseline",
             "MEDIA_PATCH_CAPACITY_CASE_SELECTION_CONFLICT")
+    require(not args.large_record_case or not args.large_library_case and not args.field_case
+            and args.metadata_order_case == "baseline", "MEDIA_PATCH_LARGE_RECORD_CASE_SELECTION_CONFLICT")
+    # Only this new retained-record workload needs a larger report/read bound.
+    # Existing cases retain their original 2MiB response/report constraint.
+    LIMIT = (8 if args.large_record_case else 2) * 1024**2
     PATCH = FIELD_PATCHES[args.field_case] if args.field_case else case_patch(args.metadata_order_case)
     args.out = args.out.resolve()
     args.out.mkdir(parents=True, exist_ok=True)
@@ -594,6 +620,7 @@ def main() -> int:
         "metadataOrderCase": args.metadata_order_case,
         "fieldCase": args.field_case,
         "largeLibraryCase": args.large_library_case,
+        "largeRecordCase": args.large_record_case,
         "nativePatchRequestStarted": False, "nativePatchReplyObserved": False,
         "controlledNativeMediaPatchWorkloadQualified": False, "offlineMediaFixtureSeeded": False,
         "workspaceGenerationFenced": False, "workspaceGenerationRetainedAfterRestart": False,

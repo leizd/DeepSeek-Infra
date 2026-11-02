@@ -49,6 +49,9 @@ pub(super) fn validate_claim(
         "media-patch-"
     };
     if c.schema_version != 1
+        || ![0, 2].contains(&intent.max_outcome_schema_version)
+        || (intent.max_outcome_schema_version == 2
+            && intent.kind != MediaMutationKind::Unspecified as i32)
         || intent.schema_version != 1
         || intent.operation_id != operation
         || c.fence.as_ref() != Some(fence)
@@ -245,6 +248,16 @@ impl WorkerRpcService {
 
 #[tonic::async_trait]
 impl MediaMutationWorker for WorkerRpcService {
+    type ReadPatchResultStream = crate::media_patch_result::ResultStream;
+
+    async fn read_patch_result(
+        &self,
+        request: Request<
+            deepseek_protocol::generated::deepseek::media::v1::ReadMediaPatchResultRequest,
+        >,
+    ) -> Result<Response<Self::ReadPatchResultStream>, Status> {
+        self.read_media_patch_result(request).await
+    }
     async fn execute_process(
         &self,
         request: Request<ExecuteMediaProcessRequest>,

@@ -86,6 +86,27 @@ func writeMediaOutcome(w http.ResponseWriter, request *http.Request, outcome *me
 	}
 	writeJSON(w, request, http.MethodPatch, map[string]any{"ok": true, "media": value})
 }
+
+func writeMediaPatchOutcome(w http.ResponseWriter, request *http.Request, client *worker.Client, outcome *mediav1.MediaPatchOutcome) {
+	if outcome.SchemaVersion != 2 {
+		writeMediaOutcome(w, request, outcome)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(request.Context()), 10*time.Second)
+	defer cancel()
+	record, err := client.ReadMediaPatchResult(ctx, outcome)
+	if err != nil {
+		mediaUnknown(w, outcome.OperationId)
+		return
+	}
+	value, err := mediamodel.ToJSON(&mediav1.MediaValue{Kind: &mediav1.MediaValue_ObjectValue{ObjectValue: record}})
+	if err != nil {
+		mediaUnknown(w, outcome.OperationId)
+		return
+	}
+	w.Header().Set("X-DeepSeek-Operation-Id", outcome.OperationId)
+	writeJSON(w, request, http.MethodPatch, map[string]any{"ok": true, "media": value})
+}
 func mediaPatch(w http.ResponseWriter, r *http.Request, control *store.Control, view PublicView) {
 	if r.Method != http.MethodPatch && r.Method != http.MethodDelete {
 		notImplemented(w, r)
@@ -149,6 +170,9 @@ func mediaPatch(w http.ResponseWriter, r *http.Request, control *store.Control, 
 	}
 	operation := prefix + hex.EncodeToString(nonce[:])
 	intent := &mediav1.MediaPatchIntent{SchemaVersion: 1, OperationId: operation, MediaId: id, Patch: patch, Kind: kind}
+	if r.Method == http.MethodPatch {
+		intent.MaxOutcomeSchemaVersion = 2
+	}
 	claim, err := control.AdmitMediaPatch(intent)
 	if err != nil {
 		mediaUnknown(w, operation)
@@ -162,7 +186,7 @@ func mediaPatch(w http.ResponseWriter, r *http.Request, control *store.Control, 
 	}
 	if err == nil && outcome != nil {
 		if _, recordErr := control.RecordMediaPatchOutcome(outcome); recordErr == nil {
-			writeMediaOutcome(w, r, outcome)
+			writeMediaPatchOutcome(w, r, client, outcome)
 			return
 		}
 	}
@@ -171,7 +195,7 @@ func mediaPatch(w http.ResponseWriter, r *http.Request, control *store.Control, 
 	queryCtx, queryCancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
 	defer queryCancel()
 	if retained, settled := recoverMediaPatch(queryCtx, control, client, claim); settled && retained != nil {
-		writeMediaOutcome(w, r, retained)
+		writeMediaPatchOutcome(w, r, client, retained)
 		return
 	}
 	mediaUnknown(w, operation)
