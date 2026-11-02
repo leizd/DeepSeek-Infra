@@ -1,3 +1,30 @@
+# Current checkpoint: prove retained media capacity through real native HTTP, 2026-11-02
+
+Parent a28f238e has independently qualified full Rust1674 tests/82.53991798272402%
+against the original80% floor, online Skill/oracle cases, and six controlled
+Windows/IntelMac/ARMMac app/profile/modal/lifecycle jobs. Complete37jobCI
+41387158014 remains separately observed. Those results do not qualify a child.
+
+The original media normalizer permits multiple120000character metadata fields
+and its writer retains1000records. Native worker reads/publications are bounded
+at128MiB. This test-only child keeps the original18record fixture and every
+existing case, appends600legal records only in a new cloud-only case, and
+requires original authenticatedHTTP success plus real retained metadata before
+actual authenticated Go/Rust PATCH, generation/effect checks and full restart.
+Small source tests never serialize/write its144MB data locally. Actual HTTP,
+request duration, process-bound RSS/high-water and raw replies are saved. The
+original timeouts, ownership/proof/fence/recovery checks and coverage floors
+remain; no production Rust/Go/Proto implementation changes.
+
+This counterexample remains UNPROVEN until its exact cloud run reaches the
+actual native request. All original34checks/7coverage remain plus the mandatory
+capacity process step; no existing case is removed. Full retained server,
+desktop, Android and background features, original MCP engine, capacity,
+authority/recovery/cutover/provider/Fleet, zeroPython/serverTypeScript, installer,
+upgrade/backup/security/performance and exactCI/Evidence remain ACTIVE/NOT_READY.
+Original163dirtyentries/HEAD/index/data are preserved. NoPR/mainmerge/release
+or realproduction operation is performed.
+
 # Current checkpoint: retain original Skill failure trace status, 2026-11-02
 
 Sourcec178badb passed strict Clippy and all-feature tests, but its new Skill

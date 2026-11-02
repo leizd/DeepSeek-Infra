@@ -195,6 +195,24 @@ jobs:
             artifacts/rust-cloud/source-context.json
           if-no-files-found: ignore
           retention-days: 7
+      - name: Verify retained large media library through actual native HTTP
+        if: matrix.mode == 'checks'
+        timeout-minutes: 15
+        run: |
+          set -o pipefail
+          python scripts/verify_native_media_patch.py --large-library-case --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --out artifacts/rust-cloud/media-capacity-process 2>&1 | tee artifacts/rust-cloud/media-capacity-process.log
+      - name: Preserve real media capacity process evidence
+        if: always() && matrix.mode == 'checks'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: rust-cloud-media-capacity-${{ github.sha }}
+          path: |
+            artifacts/rust-cloud/media-capacity-process/*.json
+            artifacts/rust-cloud/media-capacity-process/*.txt
+            artifacts/rust-cloud/media-capacity-process/*.log
+            artifacts/rust-cloud/source-context.json
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Verify media metadata ordering and maximum legal JSON through native HTTP
         if: matrix.mode == 'checks'
         timeout-minutes: 15

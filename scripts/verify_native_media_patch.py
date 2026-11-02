@@ -69,6 +69,23 @@ try:
 finally:
     client.close()
 '''
+CAPACITY_ORACLE = r'''
+import json
+from deepseek_infra.infra.media import library, schema
+rows = library._load_store()
+capacity = [row for row in rows if row["mediaId"].startswith("media_capacity_")]
+left, right = "L" * 120000, "R" * 120000
+expected = {f"media_capacity_{i:03}": schema.normalize_media_record({
+    "mediaId": f"media_capacity_{i:03}", "title": f"Capacity metadata {i}",
+    "type": "image", "mimeType": "image/png", "path": "", "source": {}, "status": "pending",
+    "createdAt": "2026-11-02T00:00:00+00:00", "updatedAt": "2026-11-02T00:00:00+00:00",
+    "metadata": {"capacity_left": left, "capacity_right": right}}) for i in range(600)}
+accepted = len(capacity) == 600 and {row["mediaId"]: row for row in capacity} == expected
+assert accepted and len(rows) <= 1000
+print(json.dumps({"status": "PASS_ORIGINAL_LARGE_MEDIA_LIBRARY", "normalizedRecords": len(rows),
+    "capacityRecords": len(capacity), "metadataCharactersPreserved": 600 * 2 * 120000,
+    "storeBytes": library.store_path().stat().st_size, "allCapacityMetadataAccepted": accepted}))
+'''
 
 
 class ProbeFailure(RuntimeError):
@@ -98,6 +115,57 @@ def case_patch(case: str) -> dict[str, Any]:
 
 def wire_payload(payload: dict[str, Any]) -> bytes:
     return json.dumps(payload, separators=(",", ":")).encode()
+
+
+def large_library_media(base: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Retain the original fixture and add600legal records, below its1000record bound.
+
+    Both large strings are shared in memory. Only the cloud-only caller writes
+    the full fixture; offline schema tests never serialize its144MB payload.
+    """
+    require(len(base) == 18, "MEDIA_PATCH_FIXTURE_CONTRACT_DIFFERS")
+    left, right = "L" * 120_000, "R" * 120_000
+    return [*base, *({"mediaId": f"media_capacity_{i:03}", "title": f"Capacity metadata {i}",
+        "type": "image", "mimeType": "image/png", "path": "", "source": {}, "status": "pending",
+        "createdAt": "2026-11-02T00:00:00+00:00", "updatedAt": "2026-11-02T00:00:00+00:00",
+        "metadata": {"capacity_left": left, "capacity_right": right}} for i in range(600))]
+
+
+def capacity_original_observation(profile: Path, diagnostic: Path) -> dict[str, Any]:
+    """Read the actual original writer's retained file in an isolated oracle process."""
+    environment = {key: value for key, value in os.environ.items() if key in {
+        "PATH", "HOME", "LANG", "LC_ALL", "TZ", "SSL_CERT_FILE", "SSL_CERT_DIR", "TMPDIR"}}
+    environment.update(DEEPSEEK_INFRA_ROOT=str(profile), PYTHONDONTWRITEBYTECODE="1", PYTHONUTF8="1")
+    result = subprocess.run([sys.executable, "-B", "-c", CAPACITY_ORACLE], cwd=ROOT, env=environment,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30, check=False)
+    require(len(result.stdout) <= LIMIT and len(result.stderr) <= LIMIT, "ORIGINAL_MEDIA_CAPACITY_OUTPUT_EXCEEDED_BOUND")
+    diagnostic.write_bytes(result.stderr)
+    require(result.returncode == 0, "ORIGINAL_MEDIA_CAPACITY_RETENTION_FAILED")
+    observed = json.loads(result.stdout)
+    require(observed.get("status") == "PASS_ORIGINAL_LARGE_MEDIA_LIBRARY"
+        and observed.get("capacityRecords") == 600 and observed.get("allCapacityMetadataAccepted") is True
+        and observed.get("storeBytes", 0) > 128 * 1024**2, "ORIGINAL_MEDIA_CAPACITY_NOT_OBSERVED")
+    return observed
+
+
+def capacity_peak_memory(identities: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Read process-owned procfs high-water marks without asserting a new budget."""
+    rows = []
+    for identity in identities:
+        pid = identity["pid"]
+        require(reads.process_identity(pid) == identity["startTicks"], "MEDIA_CAPACITY_PROCESS_IDENTITY_CHANGED")
+        with (Path("/proc") / str(pid) / "status").open(encoding="utf-8") as stream:
+            text = stream.read(16_385)
+        require(len(text) <= 16_384, "MEDIA_CAPACITY_PROC_STATUS_EXCEEDED_BOUND")
+        values = {line.split(":", 1)[0]: line.split(":", 1)[1].split() for line in text.splitlines() if ":" in line}
+        row = {"pid": pid, "executable": identity["executable"], "startTicks": identity["startTicks"]}
+        for key in ["VmRSS", "VmHWM"]:
+            fields = values.get(key, [])
+            require(len(fields) == 2 and fields[0].isdigit() and fields[1] == "kB", "MEDIA_CAPACITY_MEMORY_OBSERVATION_INVALID")
+            row[key + "KiB"] = int(fields[0])
+        require(reads.process_identity(pid) == identity["startTicks"], "MEDIA_CAPACITY_PROCESS_IDENTITY_CHANGED")
+        rows.append(row)
+    return rows
 
 
 def diagnostic_table(owned_root: Path, filename: str, query: str, columns: tuple[str, ...]) -> dict[str, Any]:
@@ -267,6 +335,8 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
     fixture = json.loads(FIXTURE.read_text())
     require(fixture["schemaVersion"] == 1 and len(fixture["media"]) == 18, "MEDIA_PATCH_FIXTURE_CONTRACT_DIFFERS")
     report["fixtureSha256"] = hashlib.sha256(FIXTURE.read_bytes()).hexdigest()
+    capacity_case = bool(getattr(args, "large_library_case", False))
+    fixture_media = large_library_media(fixture["media"]) if capacity_case else fixture["media"]
     report["patchSha256"] = hashlib.sha256(json.dumps(PATCH, sort_keys=True).encode()).hexdigest()
     request_body = wire_payload(PATCH)
     require(len(request_body) <= 1_000_000, "MEDIA_PATCH_FIXTURE_EXCEEDS_PUBLIC_LIMIT")
@@ -336,11 +406,24 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
             initial_writer = reads.writer(profile)
             shutdown()
             original_auth = (profile / ".auth-token").read_bytes()
-            seed(profile, fixture["media"])
-            seed(mirror, fixture["media"])
+            if capacity_case:
+                require(child is None and not identities, "MEDIA_CAPACITY_SEEDED_WITH_NATIVE_RUNNING")
+            seed(profile, fixture_media)
+            seed(mirror, fixture_media)
             report["offlineMediaFixtureSeeded"] = True
+            if capacity_case:
+                seeded = profile / ".media/library.json"
+                require(seeded.stat().st_size > 128 * 1024**2 and seeded.stat().st_size < 160 * 1024**2,
+                        "MEDIA_CAPACITY_FIXTURE_BYTES_DIFFER")
+                report["largeLibraryFixture"] = {"originalFixtureRecords": 18, "additionalRecords": 600,
+                    "metadataCharactersPerRecord": 240_000, "fileBytes": seeded.stat().st_size,
+                    "fileSha256": hashlib.sha256(seeded.read_bytes()).hexdigest(),
+                    "onlySeededWhileNativeStopped": True, "newProductLimit": False}
             before = reads.media_snapshot(profile)
+            oracle_clock = time.monotonic()
             expected_status, expected = original_http_patch(mirror, args.out / "original-http-oracle.log")
+            if capacity_case:
+                report["originalHTTPRequestSeconds"] = time.monotonic() - oracle_clock
             require(bool(args.field_case) or expected_status == 200, "ORIGINAL_MEDIA_PATCH_WORKLOAD_DID_NOT_SUCCEED")
             require(reads.media_snapshot(profile) == before, "ORACLE_CHANGED_NATIVE_MEDIA_PROFILE")
             (args.out / "original-patch-oracle.json").write_text(
@@ -349,6 +432,8 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
                     "body": expected}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             report.update(originalLibrarySucceeded=expected_status == 200, expectedPublicHTTPStatus=expected_status,
                           actualOriginalPublicRouteCompared=True)
+            if capacity_case:
+                report["originalLargeLibraryRetention"] = capacity_original_observation(mirror, args.out / "original-capacity-oracle.log")
             token = launch("patch-launch")
             require((profile / ".auth-token").read_bytes() == original_auth, "MEDIA_PATCH_RESTART_REPLACED_AUTH")
             current_writer = reads.writer(profile)
@@ -369,6 +454,8 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
                 nativePatchOutcome="EFFECT_UNKNOWN")
             request_identities = [{**row, "startTicks": reads.process_identity(row["pid"])} for row in identities]
             resources_before = uncertain_request_snapshot(profile, request_identities)
+            if capacity_case:
+                report["capacityMemoryBefore"] = capacity_peak_memory(request_identities)
             started = datetime.now(timezone.utc).timestamp()
             request_clock = time.monotonic()
             try:
@@ -383,6 +470,8 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
                     json.dumps(report["uncertainRequestDiagnostics"], indent=2) + "\n", encoding="utf-8")
                 raise
             finished = datetime.now(timezone.utc).timestamp()
+            if capacity_case:
+                report["capacityRequestSeconds"] = time.monotonic() - request_clock
             generation_after = generation_observation(profile)
             (args.out / "native-patch-response.txt").write_bytes(raw)
             observation = {"sourceCommit": revision, "runId": os.environ.get("GITHUB_RUN_ID"),
@@ -397,6 +486,13 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
             report.update(semanticStageReached=True, nativePatchReplyObserved=True, nativePatchHTTPStatus=status,
                 responseSha256=hashlib.sha256(raw).hexdigest(), responseContentType=content_type,
                 mediaStoreUnchangedAfterReply=reads.media_snapshot(profile) == before)
+            if capacity_case:
+                # The actual reply is durably recorded before diagnostics; a
+                # disappearing process must not hide the original HTTP result.
+                try:
+                    report["capacityMemoryAfter"] = capacity_peak_memory(request_identities)
+                except Exception as error:
+                    report["capacityMemoryObservationError"] = type(error).__name__
             if expected_status == 400:
                 require(status == 400 and json.loads(raw) == expected, "NATIVE_MEDIA_PATCH_REFUSAL_DIFFERS_FROM_ORIGINAL_ROUTE")
                 require(reads.media_snapshot(profile) == before and generation_after == generation_before,
@@ -421,6 +517,8 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
                 shutdown()
                 return
             require(status == 200, "NATIVE_MEDIA_PATCH_REFUSED")
+            require(not capacity_case or "capacityMemoryObservationError" not in report,
+                    "MEDIA_CAPACITY_MEMORY_NOT_QUALIFIED")
             require(generation_after["present"] and generation_after["value"] == generation_before["value"] + 2,
                     "NATIVE_MEDIA_PATCH_DID_NOT_FENCE_CROSSING_BACKUPS")
             actual = json.loads(raw)
@@ -435,7 +533,13 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
             if report.get("metadataOrderCase") == "maximum-array":
                 require(effect_after["claimBytes"] > 2 * 1024**2,
                         "LARGE_MEDIA_INPUT_DID_NOT_CROSS_TYPED_NATIVE_BOUNDARY")
+            capacity_retained = reads.media_snapshot(profile) if capacity_case else None
             shutdown()
+            if capacity_case:
+                report["nativeLargeLibraryBeforeRestart"] = capacity_original_observation(profile, args.out / "native-capacity-before-restart.log")
+                require(report["nativeLargeLibraryBeforeRestart"]["normalizedRecords"] == report["originalLargeLibraryRetention"]["normalizedRecords"],
+                        "NATIVE_MEDIA_CAPACITY_RECORD_COUNT_DIFFERS")
+                require(reads.media_snapshot(profile) == capacity_retained, "MEDIA_CAPACITY_ORACLE_CHANGED_NATIVE_BYTES")
             token = launch("retained-restart")
             require((profile / ".auth-token").read_bytes() == original_auth, "MEDIA_PATCH_FINAL_RESTART_REPLACED_AUTH")
             status, raw, _ = exchange(origin, "/api/media/" + MEDIA_ID, "GET", token)
@@ -450,6 +554,13 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
             require(generation_retained == generation_after, "MEDIA_READ_OR_RESTART_CHANGED_GENERATION")
             require(effect_retained == effect_after, "MEDIA_EFFECT_IDENTITY_CHANGED_AFTER_RESTART")
             shutdown()
+            if capacity_case:
+                require(reads.media_snapshot(profile) == capacity_retained, "MEDIA_CAPACITY_RESTART_CHANGED_RETAINED_BYTES")
+                report["nativeLargeLibraryAfterRestart"] = capacity_original_observation(profile, args.out / "native-capacity-after-restart.log")
+                require(report["nativeLargeLibraryAfterRestart"]["normalizedRecords"] == report["originalLargeLibraryRetention"]["normalizedRecords"],
+                        "NATIVE_MEDIA_CAPACITY_RESTART_RECORD_COUNT_DIFFERS")
+                require(reads.media_snapshot(profile) == capacity_retained, "MEDIA_CAPACITY_ORACLE_CHANGED_NATIVE_BYTES")
+                report["allCapacityRecordsAndBytesRetainedAcrossRestart"] = True
             report.update(status="PASS", controlledNativeMediaPatchWorkloadQualified=True,
                 originalResponseMatched=True, updatedAtWithinRequest=True, mediaRetainedAfterLauncherRestart=True,
                 workspaceGenerationFenced=True, workspaceGenerationRetainedAfterRestart=True,
@@ -469,8 +580,11 @@ def main() -> int:
     parser.add_argument("--metadata-order-case", choices=["baseline", "top-level", "nested", "array", "truncated", "maximum-array"],
                         default="baseline")
     parser.add_argument("--field-case", choices=tuple(FIELD_PATCHES))
+    parser.add_argument("--large-library-case", action="store_true", help="Generate a legal144MB isolated library on the cloud runner only")
     args = parser.parse_args()
     require(not args.field_case or args.metadata_order_case == "baseline", "MEDIA_PATCH_CASE_SELECTION_CONFLICT")
+    require(not args.large_library_case or not args.field_case and args.metadata_order_case == "baseline",
+            "MEDIA_PATCH_CAPACITY_CASE_SELECTION_CONFLICT")
     PATCH = FIELD_PATCHES[args.field_case] if args.field_case else case_patch(args.metadata_order_case)
     args.out = args.out.resolve()
     args.out.mkdir(parents=True, exist_ok=True)
@@ -479,6 +593,7 @@ def main() -> int:
         "event": os.environ.get("GITHUB_EVENT_NAME"), "semanticStageReached": False,
         "metadataOrderCase": args.metadata_order_case,
         "fieldCase": args.field_case,
+        "largeLibraryCase": args.large_library_case,
         "nativePatchRequestStarted": False, "nativePatchReplyObserved": False,
         "controlledNativeMediaPatchWorkloadQualified": False, "offlineMediaFixtureSeeded": False,
         "workspaceGenerationFenced": False, "workspaceGenerationRetainedAfterRestart": False,
