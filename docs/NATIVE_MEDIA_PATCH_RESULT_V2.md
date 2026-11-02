@@ -41,7 +41,9 @@ immutable file and operation-directory synchronization. This source rule and
 process-restart tests do not establish power-loss recovery on every platform;
 Windows directory durability and platform crash qualification remain open.
 
-This additive protocol is not runtime qualification. Bulk library snapshots,
+The controlled HTTP parent qualification and current bulk candidate are recorded
+in [capacity compatibility](NATIVE_MEDIA_CAPACITY_COMPATIBILITY.md). The protocol
+alone is not runtime qualification. Bulk library snapshots,
 bounded normalization, old unsignable APPLYING recovery, processing/index crash
 cases, storage growth, disk-full/lease recovery and exact-source original
 coverage, CI, browser, desktop and Android gates remain required. Production

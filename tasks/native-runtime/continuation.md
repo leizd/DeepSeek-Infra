@@ -1,25 +1,36 @@
 <!-- native-20261102-compact-patch-result:start -->
-## 2026-11-02 compact PATCH result increment: verification pending
+## 2026-11-02 media record parent proof and bulk-streaming candidate
 
-The uploaded additive protocol `9ae7ec4fd0b51172d2072da3fb391da04a5b4f5f`
-and cloud source-generation run `41410815212` have passed the pinned descriptor,
-legacy request digest and four-file generated-source boundary. This is source
-generation only. The current implementation adds an explicit capability in the
-canonical admitted intent, a distinct strict v2 signature domain, two separate
-record/dispatch commitments, immutable original typed-record custody and
-256 KiB result chunks. v1 refusals, signatures, inline-size rules and old durable
-intent bytes remain supported. Go settles the original receipt before reading;
-interrupted result reads never retry the write. Tests include >4 MiB records,
-retention-window exclusion, mixed v1/v2 replay, expired original effects,
-corrupted/missing preparations, exact dispatch matching and TLS response loss.
-Native execution is cloud-only and is not yet qualified for this increment.
+Parent `52da66155658891ea2c4355de7f4bc05a46b609e`/run41434727285 actually passed
+original/native/retained HTTP200 for a4321460-byte typed record with a447-byte
+v2 signed envelope, full metadata, original claim and complete launcher restart.
+Clippy,1679Rust tests (one original Redis ignore),15crates, independent raw LCOV
+95108/115208=82.55329491007569% (original80%floor) and8targeted Go tests passed.
+Its mandatory144MB library case still returned503/EFFECT_UNKNOWN; the workflow
+failed. This is not fullGo95%/race/Android, current-source CI or promotion proof.
 
-The actual 144 MB original-HTTP200/native-HTTP503 `EFFECT_UNKNOWN` failure from
-`b8211a50` remains open. Bulk snapshot streaming, bounded normalization and
-record decoding, old unsignable APPLYING recovery, PROCESS/index crash cases,
-storage growth and complete exact-source CI/platform/coverage/cutover remain
-required. Original MCP pytest functionality remains unfinished without a Python
-production exception. Full product readiness remains **NOT_READY**.
+The unqualified candidate streams raw images/publication and uses a disk offset/
+digest record spool, preserving full EOF/last-key parsing, first match/delete-all,
+clock ordering and post-mutation1000 retention. Private schema2 validates old
+schema1+identity before additive migration; old rows/receipts remain byte-identical.
+RETAINING ownership precedes copies, PREPARED/SEALED commit atomically, and bounded
+fair retries persist progress across restarts and retire failed private preparations.
+Separate-connection startup/periodic maintenance retires idle images; terminal
+RPCs perform no cleanup or maintenance-gate wait. Signed terminal loading has no
+image filesystem dependency; raw-image retirement requires the original signed
+receipt and retained result custody, and GC errors never hide terminal outcomes.
+New tests cover these boundaries and100updates, but execution is pending. All
+original PROCESS/index crash and signability tests and actual capacity gate remain.
+
+Explicit export/downgrade/cross-version rollback, arbitrary record-width memory,
+Windows directory/power-loss behavior, old unsignable APPLYING recovery, current
+actual144MB success and full exact-source originalCI/coverage/platform/Evidence
+remain required. [Detailed boundaries](../../docs/NATIVE_MEDIA_CAPACITY_COMPATIBILITY.md).
+Original MCP pytest behavior remains unfinished under the unchanged no-production-
+Python requirement. All product/server/desktop/Android/background, authority,
+provider/Fleet/proof, zeroPython/serverTypeScript, security/performance/upgrade
+and complete cutover requirements remain ACTIVE/**NOT_READY**. No local native
+build, main merge, PR update, release or production-data operation is performed.
 
 <!-- native-20261102-compact-patch-result:end -->
 

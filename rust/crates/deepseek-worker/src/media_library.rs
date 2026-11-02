@@ -1,5 +1,9 @@
 //! Media library publication planning. No authority is granted by this module.
-use crate::media_values::{from_json_legacy, invalid, to_json};
+use crate::{
+    media_image::{Image, LibrarySource},
+    media_records::Records,
+    media_values::{from_json_legacy, invalid, to_json},
+};
 use deepseek_policy::{
     app_error::{AppError, codes},
     media_schema::normalize_media_record,
@@ -13,12 +17,11 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
     fs,
-    io::{Read, Write},
+    io::Write,
     path::{Path, PathBuf},
 };
 use tonic::Status;
 
-pub(super) const MAX_LIBRARY_BYTES: u64 = 128 * 1024 * 1024;
 pub(super) fn reject_links(path: &Path) -> Result<(), Status> {
     for ancestor in path.ancestors() {
         match fs::symlink_metadata(ancestor) {
@@ -43,25 +46,19 @@ pub(super) fn reject_links(path: &Path) -> Result<(), Status> {
 pub(super) fn library_path(root: &Path) -> PathBuf {
     root.join(".media").join("library.json")
 }
+pub(super) fn read_snapshot(root: &Path) -> Result<Image, Status> {
+    Image::capture(&library_path(root))
+}
+// Legacy row/test adapter. Current publication and reconciliation use images.
+#[cfg(test)]
 pub(super) fn read_library(root: &Path) -> Result<Vec<u8>, Status> {
-    let path = library_path(root);
-    reject_links(&path)?;
-    let file = match fs::File::open(&path) {
-        Ok(f) => f,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(_) => return Err(invalid()),
-    };
-    if !file.metadata().map_err(|_| invalid())?.is_file() {
-        return Err(invalid());
-    }
+    use std::io::Read as _;
+    let image = read_snapshot(root)?;
     let mut bytes = Vec::new();
-    file.take(MAX_LIBRARY_BYTES + 1)
+    image
+        .reader()?
         .read_to_end(&mut bytes)
         .map_err(|_| invalid())?;
-    if bytes.len() as u64 > MAX_LIBRARY_BYTES {
-        return Err(Status::resource_exhausted("MEDIA_LIBRARY_LIMIT"));
-    }
-    reject_links(&path)?;
     Ok(bytes)
 }
 pub(super) fn sha(bytes: &[u8]) -> Vec<u8> {
@@ -89,7 +86,10 @@ pub(super) fn refusal(
     result.patched = None;
     result
 }
-pub(super) fn outcome(claim: &MediaPatchClaim, before: &[u8]) -> Result<MediaPatchOutcome, Status> {
+pub(super) fn outcome(
+    claim: &MediaPatchClaim,
+    before: &(impl LibrarySource + ?Sized),
+) -> Result<MediaPatchOutcome, Status> {
     let intent = claim.intent.as_ref().ok_or_else(invalid)?;
     Ok(MediaPatchOutcome {
         schema_version: 1,
@@ -101,7 +101,7 @@ pub(super) fn outcome(claim: &MediaPatchClaim, before: &[u8]) -> Result<MediaPat
         http_status: 200,
         error_code: String::new(),
         error_message: String::new(),
-        before_sha256: sha(before),
+        before_sha256: before.identity().sha256,
         after_sha256: Vec::new(),
         signature: Vec::new(),
         fleet_id: claim.fleet_id.clone(),
@@ -117,8 +117,8 @@ pub(super) fn outcome(claim: &MediaPatchClaim, before: &[u8]) -> Result<MediaPat
 pub(super) fn plan(
     root: &Path,
     claim: &MediaPatchClaim,
-    before: &[u8],
-) -> Result<(MediaPatchOutcome, Option<Vec<u8>>), Status> {
+    before: &(impl LibrarySource + ?Sized),
+) -> Result<(MediaPatchOutcome, Option<Image>), Status> {
     let intent = claim.intent.as_ref().ok_or_else(invalid)?;
     let mut result = outcome(claim, before)?;
     if intent.kind == MediaMutationKind::Delete as i32 {
@@ -134,35 +134,36 @@ pub(super) fn plan(
                 ));
             }
         };
-        let mut items = normalized_items(before);
-        let length = items.len();
-        items.retain(|item| item["mediaId"].as_str() != Some(safe.as_str()));
-        if items.len() == length {
+        let mut items = normalized_records(before)?;
+        if items.remove_all(&safe)? == 0 {
             // Missing records do not clean orphan files, normalize the store or
             // advance its generation. Preserve the original delete=0 behavior.
-            result.after_sha256 = sha(before);
+            result.after_sha256 = before.identity().sha256;
             return Ok((result, None));
         }
         crate::media_delete::preflight(root, &safe)?;
-        if items.len() > 1000 {
-            items.drain(..items.len() - 1000);
-        }
         result.deleted_count = 1;
         return planned_bytes(claim, result, items);
     }
     if intent.kind != MediaMutationKind::Unspecified as i32 || intent.patch.is_none() {
         return Err(invalid());
     }
-    let prepared = prepare_media(root, claim, before);
-    let (public, items) = match prepared {
+    let safe = match validate_workspace_id(&intent.media_id, "media id") {
         Ok(v) => v,
-        Err(error) => {
-            return Ok((
-                refusal(result, error.status as u32, error.code, &error.message),
-                None,
-            ));
-        }
+        Err(e) => return Ok((refusal(result, e.status as u32, e.code, &e.message), None)),
     };
+    let mut items = normalized_records(before)?;
+    let Some((index, existing)) = items.first(&safe)? else {
+        return Ok((
+            refusal(result, 404, codes::NOT_FOUND, "Media not found"),
+            None,
+        ));
+    };
+    let (public, stored) = match prepare_media(root, claim, &existing) {
+        Ok(value) => value,
+        Err(e) => return Ok((refusal(result, e.status as u32, e.code, &e.message), None)),
+    };
+    items.replace(index, &stored)?;
     let value = from_json_legacy(&public)?;
     result.media = match value.kind {
         Some(Kind::ObjectValue(object)) => Some(object),
@@ -174,27 +175,39 @@ pub(super) fn plan(
 pub(super) fn planned_bytes(
     claim: &MediaPatchClaim,
     mut result: MediaPatchOutcome,
-    items: Vec<Value>,
-) -> Result<(MediaPatchOutcome, Option<Vec<u8>>), Status> {
+    items: Records,
+) -> Result<(MediaPatchOutcome, Option<Image>), Status> {
     let intent = claim.intent.as_ref().ok_or_else(invalid)?;
-    // This internal commit witness is ignored by original public readers. It
-    // proves publication of this exact original operation after a process death;
-    // mere absence or equality with the old file can never prove non-application.
-    let document = json!({"schemaVersion":"media-library.v1","media":items,"nativePublication":{"schemaVersion":1,"operationId":intent.operation_id,"actionId":claim.fence.as_ref().ok_or_else(invalid)?.action_id,"executionEpoch":claim.fence.as_ref().ok_or_else(invalid)?.execution_epoch,"requestSha256":claim.request_sha256}});
-    let bytes = serde_json::to_vec_pretty(&document).map_err(|_| invalid())?;
-    if bytes.len() as u64 > MAX_LIBRARY_BYTES {
-        return Err(Status::resource_exhausted("MEDIA_LIBRARY_LIMIT"));
-    }
-    result.after_sha256 = sha(&bytes);
-    // PATCH's complete public record is retained in Rust custody before the
-    // journal checks the final compact RPC envelope. Other result shapes keep
-    // their existing transport check here.
+    let fence = claim.fence.as_ref().ok_or_else(invalid)?;
+    let publication = json!({"schemaVersion":1,"operationId":intent.operation_id,"actionId":fence.action_id,"executionEpoch":fence.execution_epoch,"requestSha256":claim.request_sha256});
+    let image = image_from_records(&items, &publication)?;
+    result.after_sha256 = image.identity().sha256;
     if result.media.is_none() && result.encoded_len() > 4 * 1024 * 1024 {
         return Err(Status::resource_exhausted("MEDIA_MESSAGE_LIMIT"));
     }
-    Ok((result, Some(bytes)))
+    Ok((result, Some(image)))
 }
 
+pub(super) fn image_from_records(items: &Records, publication: &Value) -> Result<Image, Status> {
+    Image::build(|out| {
+        out.write_all(br#"{"schemaVersion":"media-library.v1","media":"#)
+            .map_err(|_| invalid())?;
+        items.write_retained_array(out)?;
+        out.write_all(br#","nativePublication":"#)
+            .map_err(|_| invalid())?;
+        serde_json::to_writer(&mut *out, &publication).map_err(|_| invalid())?;
+        out.write_all(b"}").map_err(|_| invalid())?;
+        Ok(())
+    })
+}
+
+pub(super) fn normalized_records(
+    before: &(impl LibrarySource + ?Sized),
+) -> Result<Records, Status> {
+    Records::from_reader(before.reader()?)
+}
+// Only compatibility tests need a materialized normalized array.
+#[cfg(test)]
 pub(super) fn normalized_items(before: &[u8]) -> Vec<Value> {
     let document: Value = serde_json::from_slice(before).unwrap_or(Value::Null);
     document
@@ -202,28 +215,19 @@ pub(super) fn normalized_items(before: &[u8]) -> Vec<Value> {
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-        .filter(|value| value.is_object())
-        .filter_map(|value| normalize_media_record(value).ok())
+        .filter(|v| v.is_object())
+        .filter_map(|v| normalize_media_record(v).ok())
         .collect()
 }
 fn prepare_media(
     root: &Path,
     claim: &MediaPatchClaim,
-    before: &[u8],
-) -> Result<(Value, Vec<Value>), AppError> {
+    existing: &Value,
+) -> Result<(Value, Value), AppError> {
     let bad = || AppError::invalid_payload("Invalid media update");
     let intent = claim.intent.as_ref().ok_or_else(bad)?;
     let safe = validate_workspace_id(&intent.media_id, "media id")?;
-    let mut items = normalized_items(before);
-    let index = items
-        .iter()
-        .position(|v| v["mediaId"].as_str() == Some(&safe))
-        .ok_or_else(|| AppError {
-            status: 404,
-            code: codes::NOT_FOUND,
-            message: "Media not found".into(),
-        })?;
-    let mut merged = items[index].clone();
+    let mut merged = existing.clone();
     let patch = intent.patch.as_ref().ok_or_else(bad)?;
     for (key, value) in [
         ("title", patch.title.as_ref()),
@@ -259,11 +263,7 @@ fn prepare_media(
             AppError::invalid_payload("Media file must stay inside the media library")
         })?;
     }
-    items[index] = normalized.clone();
-    if items.len() > 1000 {
-        items.drain(..items.len() - 1000);
-    }
-    Ok((normalize_media_record(&normalized)?, items))
+    Ok((normalize_media_record(&normalized)?, normalized))
 }
 fn sync_published(file: &fs::File, directory: &Path) -> Result<(), Status> {
     file.sync_all().map_err(|_| invalid())?;
@@ -278,57 +278,54 @@ fn sync_published(file: &fs::File, directory: &Path) -> Result<(), Status> {
 
 // The journal caller holds the exclusive mutation gate and has already matched
 // the original after-image. Synchronize that retained file, never republish it.
-pub(super) fn confirm_publication(root: &Path, expected: &[u8]) -> Result<(), Status> {
+pub(super) fn confirm_publication(
+    root: &Path,
+    expected: &(impl LibrarySource + ?Sized),
+) -> Result<(), Status> {
     let path = library_path(root);
     let directory = path.parent().ok_or_else(invalid)?;
     reject_links(&path)?;
     let mut options = fs::OpenOptions::new();
     options.read(true);
-    // Windows FlushFileBuffers requires a handle with GENERIC_WRITE, even
-    // though this recovery path never writes or truncates any file bytes.
     #[cfg(windows)]
     options.write(true);
     let file = options.open(&path).map_err(|_| invalid())?;
     if !file.metadata().map_err(|_| invalid())?.is_file() {
         return Err(invalid());
     }
-    let mut retained = Vec::new();
-    (&file)
-        .take(MAX_LIBRARY_BYTES + 1)
-        .read_to_end(&mut retained)
-        .map_err(|_| invalid())?;
-    if retained.len() as u64 > MAX_LIBRARY_BYTES || retained.as_slice() != expected {
+    if !crate::media_image::same(&read_snapshot(root)?, expected)? {
         return Err(Status::unavailable("EFFECT_UNKNOWN"));
     }
     sync_published(&file, directory)?;
-    if read_library(root)? != expected {
+    if !crate::media_image::same(&read_snapshot(root)?, expected)? {
         return Err(Status::unavailable("EFFECT_UNKNOWN"));
     }
     Ok(())
 }
 
-pub(super) fn publish(root: &Path, bytes: &[u8], deadline: Option<i64>) -> Result<bool, Status> {
+pub(super) fn publish(
+    root: &Path,
+    bytes: &(impl LibrarySource + ?Sized),
+    deadline: Option<i64>,
+) -> Result<bool, Status> {
     let path = library_path(root);
     let directory = path.parent().ok_or_else(invalid)?;
     reject_links(&path)?;
-    fs::create_dir_all(directory).map_err(|_| invalid())?;
+    crate::media_image::ensure_parent(&path)?;
     reject_links(&path)?;
-    // tempfile 3.27 persist atomically replaces an existing destination. Its
-    // contract requires explicit file and containing-directory synchronization:
-    // https://docs.rs/tempfile/3.27.0/tempfile/struct.NamedTempFile.html#method.persist
     let mut temporary = tempfile::NamedTempFile::new_in(directory).map_err(|_| invalid())?;
-    temporary.write_all(bytes).map_err(|_| invalid())?;
+    std::io::copy(&mut bytes.reader()?, temporary.as_file_mut()).map_err(|_| invalid())?;
     temporary.as_file().sync_all().map_err(|_| invalid())?;
     reject_links(&path)?;
+    // The final deadline check remains immediately before atomic replacement.
     if let Some(deadline) = deadline {
-        let now = crate::service::unix_now_seconds().map_err(|_| invalid())?;
-        if now >= deadline {
+        if crate::service::unix_now_seconds().map_err(|_| invalid())? >= deadline {
             return Ok(false);
         }
     }
     let file = temporary.persist(&path).map_err(|_| invalid())?;
     sync_published(&file, directory)?;
-    if read_library(root)? != bytes {
+    if !crate::media_image::same(&read_snapshot(root)?, bytes)? {
         return Err(Status::unavailable("EFFECT_UNKNOWN"));
     }
     Ok(true)

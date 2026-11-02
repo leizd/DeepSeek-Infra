@@ -1,6 +1,8 @@
 //! Durable Rust custody for one library publication, its original fence and receipt.
 use crate::{
-    media_library::{self, read_library, reject_links, sha},
+    media_image::{Image, LibrarySource},
+    media_image_custody,
+    media_library::{self, read_snapshot, reject_links, sha},
     media_values::invalid,
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -21,6 +23,9 @@ use std::{
 };
 use tonic::Status;
 
+#[cfg(test)]
+use crate::media_library::read_library;
+
 const APPLICATION_ID: i64 = 0x44534d50;
 const SCHEMA: &[&str] = &[
     "CREATE TABLE media_identity (id INTEGER PRIMARY KEY CHECK(id=1), workspace TEXT NOT NULL, signer TEXT NOT NULL, fleet TEXT NOT NULL, environment TEXT NOT NULL) STRICT",
@@ -38,6 +43,10 @@ pub(crate) struct MediaJournal {
     root: PathBuf,
     public_key: String,
     creation_staging: PathBuf,
+    image_root: PathBuf,
+    state_root: PathBuf,
+    fleet: String,
+    environment: String,
 }
 pub(super) struct Prepared {
     pub digest: Vec<u8>,
@@ -46,8 +55,9 @@ pub(super) struct Prepared {
 struct Retained {
     claim: Vec<u8>,
     digest: Vec<u8>,
-    before: Vec<u8>,
-    after: Option<Vec<u8>>,
+    before: Image,
+    after: Option<Image>,
+    external_images: bool,
     planned: MediaPatchOutcome,
     state: String,
     outcome: Option<Vec<u8>>,
@@ -69,7 +79,7 @@ impl MediaJournal {
         let root = fs::canonicalize(root).map_err(|_| invalid())?;
         let path = state.join("rust-worker/media-effects.sqlite3");
         reject_links(&path)?;
-        fs::create_dir_all(path.parent().ok_or_else(invalid)?).map_err(|_| invalid())?;
+        crate::media_image::ensure_parent(&path)?;
         reject_links(&path)?;
         let new = match fs::OpenOptions::new()
             .write(true)
@@ -78,6 +88,7 @@ impl MediaJournal {
         {
             Ok(f) => {
                 f.sync_all().map_err(|_| invalid())?;
+                crate::media_image::sync_directory(path.parent().ok_or_else(invalid)?)?;
                 true
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => false,
@@ -136,9 +147,12 @@ impl MediaJournal {
                 .map_err(|_| invalid())?
         };
         let mut expected: Vec<String> = SCHEMA.iter().map(|s| s.to_string()).collect();
+        if version == 2 {
+            expected.extend(media_image_custody::SCHEMA.iter().map(|s| s.to_string()));
+        }
         actual.sort();
         expected.sort();
-        if version != 1 || application != APPLICATION_ID || actual != expected {
+        if ![1, 2].contains(&version) || application != APPLICATION_ID || actual != expected {
             return Err(invalid());
         }
         let identity: (String, String, String, String) = tx
@@ -158,12 +172,28 @@ impl MediaJournal {
         {
             return Err(invalid());
         }
+        // Validate exact old schema AND identity before the transactional,
+        // additive private-journal migration. Historical v1 rows are untouched.
+        if version == 1 {
+            for statement in media_image_custody::SCHEMA {
+                tx.execute(statement, []).map_err(|_| invalid())?;
+            }
+            tx.pragma_update(None, "user_version", 2)
+                .map_err(|_| invalid())?;
+        }
         tx.commit().map_err(|_| invalid())?;
+        let image_root = fs::canonicalize(path.parent().ok_or_else(invalid)?)
+            .map_err(|_| invalid())?
+            .join("media-library-images");
         Ok(Self {
             connection,
             root,
             public_key: key.into(),
             creation_staging: state.join("rust-worker/media-create"),
+            image_root,
+            state_root: state.into(),
+            fleet: fleet.into(),
+            environment: environment.into(),
         })
     }
     pub(super) fn creation_staging(&self) -> &Path {
@@ -234,11 +264,27 @@ impl MediaJournal {
             return Err(invalid());
         }
 
+        // A sealed manifest, not a coincidental marker in legacy user bytes,
+        // selects codec2. Loading a terminal row never opens its raw images.
+        let manifest = media_image_custody::manifest(&self.connection, operation)?;
+        let external_images = manifest.is_some();
+        let (before, after) = if let Some(manifest) = manifest {
+            if manifest.claim != claim
+                || !matches!(manifest.phase.as_str(), "SEALED" | "COLLECTED")
+                || before.as_slice() != media_image_custody::MARKER
+                || after.as_deref() != manifest.after.as_ref().map(|_| media_image_custody::MARKER)
+            {
+                return Err(invalid());
+            }
+            media_image_custody::images(&self.image_root, &binding, manifest)?
+        } else {
+            (Image::Legacy(before), after.map(Image::Legacy))
+        };
         if digest != sha(&planned.encode_to_vec())
-            || planned.before_sha256 != sha(&before)
+            || planned.before_sha256 != before.identity().sha256
             || after
                 .as_ref()
-                .is_some_and(|bytes| planned.after_sha256 != sha(bytes))
+                .is_some_and(|image| planned.after_sha256 != image.identity().sha256)
             || planned.operation_id != operation
         {
             return Err(invalid());
@@ -248,6 +294,7 @@ impl MediaJournal {
             digest,
             before,
             after,
+            external_images,
             planned,
             state,
             outcome,
@@ -302,8 +349,6 @@ impl MediaJournal {
     }
     pub(super) fn prepare(&mut self, claim: &MediaPatchClaim) -> Result<Prepared, Status> {
         let intent = claim.intent.as_ref().ok_or_else(invalid)?;
-        let _gate = exclusive_gate(&self.root).map_err(|_| invalid())?;
-        assert_mutation_allowed(None, &self.root).map_err(|_| invalid())?;
         if let Some(row) = self.retained(&intent.operation_id)? {
             if row.claim != normalized_claim(claim) {
                 return Err(invalid());
@@ -313,7 +358,26 @@ impl MediaJournal {
                 terminal: self.terminal(&row)?,
             });
         }
-        let before = read_library(&self.root)?;
+        let _gate = exclusive_gate(&self.root).map_err(|_| invalid())?;
+        assert_mutation_allowed(None, &self.root).map_err(|_| invalid())?;
+        // Another worker may have prepared or settled while this one waited.
+        if let Some(row) = self.retained(&intent.operation_id)? {
+            if row.claim != normalized_claim(claim) {
+                return Err(invalid());
+            }
+            return Ok(Prepared {
+                digest: row.digest.clone(),
+                terminal: self.terminal(&row)?,
+            });
+        }
+        if self.active()?.is_some() {
+            return Err(Status::unavailable("MEDIA_PUBLICATION_UNRESOLVED"));
+        }
+        self.sweep_images_best_effort();
+        // A prior failed reservation for this exact operation must be retired
+        // before a fresh plan may reuse its deterministic private filenames.
+        self.collect_unsealed_images(&intent.operation_id)?;
+        let before = read_snapshot(&self.root)?;
         let (planned, after) = if intent.kind
             == deepseek_protocol::generated::deepseek::media::v1::MediaMutationKind::Process as i32
         {
@@ -330,23 +394,55 @@ impl MediaJournal {
             return Err(Status::resource_exhausted("MEDIA_MESSAGE_LIMIT"));
         }
         let digest = sha(&planned.encode_to_vec());
-        self.connection
+        media_image_custody::reserve(&self.connection, claim, &before, after.as_ref())?;
+        let result = self.store_prepared(claim, &before, after.as_ref(), &planned, &digest);
+        if result.is_err() {
+            // A failed/uncertain COMMIT may have sealed the operation. Cleanup
+            // inspects the durable phase and leaves any sealed images intact.
+            if let Err(error) = self.collect_unsealed_images(&intent.operation_id) {
+                eprintln!(
+                    "MEDIA_IMAGE_PREPARATION_GC_DEFERRED operation={:?} code={:?}",
+                    intent.operation_id,
+                    error.code()
+                );
+            }
+        }
+        result?;
+        Ok(Prepared {
+            digest,
+            terminal: None,
+        })
+    }
+    fn store_prepared(
+        &mut self,
+        claim: &MediaPatchClaim,
+        before: &Image,
+        after: Option<&Image>,
+        planned: &MediaPatchOutcome,
+        digest: &[u8],
+    ) -> Result<(), Status> {
+        let intent = claim.intent.as_ref().ok_or_else(invalid)?;
+        media_image_custody::retain(&self.image_root, claim, before, after)?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| invalid())?;
+        transaction
             .execute(
                 "INSERT INTO media_operations VALUES(?1,?2,?3,?4,?5,?6,'PREPARED',NULL)",
                 params![
                     intent.operation_id,
                     normalized_claim(claim),
                     digest,
-                    before,
-                    after,
+                    media_image_custody::MARKER,
+                    after.map(|_| media_image_custody::MARKER),
                     planned.encode_to_vec()
                 ],
             )
             .map_err(|_| Status::unavailable("MEDIA_PUBLICATION_UNRESOLVED"))?;
-        Ok(Prepared {
-            digest,
-            terminal: None,
-        })
+        media_image_custody::seal(&transaction, &intent.operation_id)?;
+        transaction.commit().map_err(|_| invalid())?;
+        Ok(())
     }
 
     pub(super) fn verify_original_claim(&self, claim: &MediaPatchClaim) -> Result<(), Status> {
@@ -357,6 +453,178 @@ impl MediaJournal {
             }
         }
         Ok(())
+    }
+
+    fn verify_images(row: &Retained) -> Result<(), Status> {
+        row.before.verify()?;
+        if let Some(after) = &row.after {
+            after.verify()?;
+        }
+        Ok(())
+    }
+
+    fn collect_terminal_images(&self, operation: &str) -> Result<(), Status> {
+        let row = self.retained(operation)?.ok_or_else(invalid)?;
+        if !row.external_images {
+            return Ok(());
+        }
+        let claim = MediaPatchClaim::decode(row.claim.as_slice()).map_err(|_| invalid())?;
+        // SQL state alone is never evidence that image custody may be retired.
+        let outcome = self.terminal(&row)?.ok_or_else(invalid)?;
+        let manifest =
+            media_image_custody::manifest(&self.connection, operation)?.ok_or_else(invalid)?;
+        let outcome_sha256 = sha(row.outcome.as_deref().ok_or_else(invalid)?);
+        if manifest.phase == "COLLECTED" {
+            if manifest.collected_outcome_sha256.as_deref() != Some(outcome_sha256.as_slice()) {
+                return Err(invalid());
+            }
+            return Ok(());
+        }
+        if outcome.state == MediaPatchEffectState::Applied as i32 {
+            if let Some(patched) = &outcome.patched {
+                crate::media_patch_result::open_record(&self.creation_staging, &claim, patched)?;
+            }
+            if outcome.created.is_some() {
+                crate::media_create::retained_preparation(
+                    &self.creation_staging,
+                    &claim,
+                    &outcome,
+                )?;
+            }
+            if outcome.processed.is_some() {
+                crate::media_process::retained(&self.creation_staging, &claim, &outcome)?;
+            }
+        }
+        media_image_custody::collect(&self.image_root, &claim)?;
+        let count = self.connection.execute(
+            "UPDATE media_image_manifests SET phase='COLLECTED',collected_outcome_sha256=?2 WHERE operation_id=?1 AND phase='SEALED'",
+            params![operation,outcome_sha256],
+        ).map_err(|_|invalid())?;
+        if count != 1 {
+            return Err(invalid());
+        }
+        Ok(())
+    }
+
+    fn collect_unsealed_images(&self, operation: &str) -> Result<(), Status> {
+        let Some(manifest) = media_image_custody::manifest(&self.connection, operation)? else {
+            return Ok(());
+        };
+        if manifest.phase != "RETAINING" {
+            return Ok(());
+        }
+        // RETAINING is positive private-preparation ownership. It cannot coexist
+        // with a durable operation: insertion and SEALED commit atomically.
+        // This branch never returns an effect result or permits another write.
+        if self
+            .connection
+            .query_row(
+                "SELECT 1 FROM media_operations WHERE operation_id=?1",
+                [operation],
+                |r| r.get::<_, i64>(0),
+            )
+            .optional()
+            .map_err(|_| invalid())?
+            .is_some()
+        {
+            return Err(invalid());
+        }
+        let claim = MediaPatchClaim::decode(manifest.claim.as_slice()).map_err(|_| invalid())?;
+        if claim
+            .intent
+            .as_ref()
+            .is_none_or(|i| i.operation_id != operation)
+        {
+            return Err(invalid());
+        }
+        media_image_custody::collect(&self.image_root, &claim)?;
+        let count = self.connection.execute(
+            "DELETE FROM media_image_manifests WHERE operation_id=?1 AND phase='RETAINING' AND NOT EXISTS(SELECT 1 FROM media_operations WHERE operation_id=?1)",
+            [operation],
+        ).map_err(|_|invalid())?;
+        if count != 1 {
+            return Err(invalid());
+        }
+        Ok(())
+    }
+
+    fn sweep_images_best_effort(&self) {
+        for phase in ["RETAINING", "SEALED"] {
+            let operations = (|| {
+                let cursor: String = self
+                    .connection
+                    .query_row(
+                        "SELECT operation_id FROM media_image_gc_cursors WHERE phase=?1",
+                        [phase],
+                        |r| r.get(0),
+                    )
+                    .optional()
+                    .map_err(|_| invalid())?
+                    .unwrap_or_default();
+                let pending = media_image_custody::pending(&self.connection, phase, &cursor)?;
+                if pending.is_empty() && !cursor.is_empty() {
+                    media_image_custody::pending(&self.connection, phase, "")
+                } else {
+                    Ok(pending)
+                }
+            })();
+            match operations {
+                Err(error) => eprintln!("MEDIA_IMAGE_GC_SWEEP_DEFERRED code={:?}", error.code()),
+                Ok(operations) => {
+                    for operation in operations {
+                        // Persist progress before the fallible filesystem work.
+                        // Restarting after a stalled/failed first batch must
+                        // still give later cleanable preparations their turn.
+                        if let Err(error) = self.connection.execute("INSERT INTO media_image_gc_cursors VALUES(?1,?2) ON CONFLICT(phase) DO UPDATE SET operation_id=excluded.operation_id",params![phase,operation]) {
+                            eprintln!("MEDIA_IMAGE_GC_CURSOR_DEFERRED code={:?}", error.sqlite_error_code());
+                            break;
+                        }
+                        let result = if phase == "RETAINING" {
+                            self.collect_unsealed_images(&operation)
+                        } else {
+                            self.collect_terminal_images(&operation)
+                        };
+                        if let Err(error) = result {
+                            eprintln!(
+                                "MEDIA_IMAGE_GC_DEFERRED operation={operation:?} code={:?}",
+                                error.code()
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+    pub(crate) fn start_image_maintenance(&self) -> tokio::task::JoinHandle<()> {
+        let root = self.root.clone();
+        let state = self.state_root.clone();
+        let public_key = self.public_key.clone();
+        let fleet = self.fleet.clone();
+        let environment = self.environment.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(30));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                interval.tick().await; // includes one gated startup sweep
+                let (root, state, public_key, fleet, environment) = (
+                    root.clone(),
+                    state.clone(),
+                    public_key.clone(),
+                    fleet.clone(),
+                    environment.clone(),
+                );
+                let result = tokio::task::spawn_blocking(move || -> Result<(), Status> {
+                    let journal = Self::open(&root, &state, &public_key, &fleet, &environment)?;
+                    let _gate = exclusive_gate(&root).map_err(|_| invalid())?;
+                    journal.sweep_images_best_effort();
+                    Ok(())
+                })
+                .await;
+                if !matches!(result, Ok(Ok(()))) {
+                    eprintln!("MEDIA_IMAGE_MAINTENANCE_DEFERRED");
+                }
+            }
+        })
     }
 
     pub(super) fn patched_record(
@@ -494,6 +762,13 @@ impl MediaJournal {
         key: &ControlSigningKey,
     ) -> Result<MediaPatchOutcome, Status> {
         let operation = &claim.intent.as_ref().ok_or_else(invalid)?.operation_id;
+        let row = self.retained(operation)?.ok_or_else(invalid)?;
+        if row.claim != normalized_claim(claim) || row.digest != digest {
+            return Err(invalid());
+        }
+        if let Some(result) = self.terminal(&row)? {
+            return Ok(result);
+        }
         let _gate = exclusive_gate(&self.root).map_err(|_| invalid())?;
         assert_mutation_allowed(None, &self.root).map_err(|_| invalid())?;
         let row = self.retained(operation)?.ok_or_else(invalid)?;
@@ -514,8 +789,9 @@ impl MediaJournal {
         if let Some(patched) = row.planned.patched.as_ref() {
             crate::media_patch_result::open_record(&self.creation_staging, claim, patched)?;
         }
+        Self::verify_images(&row)?;
         if let Some(after) = row.after.as_ref() {
-            if read_library(&self.root)? != row.before {
+            if !crate::media_image::same(&read_snapshot(&self.root)?, &row.before)? {
                 let refused = media_library::refusal(
                     row.planned,
                     409,
@@ -575,7 +851,7 @@ impl MediaJournal {
             self.settle(operation, "APPLYING", row.planned, key)
         } else {
             if row.planned.state == MediaPatchEffectState::Applied as i32
-                && read_library(&self.root)? != row.before
+                && !crate::media_image::same(&read_snapshot(&self.root)?, &row.before)?
             {
                 return self.settle(
                     operation,
@@ -601,7 +877,6 @@ impl MediaJournal {
         dispatch_confirmed: bool,
         key: &ControlSigningKey,
     ) -> Result<Option<MediaPatchOutcome>, Status> {
-        let _gate = exclusive_gate(&self.root).map_err(|_| invalid())?;
         let Some(row) = self.retained(operation)? else {
             return Ok(None);
         };
@@ -612,6 +887,27 @@ impl MediaJournal {
         if let Some(outcome) = self.terminal(&row)? {
             return Ok(Some(outcome));
         }
+        let _gate = exclusive_gate(&self.root).map_err(|_| invalid())?;
+        let row = self.retained(operation)?.ok_or_else(invalid)?;
+        let claim = MediaPatchClaim::decode(row.claim.as_slice()).map_err(|_| invalid())?;
+        if claim.fence.as_ref() != Some(fence) {
+            return Err(invalid());
+        }
+        if let Some(outcome) = self.terminal(&row)? {
+            return Ok(Some(outcome));
+        }
+        // Durable PREPARED plus the current original dispatch state positively
+        // proves the pre-publication phase. Missing images are not the proof.
+        if row.state == "PREPARED" && dispatch_confirmed {
+            let refused = media_library::refusal(
+                row.planned,
+                409,
+                "execution_interrupted",
+                "Media update stopped before publication",
+            );
+            return self.settle(operation, "PREPARED", refused, key).map(Some);
+        }
+        Self::verify_images(&row)?;
         if row.state == "APPLYING" && row.planned.processed.is_some() {
             let _reconciliation = mutation_scope(None, &self.root).map_err(|_| invalid())?;
             crate::media_process::publish(
@@ -648,11 +944,15 @@ impl MediaJournal {
                 .settle(operation, "APPLYING", row.planned, key)
                 .map(Some);
         }
-        if row.state == "APPLYING"
-            && row.after.as_ref().is_some_and(|after| {
-                read_library(&self.root).is_ok_and(|current| current == *after)
-            })
-        {
+        let final_visible = if row.state == "APPLYING" {
+            match row.after.as_ref() {
+                Some(after) => crate::media_image::same(&read_snapshot(&self.root)?, after)?,
+                None => false,
+            }
+        } else {
+            false
+        };
+        if final_visible {
             media_library::confirm_publication(&self.root, row.after.as_ref().ok_or_else(invalid)?)
                 .map_err(|_| Status::unavailable("EFFECT_UNKNOWN"))?;
             let _reconciliation = mutation_scope(None, &self.root).map_err(|_| invalid())?;
@@ -663,18 +963,6 @@ impl MediaJournal {
             return self
                 .settle(operation, "APPLYING", row.planned, key)
                 .map(Some);
-        }
-        // PREPARED positively proves the durable pre-publication phase. The same
-        // OS lock and SQL compare-and-swap prevent a holder of an earlier permit
-        // from writing after this conclusive abort.
-        if row.state == "PREPARED" && dispatch_confirmed {
-            let refused = media_library::refusal(
-                row.planned,
-                409,
-                "execution_interrupted",
-                "Media update stopped before publication",
-            );
-            return self.settle(operation, "PREPARED", refused, key).map(Some);
         }
         let mut unknown = row.planned;
         unknown.schema_version = 1;
@@ -695,6 +983,10 @@ impl MediaJournal {
 #[cfg(test)]
 #[path = "media_journal_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "media_image_journal_tests.rs"]
+mod image_tests;
 
 #[cfg(test)]
 #[path = "media_patch_result_tests.rs"]

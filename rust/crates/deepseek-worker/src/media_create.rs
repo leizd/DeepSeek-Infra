@@ -1,4 +1,5 @@
 //! Fenced creation content stays in Rust custody, outside Go control row bounds.
+use crate::media_image::{Image, LibrarySource};
 use crate::{WorkerRpcService, media_library, media_values};
 use deepseek_policy::{
     app_error::AppError,
@@ -375,8 +376,8 @@ pub(super) fn plan(
     root: &Path,
     staging: &Path,
     claim: &MediaPatchClaim,
-    before: &[u8],
-) -> Result<(MediaPatchOutcome, Option<Vec<u8>>), Status> {
+    before: &(impl LibrarySource + ?Sized),
+) -> Result<(MediaPatchOutcome, Option<Image>), Status> {
     let intent = claim.intent.as_ref().ok_or_else(invalid)?;
     let payload = retained_payload(staging, claim)?;
     let mut result = MediaPatchOutcome {
@@ -386,7 +387,7 @@ pub(super) fn plan(
         request_sha256: claim.request_sha256.clone(),
         state: MediaPatchEffectState::Applied as i32,
         http_status: 200,
-        before_sha256: media_library::sha(before),
+        before_sha256: before.identity().sha256,
         fleet_id: claim.fleet_id.clone(),
         environment: claim.environment.clone(),
         writer_fencing_token: claim.writer_fencing_token,
@@ -423,10 +424,8 @@ pub(super) fn plan(
         result.error_code = effect.final_error_code.clone();
         result.error_message = effect.final_error_message.clone();
     }
-    let mut items = media_library::normalized_items(before);
-    if items
-        .iter()
-        .any(|item| item["mediaId"].as_str() == Some(&intent.media_id))
+    let mut items = media_library::normalized_records(before)?;
+    if items.contains(&intent.media_id)?
         || root.join(".media/objects").join(&intent.media_id).exists()
     {
         return Ok((
@@ -450,14 +449,11 @@ pub(super) fn plan(
         preparation_sha256: media_library::sha(&prepared_bytes),
         original_fence: claim.fence.clone(),
     });
-    items.push(media_values::to_json(
+    items.append(&media_values::to_json(
         &deepseek_protocol::generated::deepseek::media::v1::MediaValue {
             kind: Some(Kind::ObjectValue(record.clone())),
         },
-    )?);
-    if items.len() > 1000 {
-        items.drain(..items.len() - 1000);
-    }
+    )?)?;
     media_library::planned_bytes(claim, result, items)
 }
 

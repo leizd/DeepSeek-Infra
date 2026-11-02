@@ -182,7 +182,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(identity) = transport.tls_identity {
         builder = builder.tls_config(identity.server_tls_config())?;
     }
-    builder
+    let media_maintenance = service.start_media_image_maintenance()?;
+    let result = builder
         .add_service(ControlSignerBootstrapServer::new(service.clone()))
         .add_service(NativeOriginCustodyServer::new(service.clone()))
         .add_service(ControlSignerServer::new(service.clone()))
@@ -201,7 +202,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .serve_with_shutdown(address, async {
             let _ = tokio::signal::ctrl_c().await;
         })
-        .await?;
+        .await;
+    if let Some(task) = media_maintenance {
+        task.abort();
+    }
+    result?;
     Ok(())
 }
 

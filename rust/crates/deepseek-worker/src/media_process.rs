@@ -1,5 +1,6 @@
 //! Standalone processing retains the existing identity and source. It never
 //! stages a new CREATE or repairs a missing source by copying retained bytes.
+use crate::media_image::{Image, LibrarySource};
 use crate::{media_create, media_library, media_process_index, media_processing, media_values};
 use deepseek_policy::{
     core_utils::{python_truthy, text_or_empty},
@@ -125,8 +126,8 @@ pub(super) fn plan(
     root: &Path,
     staging: &Path,
     claim: &MediaPatchClaim,
-    before: &[u8],
-) -> Result<(MediaPatchOutcome, Option<Vec<u8>>), Status> {
+    before: &(impl LibrarySource + ?Sized),
+) -> Result<(MediaPatchOutcome, Option<Image>), Status> {
     let intent = claim.intent.as_ref().ok_or_else(invalid)?;
     let options = intent.process.as_ref().ok_or_else(invalid)?;
     if intent.kind != MediaMutationKind::Process as i32
@@ -146,17 +147,14 @@ pub(super) fn plan(
             ));
         }
     };
-    let mut items = media_library::normalized_items(before);
-    let Some(position) = items
-        .iter()
-        .position(|v| v["mediaId"].as_str() == Some(&id))
-    else {
+    let mut items = media_library::normalized_records(before)?;
+    let Some((position, original)) = items.first(&id)? else {
         return Ok((
             media_library::refusal(outcome, 404, "not_found", "Media not found"),
             None,
         ));
     };
-    let original = &items[position];
+    let original = &original;
     let relative = source_relative(original)?;
     let (source_present, source_bytes) = source(root, &relative)?;
     let source_sha256 = media_library::sha(&source_bytes);
@@ -226,10 +224,7 @@ pub(super) fn plan(
         &bytes,
         MAX_PREPARATION_BYTES,
     )?;
-    items[position] = value(record)?;
-    if items.len() > 1000 {
-        items.drain(..items.len() - 1000);
-    }
+    items.replace(position, &value(record)?)?;
     media_library::planned_bytes(claim, outcome, items)
 }
 
@@ -351,8 +346,8 @@ pub(super) fn publish(
     staging: &Path,
     claim: &MediaPatchClaim,
     outcome: &MediaPatchOutcome,
-    before: &[u8],
-    after: &[u8],
+    before: &(impl LibrarySource + ?Sized),
+    after: &(impl LibrarySource + ?Sized),
     initial: bool,
 ) -> Result<bool, Status> {
     let prepared = retained(staging, claim, outcome)?;
@@ -360,10 +355,10 @@ pub(super) fn publish(
     let effect = effects.processing.as_ref().ok_or_else(unknown)?;
     let id = &claim.intent.as_ref().ok_or_else(unknown)?.media_id;
     let processing = media_processing::intermediate(after, effect, id)?;
-    let current = media_library::read_library(root)?;
-    let final_published = current == after;
-    if !final_published && current != processing {
-        if !initial || current != before {
+    let current = media_library::read_snapshot(root)?;
+    let final_published = crate::media_image::same(&current, after)?;
+    if !final_published && !crate::media_image::same(&current, &processing)? {
+        if !initial || !crate::media_image::same(&current, before)? {
             return Err(unknown());
         }
         if !media_library::publish(root, &processing, Some(claim.lease_until_unix))

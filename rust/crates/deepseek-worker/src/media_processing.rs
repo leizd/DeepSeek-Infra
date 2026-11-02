@@ -3,6 +3,10 @@
 //! partial write remains unknown until its retained bytes/transaction are read
 //! and confirmed; absence never grants a second business request.
 use crate::{media_create, media_library, media_values};
+use crate::{
+    media_image::{Image, LibrarySource},
+    media_records::Records,
+};
 use deepseek_policy::{
     core_utils::utc_now_iso,
     entropy::{Entropy, SystemEntropy},
@@ -260,19 +264,37 @@ pub(super) fn validate(
 }
 
 pub(super) fn intermediate(
-    after: &[u8],
+    after: &(impl LibrarySource + ?Sized),
     effect: &MediaProcessingPreparation,
     id: &str,
-) -> Result<Vec<u8>, Status> {
-    let mut document: Value = serde_json::from_slice(after).map_err(|_| unknown())?;
-    let items = document["media"].as_array_mut().ok_or_else(unknown)?;
-    let item = items
-        .iter_mut()
-        .find(|item| item["mediaId"].as_str() == Some(id))
-        .ok_or_else(unknown)?;
-    *item = value(effect.processing_record.as_ref().ok_or_else(unknown)?)?;
-    document["nativePublication"]["phase"] = json!("PROCESSING");
-    serde_json::to_vec_pretty(&document).map_err(|_| unknown())
+) -> Result<Image, Status> {
+    if let Some(bytes) = after.legacy_bytes() {
+        let mut document: Value = serde_json::from_slice(bytes).map_err(|_| unknown())?;
+        let items = document["media"].as_array_mut().ok_or_else(unknown)?;
+        let item = items
+            .iter_mut()
+            .find(|item| item["mediaId"].as_str() == Some(id))
+            .ok_or_else(unknown)?;
+        *item = value(effect.processing_record.as_ref().ok_or_else(unknown)?)?;
+        document["nativePublication"]["phase"] = json!("PROCESSING");
+        return serde_json::to_vec_pretty(&document)
+            .map(Image::Legacy)
+            .map_err(|_| unknown());
+    }
+    let mut items = Records::from_image(after.reader()?)?;
+    let Some((index, _)) = items.first(id)? else {
+        return Err(unknown());
+    };
+    items.replace(
+        index,
+        &value(effect.processing_record.as_ref().ok_or_else(unknown)?)?,
+    )?;
+    let mut publication = items.publication.take().ok_or_else(unknown)?;
+    if !publication.is_object() {
+        return Err(unknown());
+    }
+    publication["phase"] = json!("PROCESSING");
+    media_library::image_from_records(&items, &publication)
 }
 
 pub(super) fn schema(
@@ -527,8 +549,8 @@ pub(super) fn publish(
     staging: &Path,
     claim: &MediaPatchClaim,
     outcome: &MediaPatchOutcome,
-    before: &[u8],
-    after: &[u8],
+    before: &(impl LibrarySource + ?Sized),
+    after: &(impl LibrarySource + ?Sized),
     initial: bool,
 ) -> Result<bool, Status> {
     let prepared = media_create::retained_preparation(staging, claim, outcome)?;
@@ -536,10 +558,10 @@ pub(super) fn publish(
     let effect = prepared.processing.as_ref().ok_or_else(unknown)?;
     let id = &claim.intent.as_ref().ok_or_else(unknown)?.media_id;
     let processing = intermediate(after, effect, id)?;
-    let current = media_library::read_library(root)?;
-    let final_published = current == after;
-    if !final_published && current != processing {
-        if !initial || current != before {
+    let current = media_library::read_snapshot(root)?;
+    let final_published = crate::media_image::same(&current, after)?;
+    if !final_published && !crate::media_image::same(&current, &processing)? {
+        if !initial || !crate::media_image::same(&current, before)? {
             return Err(unknown());
         }
         if !media_library::publish(root, &processing, Some(claim.lease_until_unix))
