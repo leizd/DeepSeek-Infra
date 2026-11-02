@@ -1,3 +1,31 @@
+# Current checkpoint: validate the final receipt before media publication, 2026-11-02
+
+Parent70df's actual legal large-library HTTP200-versus-native503/EFFECT_UNKNOWN
+RED is preserved. A fresh-context review identified a second boundary: plans
+permit4MiB but the original signer permits2MiB and was called after publication.
+Parente6a76058/run41402282756/job125136509045 actually reaches the real-journal
+regression: the original signer rejects the plan and publication returns error,
+but library SHA changes16be32c0to72a46e69. The original raw log and exact
+source are preserved; this is physical-write runtimeRED, not a compile failure.
+
+This child extracts the exact existing signer validation/message builder and
+uses it before APPLYING, workspace generation or library publication. The
+original validation block,2MiB bound, signing domain, signed bytes, protobuf,
+identity/fence checks and final post-effect signing remain. Validation returns
+no signature. The regression is byte-unchanged; all old tests/corpora and the
+mandatory large-library process case remain. Native proof is still pending.
+
+This is a required safety prerequisite, not large-record or whole-library
+capacity completion. Strict compact-result custody/typed reads must restore
+legal large-record success; bounded images, explicit reversible legacy-journal
+migration, sealed chunks, deterministic PROCESSING recovery, parser/retention
+parity and measured storage/memory/disk-full/lease-expiry behavior remain open.
+All original full server/desktop/Android/background features, authority/recovery/
+cutover/provider/Fleet, originalMCP, zeroPython/serverTypeScript, platform/
+upgrade/backup/security/performance and exactCI/Evidence remain ACTIVE/NOT_READY.
+No native build runs locally; original163dirtyentries/HEAD/index/data are
+preserved. NoPR/mainmerge/release or realproduction operation is performed.
+
 # Current checkpoint: reproduce unsignable media publication before repair, 2026-11-02
 
 The actual large-library process RED70df4d57/run41390652958 preserves original

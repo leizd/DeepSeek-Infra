@@ -63,3 +63,29 @@ generation, PREPARED state and original signed-query closure. Runtime failure
 is unproven until this source's actual cloud result exists. The repair must use
 the same validator before publication without signing early; strict compact
 results and legal large-record success remain required. **NOT_READY**.
+
+
+## Publication preflight candidate
+
+The candidate shares the exact existing purpose-bound validation/message
+builder between validation and signing. Before entering APPLYING, changing
+workspace generation or publishing bytes, the journal checks the real signing
+key's fleet/environment binding, original envelope, size and result shape.
+This call issues no receipt. Actual signing remains after confirmed effects.
+The original validation block, 2 MiB limit, v1 domain and bytes are unchanged.
+
+The actual-journal regression remains byte-identical. It must prove unchanged
+library hashes/generation, PREPARED state and the original signed-query closure
+for the unsignable plan. Runtime qualification is pending. This prerequisite
+still leaves legal large-record success, opaque compact results/typed reads,
+large-library streaming, reversible journal migration and complete recovery
+unqualified. **NOT_READY**.
+
+
+The original regression has now actually failed at source `e6a76058`,
+[run41402282756](https://github.com/leizd/DeepSeek-Infra/actions/runs/41402282756),
+job125136509045. Earlier size/signer/error assertions succeeded, then the real
+published-library SHA differed from the original. The raw log and both hashes
+are preserved. This confirms the physical publication failure in the journal
+fixture; it is not a public-HTTP or Go-admission proof. The candidate must pass
+this exact unchanged test before its safety behavior is qualified.

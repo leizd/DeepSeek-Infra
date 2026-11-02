@@ -4,7 +4,23 @@ use deepseek_protocol::generated::deepseek::media::v1::{MediaPatchEffectState, M
 use prost::Message as _;
 
 impl ControlSigningKey {
+    /// Check the exact final signing envelope without issuing a receipt.
+    pub fn validate_media_patch_outcome(
+        &self,
+        outcome: &MediaPatchOutcome,
+    ) -> Result<(), FederationIdentityError> {
+        self.media_patch_outcome_message(outcome).map(|_| ())
+    }
+
     pub fn sign_media_patch_outcome(
+        &self,
+        outcome: &MediaPatchOutcome,
+    ) -> Result<Vec<u8>, FederationIdentityError> {
+        let message = self.media_patch_outcome_message(outcome)?;
+        Ok(self.key.sign(&message).to_bytes().to_vec())
+    }
+
+    fn media_patch_outcome_message(
         &self,
         outcome: &MediaPatchOutcome,
     ) -> Result<Vec<u8>, FederationIdentityError> {
@@ -97,6 +113,6 @@ impl ControlSigningKey {
         }
         let mut message = b"deepseek-infra:media-patch-outcome-v1\0".to_vec();
         message.extend(bytes);
-        Ok(self.key.sign(&message).to_bytes().to_vec())
+        Ok(message)
     }
 }

@@ -449,6 +449,11 @@ impl MediaJournal {
         if row.state != "PREPARED" {
             return Err(Status::unavailable("EFFECT_UNKNOWN"));
         }
+        // Do not enter APPLYING, advance generation or publish bytes when the
+        // same key would refuse the final purpose-bound receipt. Validation
+        // issues no signature; actual signing remains after confirmed effects.
+        key.validate_media_patch_outcome(&row.planned)
+            .map_err(|_| invalid())?;
         if let Some(after) = row.after.as_ref() {
             if read_library(&self.root)? != row.before {
                 let refused = media_library::refusal(
