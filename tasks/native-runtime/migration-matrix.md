@@ -1,3 +1,21 @@
+<!-- native-20261103-media-worker-optimized:start -->
+## Current measured media and CI slices, 2026-11-03
+
+Measured parent: `2dde10d72e7bd87b0a1103bc5602f406892633be`. The new worker
+optimization/contract-repair batch awaits its own cloud evidence. Earlier dated
+checkpoints are historical. The complete ownership matrix remains NOT_READY.
+
+| Capability slice | Exact observed parent scope | Current state and remaining gap |
+|---|---|---|
+| Streamed media, typed spool and compact PATCH | 1705 Rust passes; raw LCOV 96968/117325 = 82.649052%; same 144182145-byte request still timed out at 10.010559 s | Component proof only; legal request success, all-width memory and full recovery remain open |
+| Worker development workload | Capture 0.187387 s; raw validation/spooling 9.093471 s with optimization 1 | Measure optimization 3 in the same HTTP gate; checks stay enabled, coverage/diagnostic stay 0, release unchanged |
+| Windows media corpus | 35 original plus 29 added cases independently parsed from exact-source successful runtime logs | Controlled corpus only; full directory/power-loss and all desktop workflows remain open |
+| Windows/Mac controlled product | Six exact-source jobs passed, actual owned windows/file requests/retained restart reports independently verified | Controlled subset, not all product workflows, authority or complete OS qualification |
+| Android controlled workload | 70 instrumentation and 25 app-UID custody observations on five x86_64 emulator APIs | arm64 execution, all product features, authority and zero-Python workloads remain open |
+| Full source CI contracts | Python 3.12 failed two Windows-job hash assertions; 3.10/3.11 pytest failed; Go job still live at checkpoint | Bind only the approved additional step separately and preserve the original complete Windows-job hash; full CI/Evidence must pass on this new source |
+| Production migration and original MCP engine | Full scope retained without new exception | NOT_READY: all domains/providers/Fleet, export/downgrade/rollback, old unsignable effects, authority/cutover and original test engine remain unfinished |
+<!-- native-20261103-media-worker-optimized:end -->
+
 <!-- native-20261103-media-worker-profile:start -->
 ## Current measured media slices, 2026-11-03
 

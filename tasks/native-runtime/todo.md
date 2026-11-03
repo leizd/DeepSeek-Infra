@@ -1,3 +1,29 @@
+<!-- native-20261103-media-worker-optimized:start -->
+## Current work: worker phase optimization and frozen CI contracts, 2026-11-03
+
+Branch `codex/native-media-worker-optimized-20261103` is based on 2dde10d7 and awaits
+its own cloud qualification. Earlier checkpoints remain historical. NOT_READY.
+
+- [x] Independently verify parent 1705 Rust passes, one original Redis ignore and
+  raw LCOV 96968/117325 = 82.649052% with the unchanged 80% gate.
+- [x] Measure parent capture 0.187387 s and raw document validation/spooling
+  9.093471 s; retain the actual 10.010559 s HTTP timeout as EFFECT_UNKNOWN.
+- [x] Independently bind parent controlled Windows 35 original + 29 added media
+  cases, six Windows/Mac jobs, and Android 70 instrumentation + 25 custody cases.
+- [x] Reproduce both frozen Windows-job hash failures locally; prove that removing
+  only the separately bound additional media step recovers the original full job
+  hash. Repair the two contracts without changing the workflow or original hash.
+- [ ] Measure worker dev/test optimization 1 to 3 in the same actual 144 MB HTTP
+  request; keep coverage/diagnostic at 0, assertions and overflow checks enabled.
+- [ ] Qualify this exact source against complete Rust/Go corpora, original floors,
+  full CI/Evidence, platform and browser gates; preserve all failed-run evidence.
+- [ ] Complete export/import/downgrade/cross-version rollback, historical
+  unsignable APPLYING recovery, arbitrary-width memory, directory/power-loss
+  durability and full desktop/Android/device/user workloads.
+- [ ] Complete all retained domains, provider/Fleet custody/proof, production
+  authority/cutover/recovery, zero-Python workloads and the original MCP test engine.
+<!-- native-20261103-media-worker-optimized:end -->
+
 <!-- native-20261103-media-worker-profile:start -->
 ## Current work: real media capacity and platform scope, 2026-11-03
 

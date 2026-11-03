@@ -17,7 +17,15 @@ def workflow() -> dict[Any, Any]:
 
 def test_optional_macos_probe_preserves_the_complete_original_windows_job() -> None:
     value = workflow()
-    original = json.dumps(value["jobs"]["windows-app"], sort_keys=True, separators=(",", ":")).encode()
+    windows_job = value["jobs"]["windows-app"]
+    added = [step for step in windows_job["steps"]
+             if step.get("name") == "Verify streamed media images records compact results and digest corpus on Windows"]
+    assert len(added) == 1
+    # Bind the approved additional gate separately; preserve the original job's frozen hash.
+    extra = json.dumps(added[0], sort_keys=True, separators=(",", ":")).encode()
+    assert hashlib.sha256(extra).hexdigest() == "ee4475c1610cd1079cc79193157e6e2d13fb91bb737ec789911dcfb85b20e4fe"  # pragma: allowlist secret
+    original_job = dict(windows_job, steps=[step for step in windows_job["steps"] if step is not added[0]])
+    original = json.dumps(original_job, sort_keys=True, separators=(",", ":")).encode()
     # Public SHA256 of the original workflow structure, not a credential.
     assert hashlib.sha256(original).hexdigest() == "8108d2be47dea2b3ee06cd760950a5d338fecea0f2e68a881106f7870f4ac537"  # pragma: allowlist secret
     trigger = value.get("on", value.get(True))

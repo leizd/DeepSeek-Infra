@@ -105,13 +105,13 @@ opt-level = 3
 debug-assertions = true
 overflow-checks = true
 
-# After SHA-256 capture fell from 7.23 s to 0.194 s, the unchanged 144 MB
-# request still exhausted 10 s in document validation and raw-record spooling.
-# This generic parser/spool code is instantiated in the worker. Optimize its
-# dev/test build without changing source, limits or checks; measure again in
-# the original HTTP gate. Coverage and source debugging stay unoptimized.
+# At worker opt-level 1, the unchanged 144 MB request still timed out: raw
+# validation/spooling alone took 9.09 s after capture completed in 0.187 s.
+# Level 3 also prevents importing unoptimized shared monomorphized generics.
+# Measure the original HTTP gate again; source, limits and checks are unchanged.
+# Coverage and source debugging stay unoptimized.
 [profile.dev.package.deepseek-worker]
-opt-level = 1
+opt-level = 3
 debug-assertions = true
 overflow-checks = true
 

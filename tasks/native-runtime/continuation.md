@@ -1,3 +1,50 @@
+<!-- native-20261103-media-worker-optimized:start -->
+## Current checkpoint: measured worker optimization and CI contract repair, 2026-11-03
+
+Working branch: `codex/native-media-worker-optimized-20261103`, based on exact source
+`2dde10d72e7bd87b0a1103bc5602f406892633be` (tree
+`c2bdd2963d5718a41085a8d30f24c0cf5f7d7407`). This new batch is pending its own
+cloud qualification. Preserve the original dirty worktree, index, source and data.
+Earlier dated checkpoints below are historical; full readiness remains NOT_READY.
+
+Parent [Rust run 41592910898](https://github.com/leizd/DeepSeek-Infra/actions/runs/41592910898)
+passed 1705 Rust tests with the original one Redis ignore; raw LCOV is
+96968/117325 = 82.649052% against the unchanged 80% floor. The whole workflow
+failed the unchanged 144182145-byte actual HTTP workload. Capture completed in
+0.187387 s and raw validation/spooling in 9.093471 s; normalization remained open
+at the 10.010559 s timeout. The original effect stays EFFECT_UNKNOWN and the
+original request was not repeated. This batch changes only worker dev/test
+optimization from 1 to 3 to measure that same workload again. Assertions and
+integer overflow checks stay enabled; coverage/diagnostic worker optimization
+stays 0. Release defaults, algorithms, Rust/Go source, dependencies, deadlines,
+input domains and the complete test inventory/floors are unchanged.
+
+Parent [platform run 41593327223](https://github.com/leizd/DeepSeek-Infra/actions/runs/41593327223)
+passed all six controlled Windows/Mac jobs. Independently parsed Windows results
+bind all 35 original journal cases and all 29 added media cases to that source.
+Parent [Android run 41593336359](https://github.com/leizd/DeepSeek-Infra/actions/runs/41593336359)
+independently binds 70 instrumentation and 25 app-UID custody observations across
+API 24/26/28/30/34 x86_64 emulators. These remain controlled subsets; full desktop,
+arm64 device, all product workflows and production zero-Python proof stay open.
+
+Parent [CI run 41593318029](https://github.com/leizd/DeepSeek-Infra/actions/runs/41593318029)
+has failed two frozen Windows-job structural hash assertions in Python 3.12;
+3.10/3.11 also report pytest failures. Its native Go job was still live when this
+checkpoint was written; do not redispatch it. The new Windows media step is the
+only change to the canonical original Windows job. This batch binds that exact
+additional step to its own SHA-256 and still requires the original complete job's
+unchanged SHA-256 after removing only that bound step. No workflow is changed by
+this contract repair, and no original command, timeout or assertion is removed.
+
+Next: measure the original legal 144 MB request, preserve all existing negative
+and recovery cases, qualify exact-source Rust/Go and original coverage floors,
+CI/Evidence, platform and browser gates. Retain export/downgrade/cross-version
+rollback, historical unsignable APPLYING recovery, arbitrary-width memory and
+power-loss durability, all domains/providers/Fleet/authority/cutover and the
+original MCP test engine as unfinished full-product requirements. Source-dispatch
+results do not qualify push/browser runs or a PR merge candidate.
+<!-- native-20261103-media-worker-optimized:end -->
+
 <!-- native-20261103-media-worker-profile:start -->
 ## Current checkpoint: measured media phases and Windows corpus, 2026-11-03
 

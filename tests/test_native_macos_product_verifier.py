@@ -140,7 +140,15 @@ def test_fixture_refuses_missing_hidden_assets_hash_drift_extra_files_or_wrong_s
 
 def test_product_workflow_keeps_original_windows_job_and_both_existing_window_limits() -> None:
     workflow = yaml.safe_load((Path(__file__).resolve().parents[1] / ".github/workflows/native-windows-cloud.yml").read_text())
-    original = json.dumps(workflow["jobs"]["windows-app"], sort_keys=True, separators=(",", ":")).encode()
+    windows_job = workflow["jobs"]["windows-app"]
+    added = [step for step in windows_job["steps"]
+             if step.get("name") == "Verify streamed media images records compact results and digest corpus on Windows"]
+    assert len(added) == 1
+    # Bind the approved additional gate separately; preserve the original job's frozen hash.
+    extra = json.dumps(added[0], sort_keys=True, separators=(",", ":")).encode()
+    assert hashlib.sha256(extra).hexdigest() == "ee4475c1610cd1079cc79193157e6e2d13fb91bb737ec789911dcfb85b20e4fe"  # pragma: allowlist secret
+    original_job = dict(windows_job, steps=[step for step in windows_job["steps"] if step is not added[0]])
+    original = json.dumps(original_job, sort_keys=True, separators=(",", ":")).encode()
     assert hashlib.sha256(original).hexdigest() == "8108d2be47dea2b3ee06cd760950a5d338fecea0f2e68a881106f7870f4ac537"
     assert workflow["jobs"]["macos-window"]["timeout-minutes"] == 15
     job = workflow["jobs"]["macos-product"]
