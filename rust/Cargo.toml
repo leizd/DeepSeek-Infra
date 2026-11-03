@@ -86,7 +86,8 @@ strip = "symbols"
 
 # Independently linked test binaries repeat very large COFF/ELF symbol tables.
 # Keep normal dev/test builds small. Assertions, overflow checks, optimization,
-# and unwinding retain Cargo's dev defaults; test inherits this profile.
+# and unwinding retain Cargo's dev defaults for workspace code; test inherits
+# this profile. The measured bulk SHA-256 dependency override is separate below.
 [profile.dev]
 debug = false
 strip = "symbols"
@@ -95,6 +96,15 @@ incremental = false
 [profile.dev.package."*"]
 debug = false
 
+# The actual 144 MB media request spent 7.23 s capturing/hashing its before
+# image in the unoptimized dev build. Optimize only the exact
+# existing dependency, retaining its algorithm, length semantics, assertions,
+# overflow checks and all workspace code. Test/coverage inherit dev settings.
+[profile.dev.package."sha2@0.10.9"]
+opt-level = 3
+debug-assertions = true
+overflow-checks = true
+
 # Deliberate source-level debugging is separate from routine verification.
 [profile.diagnostic]
 inherits = "dev"
@@ -102,6 +112,11 @@ debug = true
 strip = "none"
 
 [profile.diagnostic.package."*"]
+debug = true
+
+# Keep source-level debugging of this dependency deliberately unoptimized.
+[profile.diagnostic.package."sha2@0.10.9"]
+opt-level = 0
 debug = true
 
 # LLVM embeds coverage mappings independently of debugger DWARF information.

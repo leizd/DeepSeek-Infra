@@ -65,3 +65,7 @@ impl<R: Read> Read for DigestReader<R> {
         Ok(count)
     }
 }
+
+#[cfg(test)]
+#[path = "media_stream_io_tests.rs"]
+mod tests;
