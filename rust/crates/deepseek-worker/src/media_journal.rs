@@ -348,6 +348,7 @@ impl MediaJournal {
         Ok(Some(result))
     }
     pub(super) fn prepare(&mut self, claim: &MediaPatchClaim) -> Result<Prepared, Status> {
+        let _phase = crate::media_phase_timing::Phase::start("journal.prepare");
         let intent = claim.intent.as_ref().ok_or_else(invalid)?;
         if let Some(row) = self.retained(&intent.operation_id)? {
             if row.claim != normalized_claim(claim) {
@@ -422,6 +423,7 @@ impl MediaJournal {
         digest: &[u8],
     ) -> Result<(), Status> {
         let intent = claim.intent.as_ref().ok_or_else(invalid)?;
+        let _phase = crate::media_phase_timing::Phase::start("journal.retain_and_commit");
         media_image_custody::retain(&self.image_root, claim, before, after)?;
         let transaction = self
             .connection

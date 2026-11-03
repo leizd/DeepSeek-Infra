@@ -164,6 +164,7 @@ impl Image {
     pub(super) fn build(
         write: impl FnOnce(&mut dyn Write) -> Result<(), Status>,
     ) -> Result<Self, Status> {
+        let _phase = crate::media_phase_timing::Phase::start("image.build");
         let mut file = tempfile::NamedTempFile::new().map_err(|_| invalid())?;
         let mut output = BufWriter::with_capacity(64 * 1024, DigestWriter::new(file.as_file_mut()));
         write(&mut output)?;
@@ -175,6 +176,7 @@ impl Image {
         })
     }
     pub(super) fn capture(path: &Path) -> Result<Self, Status> {
+        let _phase = crate::media_phase_timing::Phase::start("image.capture");
         reject_links(path)?;
         let mut input = match fs::File::open(path) {
             Ok(f) => f,
@@ -192,10 +194,12 @@ impl Image {
         Ok(image)
     }
     pub(super) fn verify(&self) -> Result<(), Status> {
+        let _phase = crate::media_phase_timing::Phase::start("image.verify");
         io::copy(&mut self.reader()?, &mut io::sink()).map_err(|_| invalid())?;
         Ok(())
     }
     pub(super) fn retain(&self, path: &Path) -> Result<Self, Status> {
+        let _phase = crate::media_phase_timing::Phase::start("image.retain");
         let identity = self.identity();
         identity.validate()?;
         reject_links(path)?;
@@ -233,6 +237,7 @@ pub(super) fn same(
     left: &(impl LibrarySource + ?Sized),
     right: &(impl LibrarySource + ?Sized),
 ) -> Result<bool, Status> {
+    let _phase = crate::media_phase_timing::Phase::start("image.compare");
     if left.identity() != right.identity() {
         return Ok(false);
     }

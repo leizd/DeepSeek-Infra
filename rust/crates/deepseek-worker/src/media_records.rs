@@ -89,6 +89,7 @@ impl Records {
         strict: bool,
         capture_publication: bool,
     ) -> Result<Self, Status> {
+        let validate_phase = crate::media_phase_timing::Phase::start("records.validate_raw");
         let mut failure = None;
         let mut publication = None;
         let mut input = BufReader::with_capacity(BUFFER, reader);
@@ -116,6 +117,8 @@ impl Records {
             io::copy(&mut input, &mut io::sink()).map_err(|_| invalid())?;
             return Ok(normalized);
         }
+        drop(validate_phase);
+        let _normalize_phase = crate::media_phase_timing::Phase::start("records.normalize_spool");
         normalized.publication = publication;
         let mut statement = raw
             .connection
@@ -245,6 +248,7 @@ impl Records {
         &self,
         output: &mut (impl Write + ?Sized),
     ) -> Result<(), Status> {
+        let _phase = crate::media_phase_timing::Phase::start("records.emit_array");
         let skip = (self.len()? - 1000).max(0);
         let mut statement = self.connection.prepare(
             "SELECT record_offset,record_bytes,digest FROM records ORDER BY record_index LIMIT 1000 OFFSET ?1"

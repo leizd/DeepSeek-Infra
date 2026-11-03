@@ -224,6 +224,8 @@ jobs:
       - name: Verify retained large media library through actual native HTTP
         if: matrix.mode == 'checks'
         timeout-minutes: 15
+        env:
+          DEEPSEEK_MEDIA_PHASE_TIMING: "1"
         run: |
           set -o pipefail
           python scripts/verify_native_media_patch.py --large-library-case --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --out artifacts/rust-cloud/media-capacity-process 2>&1 | tee artifacts/rust-cloud/media-capacity-process.log

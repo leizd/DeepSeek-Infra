@@ -384,7 +384,8 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
             public_port = listener.getsockname()[1]
         origin = f"http://127.0.0.1:{public_port}"
         launch_env = {key: value for key, value in os.environ.items() if key in {
-            "PATH", "HOME", "LANG", "LC_ALL", "TZ", "SSL_CERT_FILE", "SSL_CERT_DIR", "TMPDIR"}}
+            "PATH", "HOME", "LANG", "LC_ALL", "TZ", "SSL_CERT_FILE", "SSL_CERT_DIR", "TMPDIR",
+            "DEEPSEEK_MEDIA_PHASE_TIMING"}}
         launch_env.update(DEEPSEEK_NATIVE_BIN=str(binaries), DEEPSEEK_INFRA_ROOT=str(profile),
             DEEPSEEK_INFRA_STATIC_DIR=str(ROOT / "static"))
         child: subprocess.Popen[bytes] | None = None

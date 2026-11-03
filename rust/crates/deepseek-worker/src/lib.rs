@@ -37,6 +37,7 @@ mod media_journal;
 mod media_library;
 mod media_patch;
 mod media_patch_result;
+mod media_phase_timing;
 mod media_process;
 mod media_process_index;
 mod media_processing;
