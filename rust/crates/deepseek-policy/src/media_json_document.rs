@@ -150,7 +150,7 @@ impl<R: Read> Input<R> {
             .map(|b| b.first().copied())
             .map_err(|_| Error::SourceIo)
     }
-    fn take(&mut self) -> Result<Option<u8>, Error> {
+    fn next_byte(&mut self) -> Result<Option<u8>, Error> {
         if let Some(byte) = self.returned.take() {
             return Ok(Some(byte));
         }
@@ -162,12 +162,12 @@ impl<R: Read> Input<R> {
     }
     fn space(&mut self) -> Result<Option<u8>, Error> {
         while matches!(self.peek()?, Some(b' ' | b'\n' | b'\r' | b'\t')) {
-            self.take()?;
+            self.next_byte()?;
         }
         self.peek()
     }
     fn expect(&mut self, byte: u8) -> Result<(), Error> {
-        if self.take()? == Some(byte) {
+        if self.next_byte()? == Some(byte) {
             Ok(())
         } else {
             Err(Error::Syntax)
@@ -411,7 +411,7 @@ impl<R: Read> Parser<R> {
     fn hex4(&mut self) -> Result<u32, Error> {
         let mut value = 0;
         for _ in 0..4 {
-            let digit = match self.input.take()? {
+            let digit = match self.input.next_byte()? {
                 Some(b @ b'0'..=b'9') => u32::from(b - b'0'),
                 Some(b @ b'a'..=b'f') => u32::from(b - b'a' + 10),
                 Some(b @ b'A'..=b'F') => u32::from(b - b'A' + 10),
@@ -433,9 +433,9 @@ impl<R: Read> Parser<R> {
         self.input.expect(b'"')?;
         let mut key = KeyMatch::new();
         loop {
-            let scalar = match self.input.take()? {
+            let scalar = match self.input.next_byte()? {
                 Some(b'"') => return Ok(key.result()),
-                Some(b'\\') => match self.input.take()? {
+                Some(b'\\') => match self.input.next_byte()? {
                     Some(b @ (b'"' | b'\\' | b'/')) => u32::from(b),
                     Some(b'b') => 8,
                     Some(b'f') => 12,
@@ -485,9 +485,9 @@ impl<R: Read> Parser<R> {
     fn ignored_key(&mut self) -> Result<(), Error> {
         self.input.expect(b'"')?;
         loop {
-            match self.input.take()? {
+            match self.input.next_byte()? {
                 Some(b'"') => return Ok(()),
-                Some(b'\\') => match self.input.take()? {
+                Some(b'\\') => match self.input.next_byte()? {
                     Some(b'"' | b'\\' | b'/' | b'b' | b'f' | b'n' | b'r' | b't') => {}
                     Some(b'u') => {
                         self.hex4()?;
@@ -563,7 +563,7 @@ impl<R: Read> Parser<R> {
             return Err(Error::Syntax);
         }
         while matches!(self.input.peek()?, Some(b'0'..=b'9')) {
-            self.input.take()?;
+            self.input.next_byte()?;
         }
         Ok(())
     }
@@ -576,23 +576,23 @@ impl<R: Read> Parser<R> {
         // With the caller's existing arbitrary-precision feature, every JSON
         // number spelling is retained by Value; no scalar buffer is necessary.
         if self.input.peek()? == Some(b'-') {
-            self.input.take()?;
+            self.input.next_byte()?;
         }
         match self.input.peek()? {
             Some(b'0') => {
-                self.input.take()?;
+                self.input.next_byte()?;
             }
             Some(b'1'..=b'9') => self.digits()?,
             _ => return Err(Error::Syntax),
         }
         if self.input.peek()? == Some(b'.') {
-            self.input.take()?;
+            self.input.next_byte()?;
             self.digits()?;
         }
         if matches!(self.input.peek()?, Some(b'e' | b'E')) {
-            self.input.take()?;
+            self.input.next_byte()?;
             if matches!(self.input.peek()?, Some(b'+' | b'-')) {
-                self.input.take()?;
+                self.input.next_byte()?;
             }
             self.digits()?;
         }
@@ -623,10 +623,10 @@ impl<R: Read> Parser<R> {
                 if parents + 1 >= DEPTH {
                     return Err(Error::Syntax);
                 }
-                self.input.take()?;
+                self.input.next_byte()?;
                 let close = if first == b'[' { b']' } else { b'}' };
                 if self.input.space()? == Some(close) {
-                    self.input.take()?;
+                    self.input.next_byte()?;
                     return Ok(());
                 }
                 let mut first_member = true;
@@ -660,11 +660,11 @@ impl<R: Read> Parser<R> {
                     first_member = false;
                     match self.input.space()? {
                         Some(byte) if byte == close => {
-                            self.input.take()?;
+                            self.input.next_byte()?;
                             break;
                         }
                         Some(b',') => {
-                            self.input.take()?;
+                            self.input.next_byte()?;
                         }
                         _ => return Err(Error::Syntax),
                     }
@@ -680,9 +680,9 @@ impl<R: Read> Parser<R> {
         if self.input.space()? != Some(b'[') {
             return self.skip_mode(parents, Mode::MediaArray);
         }
-        self.input.take()?;
+        self.input.next_byte()?;
         if self.input.space()? == Some(b']') {
-            self.input.take()?;
+            self.input.next_byte()?;
             return Ok(());
         }
         loop {
@@ -696,11 +696,11 @@ impl<R: Read> Parser<R> {
             }
             match self.input.space()? {
                 Some(b']') => {
-                    self.input.take()?;
+                    self.input.next_byte()?;
                     break;
                 }
                 Some(b',') => {
-                    self.input.take()?;
+                    self.input.next_byte()?;
                 }
                 _ => return Err(Error::Syntax),
             }
@@ -714,9 +714,9 @@ impl<R: Read> Parser<R> {
         } else if self.mode == Mode::Discard {
             self.skip(0)?;
         } else if self.input.space()? == Some(b'{') {
-            self.input.take()?;
+            self.input.next_byte()?;
             if self.input.space()? == Some(b'}') {
-                self.input.take()?;
+                self.input.next_byte()?;
             } else {
                 let mut first_member = true;
                 loop {
@@ -751,11 +751,11 @@ impl<R: Read> Parser<R> {
                     first_member = false;
                     match self.input.space()? {
                         Some(b'}') => {
-                            self.input.take()?;
+                            self.input.next_byte()?;
                             break;
                         }
                         Some(b',') => {
-                            self.input.take()?;
+                            self.input.next_byte()?;
                         }
                         _ => return Err(Error::Syntax),
                     }

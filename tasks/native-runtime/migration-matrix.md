@@ -1,3 +1,26 @@
+<!-- native-20261103-media-byte-reader-fix:start -->
+## Current checkpoint: cloud compilation correction, 2026-11-03
+
+Working branch: `codex/native-media-byte-reader-fix-20261103`, based on exact
+source `996115f40276e5e317f4aab84228d19f3dfeaac0`.
+The parent Rust source-dispatch run 41640268529 failed compilation in both checks
+and coverage: the owned `Input` field selected `std::io::Read::take(self, u64)`
+instead of its identically named byte-consumption helper. The raw logs and
+source/job/run/hash receipts are preserved; no tests, capacity or memory results
+were qualified, and the failed run was not restarted.
+
+This correction renames only that helper and its 25 call sites to `next_byte`;
+all Option::take calls, parsing branches, features, limits, deadlines, profiles,
+interfaces and tests remain unchanged. An exact inverse rewrite reconstructs
+the parent Rust file. The existing twelve parser and seven gateway cases plus
+all original tests still require exact-source cloud execution. Native compilation
+is pending; no parent result qualifies this new source. Full readiness remains
+**NOT_READY**, with the entire preceding checkpoint and all whole-product gates
+retained below. Original HEAD/163 guarded entries and runtime data are preserved;
+no local native build, cache/image/volume download, main merge/release/production
+data or out-of-schedule PR action is included.
+<!-- native-20261103-media-byte-reader-fix:end -->
+
 <!-- native-20261103-media-gateway-streaming:start -->
 ## Current checkpoint: bounded gateway media reads, 2026-11-03
 
