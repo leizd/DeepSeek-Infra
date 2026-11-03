@@ -112,7 +112,9 @@ jobs:
           $log = 'artifacts/windows-native-cloud/media-image-and-record-tests.log'
           if (Test-Path -LiteralPath $log) { throw 'Refuse an existing Windows media corpus log' }
           foreach ($filter in @('media_journal::image_tests', 'media_journal::patch_result_tests', 'media_image::tests', 'media_records::tests', 'media_stream_io::tests')) {
-            python scripts/rust_build.py --toolchain 1.85.0 --target-dir $env:CARGO_TARGET_DIR -- test --locked -p deepseek-worker --lib $filter 2>&1 | Tee-Object -FilePath $log -Append
+            $packages = @('-p', 'deepseek-worker')
+            if ($filter -eq 'media_records::tests') { $packages += @('-p', 'deepseek-policy') }
+            python scripts/rust_build.py --toolchain 1.85.0 --target-dir $env:CARGO_TARGET_DIR -- test --locked @packages --lib $filter 2>&1 | Tee-Object -FilePath $log -Append
             if ($LASTEXITCODE -ne 0) { throw ('Windows media corpus failed: ' + $filter) }
           }
           $expected = @(
@@ -142,6 +144,7 @@ jobs:
             'media_records::tests::only_the_complete_winning_array_uses_normalization_clocks',
             'media_records::tests::source_spool_and_index_failures_never_become_an_empty_store',
             'media_records::tests::streaming_parser_matches_legacy_normalization_for_valid_and_malformed_documents',
+            'media_records::tests::shared_records_match_original_worker_normalizer',
             'media_stream_io::tests::media_digest_reader_hashes_only_observed_bytes_and_preserves_source_failure',
             'media_stream_io::tests::media_digest_streams_match_frozen_sha256_and_all_block_boundaries',
             'media_stream_io::tests::media_digest_writer_hashes_only_accepted_short_writes_and_preserves_errors'
@@ -151,7 +154,7 @@ jobs:
           foreach ($expectedName in $expected) {
             if (-not $expectedNames.Add($expectedName)) { throw 'Windows media expected inventory contains duplicates' }
           }
-          $caseLines = @([regex]::Matches($tests, '(?m)^test (?!result:)[^\n]*$'))
+          $caseLines = @([regex]::Matches($tests, '(?im)^test (?!result:)[^\n]*$'))
           $results = @([regex]::Matches($tests, '(?m)^test ([^\r\n]+?) \.\.\. ([^\r\n]+?)\r?$'))
           if ($caseLines.Count -ne $results.Count -or $results.Count -ne $expected.Count) { throw 'Windows media corpus has missing extra or malformed result lines' }
           $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
@@ -159,15 +162,80 @@ jobs:
             if (-not ([System.StringComparer]::Ordinal.Equals($result.Groups[2].Value, 'ok')) -or -not $expectedNames.Contains($result.Groups[1].Value) -or -not $seen.Add($result.Groups[1].Value)) { throw 'Windows media corpus failed ignored duplicated or misnamed a selected case' }
           }
           if ($seen.Count -ne $expectedNames.Count) { throw 'Windows media corpus names differ from the expected inventory' }
-          $summaries = @([regex]::Matches($tests, '(?m)^test result: ok\. ([0-9]+) passed; ([0-9]+) failed; ([0-9]+) ignored;[^\r\n]*\r?$'))
-          $summaryLines = @([regex]::Matches($tests, '(?m)^test result:[^\n]*$'))
-          if ($summaryLines.Count -ne 5 -or $summaries.Count -ne 5) { throw 'Windows media corpus lacks one complete successful result summary per module' }
+          $summaries = @([regex]::Matches($tests, '(?m)^test result: ok\. ([0-9]+) passed; ([0-9]+) failed; ([0-9]+) ignored; ([0-9]+) measured; ([0-9]+) filtered out; finished in ([0-9]+(?:\.[0-9]+)?)s\r?$'))
+          $summaryLines = @([regex]::Matches($tests, '(?im)^test result:[^\n]*$'))
+          if ($summaryLines.Count -ne 6 -or $summaries.Count -ne 6) { throw 'Windows media corpus lacks one complete successful result summary per selected package/module' }
           $totalPassed = 0
           foreach ($summary in $summaries) {
-            if ($summary.Groups[2].Value -ne '0' -or $summary.Groups[3].Value -ne '0') { throw 'Windows media corpus summary includes failures or ignores' }
+            if ($summary.Groups[2].Value -ne '0' -or $summary.Groups[3].Value -ne '0' -or $summary.Groups[4].Value -ne '0') { throw 'Windows media corpus summary includes failures or ignores' }
             $totalPassed += [int]$summary.Groups[1].Value
           }
+          $summaryPasses = @($summaries | ForEach-Object { [int]$_.Groups[1].Value } | Sort-Object)
+          $expectedPasses = @(1, 3, 3, 4, 7, 12)
+          for ($summaryIndex = 0; $summaryIndex -lt $expectedPasses.Count; $summaryIndex++) {
+            if ($summaryPasses[$summaryIndex] -ne $expectedPasses[$summaryIndex]) { throw 'Windows media corpus package summary distribution differs' }
+          }
           if ($totalPassed -ne $expected.Count) { throw 'Windows media corpus result count does not match its complete inventory' }
+          # Both caller graphs run the same new parser corpus without enabling features.
+          $parserExpected = @(
+            'media_records::document::tests::escaped_names_and_complete_last_key_match_the_full_document',
+            'media_records::document::tests::discarded_string_escapes_are_fully_validated_without_becoming_values',
+            'media_records::document::tests::discarded_numeric_domain_uses_the_callers_existing_json_features',
+            'media_records::document::tests::full_document_depth_is_preserved_for_discarded_and_retained_values',
+            'media_records::document::tests::enormous_ignored_keys_and_values_are_consumed_from_a_generated_reader',
+            'media_records::document::tests::early_syntax_does_not_hide_utf8_or_a_later_original_source_failure',
+            'media_records::document::tests::raw_mode_preserves_per_row_skip_then_propagate_and_does_not_return_early',
+            'media_records::document::tests::valid_and_invalid_token_combinations_match_full_value_parsing',
+            'media_records::document::tests::interrupted_reads_before_and_inside_a_record_are_retried_without_poisoning',
+            'media_records::document::tests::first_key_number_and_raw_value_wrappers_match_the_existing_value_decoder',
+            'media_records::document::tests::wrapped_media_arrays_and_inner_depth_match_full_value_decoding',
+            'media_records::document::tests::worker_discarded_keys_keep_original_ignored_any_surrogate_behavior'
+          )
+          $spoolExpected = @(
+            'media_segment_routes::media_read_spool::tests::source_order_first_match_stable_sort_and_all_fields_match_original',
+            'media_segment_routes::media_read_spool::tests::later_second_normalization_errors_propagate_before_filter_find_and_window',
+            'media_segment_routes::media_read_spool::tests::complete_document_last_key_utf8_and_missing_sources_preserve_old_results',
+            'media_segment_routes::media_read_spool::tests::raw_membership_is_not_short_circuited_before_full_json_validation',
+            'media_segment_routes::media_read_spool::tests::streamed_collection_matches_original_bytes_filters_headers_and_head',
+            'media_segment_routes::media_read_spool::tests::dropping_a_stream_releases_its_private_file_without_modifying_the_library',
+            'media_segment_routes::media_read_spool::tests::changed_response_spool_fails_instead_of_claiming_a_complete_body'
+          )
+          foreach ($graph in @('policy', 'gateway-policy', 'gateway-spool')) {
+            $packages = @('-p', 'deepseek-policy')
+            $filter = 'media_records::document::tests'
+            $graphExpected = $parserExpected
+            $expectedCount = $graphExpected.Count
+            $expectedSummaries = 1
+            if ($graph -eq 'gateway-policy') { $packages += @('-p', 'deepseek-gateway'); $expectedSummaries = 2 }
+            if ($graph -eq 'gateway-spool') { $packages = @('-p', 'deepseek-gateway'); $filter = 'media_segment_routes::media_read_spool::tests'; $graphExpected = $spoolExpected; $expectedCount = $graphExpected.Count }
+            $graphLog = 'artifacts/windows-native-cloud/media-read-' + $graph + '.log'
+            if (Test-Path -LiteralPath $graphLog) { throw 'Refuse an existing media read log' }
+            python scripts/rust_build.py --toolchain 1.85.0 --target-dir $env:CARGO_TARGET_DIR -- test --locked @packages --lib $filter 2>&1 | Tee-Object -FilePath $graphLog
+            if ($LASTEXITCODE -ne 0) { throw ('Windows shared media read graph failed: ' + $graph) }
+            $graphText = Get-Content -LiteralPath $graphLog -Raw
+            $graphCases = @([regex]::Matches($graphText, '(?m)^test (?!result:)([^\r\n]+?) \.\.\. ([^\r\n]+?)\r?$'))
+            $graphNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+            $graphCaseLines = @([regex]::Matches($graphText, '(?im)^test (?!result:)[^\n]*$'))
+            if ($graphCaseLines.Count -ne $graphCases.Count -or $graphCases.Count -ne $expectedCount) { throw 'Shared media read corpus has missing or extra cases' }
+            foreach ($case in $graphCases) {
+              if ($case.Groups[2].Value -cne 'ok' -or -not ($graphExpected -ccontains $case.Groups[1].Value) -or -not $graphNames.Add($case.Groups[1].Value)) { throw 'Shared media read corpus failed ignored duplicated or misnamed a case' }
+            }
+            $graphSummaries = @([regex]::Matches($graphText, '(?m)^test result: ok\. ([0-9]+) passed; ([0-9]+) failed; ([0-9]+) ignored; ([0-9]+) measured; ([0-9]+) filtered out; finished in ([0-9]+(?:\.[0-9]+)?)s\r?$'))
+            $graphSummaryLines = @([regex]::Matches($graphText, '(?im)^test result:[^\n]*$'))
+            if ($graphSummaryLines.Count -ne $graphSummaries.Count -or $graphSummaries.Count -ne $expectedSummaries) { throw 'Shared media read corpus lacks complete package summaries' }
+            $graphPassed = 0
+            foreach ($summary in $graphSummaries) {
+              if ($summary.Groups[2].Value -ne '0' -or $summary.Groups[3].Value -ne '0' -or $summary.Groups[4].Value -ne '0') { throw 'Shared media read summary includes a failure or ignore' }
+              $graphPassed += [int]$summary.Groups[1].Value
+            }
+            $graphSummaryPasses = @($graphSummaries | ForEach-Object { [int]$_.Groups[1].Value } | Sort-Object)
+            $graphExpectedPasses = @($expectedCount)
+            if ($expectedSummaries -eq 2) { $graphExpectedPasses = @(0, $expectedCount) }
+            for ($summaryIndex = 0; $summaryIndex -lt $graphExpectedPasses.Count; $summaryIndex++) {
+              if ($graphSummaryPasses[$summaryIndex] -ne $graphExpectedPasses[$summaryIndex]) { throw 'Shared media read package summary distribution differs' }
+            }
+            if ($graphPassed -ne $expectedCount) { throw 'Shared media read corpus totals differ' }
+          }
       - name: Build actual Windows Go control, launcher and WebView2 host
         run: |
           $bin = Join-Path $env:RUNNER_TEMP 'deepseek-windows-bin'

@@ -96,7 +96,7 @@ incremental = false
 [profile.dev.package."*"]
 debug = false
 
-# The actual 144 MB media request spent 7.23 s capturing/hashing its before
+# A 76-byte PATCH against the actual 144 MB media library spent 7.23 s capturing/hashing its before
 # image in the unoptimized dev build. Optimize only the exact
 # existing dependency, retaining its algorithm, length semantics, assertions,
 # overflow checks and Rust source. Test/coverage inherit dev settings.
@@ -105,12 +105,25 @@ opt-level = 3
 debug-assertions = true
 overflow-checks = true
 
-# At worker opt-level 1, the unchanged 144 MB request still timed out: raw
+# At worker opt-level 1, the unchanged PATCH against that library still timed out: raw
 # validation/spooling alone took 9.09 s after capture completed in 0.187 s.
 # Level 3 also prevents importing unoptimized shared monomorphized generics.
 # Measure the original HTTP gate again; source, limits and checks are unchanged.
 # Coverage and source debugging stay unoptimized.
 [profile.dev.package.deepseek-worker]
+opt-level = 3
+debug-assertions = true
+overflow-checks = true
+
+# Shared record decoding/normalization now lives in policy, and gateway owns
+# bounded read snapshots. Avoid reintroducing the measured unoptimized parsing
+# cost when moving the same work out of worker. Coverage/debugging stay at 0.
+[profile.dev.package.deepseek-policy]
+opt-level = 3
+debug-assertions = true
+overflow-checks = true
+
+[profile.dev.package.deepseek-gateway]
 opt-level = 3
 debug-assertions = true
 overflow-checks = true
@@ -133,6 +146,14 @@ debug = true
 opt-level = 0
 debug = true
 
+[profile.diagnostic.package.deepseek-policy]
+opt-level = 0
+debug = true
+
+[profile.diagnostic.package.deepseek-gateway]
+opt-level = 0
+debug = true
+
 # LLVM embeds coverage mappings independently of debugger DWARF information.
 # Keep mappings and symbols without repeating DWARF in every test binary.
 # Never change the complete test inventory or coverage threshold.
@@ -146,5 +167,13 @@ debug = false
 
 # Keep workspace coverage measurement at its original optimization level.
 [profile.coverage.package.deepseek-worker]
+opt-level = 0
+debug = false
+
+[profile.coverage.package.deepseek-policy]
+opt-level = 0
+debug = false
+
+[profile.coverage.package.deepseek-gateway]
 opt-level = 0
 debug = false

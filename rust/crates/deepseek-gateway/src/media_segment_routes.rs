@@ -43,6 +43,9 @@ const SEGMENT_TYPES: [&str; 6] = [
     "webpage_text",
 ];
 
+#[path = "media_read_spool.rs"]
+mod media_read_spool;
+
 pub fn router() -> Router {
     Router::new()
         .route("/api/media", any(collection_dispatch))
@@ -74,7 +77,7 @@ async fn item_dispatch(
             Ok(AxumPath(media_id)) => media_id,
             Err(rejection) => return rejection.into_response(),
         };
-        return read_response(method, move || read_media_item(&media_id)).await;
+        return read_response(method, move || read_media_item(&media_id).map(Json)).await;
     }
     crate::control_proxy::proxy_api_to_go(method, headers, OriginalUri(uri), body).await
 }
@@ -93,12 +96,12 @@ async fn dispatch(
 }
 
 async fn segments_response(method: Method, media_id: String) -> Response {
-    read_response(method, move || read_segments(&media_id)).await
+    read_response(method, move || read_segments(&media_id).map(Json)).await
 }
 
-async fn read_response(
+async fn read_response<T: IntoResponse + Send + 'static>(
     method: Method,
-    work: impl FnOnce() -> Result<Value, AppError> + Send + 'static,
+    work: impl FnOnce() -> Result<T, AppError> + Send + 'static,
 ) -> Response {
     let result = match tokio::task::spawn_blocking(work).await {
         Ok(result) => result,
@@ -106,7 +109,7 @@ async fn read_response(
     };
     match result {
         Ok(_) if method == Method::HEAD => StatusCode::OK.into_response(),
-        Ok(body) => Json(body).into_response(),
+        Ok(body) => body.into_response(),
         Err(error) if method == Method::HEAD => StatusCode::from_u16(error.status)
             .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
             .into_response(),
@@ -114,7 +117,7 @@ async fn read_response(
     }
 }
 
-fn read_media_collection(uri: &Uri) -> Result<Value, AppError> {
+fn read_media_collection(uri: &Uri) -> Result<media_read_spool::CompletedJson, AppError> {
     let Query(filters) = Query::<BTreeMap<String, String>>::try_from_uri(uri)
         .map_err(|_| AppError::invalid_payload("Invalid media filters"))?;
     let raw_project = filters.get("projectId").map(String::as_str).unwrap_or("");
@@ -135,20 +138,16 @@ fn read_media_collection(uri: &Uri) -> Result<Value, AppError> {
     } else {
         media_status(Some(&Value::String(raw_status.to_string())))?
     };
-    let mut items = list_public_media()?;
-    items.retain(|item| {
+    media_read_spool::PublicIndex::load(&library_path())?.collection(|item| {
         (project.is_empty() || item["projectId"].as_str() == Some(project.as_str()))
             && (media_type.is_empty() || item["type"].as_str() == Some(media_type.as_str()))
             && (status.is_empty() || item["status"].as_str() == Some(status.as_str()))
-    });
-    Ok(json!({"ok": true, "media": items}))
+    })
 }
 
 fn read_media_item(media_id: &str) -> Result<Value, AppError> {
     let safe_id = validate_workspace_id(media_id, "media id")?;
-    let media = load_public_media_in_source_order()?
-        .into_iter()
-        .find(|item| item["mediaId"].as_str() == Some(safe_id.as_str()))
+    let media = media_read_spool::find(&library_path(), &safe_id)?
         .ok_or_else(|| AppError::not_found("Media not found"))?;
     Ok(json!({"ok": true, "media": media}))
 }
@@ -162,15 +161,7 @@ fn read_segments(media_id: &str) -> Result<Value, AppError> {
 }
 
 fn library_contains(safe_id: &str) -> Result<bool, AppError> {
-    let Some(value) = read_optional_json(&library_path())? else {
-        return Ok(false);
-    };
-    let Some(items) = value.get("media").and_then(Value::as_array) else {
-        return Ok(false);
-    };
-    Ok(items
-        .iter()
-        .any(|item| item.is_object() && accepted_media_id(item).as_deref() == Some(safe_id)))
+    media_read_spool::contains(&library_path(), safe_id)
 }
 
 fn load_segments(safe_id: &str) -> Result<Vec<Value>, AppError> {
@@ -386,45 +377,10 @@ fn str_or_default(value: Option<&Value>, default: &str) -> String {
 }
 
 /// `library.list_media()` with no filters: normalise each row, skip `AppError`,
-/// and sort by `str(updatedAt)` descending. A missing library is `[]` and is
+/// and sort by `str(updatedAt)` descending before selecting the home window. A missing library is `[]` and is
 /// not created. Invalid UTF-8 is the oracle's uncaught `UnicodeDecodeError`.
-pub(crate) fn list_public_media() -> Result<Vec<Value>, AppError> {
-    let mut items = load_public_media_in_source_order()?;
-    items.sort_by_key(|item| std::cmp::Reverse(media_sort_key(item)));
-    Ok(items)
-}
-
-fn load_public_media_in_source_order() -> Result<Vec<Value>, AppError> {
-    let path = library_path();
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-    let bytes = match std::fs::read(&path) {
-        Ok(bytes) => bytes,
-        Err(_) => return Ok(Vec::new()),
-    };
-    let text = std::str::from_utf8(&bytes).map_err(|_| server_error())?;
-    let value: Value = match serde_json::from_str(text) {
-        Ok(value) => value,
-        Err(_) => return Ok(Vec::new()),
-    };
-    if !value.is_object() {
-        return Ok(Vec::new());
-    }
-    let rows = value.get("media").and_then(Value::as_array);
-    let mut items = Vec::new();
-    for item in rows.into_iter().flatten() {
-        if !item.is_object() {
-            continue;
-        }
-        // `_load_store` catches `AppError` and continues. `public_media` is a
-        // second `normalize_media_record` and is not caught.
-        let Ok(stored) = normalize_media_record(item) else {
-            continue;
-        };
-        items.push(normalize_media_record(&stored)?);
-    }
-    Ok(items)
+pub(crate) fn media_window(limit: usize) -> Result<(Vec<Value>, usize), AppError> {
+    media_read_spool::PublicIndex::load(&library_path())?.window(limit)
 }
 
 fn media_sort_key(row: &Value) -> String {

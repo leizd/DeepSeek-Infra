@@ -12,6 +12,8 @@ deepseek-protocol = { path = "../deepseek-protocol" }
 futures-util.workspace = true
 tokio.workspace = true
 tonic.workspace = true
+# Already locked and previously used by this crate in tests.
+tempfile = "=3.27.0"
 # The sealed frontend mirror seals each generation with the same streaming age
 # implementation the production `backup-crypto` CLI runs, and proves the result with
 # the same decrypt round trip. Linking the library is what keeps the two from
@@ -41,6 +43,3 @@ quick-xml = "=0.31.0"
 lopdf = "=0.36.0"
 # Inspect pdftoppm's rendered PNG pixels before accepting OCR text from a blank PDF page.
 png = "=0.18.1"
-
-[dev-dependencies]
-tempfile = "3.27.0"

@@ -86,7 +86,7 @@ fn workspace_home(limit: i64) -> Result<Value, AppError> {
     let skill_runs = collect_skill_runs(&project_ids, &root);
     let automations = crate::automation_definition_routes::load_automations()?;
     let automation_runs = automation_runs(limit)?;
-    let media = crate::media_segment_routes::list_public_media()?;
+    let (media, media_count) = crate::media_segment_routes::media_window(window)?;
     let exports = list_exports(&root)?;
     let memories = memory_schema::list_memories("", "", &root, &SystemClock);
     Ok(json!({
@@ -97,7 +97,7 @@ fn workspace_home(limit: i64) -> Result<Value, AppError> {
             "projects": take(&projects, window),
             "memories": take(&memories, window),
             "skills": take(&skill_runs, window),
-            "media": take(&media, window),
+            "media": media,
             "automations": take(&automation_runs, window),
             "artifacts": take(&artifacts, window),
             "savedItems": take(&saved_items, window),
@@ -107,7 +107,7 @@ fn workspace_home(limit: i64) -> Result<Value, AppError> {
             "projects": projects.len(),
             "memories": memories.len(),
             "skills": skill_runs.len(),
-            "media": media.len(),
+            "media": media_count,
             "automations": automations.len(),
             "automationRuns": automation_runs.len(),
             "artifacts": artifacts.len(),

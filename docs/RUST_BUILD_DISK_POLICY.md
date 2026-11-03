@@ -368,3 +368,13 @@ was C: +1.7 GiB and D: +73.6 GiB. The exact remaining 34 Go archives and referen
 build records are recorded in `artifacts/native-20261011-go-docker-cloud/cleanup-summary.json`.
 See [cloud verification](NATIVE_CLOUD_VERIFICATION.md) for current execution and
 qualification status. Local native compilation remains disabled on this host.
+
+### 共享媒体读取代码的构建配置（2026-11-03）
+
+媒体记录的具体解码、校验、归一化和临时索引从 worker 共享到 policy，网关也使用该实现逐条读取。
+因此 policy 与 gateway 的日常 dev/test 配置设为 `opt-level = 3`，保持断言和整数溢出检查；
+它们的 coverage 与 diagnostic 配置明确保持 `opt-level = 0`，release 配置不变。
+此前实测的 144182145 字节是媒体库大小，HTTP PATCH 请求体为 76 字节，原 10 秒超时保持不变。
+父提交 `00a11f3d` 已在该受控案例中成功，新共享读取源码仍须独立云端验证。
+每条记录及响应仍完整保留；本改动不引入容量上限。单条记录宽度与整应用峰值内存仍需继续验收。
+所有 Rust/Go 编译、测试、容器与构建缓存继续留在云端，本机只做格式、源码检查和报告核验。

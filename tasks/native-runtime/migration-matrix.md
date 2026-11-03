@@ -1,3 +1,58 @@
+<!-- native-20261103-media-gateway-streaming:start -->
+## Current checkpoint: bounded gateway media reads, 2026-11-03
+
+Working branch: `codex/native-media-gateway-streaming-20261103`, based on exact
+source `00a11f3d1c387c49709ce4554eb2cec5496c3ac8`.
+This checkpoint is source-reviewed and awaiting compilation and cloud results.
+No parent result qualifies this changed source. Full readiness remains **NOT_READY**.
+Earlier dated checkpoints below are historical and retained byte for byte.
+
+The parent independently passed all 37 original CI jobs and 50 Evidence Assembly
+artifacts. Go default coverage was 16521/17385 (95.030198%), Go Android
+16840/17723 (95.017774%), Python branch 83524/87385 (95.581622%), and CI Rust
+96964/117325 (82.645642%); original 95%/80% floors were retained. Its unchanged
+10-second controlled PATCH succeeded in 8.587913 seconds against a 144182145-byte
+library with all 600 large metadata rows retained after a full restart. The HTTP
+request itself was 76 bytes. These are parent source-dispatch results, neither
+push/browser validation nor a PR merge-candidate qualification. The measured
+parent gateway high-water memory was 458576 KiB; whole-library gateway decoding
+and collection allocation therefore remained open despite the successful PATCH.
+
+This increment replaces gateway library aggregation for collection, detail,
+segment membership, and workspace-home media with private bounded snapshots.
+Full source/UTF8/JSON validation precedes normalization. Raw membership keeps
+its original acceptance rules; public rows retain first-normalization skip and
+second-normalization propagation before filtering, first-match selection, or
+home windowing. A separate SQLite order index preserves descending sort keys
+and source-order ties. Collection JSON is completed in a private temporary file
+and then streamed through one bounded channel; cancellation closes its owner.
+One individual media/segment width, other domains, and all-product peak memory
+remain unqualified. No new library/record limits, HTTP deadlines, truncation,
+shared authoritative writer, or protocol change is introduced.
+
+The existing record-spool implementation and original seven tests move from
+worker into policy, preserving worker digest and journal tests. The worker gains
+one integration comparison against its old normalizer. Twelve parser tests cover
+complete documents, IO/UTF8/Interrupted precedence, ignored token widths, depth,
+last keys, caller numeric features, and Value's existing private Number/RawValue
+wrappers; seven gateway tests cover ordering, errors, headers, filtering,
+window/counts, cancellation and changed private response bytes. Native execution
+is pending. Caller feature graphs are not changed. Dev/test policy and gateway
+code use opt-level 3 for the moved concrete work, retaining assertions and
+overflow checks; coverage and diagnostic overrides remain explicitly 0.
+The original Windows job remains frozen; its separately bound additional gate
+retains all original 29 cases and adds the worker comparison and both new parser
+feature graphs plus gateway tests. Full original CI and coverage gates remain.
+
+No local native compilation, cache/image/volume download, main merge, release,
+production-data operation or out-of-schedule PR action is included. The original
+163 guarded dirty-root entries and HEAD are retained. Whole-product ownership,
+all retained MCP test-engine functions, Fleet/proofs/risk/cutover, arbitrary-width
+memory, historical unsignable APPLYING recovery, full processing/crash/power-loss,
+export/import/downgrade/rollback and all affected product/platform/provider/browser
+qualification remain required; this is not release readiness.
+<!-- native-20261103-media-gateway-streaming:end -->
+
 <!-- native-20261103-media-worker-optimized:start -->
 ## Current measured media and CI slices, 2026-11-03
 
