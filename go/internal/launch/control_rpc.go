@@ -79,6 +79,9 @@ func productionChildEnvironment(name string, environment []string) []string {
 	result := make([]string, 0, len(environment))
 	for _, entry := range environment {
 		key, _, _ := strings.Cut(entry, "=")
+		if key == "DEEPSEEK_MEDIA_PHASE_TIMING" && name != "deepseek-worker" {
+			continue
+		}
 		denied := name != "deepseekd" && strings.HasPrefix(key, "DEEPSEEKD_INTERNAL_RPC_")
 		denied = denied || name != "deepseek-worker" && name != "deepseek-gateway" && strings.HasPrefix(key, "DEEPSEEK_GO_CONTROL_RPC_")
 		denied = denied || name != "deepseek-worker" && strings.HasPrefix(key, "DEEPSEEK_WORKER_CONTROL_SIGNER_")

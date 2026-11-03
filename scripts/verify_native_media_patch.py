@@ -159,6 +159,23 @@ def capacity_original_observation(profile: Path, diagnostic: Path) -> dict[str, 
     return observed
 
 
+def phase_timing_environment(identities: list[dict[str, Any]]) -> bool:
+    """Check only one opt-in flag in the same owned worker; never report env values."""
+    workers = [row for row in identities if row["executable"] == "deepseek-worker"]
+    require(len(workers) == 1, "MEDIA_PHASE_WORKER_IDENTITY_MISSING")
+    worker = workers[0]
+    pid = worker["pid"]
+    require(reads.process_identity(pid) == worker["startTicks"], "MEDIA_PHASE_WORKER_IDENTITY_CHANGED")
+    with (Path("/proc") / str(pid) / "environ").open("rb") as stream:
+        raw = stream.read(256 * 1024 + 1)
+    require(len(raw) <= 256 * 1024, "MEDIA_PHASE_ENVIRONMENT_EXCEEDED_BOUND")
+    matches = [entry for entry in raw.split(b"\0") if entry.startswith(b"DEEPSEEK_MEDIA_PHASE_TIMING=")]
+    enabled = matches == [b"DEEPSEEK_MEDIA_PHASE_TIMING=1"]
+    require(reads.process_identity(pid) == worker["startTicks"], "MEDIA_PHASE_WORKER_IDENTITY_CHANGED")
+    require(enabled, "MEDIA_PHASE_TIMING_ENVIRONMENT_NOT_RETAINED")
+    return True
+
+
 def capacity_peak_memory(identities: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Read process-owned procfs high-water marks without asserting a new budget."""
     rows = []
@@ -466,10 +483,12 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
             require(reads.media_snapshot(profile) == before, "MEDIA_CHANGED_BEFORE_AUTHENTICATED_PATCH")
             require(generation_observation(profile) == generation_before,
                     "UNAUTHENTICATED_PATCH_CHANGED_WORKSPACE_GENERATION")
+            request_identities = [{**row, "startTicks": reads.process_identity(row["pid"])} for row in identities]
+            if os.environ.get("DEEPSEEK_MEDIA_PHASE_TIMING") == "1":
+                report["mediaPhaseTimingEnabledInWorker"] = phase_timing_environment(request_identities)
             report.update(controlHealthyBeforePatch=True, originalMediaReadBeforePatch=True,
                 unauthenticatedPatchDenied=True, nativePatchRequestStarted=True,
                 nativePatchOutcome="EFFECT_UNKNOWN")
-            request_identities = [{**row, "startTicks": reads.process_identity(row["pid"])} for row in identities]
             resources_before = uncertain_request_snapshot(profile, request_identities)
             if capacity_case:
                 report["capacityMemoryBefore"] = capacity_peak_memory(request_identities)

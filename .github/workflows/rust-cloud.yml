@@ -221,6 +221,14 @@ jobs:
             artifacts/rust-cloud/compact-patch-go.log
           if-no-files-found: ignore
           retention-days: 7
+      - name: Exercise worker-only media timing environment propagation
+        if: matrix.mode == 'checks'
+        working-directory: go
+        timeout-minutes: 5
+        run: |
+          set -o pipefail
+          mkdir -p ../artifacts/rust-cloud/media-capacity-process
+          CGO_ENABLED=0 go test -v -count=1 -timeout=2m -run '^TestMediaPhaseTimingOnlyReachesWorker$' ./internal/launch 2>&1 | tee ../artifacts/rust-cloud/media-capacity-process/phase-environment-go.log
       - name: Verify retained large media library through actual native HTTP
         if: matrix.mode == 'checks'
         timeout-minutes: 15

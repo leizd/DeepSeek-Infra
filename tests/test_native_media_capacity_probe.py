@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+from io import BytesIO
 import json
 from pathlib import Path
 import sys
@@ -20,6 +21,57 @@ def capacity_verifier(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+@pytest.mark.parametrize("environment", [
+    b"DEEPSEEK_MEDIA_PHASE_TIMING=1\0UNRELATED=not-reported\0",
+    b"UNRELATED=not-reported\0DEEPSEEK_MEDIA_PHASE_TIMING=1\0",
+])
+def test_phase_timing_checks_the_owned_worker_without_reporting_environment(
+    environment: bytes, capacity_verifier: ModuleType, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(capacity_verifier.reads, "process_identity", lambda _pid: "7")
+
+    def read_environment(path: Path, *_args: object, **_kwargs: object) -> BytesIO:
+        assert path.as_posix() == "/proc/123/environ"
+        return BytesIO(environment)
+
+    monkeypatch.setattr(Path, "open", read_environment)
+    assert capacity_verifier.phase_timing_environment([
+        {"pid": 123, "executable": "deepseek-worker", "startTicks": "7"},
+        {"pid": 456, "executable": "deepseek-gateway", "startTicks": "8"},
+    ]) is True
+    captured = capsys.readouterr()
+    assert captured.out == captured.err == ""
+
+
+@pytest.mark.parametrize("environment,reason", [
+    (b"OTHER=1\0", "ENVIRONMENT_NOT_RETAINED"),
+    (b"DEEPSEEK_MEDIA_PHASE_TIMING=0\0", "ENVIRONMENT_NOT_RETAINED"),
+    (b"DEEPSEEK_MEDIA_PHASE_TIMING=0\0DEEPSEEK_MEDIA_PHASE_TIMING=1\0", "ENVIRONMENT_NOT_RETAINED"),
+    (b"x" * (256 * 1024 + 1), "ENVIRONMENT_EXCEEDED_BOUND"),
+], ids=["missing", "wrong-value", "duplicate", "oversized"])
+def test_phase_timing_refuses_missing_duplicate_wrong_or_oversized_environment(
+    environment: bytes, reason: str, capacity_verifier: ModuleType, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(capacity_verifier.reads, "process_identity", lambda _pid: "7")
+    monkeypatch.setattr(Path, "open", lambda *_args, **_kwargs: BytesIO(environment))
+    with pytest.raises(capacity_verifier.ProbeFailure, match=reason):
+        capacity_verifier.phase_timing_environment([{"pid": 123, "executable": "deepseek-worker", "startTicks": "7"}])
+
+
+def test_phase_timing_refuses_reused_or_ambiguous_worker_identity(
+    capacity_verifier: ModuleType, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    identities = iter(["7", "8"])
+    monkeypatch.setattr(capacity_verifier.reads, "process_identity", lambda _pid: next(identities))
+    monkeypatch.setattr(Path, "open", lambda *_args, **_kwargs: BytesIO(b"DEEPSEEK_MEDIA_PHASE_TIMING=1\0"))
+    worker = {"pid": 123, "executable": "deepseek-worker", "startTicks": "7"}
+    with pytest.raises(capacity_verifier.ProbeFailure, match="WORKER_IDENTITY_CHANGED"):
+        capacity_verifier.phase_timing_environment([worker])
+    with pytest.raises(capacity_verifier.ProbeFailure, match="WORKER_IDENTITY_MISSING"):
+        capacity_verifier.phase_timing_environment([worker, worker])
 
 
 @pytest.mark.usefixtures("tmp_settings")

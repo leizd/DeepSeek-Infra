@@ -197,6 +197,7 @@ func productionEnv(dataRoot, staticDir, controlListen, gatewayBind string) []str
 }
 
 var operatorConfigKeys = []string{
+	"DEEPSEEK_MEDIA_PHASE_TIMING",
 	"AUTH_TOKEN",
 	"AUTH_DISABLED",
 	"DEEPSEEK_API_KEY",
