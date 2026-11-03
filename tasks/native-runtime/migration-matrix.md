@@ -1,3 +1,24 @@
+<!-- native-20261103-media-worker-profile:start -->
+## Current measured media slices, 2026-11-03
+
+Measured parent:6f3603c0. The worker-profile/Windows-corpus batch is pending its
+own cloud evidence. Earlier dated checkpoints below retain historical status.
+The existing domain ownership matrix and full NOT_READY scope remain in force.
+
+| Capability slice | Exact observed scope | Current state and remaining gap |
+|---|---|---|
+| Streamed media images, typed record spool and compact PATCH | Parent1705 Rust passes;82.649052% original workspace coverage; actual144182145-byte request still timed out at10.010306s | Unit/component proof only; original legal request must succeed without new limits, lost metadata or uncertain-effect retries |
+| Media worker development workload | Capture/hash7.233857s to0.194434s; raw document/spool phase remained open | Basic worker dev/test optimization pending actual remeasurement; coverage/diagnostic stay unoptimized and release defaults stay unchanged |
+| Windows media corpus | Parent controlled platform jobs passed;35 original journal cases actually ran, including10 nested cases | Add29 mandatory image/record/compact-result/digest cases and verify each name; complete directory/power-loss and all desktop workflows remain open |
+| Android retained controlled workload | Parent70 instrumentation and25 app-UID custody observations across five x86_64 emulator APIs | Controlled integration subset; arm64 execution, full authority, all product features and zero-Python workload qualification remain open |
+| Source CI and Evidence | Historical71661484:37/37 original CI jobs,50 bound Evidence reports; parent6f3603c0 CI still in Go race at checkpoint time | Complete this batch's exact-source gates; no historical source, push or PR candidate substitution |
+
+Image export/downgrade/cross-version rollback, historical unsignable APPLYING,
+universal memory/durability, all retained domains/providers/Fleet/proofs/authority/
+cutover and original MCP engine requirements remain unfinished. No full media
+cutover or full product/platform acceptance is claimed by this slice.
+<!-- native-20261103-media-worker-profile:end -->
+
 <!-- native-20261102-compact-patch-result:start -->
 ## 2026-11-02 media record parent proof and bulk-streaming candidate
 

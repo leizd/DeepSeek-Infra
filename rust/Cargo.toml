@@ -86,8 +86,8 @@ strip = "symbols"
 
 # Independently linked test binaries repeat very large COFF/ELF symbol tables.
 # Keep normal dev/test builds small. Assertions, overflow checks, optimization,
-# and unwinding retain Cargo's dev defaults for workspace code; test inherits
-# this profile. The measured bulk SHA-256 dependency override is separate below.
+# and unwinding retain Cargo's dev defaults. Measured worker/SHA-256
+# optimization overrides are explicit below; test inherits this profile.
 [profile.dev]
 debug = false
 strip = "symbols"
@@ -99,9 +99,19 @@ debug = false
 # The actual 144 MB media request spent 7.23 s capturing/hashing its before
 # image in the unoptimized dev build. Optimize only the exact
 # existing dependency, retaining its algorithm, length semantics, assertions,
-# overflow checks and all workspace code. Test/coverage inherit dev settings.
+# overflow checks and Rust source. Test/coverage inherit dev settings.
 [profile.dev.package."sha2@0.10.9"]
 opt-level = 3
+debug-assertions = true
+overflow-checks = true
+
+# After SHA-256 capture fell from 7.23 s to 0.194 s, the unchanged 144 MB
+# request still exhausted 10 s in document validation and raw-record spooling.
+# This generic parser/spool code is instantiated in the worker. Optimize its
+# dev/test build without changing source, limits or checks; measure again in
+# the original HTTP gate. Coverage and source debugging stay unoptimized.
+[profile.dev.package.deepseek-worker]
+opt-level = 1
 debug-assertions = true
 overflow-checks = true
 
@@ -119,6 +129,10 @@ debug = true
 opt-level = 0
 debug = true
 
+[profile.diagnostic.package.deepseek-worker]
+opt-level = 0
+debug = true
+
 # LLVM embeds coverage mappings independently of debugger DWARF information.
 # Keep mappings and symbols without repeating DWARF in every test binary.
 # Never change the complete test inventory or coverage threshold.
@@ -128,4 +142,9 @@ debug = false
 strip = "none"
 
 [profile.coverage.package."*"]
+debug = false
+
+# Keep workspace coverage measurement at its original optimization level.
+[profile.coverage.package.deepseek-worker]
+opt-level = 0
 debug = false

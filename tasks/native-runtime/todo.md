@@ -1,3 +1,30 @@
+<!-- native-20261103-media-worker-profile:start -->
+## Current work: real media capacity and platform scope, 2026-11-03
+
+These entries refer to parent6f3603c0 and the pending worker-profile/Windows-corpus
+batch. Earlier dated checkpoints below are historical; full readiness is NOT_READY.
+
+- [x] Independently bind1705 parent Rust tests and96968/117325 coverage to41583322898.
+- [x] Measure capture/hash7.233857s to0.194434s; retain the real10.010306s raw-document
+  timeout as EFFECT_UNKNOWN without reexecuting the original request.
+- [x] Bind six controlled parent Windows/Mac jobs and70 Android instrumentation /
+  25 custody observations to their exact source; do not promote them to all-platform proof.
+- [x] Reconcile the original Windows journal corpus as35 actual passes, including10
+  nested cases, and identify29 additional cases excluded by its old command filter.
+- [ ] Run this batch's original144MB HTTP request, complete recovery/retention and
+  digest contracts in the cloud with the original deadline and no new input bounds.
+- [ ] Execute all29 added Windows cases and retain the original35; source checks alone
+  do not qualify their execution or complete Windows durability.
+- [ ] Qualify the same source's complete37-job CI, Go/Android95%, Python95%, Rust80%,
+  all50 Evidence reports and remaining browser/platform gates; keep source-dispatch,
+  push and PR merge-candidate evidence separate.
+- [ ] Finish image export/import/downgrade/rollback, old unsignable APPLYING recovery,
+  arbitrary-width memory, directory/power-loss and remaining public/provider workloads.
+- [ ] Complete every retained server/desktop/Android/background/domain/Fleet/proof/
+  authority/cutover/zero-Python/server-TypeScript requirement. The user retained the
+  original MCP pytest-engine requirement; no Python exception or deprecation is approved.
+<!-- native-20261103-media-worker-profile:end -->
+
 <!-- native-20261102-compact-patch-result:start -->
 ## 2026-11-02 media record parent proof and bulk-streaming candidate
 

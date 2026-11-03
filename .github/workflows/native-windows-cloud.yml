@@ -106,6 +106,68 @@ jobs:
           foreach ($name in @('media_retained_publication_sync_never_creates_or_replaces_bytes', 'media_windows_readonly_recovery_keeps_original_unknown_until_sync_is_possible')) {
             if ($tests -notmatch ('test .*' + $name + ' \.\.\. ok')) { throw ('Windows recovery case missing: ' + $name) }
           }
+      - name: Verify streamed media images records compact results and digest corpus on Windows
+        timeout-minutes: 10
+        run: |
+          $log = 'artifacts/windows-native-cloud/media-image-and-record-tests.log'
+          if (Test-Path -LiteralPath $log) { throw 'Refuse an existing Windows media corpus log' }
+          foreach ($filter in @('media_journal::image_tests', 'media_journal::patch_result_tests', 'media_image::tests', 'media_records::tests', 'media_stream_io::tests')) {
+            python scripts/rust_build.py --toolchain 1.85.0 --target-dir $env:CARGO_TARGET_DIR -- test --locked -p deepseek-worker --lib $filter 2>&1 | Tee-Object -FilePath $log -Append
+            if ($LASTEXITCODE -ne 0) { throw ('Windows media corpus failed: ' + $filter) }
+          }
+          $expected = @(
+            'media_image::tests::large_image_capture_does_not_use_the_old_library_byte_cutoff',
+            'media_image::tests::missing_empty_and_nonregular_source_images_preserve_the_original_semantics',
+            'media_image::tests::streamed_image_keeps_exact_bytes_and_rejects_changed_retained_content',
+            'media_journal::image_tests::bounded_preparation_sweep_keeps_fair_progress_across_repeated_restarts',
+            'media_journal::image_tests::compact_result_custody_is_verified_before_any_terminal_raw_image_is_collected',
+            'media_journal::image_tests::exact_legacy_schema_rows_migrate_without_rewriting_and_recover_each_durable_phase',
+            'media_journal::image_tests::failed_prepared_insert_retires_both_images_without_a_public_effect',
+            'media_journal::image_tests::missing_or_corrupt_active_images_never_settle_an_applying_effect',
+            'media_journal::image_tests::one_hundred_updates_keep_only_current_effect_images_and_small_historical_descriptors',
+            'media_journal::image_tests::positive_prepared_abort_and_terminal_replay_do_not_require_raw_images',
+            'media_journal::image_tests::restart_retires_a_durably_owned_partial_copy_and_sealed_images_are_untouched',
+            'media_journal::image_tests::schema1_identity_or_shape_rejection_does_not_partially_migrate_the_journal',
+            'media_journal::image_tests::sealed_image_identity_and_collection_receipts_are_mechanically_immutable',
+            'media_journal::image_tests::terminal_calls_return_while_private_maintenance_holds_the_workspace_gate',
+            'media_journal::image_tests::terminal_gc_failure_cannot_hide_the_receipt_and_is_retried_on_later_preparation',
+            'media_journal::patch_result_tests::compact_patch_keeps_original_record_outside_retention_and_after_restart',
+            'media_journal::patch_result_tests::compact_patch_missing_or_corrupt_preparation_never_publishes_or_reconstructs',
+            'media_journal::patch_result_tests::compact_patch_original_applied_recovery_does_not_require_a_live_lease',
+            'media_journal::patch_result_tests::compact_patch_refusals_and_unknown_keep_the_frozen_v1_shape',
+            'media_records::tests::an_early_syntax_error_cannot_hide_a_later_source_io_failure',
+            'media_records::tests::changed_private_spool_bytes_are_detected_before_emission_or_lookup',
+            'media_records::tests::discarded_values_still_validate_numbers_utf8_and_original_json_depth',
+            'media_records::tests::first_match_delete_all_and_post_mutation_tail_match_the_original_order',
+            'media_records::tests::only_the_complete_winning_array_uses_normalization_clocks',
+            'media_records::tests::source_spool_and_index_failures_never_become_an_empty_store',
+            'media_records::tests::streaming_parser_matches_legacy_normalization_for_valid_and_malformed_documents',
+            'media_stream_io::tests::media_digest_reader_hashes_only_observed_bytes_and_preserves_source_failure',
+            'media_stream_io::tests::media_digest_streams_match_frozen_sha256_and_all_block_boundaries',
+            'media_stream_io::tests::media_digest_writer_hashes_only_accepted_short_writes_and_preserves_errors'
+          )
+          $tests = Get-Content -LiteralPath $log -Raw
+          $expectedNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+          foreach ($expectedName in $expected) {
+            if (-not $expectedNames.Add($expectedName)) { throw 'Windows media expected inventory contains duplicates' }
+          }
+          $caseLines = @([regex]::Matches($tests, '(?m)^test (?!result:)[^\n]*$'))
+          $results = @([regex]::Matches($tests, '(?m)^test ([^\r\n]+?) \.\.\. ([^\r\n]+?)\r?$'))
+          if ($caseLines.Count -ne $results.Count -or $results.Count -ne $expected.Count) { throw 'Windows media corpus has missing extra or malformed result lines' }
+          $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+          foreach ($result in $results) {
+            if (-not ([System.StringComparer]::Ordinal.Equals($result.Groups[2].Value, 'ok')) -or -not $expectedNames.Contains($result.Groups[1].Value) -or -not $seen.Add($result.Groups[1].Value)) { throw 'Windows media corpus failed ignored duplicated or misnamed a selected case' }
+          }
+          if ($seen.Count -ne $expectedNames.Count) { throw 'Windows media corpus names differ from the expected inventory' }
+          $summaries = @([regex]::Matches($tests, '(?m)^test result: ok\. ([0-9]+) passed; ([0-9]+) failed; ([0-9]+) ignored;[^\r\n]*\r?$'))
+          $summaryLines = @([regex]::Matches($tests, '(?m)^test result:[^\n]*$'))
+          if ($summaryLines.Count -ne 5 -or $summaries.Count -ne 5) { throw 'Windows media corpus lacks one complete successful result summary per module' }
+          $totalPassed = 0
+          foreach ($summary in $summaries) {
+            if ($summary.Groups[2].Value -ne '0' -or $summary.Groups[3].Value -ne '0') { throw 'Windows media corpus summary includes failures or ignores' }
+            $totalPassed += [int]$summary.Groups[1].Value
+          }
+          if ($totalPassed -ne $expected.Count) { throw 'Windows media corpus result count does not match its complete inventory' }
       - name: Build actual Windows Go control, launcher and WebView2 host
         run: |
           $bin = Join-Path $env:RUNNER_TEMP 'deepseek-windows-bin'

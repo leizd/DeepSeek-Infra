@@ -1,3 +1,50 @@
+<!-- native-20261103-media-worker-profile:start -->
+## Current checkpoint: measured media phases and Windows corpus, 2026-11-03
+
+Working branch: `codex/native-media-worker-profile-windows-20261103`, based on
+measured parent `6f3603c01a6367f746b85a4b53ac4985f88de779` (tree
+`8c224c76d205f5fde872e88518cf6d9fbc7e1823`). This batch is pending its own
+cloud qualification; preserve the original dirty worktree, source, index and data.
+Earlier dated checkpoints below retain their historical status.
+
+Parent [Rust run41583322898](https://github.com/leizd/DeepSeek-Infra/actions/runs/41583322898)
+passed1705 Rust tests, the original one Redis ignore, the three new digest/IO
+tests and raw LCOV96968/117325=82.649052% against the original80%floor.
+The whole Rust workflow failed the unchanged144182145-byte HTTP workload at
+10.010306s. Verified worker timings reduced capture/hash from7.233857s on9d217aee
+to0.194434s on6f3603c0; full-document validation/raw-record spooling remained open
+at timeout. The original request remains EFFECT_UNKNOWN and was never retried.
+
+This batch gives only the worker dev/test code basic optimization, preserving
+assertions, overflow checks, algorithms and source. Coverage explicitly keeps
+the worker at its original optimization level0; diagnostic also remains0 with
+full debug information. Release defaults, protocols, source tests, input limits,
+the10-second HTTP deadline and original coverage floors remain unchanged.
+
+Parent [platform run41583562808](https://github.com/leizd/DeepSeek-Infra/actions/runs/41583562808)
+passed six controlled Windows/Mac jobs; independent reports bind actual windows,
+file requests and retained restart state to this source. The existing Windows
+journal filter actually ran35 tests:25 top-level and10 nested. It did not select
+29 image/record/compact-result/digest cases. A new mandatory Windows step runs
+those five modules and requires the exact29 passing names, retaining the old35.
+Parent [Android run41583571182](https://github.com/leizd/DeepSeek-Infra/actions/runs/41583571182)
+independently binds70 instrumentation and25 app-UID custody observations across
+API24/26/28/30/34 x86_64 emulators. These are controlled subsets, not full product
+platform, arm64 device, production authority or zero-Python workload qualification.
+
+Parent [CI run41583554362](https://github.com/leizd/DeepSeek-Infra/actions/runs/41583554362)
+was still in full Go race verification when this checkpoint was written. Do not
+redispatch a live run. Historical71661484 has37/37 original CI jobs and50 bound
+Evidence reports; it does not qualify later source or a PR merge candidate.
+
+Next: qualify this batch's unchanged actual144MB request, complete Rust/Go original
+corpora and floors, all exact-source CI/Evidence/platform/browser gates and the
+additional Windows corpus. Keep export/downgrade/cross-version rollback,
+historical unsignable APPLYING recovery, arbitrary-width memory/durability,
+all retained domains/providers/Fleet/authority/cutover and original MCP test
+engine functionality open. Full product readiness remains NOT_READY.
+<!-- native-20261103-media-worker-profile:end -->
+
 <!-- native-20261102-compact-patch-result:start -->
 ## 2026-11-02 media record parent proof and bulk-streaming candidate
 
