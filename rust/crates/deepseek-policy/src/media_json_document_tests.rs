@@ -76,51 +76,14 @@ fn discarded_string_escapes_are_fully_validated_without_becoming_values() {
 
 #[test]
 fn discarded_numeric_domain_uses_the_callers_existing_json_features() {
-    for number in [
-        "0",
-        "-0",
-        "18446744073709551616",
-        "1e400",
-        "-1e400",
-        "0e9999999999999999999",
-        "1e-99999999999999999999",
-        "1.7976931348623157e308",
-        "1.7976931348623159e308",
-        "01",
-        "-01",
-        "1e+",
-        "1.",
-        "+1",
-        "NaN",
-        "Infinity",
-    ] {
-        let text = format!(r#"{{"ignored":{},"media":[{}]}}"#, number, ROW);
-        assert_eq!(
-            rows(text.as_bytes()).unwrap(),
-            legacy(text.as_bytes()),
-            "{number}"
-        );
-    }
+    // The unchanged original Python reader owns admission, independent of serde features.
+    python_original_contract_family("numeric");
 }
 
 #[test]
 fn full_document_depth_is_preserved_for_discarded_and_retained_values() {
-    for depth in 0..134 {
-        let nested = format!("{}0{}", "[".repeat(depth), "]".repeat(depth));
-        for text in [
-            format!(r#"{{"ignored":{},"media":[{}]}}"#, nested, ROW),
-            format!(
-                r#"{{"media":[{{"mediaId":"kept","metadata":{{"nested":{}}}}}]}}"#,
-                nested
-            ),
-        ] {
-            assert_eq!(
-                rows(text.as_bytes()).unwrap(),
-                legacy(text.as_bytes()),
-                "depth {depth}"
-            );
-        }
-    }
+    // Includes every original 0..134 depth plus 140/200/500, in both positions.
+    python_original_contract_family("depth");
 }
 
 #[test]
@@ -253,63 +216,14 @@ fn interrupted_reads_before_and_inside_a_record_are_retried_without_poisoning() 
 
 #[test]
 fn first_key_number_and_raw_value_wrappers_match_the_existing_value_decoder() {
-    let number = "$serde_json::private::Number";
-    let raw = "$serde_json::private::RawValue";
-    let encoded_document = serde_json::to_string(&format!(r#"{{"media":[{}]}}"#, ROW)).unwrap();
-    let cases = [
-        format!(r#"{{"ignored":{{"{}":0}},"media":[{}]}}"#, number, ROW),
-        format!(
-            r#"{{"ignored":{{"{}":"1e400"}},"media":[{}]}}"#,
-            number, ROW
-        ),
-        format!(
-            r#"{{"ignored":{{"{}":"not a number"}},"media":[{}]}}"#,
-            number, ROW
-        ),
-        format!(
-            r#"{{"ignored":{{"first":0,"{}":0}},"media":[{}]}}"#,
-            number, ROW
-        ),
-        format!(r#"{{"{}":"1","media":[{}]}}"#, number, ROW),
-        format!(
-            r#"{{"ignored":{{"\u0024serde_json::private::Number":0}},"media":[{}]}}"#,
-            ROW
-        ),
-        format!(
-            r#"{{"ignored":[{{"{}":false}}],"media":[{}]}}"#,
-            number, ROW
-        ),
-        format!(r#"{{"{}":{}}}"#, raw, encoded_document),
-        format!(r#"{{"{}":{},"media":[{}]}}"#, raw, encoded_document, ROW),
-        format!(r#"{{"ignored":{{"{}":"[1,]"}},"media":[{}]}}"#, raw, ROW),
-        format!(r#"{{"ignored":{{"{}":"[1,2]"}},"media":[{}]}}"#, raw, ROW),
-        format!(r#"{{"media":[{{"{}":"0"}},{}]}}"#, number, ROW),
-    ];
-    for text in cases {
-        assert_eq!(
-            rows(text.as_bytes()).unwrap(),
-            legacy(text.as_bytes()),
-            "{text}"
-        );
-    }
+    python_original_contract_family("private");
+    python_original_contract_family("retained_private");
+    python_original_contract_family("projection");
     for value in [
         r#"{"$serde_json::private::Number":"0"}"#,
         r#"{"$serde_json::private::RawValue":"0"}"#,
     ] {
         let text = format!(r#"{{"media":[{}]}}"#, value);
-        let mut old_calls = 0;
-        let old = Records::parse_mode(
-            text.as_bytes(),
-            Records::empty().unwrap(),
-            Records::empty().unwrap(),
-            |value| {
-                old_calls += 1;
-                crate::media_schema::normalize_media_record(value)
-            },
-            false,
-            false,
-        )
-        .unwrap();
         let mut calls = 0;
         let actual = Records::parse(
             text.as_bytes(),
@@ -321,43 +235,16 @@ fn first_key_number_and_raw_value_wrappers_match_the_existing_value_decoder() {
             },
         )
         .unwrap();
-        assert_eq!(calls, old_calls, "{text}");
-        assert_eq!(actual.len().unwrap(), old.len().unwrap(), "{text}");
+        // Both are ordinary dictionaries: the original normalizer is called once
+        // and skips each invalid record because its mediaId is missing.
+        assert_eq!(calls, 1, "{text}");
+        assert_eq!(actual.len().unwrap(), 0, "{text}");
     }
 }
 
 #[test]
 fn wrapped_media_arrays_and_inner_depth_match_full_value_decoding() {
-    let inner = format!(r#"[{}]"#, ROW);
-    let wrapped = |text: &str| {
-        format!(
-            r#"{{"$serde_json::private::RawValue":{}}}"#,
-            serde_json::to_string(text).unwrap()
-        )
-    };
-    for value in [
-        wrapped(&inner),
-        wrapped(&wrapped(&inner)),
-        wrapped("null"),
-        wrapped("[1,]"),
-        wrapped(r#"{"wrong":[]}"#),
-    ] {
-        let text = format!(r#"{{"media":{}}}"#, value);
-        assert_eq!(
-            rows(text.as_bytes()).unwrap(),
-            legacy(text.as_bytes()),
-            "{text}"
-        );
-    }
-    for depth in [124, 125, 126, 127, 128] {
-        let inner = format!("{}0{}", "[".repeat(depth), "]".repeat(depth));
-        let text = format!(r#"{{"media":{}}}"#, wrapped(&inner));
-        assert_eq!(
-            rows(text.as_bytes()).unwrap(),
-            legacy(text.as_bytes()),
-            "depth={depth}"
-        );
-    }
+    python_original_contract_family("wrapped");
 }
 
 #[test]

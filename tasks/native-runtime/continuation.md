@@ -1,3 +1,40 @@
+<!-- native checkpoint 2026-11-04 ordinary Python media JSON -->
+
+The full server/desktop/Android/background Rust+Go production migration remains
+**ACTIVE / NOT_READY**. This checkpoint does not waive any retained function,
+original gate, original coverage floor, authority/recovery obligation, or platform
+acceptance. Original MCP `start_test_run` compatibility is still incomplete under
+the unchanged zero-production-Python requirement.
+
+This source replaces serde-private dictionary interpretation with ordinary JSON
+object semantics in the temporary media reader, digest-checked record spool and
+native after-image reader. Only the original schema's 11 record fields are
+materialized; all other values are fully validated with iterative heap frames.
+Ignored NaN/Infinity/-Infinity, valid large exponent spellings, escaped surrogate
+code units and deep ignored containers do not acquire serde-specific rejections.
+Complete document/EOF, last duplicate media key, deferred normalization, source
+I/O/UTF-8 precedence and private-spool failure/digest checks remain mandatory.
+
+The diagnostic parent `2eebc140c77b9ddeeb3aa5e053da0d76ecea13c8`
+freezes 23 actual-original-Python regressions. Cloud run 41786250876
+confirmed 19/23 failures in both checks and coverage, after successful compilation
+and Clippy. A further 328-case original-reader
+matrix replaces the old serde oracle in four existing named tests. It includes
+every original depth 0..133 and added 140/200/500 cases, ordinary private-tag keys
+inside retained source/metadata, and duplicate projected fields. Local Python
+oracle/flow checks passed (381). Fresh read-only parser/value/test reviews found
+no remaining actionable issues; cross-model CLI was skipped in this autonomous
+continuation. Native compilation/runtime acceptance is still required on cloud.
+
+Ancestor `f000759b44d5fb939c84e652866fca82cf47f517` independently passed
+37/37 full CI jobs and 50 Evidence artifacts: default Go 95.030198%, Android Go
+95.017774%, Python branch 95.580477%, Rust lines 82.718282%. Those reports do not
+qualify this changed source, Rust/browser push or a PR merge candidate. Retained
+non-finite numbers, unpaired surrogates and other original JSON-domain gaps,
+all-width memory, full media processing/authority/recovery and complete product
+acceptance remain open. All Rust/Go/container/platform builds stay in cloud;
+only reports are retrieved. The dirty original checkout and real data stay intact.
+
 ## 2026-11-04: original-reader JSON regressions before native repair
 
 This diagnostic source snapshot adds23 independent Rust cases backed by actual

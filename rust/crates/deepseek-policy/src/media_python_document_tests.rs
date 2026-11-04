@@ -7,6 +7,11 @@ fn python_original_document_case(name: &str) {
     let cases = fixture["cases"].as_array().unwrap();
     assert_eq!(cases.len(), 23);
     let case = cases.iter().find(|case| case["name"] == name).unwrap();
+    assert_python_original_case(case);
+}
+
+fn assert_python_original_case(case: &Value) {
+    let name = case["name"].as_str().unwrap();
     let text = case["document"].as_str().unwrap();
     let worker = Records::from_reader(text.as_bytes())
         .map_err(|error| error.to_string())
@@ -168,4 +173,26 @@ fn python_original_discarded_depth_500() {
 #[test]
 fn python_original_retained_schema_ignored_surrogate() {
     python_original_document_case("retained_schema_ignored_surrogate");
+}
+
+fn python_original_contract_family(family: &str) {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../../tests/fixtures/native_media_python_contract_v1.json"
+    ))
+    .unwrap();
+    assert_eq!(fixture["caseCount"], 328);
+    let cases = fixture["cases"].as_array().unwrap();
+    assert_eq!(cases.len(), 328);
+    let selected: Vec<_> = cases
+        .iter()
+        .filter(|case| case["family"] == family)
+        .collect();
+    assert_eq!(
+        selected.len() as u64,
+        fixture["families"][family].as_u64().unwrap()
+    );
+    assert!(!selected.is_empty());
+    for case in selected {
+        assert_python_original_case(case);
+    }
 }

@@ -1,23 +1,15 @@
 //! Bounded recognition of document keys and validated skipping of unused values.
 //! Only a media record (or an explicitly captured publication) becomes a Value.
 use super::Records;
-use crate::media_stream_io::{DigestReader, DigestWriter};
-use serde::{
-    Deserialize,
-    de::{self, DeserializeOwned, Visitor},
-};
-use serde_json::Value;
+use serde_json::{Map, Value};
 use std::{
     cell::RefCell,
-    fmt,
-    io::{self, BufRead, BufReader, BufWriter, Read, Seek, SeekFrom, Write},
+    io::{self, BufRead, BufReader, Read},
     rc::Rc,
-    sync::OnceLock,
 };
 use tonic::Status;
 
 const BUFFER: usize = 64 * 1024;
-const DEPTH: usize = 128;
 
 #[derive(Debug)]
 pub(crate) enum Error {
@@ -31,10 +23,6 @@ pub(crate) enum Error {
 struct InputState {
     source_io: bool,
     utf8: Utf8,
-    in_string: bool,
-    escaped: bool,
-    depth: usize,
-    excessive_depth: bool,
 }
 
 #[derive(Default)]
@@ -103,32 +91,6 @@ impl<R: Read> Read for Probe<R> {
             }
             Ok(count) => {
                 state.utf8.accept(&bytes[..*count]);
-                if !state.excessive_depth {
-                    for byte in &bytes[..*count] {
-                        if state.in_string {
-                            if state.escaped {
-                                state.escaped = false;
-                            } else if *byte == b'\\' {
-                                state.escaped = true;
-                            } else if *byte == b'"' {
-                                state.in_string = false;
-                            }
-                        } else {
-                            match byte {
-                                b'"' => state.in_string = true,
-                                b'[' | b'{' => {
-                                    state.depth += 1;
-                                    if state.depth >= DEPTH {
-                                        state.excessive_depth = true;
-                                        break;
-                                    }
-                                }
-                                b']' | b'}' => state.depth = state.depth.saturating_sub(1),
-                                _ => {}
-                            }
-                        }
-                    }
-                }
             }
         }
         result
@@ -195,223 +157,75 @@ impl<R: Read> Read for Input<R> {
     }
 }
 
-struct Counted<'a, R> {
-    input: &'a mut Input<R>,
-    bytes: usize,
-    last: u8,
-}
-impl<R: Read> Read for Counted<'_, R> {
-    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-        let count = self.input.read(buffer)?;
-        self.bytes = self
-            .bytes
-            .checked_add(count)
-            .ok_or_else(|| io::Error::other("media JSON cursor overflow"))?;
-        if count != 0 {
-            self.last = buffer[count - 1];
-        }
-        Ok(count)
-    }
-}
-
 #[derive(Clone, Copy, PartialEq)]
 enum Key {
     Media,
     Publication,
+    Field(&'static str),
     Other,
-    Number,
-    RawValue,
 }
 
-#[derive(Default)]
+const KEYS: [&str; 13] = [
+    "media",
+    "nativePublication",
+    "mediaId",
+    "projectId",
+    "type",
+    "title",
+    "mimeType",
+    "path",
+    "source",
+    "status",
+    "createdAt",
+    "updatedAt",
+    "metadata",
+];
+
 struct KeyMatch {
     length: usize,
-    media: bool,
-    publication: bool,
-    number: bool,
-    raw_value: bool,
+    candidates: u16,
 }
 impl KeyMatch {
     fn new() -> Self {
         Self {
             length: 0,
-            media: true,
-            publication: true,
-            number: true,
-            raw_value: true,
+            candidates: (1 << KEYS.len()) - 1,
         }
     }
     fn character(&mut self, value: u32) {
-        if !self.media && !self.publication && !self.number && !self.raw_value {
+        if self.candidates == 0 {
             return;
         }
-        self.media &= b"media"
-            .get(self.length)
-            .is_some_and(|b| u32::from(*b) == value);
-        self.publication &= b"nativePublication"
-            .get(self.length)
-            .is_some_and(|b| u32::from(*b) == value);
-        self.number &= b"$serde_json::private::Number"
-            .get(self.length)
-            .is_some_and(|b| u32::from(*b) == value);
-        self.raw_value &= b"$serde_json::private::RawValue"
-            .get(self.length)
-            .is_some_and(|b| u32::from(*b) == value);
-        // Recognition storage is bounded; arbitrarily long keys remain accepted.
-        self.length = (self.length + 1).min(b"$serde_json::private::RawValue".len() + 1);
+        for (index, name) in KEYS.iter().enumerate() {
+            if !name
+                .as_bytes()
+                .get(self.length)
+                .is_some_and(|byte| u32::from(*byte) == value)
+            {
+                self.candidates &= !(1 << index);
+            }
+        }
+        self.length += 1;
     }
     fn result(self) -> Key {
-        if self.media && self.length == 5 {
-            Key::Media
-        } else if self.publication && self.length == 17 {
-            Key::Publication
-        } else if self.number && self.length == b"$serde_json::private::Number".len() {
-            Key::Number
-        } else if self.raw_value && self.length == b"$serde_json::private::RawValue".len() {
-            Key::RawValue
-        } else {
-            Key::Other
-        }
-    }
-}
-
-fn arbitrary_numbers() -> bool {
-    static ARBITRARY: OnceLock<bool> = OnceLock::new();
-    *ARBITRARY
-        .get_or_init(|| matches!(serde_json::from_str::<Value>("1e400"), Ok(Value::Number(_))))
-}
-
-fn raw_values() -> bool {
-    static RAW: OnceLock<bool> = OnceLock::new();
-    *RAW.get_or_init(|| {
-        matches!(
-            serde_json::from_str::<Value>(r#"{"$serde_json::private::RawValue":"null"}"#),
-            Ok(Value::Null)
-        )
-    })
-}
-
-#[derive(Clone, Copy)]
-enum NumericString {
-    Start,
-    Sign,
-    Zero,
-    Integer,
-    Dot,
-    Fraction,
-    Exponent,
-    ExponentSign,
-    ExponentDigits,
-    Invalid,
-}
-impl NumericString {
-    fn accept(&mut self, bytes: &[u8]) {
-        use NumericString::*;
-        for byte in bytes {
-            *self = match (*self, byte) {
-                (Start, b'-') => Sign,
-                (Start | Sign, b'0') => Zero,
-                (Start | Sign, b'1'..=b'9') | (Integer, b'0'..=b'9') => Integer,
-                (Zero | Integer, b'.') => Dot,
-                (Dot | Fraction, b'0'..=b'9') => Fraction,
-                (Zero | Integer | Fraction, b'e' | b'E') => Exponent,
-                (Exponent, b'+' | b'-') => ExponentSign,
-                (Exponent | ExponentSign | ExponentDigits, b'0'..=b'9') => ExponentDigits,
-                _ => Invalid,
-            };
-        }
-    }
-    fn finish(self) -> Result<(), Error> {
-        if matches!(
-            self,
-            Self::Zero | Self::Integer | Self::Fraction | Self::ExponentDigits
-        ) {
-            Ok(())
-        } else {
-            Err(Error::Syntax)
-        }
-    }
-}
-
-struct SealedReader {
-    source: Option<DigestReader<std::fs::File>>,
-    expected_size: u64,
-    expected_hash: Vec<u8>,
-}
-impl Read for SealedReader {
-    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-        if buffer.is_empty() {
-            return Ok(0);
-        }
-        let Some(source) = self.source.as_mut() else {
-            return Ok(0);
-        };
-        let count = source.read(buffer)?;
-        if count == 0 {
-            let source = self
-                .source
-                .take()
-                .ok_or_else(|| io::Error::other("media JSON source already closed"))?;
-            let (size, hash) = source.finish();
-            if size != self.expected_size || hash != self.expected_hash {
-                return Err(io::Error::other("media JSON temporary source changed"));
+        for (index, name) in KEYS.iter().enumerate() {
+            if self.candidates & (1 << index) != 0 && self.length == name.len() {
+                return match index {
+                    0 => Key::Media,
+                    1 => Key::Publication,
+                    _ => Key::Field(*name),
+                };
             }
         }
-        Ok(count)
+        Key::Other
     }
 }
 
-#[derive(Clone, Copy, PartialEq)]
-enum Mode {
-    Discard,
-    Document,
-    MediaArray,
-}
-
-struct Parser<R> {
-    input: Input<R>,
-    records: Records,
-    capture_publication: bool,
-    publication: Option<Value>,
-    value_semantics: bool,
-    mode: Mode,
-}
-
-impl<R: Read> Parser<R> {
-    fn value<T: DeserializeOwned>(&mut self) -> Result<T, Error> {
-        let mut counted = Counted {
-            input: &mut self.input,
-            bytes: 0,
-            last: 0,
-        };
-        let (result, offset) = {
-            let mut values = serde_json::Deserializer::from_reader(&mut counted).into_iter::<T>();
-            let value = values.next().ok_or(Error::Syntax)?;
-            (value, values.byte_offset())
-        };
-        let value = result.map_err(|error| {
-            if error.is_io() {
-                if counted.input.source.get_ref().state.borrow().source_io {
-                    Error::SourceIo
-                } else {
-                    Error::Storage(super::invalid())
-                }
-            } else {
-                Error::Syntax
-            }
-        })?;
-        match counted.bytes.checked_sub(offset) {
-            Some(0) => {}
-            Some(1) => counted.input.restore(counted.last)?,
-            _ => return Err(Error::Storage(super::invalid())),
-        }
-        Ok(value)
-    }
-
+impl<R: Read> Input<R> {
     fn hex4(&mut self) -> Result<u32, Error> {
         let mut value = 0;
         for _ in 0..4 {
-            let digit = match self.input.next_byte()? {
+            let digit = match self.next_byte()? {
                 Some(b @ b'0'..=b'9') => u32::from(b - b'0'),
                 Some(b @ b'a'..=b'f') => u32::from(b - b'a' + 10),
                 Some(b @ b'A'..=b'F') => u32::from(b - b'A' + 10),
@@ -431,12 +245,12 @@ impl<R: Read> Parser<R> {
         discarded: bool,
         mut accept: impl FnMut(&[u8]) -> Result<(), Error>,
     ) -> Result<Key, Error> {
-        self.input.expect(b'"')?;
+        self.expect(b'"')?;
         let mut key = KeyMatch::new();
         loop {
-            let scalar = match self.input.next_byte()? {
+            let scalar = match self.next_byte()? {
                 Some(b'"') => return Ok(key.result()),
-                Some(b'\\') => match self.input.next_byte()? {
+                Some(b'\\') => match self.next_byte()? {
                     Some(b @ (b'"' | b'\\' | b'/')) => u32::from(b),
                     Some(b'b') => 8,
                     Some(b'f') => 12,
@@ -453,8 +267,8 @@ impl<R: Read> Parser<R> {
                             continue;
                         }
                         if (0xd800..=0xdbff).contains(&high) {
-                            self.input.expect(b'\\')?;
-                            self.input.expect(b'u')?;
+                            self.expect(b'\\')?;
+                            self.expect(b'u')?;
                             let low = self.hex4()?;
                             if !(0xdc00..=0xdfff).contains(&low) {
                                 return Err(Error::Syntax);
@@ -487,180 +301,181 @@ impl<R: Read> Parser<R> {
         }
     }
 
-    fn numeric_string(&mut self) -> Result<(), Error> {
-        self.input.space()?;
-        let mut numeric = NumericString::Start;
-        self.string_with(false, |bytes| {
-            numeric.accept(bytes);
-            Ok(())
-        })?;
-        numeric.finish()
-    }
-
-    fn decoded_raw(&mut self, mode: Mode) -> Result<(), Error> {
-        self.input.space()?;
-        let mut file =
-            tempfile::NamedTempFile::new().map_err(|_| Error::Storage(super::invalid()))?;
-        let (size, hash) = {
-            let mut output =
-                BufWriter::with_capacity(BUFFER, DigestWriter::new(file.as_file_mut()));
-            self.string_with(false, |bytes| {
-                output
-                    .write_all(bytes)
-                    .map_err(|_| Error::Storage(super::invalid()))
-            })?;
-            output
-                .flush()
-                .map_err(|_| Error::Storage(super::invalid()))?;
-            output
-                .into_inner()
-                .map_err(|_| Error::Storage(super::invalid()))?
-                .finish()
-        };
-        file.as_file_mut()
-            .seek(SeekFrom::Start(0))
-            .map_err(|_| Error::Storage(super::invalid()))?;
-        let source = SealedReader {
-            source: Some(DigestReader::new(
-                file.as_file()
-                    .try_clone()
-                    .map_err(|_| Error::Storage(super::invalid()))?,
-            )),
-            expected_size: size,
-            expected_hash: hash,
-        };
-        let records = Records::empty().map_err(Error::Storage)?;
-        let (records, publication) =
-            match read_mode(source, records, self.capture_publication, true, mode) {
-                Ok(value) => value,
-                Err(Error::SourceIo) => return Err(Error::Storage(super::invalid())),
-                Err(Error::InvalidUtf8 | Error::Syntax) => return Err(Error::Syntax),
-                Err(Error::Storage(error)) => return Err(Error::Storage(error)),
-            };
-        if mode != Mode::Discard {
-            self.records = records;
-            self.publication = publication;
+    fn number(&mut self, mut accept: impl FnMut(u8)) -> Result<(), Error> {
+        if self.peek()? == Some(b'-') {
+            accept(self.next_byte()?.ok_or(Error::Syntax)?);
         }
-        drop(file);
-        Ok(())
-    }
-
-    fn digits(&mut self) -> Result<(), Error> {
-        if !matches!(self.input.peek()?, Some(b'0'..=b'9')) {
-            return Err(Error::Syntax);
-        }
-        while matches!(self.input.peek()?, Some(b'0'..=b'9')) {
-            self.input.next_byte()?;
-        }
-        Ok(())
-    }
-
-    fn number(&mut self) -> Result<(), Error> {
-        let arbitrary = arbitrary_numbers();
-        if !arbitrary {
-            return self.value::<NumberOnly>().map(|_| ());
-        }
-        // With the caller's existing arbitrary-precision feature, every JSON
-        // number spelling is retained by Value; no scalar buffer is necessary.
-        if self.input.peek()? == Some(b'-') {
-            self.input.next_byte()?;
-        }
-        match self.input.peek()? {
-            Some(b'0') => {
-                self.input.next_byte()?;
-            }
-            Some(b'1'..=b'9') => self.digits()?,
+        match self.peek()? {
+            Some(b'0') => accept(self.next_byte()?.ok_or(Error::Syntax)?),
+            Some(b'1'..=b'9') => self.number_digits(&mut accept)?,
             _ => return Err(Error::Syntax),
         }
-        if self.input.peek()? == Some(b'.') {
-            self.input.next_byte()?;
-            self.digits()?;
+        if self.peek()? == Some(b'.') {
+            accept(self.next_byte()?.ok_or(Error::Syntax)?);
+            self.number_digits(&mut accept)?;
         }
-        if matches!(self.input.peek()?, Some(b'e' | b'E')) {
-            self.input.next_byte()?;
-            if matches!(self.input.peek()?, Some(b'+' | b'-')) {
-                self.input.next_byte()?;
+        if matches!(self.peek()?, Some(b'e' | b'E')) {
+            accept(self.next_byte()?.ok_or(Error::Syntax)?);
+            if matches!(self.peek()?, Some(b'+' | b'-')) {
+                accept(self.next_byte()?.ok_or(Error::Syntax)?);
             }
-            self.digits()?;
+            self.number_digits(&mut accept)?;
+        }
+        Ok(())
+    }
+    fn number_digits(&mut self, accept: &mut impl FnMut(u8)) -> Result<(), Error> {
+        if !matches!(self.peek()?, Some(b'0'..=b'9')) {
+            return Err(Error::Syntax);
+        }
+        while matches!(self.peek()?, Some(b'0'..=b'9')) {
+            accept(self.next_byte()?.ok_or(Error::Syntax)?);
+        }
+        Ok(())
+    }
+    fn literal(&mut self, word: &[u8]) -> Result<(), Error> {
+        for byte in word {
+            self.expect(*byte)?;
         }
         Ok(())
     }
 
-    fn skip(&mut self, parents: usize) -> Result<(), Error> {
-        self.skip_mode(parents, Mode::Discard)
-    }
-
-    fn skip_mode(&mut self, parents: usize, mode: Mode) -> Result<(), Error> {
-        match self.input.space()? {
+    /// Original Python accepts non-finite tokens in discarded positions. Validate
+    /// their spelling and delimiters without converting or allocating the scalar.
+    fn skipped_atom(&mut self) -> Result<(), Error> {
+        match self.space()? {
             Some(b'"') => {
                 self.string()?;
             }
-            Some(b'-' | b'0'..=b'9') => self.number()?,
-            Some(first @ (b'n' | b't' | b'f')) => {
-                let word: &[u8] = match first {
-                    b'n' => b"null",
-                    b't' => b"true",
-                    _ => b"false",
-                };
-                for byte in word {
-                    self.input.expect(*byte)?;
+            Some(b'n') => self.literal(b"null")?,
+            Some(b't') => self.literal(b"true")?,
+            Some(b'f') => self.literal(b"false")?,
+            Some(b'N') => self.literal(b"NaN")?,
+            Some(b'I') => self.literal(b"Infinity")?,
+            Some(b'-') => {
+                self.next_byte()?;
+                if self.peek()? == Some(b'I') {
+                    self.literal(b"Infinity")?;
+                } else {
+                    self.restore(b'-')?;
+                    self.number(|_| {})?;
                 }
             }
-            Some(first @ (b'[' | b'{')) => {
-                if parents + 1 >= DEPTH {
-                    return Err(Error::Syntax);
-                }
-                self.input.next_byte()?;
-                let close = if first == b'[' { b']' } else { b'}' };
-                if self.input.space()? == Some(close) {
-                    self.input.next_byte()?;
-                    return Ok(());
-                }
-                let mut first_member = true;
-                loop {
-                    if first == b'{' {
-                        self.input.space()?;
-                        let key = self.string()?;
-                        self.input.space()?;
-                        self.input.expect(b':')?;
-                        if self.value_semantics && first_member {
-                            if key == Key::Number && arbitrary_numbers() {
-                                self.numeric_string()?;
-                                self.input.space()?;
-                                self.input.expect(b'}')?;
-                                return Ok(());
-                            }
-                            if key == Key::RawValue && raw_values() {
-                                self.decoded_raw(mode)?;
-                                self.input.space()?;
-                                self.input.expect(b'}')?;
-                                return Ok(());
-                            }
-                        }
-                    }
-                    self.skip(parents + 1)?;
-                    first_member = false;
-                    match self.input.space()? {
-                        Some(byte) if byte == close => {
-                            self.input.next_byte()?;
-                            break;
-                        }
-                        Some(b',') => {
-                            self.input.next_byte()?;
-                        }
-                        _ => return Err(Error::Syntax),
-                    }
-                }
-            }
+            Some(b'0'..=b'9') => self.number(|_| {})?,
             _ => return Err(Error::Syntax),
         }
         Ok(())
     }
+    /// Heap frames replace recursive descent; ignored bytes never become Values.
+    fn skip(&mut self) -> Result<(), Error> {
+        enum Frame {
+            Value,
+            ArrayStart,
+            ArrayTail,
+            ObjectStart,
+            ObjectTail,
+        }
+        let mut frames = vec![Frame::Value];
+        while let Some(frame) = frames.pop() {
+            match frame {
+                Frame::Value => match self.space()? {
+                    Some(b'[') => {
+                        self.next_byte()?;
+                        frames.push(Frame::ArrayStart);
+                    }
+                    Some(b'{') => {
+                        self.next_byte()?;
+                        frames.push(Frame::ObjectStart);
+                    }
+                    _ => self.skipped_atom()?,
+                },
+                Frame::ArrayStart => {
+                    if self.space()? == Some(b']') {
+                        self.next_byte()?;
+                    } else {
+                        frames.push(Frame::ArrayTail);
+                        frames.push(Frame::Value);
+                    }
+                }
+                Frame::ArrayTail => match self.space()? {
+                    Some(b']') => {
+                        self.next_byte()?;
+                    }
+                    Some(b',') => {
+                        self.next_byte()?;
+                        frames.push(Frame::ArrayTail);
+                        frames.push(Frame::Value);
+                    }
+                    _ => return Err(Error::Syntax),
+                },
+                Frame::ObjectStart | Frame::ObjectTail => {
+                    let first = matches!(frame, Frame::ObjectStart);
+                    if self.space()? == Some(b'}') {
+                        self.next_byte()?;
+                        continue;
+                    }
+                    if !first {
+                        self.expect(b',')?;
+                        self.space()?;
+                    }
+                    self.string()?;
+                    self.space()?;
+                    self.expect(b':')?;
+                    frames.push(Frame::ObjectTail);
+                    frames.push(Frame::Value);
+                }
+            }
+        }
+        Ok(())
+    }
+}
 
-    fn media(&mut self, parents: usize) -> Result<(), Error> {
+#[path = "media_json_value.rs"]
+mod ordinary_value;
+pub(super) use ordinary_value::from_slice as decode_value_slice;
+
+struct Parser<R> {
+    input: Input<R>,
+    records: Records,
+    capture_publication: bool,
+    publication: Option<Value>,
+}
+impl<R: Read> Parser<R> {
+    /// The original normalizer reads exactly these 11 fields. Unknown values are
+    /// fully validated and discarded before materialization, including surrogates.
+    fn record(&mut self) -> Result<Value, Error> {
+        self.input.expect(b'{')?;
+        let mut fields = Map::new();
+        if self.input.space()? == Some(b'}') {
+            self.input.next_byte()?;
+            return Ok(Value::Object(fields));
+        }
+        loop {
+            self.input.space()?;
+            let key = self.input.string()?;
+            self.input.space()?;
+            self.input.expect(b':')?;
+            if let Key::Field(name) = key {
+                fields.insert(name.to_owned(), self.input.value()?);
+            } else {
+                self.input.skip()?;
+            }
+            match self.input.space()? {
+                Some(b'}') => {
+                    self.input.next_byte()?;
+                    break;
+                }
+                Some(b',') => {
+                    self.input.next_byte()?;
+                }
+                _ => return Err(Error::Syntax),
+            }
+        }
+        Ok(Value::Object(fields))
+    }
+    fn media(&mut self) -> Result<(), Error> {
         self.records.clear().map_err(Error::Storage)?;
         if self.input.space()? != Some(b'[') {
-            return self.skip_mode(parents, Mode::MediaArray);
+            return self.input.skip();
         }
         self.input.next_byte()?;
         if self.input.space()? == Some(b']') {
@@ -669,12 +484,12 @@ impl<R: Read> Parser<R> {
         }
         loop {
             if self.input.space()? == Some(b'{') {
-                let value = self.value::<Value>()?;
+                let value = self.record()?;
                 if value.is_object() {
                     self.records.append_raw(&value).map_err(Error::Storage)?;
                 }
             } else {
-                self.skip(parents + 1)?;
+                self.input.skip()?;
             }
             match self.input.space()? {
                 Some(b']') => {
@@ -691,46 +506,23 @@ impl<R: Read> Parser<R> {
     }
 
     fn document(&mut self) -> Result<(), Error> {
-        if self.mode == Mode::MediaArray {
-            self.media(0)?;
-        } else if self.mode == Mode::Discard {
-            self.skip(0)?;
-        } else if self.input.space()? == Some(b'{') {
+        if self.input.space()? == Some(b'{') {
             self.input.next_byte()?;
             if self.input.space()? == Some(b'}') {
                 self.input.next_byte()?;
             } else {
-                let mut first_member = true;
                 loop {
                     self.input.space()?;
-                    let key = self.string()?;
+                    let key = self.input.string()?;
                     self.input.space()?;
                     self.input.expect(b':')?;
-                    if self.value_semantics
-                        && first_member
-                        && key == Key::Number
-                        && arbitrary_numbers()
-                    {
-                        self.numeric_string()?;
-                        self.input.space()?;
-                        self.input.expect(b'}')?;
-                        break;
-                    }
-                    if self.value_semantics && first_member && key == Key::RawValue && raw_values()
-                    {
-                        self.decoded_raw(Mode::Document)?;
-                        self.input.space()?;
-                        self.input.expect(b'}')?;
-                        break;
-                    }
                     match key {
-                        Key::Media => self.media(1)?,
+                        Key::Media => self.media()?,
                         Key::Publication if self.capture_publication => {
-                            self.publication = Some(self.value()?)
+                            self.publication = Some(self.input.value()?)
                         }
-                        _ => self.skip(1)?,
+                        _ => self.input.skip()?,
                     }
-                    first_member = false;
                     match self.input.space()? {
                         Some(b'}') => {
                             self.input.next_byte()?;
@@ -744,7 +536,7 @@ impl<R: Read> Parser<R> {
                 }
             }
         } else {
-            self.skip(0)?;
+            self.input.skip()?;
         }
         if self.input.space()?.is_some() {
             return Err(Error::Syntax);
@@ -753,35 +545,12 @@ impl<R: Read> Parser<R> {
     }
 }
 
-struct NumberOnly;
-impl<'de> Deserialize<'de> for NumberOnly {
-    fn deserialize<D: de::Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
-        struct Numeric;
-        impl Visitor<'_> for Numeric {
-            type Value = NumberOnly;
-            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                f.write_str("a JSON number")
-            }
-            fn visit_i64<E: de::Error>(self, _: i64) -> Result<NumberOnly, E> {
-                Ok(NumberOnly)
-            }
-            fn visit_u64<E: de::Error>(self, _: u64) -> Result<NumberOnly, E> {
-                Ok(NumberOnly)
-            }
-            fn visit_f64<E: de::Error>(self, _: f64) -> Result<NumberOnly, E> {
-                Ok(NumberOnly)
-            }
-        }
-        de.deserialize_any(Numeric)
-    }
-}
-
 pub(super) fn read(
     reader: impl Read,
     records: Records,
     capture_publication: bool,
 ) -> Result<(Records, Option<Value>), Error> {
-    read_mode(reader, records, capture_publication, false, Mode::Document)
+    read_mode(reader, records, capture_publication)
 }
 
 pub(super) fn read_value(
@@ -789,15 +558,13 @@ pub(super) fn read_value(
     records: Records,
     capture_publication: bool,
 ) -> Result<(Records, Option<Value>), Error> {
-    read_mode(reader, records, capture_publication, true, Mode::Document)
+    read_mode(reader, records, capture_publication)
 }
 
 fn read_mode(
     reader: impl Read,
     records: Records,
     capture_publication: bool,
-    value_semantics: bool,
-    mode: Mode,
 ) -> Result<(Records, Option<Value>), Error> {
     let state = Rc::new(RefCell::new(InputState::default()));
     let source = Probe {
@@ -812,8 +579,6 @@ fn read_mode(
         records,
         capture_publication,
         publication: None,
-        value_semantics,
-        mode,
     };
     let result = parser.document();
     // Private spool failures retain priority over source/UTF8 fallbacks.
@@ -830,9 +595,6 @@ fn read_mode(
     }
     if state.utf8.invalid {
         return Err(Error::InvalidUtf8);
-    }
-    if state.excessive_depth {
-        return Err(Error::Syntax);
     }
     result?;
     Ok((parser.records, parser.publication))

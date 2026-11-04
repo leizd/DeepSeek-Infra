@@ -9,15 +9,11 @@ use crate::{
     media_stream_io::{DigestReader, DigestWriter, WriteSeek},
 };
 use rusqlite::{Connection, OptionalExtension, params};
-use serde::{
-    Deserialize,
-    de::{self, DeserializeSeed, IgnoredAny, MapAccess, SeqAccess, Visitor},
-};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
-    fmt, fs,
-    io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write},
+    fs,
+    io::{self, BufWriter, Read, Seek, SeekFrom, Write},
 };
 use tonic::Status;
 
@@ -119,53 +115,15 @@ impl Records {
     }
 
     pub fn from_image(reader: impl Read) -> Result<Self, Status> {
-        Self::parse_mode(
-            reader,
-            Self::empty()?,
-            Self::empty()?,
-            |value| Ok(value.clone()),
-            true,
-            true,
-        )
-    }
-    fn parse_mode(
-        reader: impl Read,
-        mut raw: Self,
-        normalized: Self,
-        normalize: impl FnMut(&Value) -> Result<Value, AppError>,
-        strict: bool,
-        capture_publication: bool,
-    ) -> Result<Self, Status> {
         let validate_phase = crate::media_phase_timing::Phase::start("records.validate_raw");
-        let mut failure = None;
-        let mut publication = None;
-        let mut input = BufReader::with_capacity(BUFFER, reader);
-        let mut decoder = serde_json::Deserializer::from_reader(&mut input);
-        let parsed = RootSeed {
-            records: &mut raw,
-            failure: &mut failure,
-            publication: &mut publication,
-            capture_publication,
-        }
-        .deserialize(&mut decoder);
-        let parsed = parsed.and_then(|_| decoder.end());
-        if let Some(error) = failure {
-            return Err(error);
-        }
-        if let Err(error) = parsed {
-            // The old reader treats a malformed *complete document* as empty.
-            // Source I/O and private-spool failures retain their error instead.
-            if strict || error.is_io() {
-                return Err(invalid());
-            }
-            // As with the old full-file read, an early JSON error cannot hide
-            // later storage I/O or the image reader's final digest failure.
-            drop(decoder);
-            io::copy(&mut input, &mut io::sink()).map_err(|_| invalid())?;
-            return Ok(normalized);
-        }
+        let raw = Self::empty()?;
+        let (raw, publication) =
+            document::read(reader, raw, true).map_err(|error| match error {
+                document::Error::Storage(error) => error,
+                _ => invalid(),
+            })?;
         drop(validate_phase);
-        Self::normalize_raw(&raw, normalized, publication, normalize)
+        Self::normalize_raw(&raw, Self::empty()?, publication, |value| Ok(value.clone()))
     }
 
     fn normalize_raw(
@@ -256,7 +214,7 @@ impl Records {
         if Sha256::digest(&bytes).to_vec() != digest {
             return Err(invalid());
         }
-        serde_json::from_slice(&bytes).map_err(|_| invalid())
+        document::decode_value_slice(&bytes).map_err(|_| invalid())
     }
 
     /// Visit the complete stored sequence without accumulating its values.
@@ -380,161 +338,6 @@ impl Records {
 
 // These visitors intentionally do not normalize. A discarded media array and
 // any malformed/trailing input must consume zero original normalization clocks.
-macro_rules! empty_scalars {
-    () => {
-        fn visit_unit<E: de::Error>(self) -> Result<(), E> {
-            Ok(())
-        }
-        fn visit_bool<E: de::Error>(self, _: bool) -> Result<(), E> {
-            Ok(())
-        }
-        fn visit_i64<E: de::Error>(self, _: i64) -> Result<(), E> {
-            Ok(())
-        }
-        fn visit_u64<E: de::Error>(self, _: u64) -> Result<(), E> {
-            Ok(())
-        }
-        fn visit_f64<E: de::Error>(self, _: f64) -> Result<(), E> {
-            Ok(())
-        }
-        fn visit_str<E: de::Error>(self, _: &str) -> Result<(), E> {
-            Ok(())
-        }
-    };
-}
-fn storage_error<E: de::Error>(failure: &mut Option<Status>, error: Status) -> E {
-    *failure = Some(error);
-    E::custom("media temporary spool unavailable")
-}
-struct RootSeed<'a> {
-    records: &'a mut Records,
-    failure: &'a mut Option<Status>,
-    publication: &'a mut Option<Value>,
-    capture_publication: bool,
-}
-struct MediaSeed<'a> {
-    records: &'a mut Records,
-    failure: &'a mut Option<Status>,
-}
-struct RecordSeed<'a> {
-    records: &'a mut Records,
-    failure: &'a mut Option<Status>,
-}
-struct ValidatedSkip;
-impl<'de> DeserializeSeed<'de> for ValidatedSkip {
-    type Value = ();
-    fn deserialize<D: de::Deserializer<'de>>(self, decoder: D) -> Result<(), D::Error> {
-        decoder.deserialize_any(self)
-    }
-}
-impl<'de> Visitor<'de> for ValidatedSkip {
-    type Value = ();
-    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("a valid JSON value")
-    }
-    empty_scalars!();
-    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<(), A::Error> {
-        while seq.next_element_seed(ValidatedSkip)?.is_some() {}
-        Ok(())
-    }
-    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<(), A::Error> {
-        while map.next_key::<IgnoredAny>()?.is_some() {
-            map.next_value_seed(ValidatedSkip)?;
-        }
-        Ok(())
-    }
-}
-impl<'de> DeserializeSeed<'de> for RootSeed<'_> {
-    type Value = ();
-    fn deserialize<D: de::Deserializer<'de>>(self, decoder: D) -> Result<(), D::Error> {
-        decoder.deserialize_any(self)
-    }
-}
-impl<'de> Visitor<'de> for RootSeed<'_> {
-    type Value = ();
-    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("a media document")
-    }
-    empty_scalars!();
-    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<(), A::Error> {
-        while seq.next_element_seed(ValidatedSkip)?.is_some() {}
-        Ok(())
-    }
-    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<(), A::Error> {
-        while let Some(key) = map.next_key::<String>()? {
-            if key == "media" {
-                self.records
-                    .clear()
-                    .map_err(|e| storage_error(self.failure, e))?;
-                map.next_value_seed(MediaSeed {
-                    records: &mut *self.records,
-                    failure: &mut *self.failure,
-                })?;
-            } else if key == "nativePublication" && self.capture_publication {
-                *self.publication = Some(map.next_value::<Value>()?);
-            } else {
-                map.next_value_seed(ValidatedSkip)?;
-            }
-        }
-        Ok(())
-    }
-}
-impl<'de> DeserializeSeed<'de> for MediaSeed<'_> {
-    type Value = ();
-    fn deserialize<D: de::Deserializer<'de>>(self, decoder: D) -> Result<(), D::Error> {
-        decoder.deserialize_any(self)
-    }
-}
-impl<'de> Visitor<'de> for MediaSeed<'_> {
-    type Value = ();
-    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("a media array")
-    }
-    empty_scalars!();
-    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<(), A::Error> {
-        while map.next_key::<IgnoredAny>()?.is_some() {
-            map.next_value_seed(ValidatedSkip)?;
-        }
-        Ok(())
-    }
-    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<(), A::Error> {
-        while seq
-            .next_element_seed(RecordSeed {
-                records: &mut *self.records,
-                failure: &mut *self.failure,
-            })?
-            .is_some()
-        {}
-        Ok(())
-    }
-}
-impl<'de> DeserializeSeed<'de> for RecordSeed<'_> {
-    type Value = ();
-    fn deserialize<D: de::Deserializer<'de>>(self, decoder: D) -> Result<(), D::Error> {
-        decoder.deserialize_any(self)
-    }
-}
-impl<'de> Visitor<'de> for RecordSeed<'_> {
-    type Value = ();
-    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("a media record")
-    }
-    empty_scalars!();
-    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<(), A::Error> {
-        while seq.next_element_seed(ValidatedSkip)?.is_some() {}
-        Ok(())
-    }
-    fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<(), A::Error> {
-        let value = Value::deserialize(de::value::MapAccessDeserializer::new(map))?;
-        if value.is_object() {
-            self.records
-                .append_raw(&value)
-                .map_err(|e| storage_error(self.failure, e))?;
-        }
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 #[path = "media_records_tests.rs"]
 mod tests;

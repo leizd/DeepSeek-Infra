@@ -184,27 +184,24 @@ fn source_spool_and_index_failures_never_become_an_empty_store() {
 #[test]
 fn discarded_values_still_validate_numbers_utf8_and_original_json_depth() {
     let valid_record = serde_json::to_string(&record("media_one", "Retained")).unwrap();
-    // Workspace/worker graphs enable arbitrary_precision through deepseek-proof;
-    // policy-only callers retain their existing numeric range. Never enable a
-    // new feature merely to make this same corpus pass in both graphs.
-    for ignored in ["1e400", "1234567890123456789012345678901234567890"] {
-        let bytes = format!(r#"{{"media":[{valid_record}],"ignored":{ignored}}}"#);
-        let accepted = serde_json::from_str::<Value>(&bytes).is_ok();
-        let records = Records::from_reader(bytes.as_bytes()).unwrap();
-        assert_eq!(records.len().unwrap(), i64::from(accepted));
-        assert_eq!(
-            retained(&records),
-            legacy_normalized_items(bytes.as_bytes())
-        );
-    }
+    // Actual original Python goldens cover both feature graphs, non-finite
+    // discarded scalars and accepted nesting. Do not make serde the oracle.
     for ignored in [
-        "1e+".to_string(),
-        "01".to_string(),
+        "1e400".to_string(),
+        "1234567890123456789012345678901234567890".to_string(),
         "NaN".to_string(),
         format!("{}0{}", "[".repeat(140), "]".repeat(140)),
     ] {
         let bytes = format!(r#"{{"media":[{valid_record}],"ignored":{ignored}}}"#);
-        assert!(serde_json::from_str::<Value>(&bytes).is_err());
+        let records = Records::from_reader(bytes.as_bytes()).unwrap();
+        assert_eq!(records.len().unwrap(), 1);
+        assert_eq!(
+            retained(&records),
+            legacy_normalized_items(document(&[record("media_one", "Retained")]).as_slice())
+        );
+    }
+    for ignored in ["1e+", "01"] {
+        let bytes = format!(r#"{{"media":[{valid_record}],"ignored":{ignored}}}"#);
         assert_eq!(
             Records::from_reader(bytes.as_bytes())
                 .unwrap()
