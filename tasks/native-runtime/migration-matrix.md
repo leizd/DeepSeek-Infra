@@ -1,3 +1,36 @@
+## 2026-11-04: original-reader JSON regressions before native repair
+
+This diagnostic source snapshot adds23 independent Rust cases backed by actual
+original Python `_load_store` / `list_media` observations:22 retain a media row,
+and one ordinary private-tag object used as `media` remains a non-array and
+returns empty. Both worker and gateway observations run before each assertion.
+The fixtures cover discarded numeric domains, ordinary private dictionary
+keys, original admitted nesting and schema-ignored surrogate fields. The old
+native Value decoder is not the acceptance oracle. None of these tests is
+ignored or marked as an expected failure. Existing assertions remain intact.
+
+Production Rust/Go/Python, Proto, Cargo profiles/dependencies/lock, original
+coverage floors and Rust cloud commands remain byte-identical to parentf000759b.
+Only the additional Windows parser corpus grows by23 names; all original
+Windows steps remain frozen. Local offline/source checks do not establish
+native compatibility. Execute the reviewed exact snapshot in GitHub Actions,
+preserve actual regression evidence, and then repair the reader in a later
+source snapshot. Do not relabel compiler errors or older-source passes as
+these required original-function cases passing.
+
+Parentf000759b has completed standalone Rust and controlled Windows/macOS /
+Android qualification; its original complete CI41766346063 remains separate.
+No parent result qualifies this new diagnostic source. The original workspace
+HEAD/index and163 guarded entries remain preserved. Native compilation/tests,
+Docker and platform builds stay in the cloud; only reports return locally.
+No main merge, product release, PR operation or production-data change is
+included. Full migration stays ACTIVE/NOT_READY. All original retained JSON
+and domain behavior, MCP test-engine, unique signed writers/cutover/Fleet/proof,
+unknown effects, complete recovery/rollback/width/power-loss and actual full
+product/provider/model/physical-platform/zero-Python acceptance remain required.
+
+---
+
 ## 2026-11-04: discarded Unicode escapes use the original Python oracle
 
 The latest exact-source Rust cloud run for `c2b00a2a` failed a newly added
