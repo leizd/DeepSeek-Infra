@@ -775,7 +775,7 @@ struct NumberOnly;
 impl<'de> Deserialize<'de> for NumberOnly {
     fn deserialize<D: de::Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
         struct Numeric;
-        impl<'de> Visitor<'de> for Numeric {
+        impl Visitor<'_> for Numeric {
             type Value = NumberOnly;
             fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 f.write_str("a JSON number")
@@ -833,10 +833,11 @@ fn read_mode(
         value_semantics,
         mode,
     };
-    let result = match parser.document() {
-        Err(Error::Storage(error)) => return Err(Error::Storage(error)),
-        result => result,
-    };
+    let result = parser.document();
+    // Private spool failures retain priority over source/UTF8 fallbacks.
+    if let Err(Error::Storage(error)) = result {
+        return Err(Error::Storage(error));
+    }
     if matches!(result, Err(Error::Syntax)) {
         // Preserve complete source-read/UTF8 precedence even after early syntax.
         let _ = io::copy(&mut parser.input, &mut io::sink());

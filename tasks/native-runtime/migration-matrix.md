@@ -1,3 +1,33 @@
+<!-- native-20261104-media-parser-build-fixes:start -->
+## Current checkpoint: combine three observed cloud compilation corrections, 2026-11-04
+
+Working branch: `codex/native-media-parser-build-fixes-20261103`, based on exact
+source `7c97e6dd76c279a70a79f4ebe1b4352ea28ce739`.
+Parent run 41642403830 is terminal: checks job 125938966298 failed on two Clippy
+lints, and coverage job 125938966754 failed compiling one new fixture format
+string (two placeholders, one argument). The prior byte-reader signature errors
+were absent. Both terminal raw logs and source/run/job/hash receipts are retained;
+no native tests, coverage score, capacity or memory were qualified or restarted.
+
+This direct child combines the two prepared production lint cleanups with the
+fixture escaping correction. Elide the Numeric visitor lifetime and retain the
+early Storage failure return with an explicit if-let before source/UTF8 fallback.
+Escape the literal empty object in the existing mixed media-array fixture;
+retain its real row placeholder, all assertions and every case name. The already
+frozen lint-only prototype dbc652d71b73e8576d51e95b323dc39b82bdd90f remains in
+artifacts but was never uploaded or dispatched. No native tests are removed.
+
+Only those two Rust files and three append-preserving task checkpoints change.
+Profiles, dependencies/lock, workflows, features, thresholds, input domains,
+protocols, deadlines and runtime data remain unchanged. Source scope, formatting
+and doc links precede a new exact-source cloud run. All new native results are
+pending; full product readiness remains **NOT_READY** with every earlier retained
+functionality/ownership/recovery/platform/browser/provider gate still required.
+Original HEAD and163 guarded entries are retained; no local native compilation,
+compiler cache/image/volume download, main merge/release/production-data or
+out-of-schedule PR action is included.
+<!-- native-20261104-media-parser-build-fixes:end -->
+
 <!-- native-20261103-media-byte-reader-fix:start -->
 ## Current checkpoint: cloud compilation correction, 2026-11-03
 

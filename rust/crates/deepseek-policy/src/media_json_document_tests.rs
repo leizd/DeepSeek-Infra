@@ -38,7 +38,7 @@ fn escaped_names_and_complete_last_key_match_the_full_document() {
         ),
         format!(r#"{{"media":[{}],"media":null}}"#, ROW),
         format!(
-            r#"{{"media":[null,5,1.25,[],false,{},{}],"ignored":{{"x":[1,true]}}}}"#,
+            r#"{{"media":[null,5,1.25,[],false,{{}},{}],"ignored":{{"x":[1,true]}}}}"#,
             ROW
         ),
         format!(r#"{{"media":[{}]}} garbage"#, ROW),
