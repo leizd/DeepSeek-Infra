@@ -1,3 +1,18 @@
+<!-- native checkpoint 2026-11-04 raw capture result type -->
+
+Full product migration remains ACTIVE / NOT_READY. Source35680c0c run41822512132
+checks job126548906137 reached the unchanged pinned Clippy gate and failed only
+on the private Capture::finish complex tuple type. This source names the same
+writer/offset/length/hash result CapturedRecord. Buffer/sink flushes, digest
+finalization, writer restoration and SQLite index ordering stay identical.
+All production/test/gate bytes except that type spelling and this checkpoint
+remain unchanged. The source uses no lint suppression or skipped case. Parent
+coverage keeps its original run handle and is not borrowed for current-source
+qualification. Current cloud native compilation/runtime is still required.
+All earlier raw/lossless normalization, product/platform/recovery/authority,
+zero-production-Python and original MCP obligations remain required. Original
+dirty checkout/data stay intact; all native builds/caches remain cloud-only.
+
 <!-- native checkpoint 2026-11-04 raw media read-spool separation -->
 
 Whole server/desktop/Android/background Rust+Go production migration remains

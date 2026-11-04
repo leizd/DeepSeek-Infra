@@ -25,19 +25,26 @@ impl Write for Capture {
     }
 }
 
+struct CapturedRecord {
+    writer: Box<dyn WriteSeek>,
+    offset: i64,
+    length: i64,
+    hash: Vec<u8>,
+}
+
 impl Capture {
-    fn finish(mut self) -> Result<(Box<dyn WriteSeek>, i64, i64, Vec<u8>), Status> {
+    fn finish(mut self) -> Result<CapturedRecord, Status> {
         // Both the buffer and underlying sink must flush before any index entry
         // is committed or a later top-level media key can truncate the spool.
         self.output.flush().map_err(|_| invalid())?;
         let digest = self.output.into_inner().map_err(|_| invalid())?;
         let (writer, length, hash) = digest.finish_into_inner().map_err(|_| invalid())?;
-        Ok((
+        Ok(CapturedRecord {
             writer,
-            self.offset,
-            i64::try_from(length).map_err(|_| invalid())?,
+            offset: self.offset,
+            length: i64::try_from(length).map_err(|_| invalid())?,
             hash,
-        ))
+        })
     }
 }
 
@@ -78,7 +85,12 @@ impl RawRecords {
     }
 
     pub(super) fn finish_capture(&mut self, capture: Capture) -> Result<(), Status> {
-        let (writer, offset, length, hash) = capture.finish()?;
+        let CapturedRecord {
+            writer,
+            offset,
+            length,
+            hash,
+        } = capture.finish()?;
         self.inner.writer = writer;
         self.inner
             .connection
