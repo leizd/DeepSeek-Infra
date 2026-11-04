@@ -1,3 +1,35 @@
+<!-- native checkpoint 2026-11-04 original winning-field and clock diagnostics -->
+
+Full server/desktop/Android/background Rust+Go production migration remains
+ACTIVE / NOT_READY, with every retained function and original gate still required.
+This source adds 11 independent native regressions against actual unchanged
+original Python behavior: four raw-path MIME cases, three final media-array cases,
+three duplicate-field cases and one fake-clock ordering case. The original reader
+accepts all ten documents; after skipping an invalid-path row, the next valid row
+uses the second clock value. The deep losing-array fixture uses500 levels already
+covered in the original supported Python CI range, without imposing a native cap.
+
+Only a clock dependency was extracted from the existing Rust normalizer for this
+diagnostic snapshot. Its production clock, expression order and body tokens are
+unchanged; the source does not yet fix the exposed behavior. Both worker and
+gateway results are evaluated before assertions. Every existing native test stays
+in the inventory. The added Windows parser group includes the new11 names in
+both caller graphs; the original Windows job bytes, CI, profiles, dependencies,
+coverage floors, deadlines, Proto and authoritative writer boundaries stay intact.
+
+Parent f264e381b5c7980281d013f95d94e1fc10eed4a8 has a separately verified
+coverage job:1749 passed, sole original Redis ignore,15 crates and82.777530%
+lines at the unchanged80% floor. Parent full Rust HTTP gates were still pending
+when this diagnostic checkpoint was prepared. Ancestor f000759b fullCI37/37 and
+Evidence50 are not current-source qualification. The new regressions need actual
+cloud execution, then repair and exact-source original verification. Raw/lossless
+spooling must preserve escapes, separate raw from emission-capable normalized
+records, resolve duplicate keys and preserve actual clock ordering; the reviewed
+four design findings remain actionable. Full media processing/recovery/authority,
+remaining JSON domains, platforms, zero production Python/server TypeScript and
+original MCP test-engine requirements remain open. All native builds/caches stay
+cloud-only; original dirty checkout and real data are preserved.
+
 <!-- native checkpoint 2026-11-04 pinned Clippy correction -->
 
 Whole product migration remains ACTIVE / NOT_READY. At source

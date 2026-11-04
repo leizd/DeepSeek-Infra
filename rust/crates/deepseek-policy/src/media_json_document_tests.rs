@@ -292,3 +292,5 @@ fn discarded_surrogate_escapes_match_original_python_media_reader() {
 }
 
 include!("media_python_document_tests.rs");
+
+include!("media_python_winning_tests.rs");

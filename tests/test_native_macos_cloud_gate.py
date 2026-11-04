@@ -23,7 +23,7 @@ def test_optional_macos_probe_preserves_the_complete_original_windows_job() -> N
     assert len(added) == 1
     # Bind the approved additional gate separately; preserve the original job's frozen hash.
     extra = json.dumps(added[0], sort_keys=True, separators=(",", ":")).encode()
-    assert hashlib.sha256(extra).hexdigest() == "bcb5a3890a00efc89b28209bd916b04fe201057b9b7827f7d8ee220b4966b5ad"  # pragma: allowlist secret
+    assert hashlib.sha256(extra).hexdigest() == "48e1c24ee45dad561fcf471832be2db17e46dc244c91b1a98a9fc428f94a8097"  # pragma: allowlist secret
     original_job = dict(windows_job, steps=[step for step in windows_job["steps"] if step is not added[0]])
     original = json.dumps(original_job, sort_keys=True, separators=(",", ":")).encode()
     # Public SHA256 of the original workflow structure, not a credential.

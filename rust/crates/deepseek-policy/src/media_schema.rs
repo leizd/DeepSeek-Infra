@@ -100,6 +100,13 @@ pub fn python_truthy_opt(value: Option<&Value>) -> bool {
 /// `schema.normalize_media_record`. The segment route only needed acceptance;
 /// home and library readers return the public record.
 pub fn normalize_media_record(value: &Value) -> Result<Value, AppError> {
+    normalize_media_record_with_clock(value, utc_now_z)
+}
+
+pub(crate) fn normalize_media_record_with_clock(
+    value: &Value,
+    mut clock: impl FnMut() -> String,
+) -> Result<Value, AppError> {
     let media_id = validate_workspace_id(&text_or_empty(value.get("mediaId")), "media id")?;
     let project_raw = text_or_empty(value.get("projectId"));
     let project_id = if project_raw.trim().is_empty() {
@@ -114,7 +121,7 @@ pub fn normalize_media_record(value: &Value) -> Result<Value, AppError> {
     let created_at = if python_truthy_opt(value.get("createdAt")) {
         value_str(value.get("createdAt").expect("truthy createdAt"))
     } else {
-        utc_now_z()
+        clock()
     };
     let updated_at = if python_truthy_opt(value.get("updatedAt")) {
         value_str(value.get("updatedAt").expect("truthy updatedAt"))

@@ -212,7 +212,18 @@ jobs:
             'media_records::document::tests::python_original_discarded_depth_128',
             'media_records::document::tests::python_original_discarded_depth_200',
             'media_records::document::tests::python_original_discarded_depth_500',
-            'media_records::document::tests::python_original_retained_schema_ignored_surrogate'
+            'media_records::document::tests::python_original_retained_schema_ignored_surrogate',
+            'media_records::document::tests::original_winning_last_title_replaces_surrogate',
+            'media_records::document::tests::original_winning_last_metadata_replaces_nonfinite',
+            'media_records::document::tests::original_winning_last_metadata_key_replaces_surrogate',
+            'media_records::document::tests::original_winning_mime_raw_path_0',
+            'media_records::document::tests::original_winning_mime_raw_path_1',
+            'media_records::document::tests::original_winning_mime_raw_path_2',
+            'media_records::document::tests::original_winning_mime_raw_path_3',
+            'media_records::document::tests::original_winning_last_media_replaces_first_nan',
+            'media_records::document::tests::original_winning_last_media_replaces_first_surrogate',
+            'media_records::document::tests::original_winning_last_media_replaces_first_deep',
+            'media_records::document::tests::original_winning_clock_before_invalid_path'
           )
           $spoolExpected = @(
             'media_segment_routes::media_read_spool::tests::source_order_first_match_stable_sort_and_all_fields_match_original',
