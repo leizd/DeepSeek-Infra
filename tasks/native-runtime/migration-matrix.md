@@ -1,3 +1,35 @@
+<!-- native-20261104-media-valid-fixtures:start -->
+## Current checkpoint: make new positive media fixtures valid, 2026-11-04
+
+Working branch: `codex/native-media-valid-fixtures-20261104`, based on exact source
+`cf315d10c5b68d910b010a402227949e6861a69f`.
+Historical source d3b06946 run 41744758477 coverage job 126294859284 reached actual
+gateway tests: 250 passed, one new streamed-collection test failed because fixture
+IDs a/b were rejected by the existing 4-character minimum. The base source retains
+that identical fixture file. Original Python normalization independently rejects
+a/b/one/two and accepts media_alpha/media_beta/media_one/media_two. This is invalid
+positive test data; production admission rules remain unchanged.
+
+Use legal IDs in streaming, cancellation and corruption fixtures, require the
+positive row factory to normalize successfully, and require the original collection
+oracle to retain both rows. Correct the worker comparison's one/two IDs and require
+its independent original normalizer to retain all three rows; these were likewise
+short invalid fixtures. Preserve every existing case name and behavioral assertion,
+including filtering, exact bytes/headers, status-only HEAD, cancellation cleanup,
+corrupt-spool failure and duplicate-first semantics. No production Rust changes.
+
+Only two Rust test files and three append-preserving task checkpoints change.
+All production code, three digest tests, dependencies/lock, profiles, workflows,
+thresholds, features, admitted inputs, deadlines and protocols are unchanged.
+Native results on this exact source are still pending; historical or base results
+do not qualify it. Keep observing the original base run 41746583402 without restart
+until each job is terminal. Whole-product readiness remains **NOT_READY**, and all
+preceding retained-function/ownership/recovery/platform/browser/provider/release
+gates remain required. Preserve original HEAD and163 guarded entries; no local
+native build, cache/image/volume download, main merge/release/production-data or
+out-of-schedule PR action is included.
+<!-- native-20261104-media-valid-fixtures:end -->
+
 <!-- native-20261104-media-worker-imports:start -->
 ## Current checkpoint: worker imports after shared record relocation, 2026-11-04
 

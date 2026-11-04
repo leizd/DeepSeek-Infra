@@ -4,8 +4,13 @@ use axum::http::Method;
 use std::fs;
 
 fn row(id: &str, stamp: &str) -> Value {
-    json!({"mediaId":id,"type":"image","path":"image.png","title":id,
-        "createdAt":"fixed","updatedAt":stamp,"metadata":{"preserved":[1,true,"λ"]}})
+    let value = json!({"mediaId":id,"type":"image","path":"image.png","title":id,
+        "createdAt":"fixed","updatedAt":stamp,"metadata":{"preserved":[1,true,"λ"]}});
+    assert!(
+        normalize_media_record(&value).is_ok(),
+        "invalid positive fixture: {id}"
+    );
+    value
 }
 
 fn fixture(bytes: &[u8]) -> tempfile::NamedTempFile {
@@ -131,9 +136,16 @@ fn raw_membership_is_not_short_circuited_before_full_json_validation() {
 
 #[tokio::test]
 async fn streamed_collection_matches_original_bytes_filters_headers_and_head() {
-    let bytes = serde_json::to_vec(&json!({"media":[row("a","1"),row("b","2")]})).unwrap();
+    let bytes =
+        serde_json::to_vec(&json!({"media":[row("media_alpha","1"),row("media_beta","2")]}))
+            .unwrap();
     let file = fixture(&bytes);
     let mut rows = original(&bytes).unwrap();
+    assert_eq!(
+        rows.len(),
+        2,
+        "both positive collection fixtures must be retained"
+    );
     rows.sort_by_key(|item| std::cmp::Reverse(media_sort_key(item)));
     let index = PublicIndex::load(file.path()).unwrap();
     let response = index.collection(|_| true).unwrap().into_response();
@@ -152,12 +164,12 @@ async fn streamed_collection_matches_original_bytes_filters_headers_and_head() {
         expected
     );
     let response = index
-        .collection(|value| value["mediaId"] == "a")
+        .collection(|value| value["mediaId"] == "media_alpha")
         .unwrap()
         .into_response();
     let value: Value =
         serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
-    assert_eq!(value["media"][0]["mediaId"], "a");
+    assert_eq!(value["media"][0]["mediaId"], "media_alpha");
     assert_eq!(value["media"].as_array().unwrap().len(), 1);
     let prepared = index.collection(|_| true).unwrap();
     let response = super::super::read_response(Method::HEAD, move || Ok(prepared)).await;
@@ -173,7 +185,7 @@ async fn streamed_collection_matches_original_bytes_filters_headers_and_head() {
 
 #[tokio::test]
 async fn dropping_a_stream_releases_its_private_file_without_modifying_the_library() {
-    let bytes = serde_json::to_vec(&json!({"media":[row("a","1")]})).unwrap();
+    let bytes = serde_json::to_vec(&json!({"media":[row("media_alpha","1")]})).unwrap();
     let file = fixture(&bytes);
     let output = PublicIndex::load(file.path())
         .unwrap()
@@ -189,7 +201,7 @@ async fn dropping_a_stream_releases_its_private_file_without_modifying_the_libra
 
 #[tokio::test]
 async fn changed_response_spool_fails_instead_of_claiming_a_complete_body() {
-    let bytes = serde_json::to_vec(&json!({"media":[row("a","1")]})).unwrap();
+    let bytes = serde_json::to_vec(&json!({"media":[row("media_alpha","1")]})).unwrap();
     let file = fixture(&bytes);
     let output = PublicIndex::load(file.path())
         .unwrap()
