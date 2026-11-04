@@ -1,3 +1,31 @@
+<!-- native-20261104-media-worker-imports:start -->
+## Current checkpoint: worker imports after shared record relocation, 2026-11-04
+
+Working branch: `codex/native-media-worker-imports-20261104`, based on exact source
+`d3b06946cdd5cfe29916b82578063b0af7c20cde`.
+Checks job 126294859469 in run 41744758477 reached the worker and failed the
+unchanged `-D warnings` gate on unused imports left by record relocation. Its
+terminal raw log and source/run/job/hash receipt are retained. Coverage job
+126294859284 was independently verified live at the recorded observation; keep
+that exact handle and collect its eventual result, without restart or treating
+an observation timeout as termination. No parent result qualifies this source.
+
+Retain the production DigestWriter re-export, import DigestReader only for the
+existing tests, remove the unused WriteSeek re-export and redundant parent SHA2
+import (the test module already imports SHA2). The common streaming digest code,
+worker image identities, all three original digest tests and every other test,
+profile, dependency/lock, feature, workflow, threshold and deadline are unchanged.
+An exact inverse rewrite restores the parent worker file. Only this import file
+and three append-preserving task checkpoints change; no lint suppression is added.
+
+Native compilation/tests/coverage and controlled HTTP capacity/memory are pending
+for this source. Full product readiness remains **NOT_READY** and all earlier
+retained functionality, ownership, recovery, platform/browser/provider and release
+gates remain required. Preserve original HEAD and163 guarded entries; no local
+native build, compiler cache/image/volume download, main merge/release/production
+data or out-of-schedule PR action is included.
+<!-- native-20261104-media-worker-imports:end -->
+
 <!-- native-20261104-media-parser-build-fixes:start -->
 ## Current checkpoint: combine three observed cloud compilation corrections, 2026-11-04
 
