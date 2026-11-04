@@ -197,10 +197,10 @@ impl KeyMatch {
             return;
         }
         for (index, name) in KEYS.iter().enumerate() {
-            if !name
+            if name
                 .as_bytes()
                 .get(self.length)
-                .is_some_and(|byte| u32::from(*byte) == value)
+                .is_none_or(|byte| u32::from(*byte) != value)
             {
                 self.candidates &= !(1 << index);
             }
@@ -213,7 +213,7 @@ impl KeyMatch {
                 return match index {
                     0 => Key::Media,
                     1 => Key::Publication,
-                    _ => Key::Field(*name),
+                    _ => Key::Field(name),
                 };
             }
         }

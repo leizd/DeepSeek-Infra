@@ -1,3 +1,21 @@
+<!-- native checkpoint 2026-11-04 pinned Clippy correction -->
+
+Whole product migration remains ACTIVE / NOT_READY. At source
+`8aa6721d7610cf31599f9f450b1383cb4633c317`, Rust cloud run 41788650911
+checks job 126436577030 failed its unchanged pinned Clippy gate on
+`nonminimal_bool` and `explicit_auto_deref` in document-key recognition.
+This source changes only those two equivalent expressions and this checkpoint.
+Original tests (including the 23 individual regressions and 328-case actual
+Python matrix), production behavior, dependencies, profiles, workflows, deadlines
+and floors remain unchanged. The previous coverage job retains its original
+handle; it is not restarted or borrowed to qualify this source. Current native
+compilation/runtime verification is required at this exact new commit.
+
+The original dirty checkout and real data remain intact. All native builds and
+caches stay cloud-side; only reports are retrieved. All earlier unfinished full
+product, retained JSON domain, authority/recovery, platform, zero-production-
+Python and MCP test-engine obligations remain required.
+
 <!-- native checkpoint 2026-11-04 ordinary Python media JSON -->
 
 The full server/desktop/Android/background Rust+Go production migration remains
