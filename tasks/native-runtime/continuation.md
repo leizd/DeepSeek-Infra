@@ -1,3 +1,27 @@
+<!-- native checkpoint 2026-11-04 original MIME and clock correction -->
+
+Full product migration remains ACTIVE / NOT_READY. Source4e29505c cloud run
+41794728527 compiled and passed Clippy, then its coverage-mode policy tests
+exposed10 failures among11 new original-Python regressions. The checks-mode
+handle is preserved and observed separately; no uncertain run is restarted.
+
+This source corrects two normalizer expressions: original timestamps are
+calculated before invalid-path rejection, and MIME fallback reads the original
+raw path before normalization. No other production expression, test, fixture,
+workflow, profile, dependency, Proto, timeout or coverage floor changes. The
+clock and four raw-path MIME assertions stay mandatory. Five other duplicate-
+selection inputs still require raw/lossless record spooling; this source does
+not claim those solved and does not suppress or ignore their regressions.
+
+Fresh scoped adversarial review found no issue in the two-line unit. External
+model review was skipped for autonomous continuation. Native qualification must
+be re-established at this exact source; inherited offline393/mypy1020 evidence
+is limited to byte-identical Python/test/fixture sources. Parent f264 coverage
+and controlled media HTTP reports are not child qualification. All original
+server/desktop/Android/background, authority/recovery, zero-production-Python
+and MCP test-engine obligations stay open. Original dirty checkout and real
+data stay intact; all native compilation and caches remain cloud-only.
+
 <!-- native checkpoint 2026-11-04 original winning-field and clock diagnostics -->
 
 Full server/desktop/Android/background Rust+Go production migration remains

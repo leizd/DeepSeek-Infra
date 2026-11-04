@@ -117,7 +117,6 @@ pub(crate) fn normalize_media_record_with_clock(
     let mime = normalize_mime(value.get("mimeType"));
     let title_raw = text_or_empty(value.get("title"));
     let media_type = declared_media_type(value.get("type"), &mime, &title_raw)?;
-    let path = normalize_media_path(value.get("path"))?;
     let created_at = if python_truthy_opt(value.get("createdAt")) {
         value_str(value.get("createdAt").expect("truthy createdAt"))
     } else {
@@ -129,10 +128,11 @@ pub(crate) fn normalize_media_record_with_clock(
         created_at.clone()
     };
     let mime_type = if mime.is_empty() {
-        guess_mime_type(&path)
+        guess_mime_type(&text_or_empty(value.get("path")))
     } else {
         mime
     };
+    let path = normalize_media_path(value.get("path"))?;
     Ok(json!({
         "mediaId": media_id,
         "projectId": project_id,
