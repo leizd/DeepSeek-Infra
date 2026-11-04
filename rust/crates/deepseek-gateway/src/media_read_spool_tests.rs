@@ -215,3 +215,48 @@ async fn changed_response_spool_fails_instead_of_claiming_a_complete_body() {
     assert!(!temporary_path.exists());
     assert_eq!(fs::read(file.path()).unwrap(), bytes);
 }
+
+#[tokio::test]
+async fn discarded_unicode_collection_detail_membership_and_window_match_python() {
+    let golden: Value = serde_json::from_str(include_str!(
+        "../../../../tests/fixtures/native_media_discarded_unicode_v1.json"
+    ))
+    .unwrap();
+    let cases = golden["cases"].as_array().unwrap();
+    assert_eq!(cases.len(), 21);
+    for case in cases {
+        let bytes = case["document"].as_str().unwrap().as_bytes();
+        let file = fixture(bytes);
+        let expected = case["publicRows"].as_array().unwrap();
+        let index = PublicIndex::load(file.path()).unwrap();
+        assert_eq!(
+            index.window(99).unwrap(),
+            (expected.clone(), expected.len()),
+            "{}",
+            case["name"]
+        );
+        assert_eq!(
+            find(file.path(), "media_kept").unwrap(),
+            expected.first().cloned(),
+            "{}",
+            case["name"]
+        );
+        assert_eq!(
+            contains(file.path(), "media_kept").unwrap(),
+            !expected.is_empty(),
+            "{}",
+            case["name"]
+        );
+        let response = index.collection(|_| true).unwrap().into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let actual: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            actual,
+            json!({"ok":true,"media":expected}),
+            "{}",
+            case["name"]
+        );
+        assert_eq!(fs::read(file.path()).unwrap(), bytes);
+    }
+}

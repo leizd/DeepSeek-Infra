@@ -1,0 +1,826 @@
+{
+  "schemaVersion": 1,
+  "oracle": "original Python library._load_store and library.list_media",
+  "originalReaderSha256": "1b1ae1f169609b0f83606c142726d2361902d4515845ed4465d9f93f69b2f7dd",
+  "sourceCommit": "c2b00a2af9514de09cbf5e755af328dd42347d05",
+  "cases": [
+    {
+      "name": "ignored_value_paired",
+      "kind": "ignored_value",
+      "document": "{\"ignored\":\"\\uD834\\uDD1E\",\"media\":[{\"mediaId\":\"media_kept\",\"type\":\"image\",\"title\":\"original\",\"path\":\"image.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"fixed\"}]}",
+      "documentSha256": "98f2743de7b407121ef25476cab0ed17cddd67ba402f848d828df17d65648a4f",
+      "rawRows": [
+        {
+          "mediaId": "media_kept",
+          "type": "image",
+          "title": "original",
+          "path": "image.png",
+          "createdAt": "fixed",
+          "updatedAt": "fixed"
+        }
+      ],
+      "storedRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "publicRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ]
+    },
+    {
+      "name": "ignored_value_high",
+      "kind": "ignored_value",
+      "document": "{\"ignored\":\"\\uD800\",\"media\":[{\"mediaId\":\"media_kept\",\"type\":\"image\",\"title\":\"original\",\"path\":\"image.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"fixed\"}]}",
+      "documentSha256": "0fb064d588381285369eae22eb92846fa4b3907e671f08aa3f296d66412d389d",
+      "rawRows": [
+        {
+          "mediaId": "media_kept",
+          "type": "image",
+          "title": "original",
+          "path": "image.png",
+          "createdAt": "fixed",
+          "updatedAt": "fixed"
+        }
+      ],
+      "storedRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "publicRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ]
+    },
+    {
+      "name": "ignored_value_low",
+      "kind": "ignored_value",
+      "document": "{\"ignored\":\"\\uDC00\",\"media\":[{\"mediaId\":\"media_kept\",\"type\":\"image\",\"title\":\"original\",\"path\":\"image.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"fixed\"}]}",
+      "documentSha256": "7d1d2c65ab9a9931a3e303dae609922b7dca6d73abf38aad182282fc0d601c83",
+      "rawRows": [
+        {
+          "mediaId": "media_kept",
+          "type": "image",
+          "title": "original",
+          "path": "image.png",
+          "createdAt": "fixed",
+          "updatedAt": "fixed"
+        }
+      ],
+      "storedRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "publicRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ]
+    },
+    {
+      "name": "ignored_value_high_ascii",
+      "kind": "ignored_value",
+      "document": "{\"ignored\":\"\\uD800\\u0061\",\"media\":[{\"mediaId\":\"media_kept\",\"type\":\"image\",\"title\":\"original\",\"path\":\"image.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"fixed\"}]}",
+      "documentSha256": "61659d2011ebb40d4e45cf9c3ec9f331c5c41f6663c00c70871d69f9c3b45f3e",
+      "rawRows": [
+        {
+          "mediaId": "media_kept",
+          "type": "image",
+          "title": "original",
+          "path": "image.png",
+          "createdAt": "fixed",
+          "updatedAt": "fixed"
+        }
+      ],
+      "storedRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "publicRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ]
+    },
+    {
+      "name": "ignored_value_bad_escape",
+      "kind": "ignored_value",
+      "document": "{\"ignored\":\"\\x00\",\"media\":[{\"mediaId\":\"media_kept\",\"type\":\"image\",\"title\":\"original\",\"path\":\"image.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"fixed\"}]}",
+      "documentSha256": "373bc5dd10c7e00450c64721fb090d7e1429606352257f2abdee45f73865e607",
+      "rawRows": [],
+      "storedRows": [],
+      "publicRows": []
+    },
+    {
+      "name": "ignored_value_quote_slash",
+      "kind": "ignored_value",
+      "document": "{\"ignored\":\"quote\\\"and\\\\slash\",\"media\":[{\"mediaId\":\"media_kept\",\"type\":\"image\",\"title\":\"original\",\"path\":\"image.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"fixed\"}]}",
+      "documentSha256": "7eef5b40f1ba0debf369fe305916b6bff1b2b6c4d638a6204c5187bd53194c02",
+      "rawRows": [
+        {
+          "mediaId": "media_kept",
+          "type": "image",
+          "title": "original",
+          "path": "image.png",
+          "createdAt": "fixed",
+          "updatedAt": "fixed"
+        }
+      ],
+      "storedRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "publicRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ]
+    },
+    {
+      "name": "ignored_value_nul",
+      "kind": "ignored_value",
+      "document": "{\"ignored\":\"\\u0000\",\"media\":[{\"mediaId\":\"media_kept\",\"type\":\"image\",\"title\":\"original\",\"path\":\"image.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"fixed\"}]}",
+      "documentSha256": "a23e5de71c9d29c837ec1c75b80987bdd775a243b6e95bc5ba82ecadc5852cd1",
+      "rawRows": [
+        {
+          "mediaId": "media_kept",
+          "type": "image",
+          "title": "original",
+          "path": "image.png",
+          "createdAt": "fixed",
+          "updatedAt": "fixed"
+        }
+      ],
+      "storedRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "publicRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ]
+    },
+    {
+      "name": "ignored_value_bad_hex",
+      "kind": "ignored_value",
+      "document": "{\"ignored\":\"\\u00xz\",\"media\":[{\"mediaId\":\"media_kept\",\"type\":\"image\",\"title\":\"original\",\"path\":\"image.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"fixed\"}]}",
+      "documentSha256": "f0b09d2523d1c5c933794e35bd11d592533e9425f95ab0b517e1dfd4b3208c41",
+      "rawRows": [],
+      "storedRows": [],
+      "publicRows": []
+    },
+    {
+      "name": "ignored_value_raw_control",
+      "kind": "ignored_value",
+      "document": "{\"ignored\":\"line\nfeed\",\"media\":[{\"mediaId\":\"media_kept\",\"type\":\"image\",\"title\":\"original\",\"path\":\"image.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"fixed\"}]}",
+      "documentSha256": "173012ff4939027503f0a39872cdb7ae2bd8e4c0d0502db75aaad17caabd6d0b",
+      "rawRows": [],
+      "storedRows": [],
+      "publicRows": []
+    },
+    {
+      "name": "ignored_key_high",
+      "kind": "ignored_key",
+      "document": "{\"ignored\":{\"\\uD800\":0},\"media\":[{\"mediaId\":\"media_kept\",\"type\":\"image\",\"title\":\"original\",\"path\":\"image.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"fixed\"}]}",
+      "documentSha256": "5f7914ed842cac07b2efd5746b3474d304bd30f16a86184a0619e964ccc46cab",
+      "rawRows": [
+        {
+          "mediaId": "media_kept",
+          "type": "image",
+          "title": "original",
+          "path": "image.png",
+          "createdAt": "fixed",
+          "updatedAt": "fixed"
+        }
+      ],
+      "storedRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "publicRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ]
+    },
+    {
+      "name": "ignored_key_low",
+      "kind": "ignored_key",
+      "document": "{\"ignored\":{\"\\uDC00\":0},\"media\":[{\"mediaId\":\"media_kept\",\"type\":\"image\",\"title\":\"original\",\"path\":\"image.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"fixed\"}]}",
+      "documentSha256": "332af9709eff3eb8903423ce37db1f2587e28b7d17df5e05aceeb9e11fdb3ead",
+      "rawRows": [
+        {
+          "mediaId": "media_kept",
+          "type": "image",
+          "title": "original",
+          "path": "image.png",
+          "createdAt": "fixed",
+          "updatedAt": "fixed"
+        }
+      ],
+      "storedRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "publicRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ]
+    },
+    {
+      "name": "ignored_key_high_ascii",
+      "kind": "ignored_key",
+      "document": "{\"ignored\":{\"\\uD800\\u0041\":0},\"media\":[{\"mediaId\":\"media_kept\",\"type\":\"image\",\"title\":\"original\",\"path\":\"image.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"fixed\"}]}",
+      "documentSha256": "577f1df7e6e3a2510795fcb2074ef375f3cfca556e192ddf4f9279f7915d7615",
+      "rawRows": [
+        {
+          "mediaId": "media_kept",
+          "type": "image",
+          "title": "original",
+          "path": "image.png",
+          "createdAt": "fixed",
+          "updatedAt": "fixed"
+        }
+      ],
+      "storedRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "publicRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ]
+    },
+    {
+      "name": "ignored_key_paired",
+      "kind": "ignored_key",
+      "document": "{\"ignored\":{\"\\uD83D\\uDE00\":0},\"media\":[{\"mediaId\":\"media_kept\",\"type\":\"image\",\"title\":\"original\",\"path\":\"image.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"fixed\"}]}",
+      "documentSha256": "d59adf5dd0d15b954c45aa5ada948ad7a28c8bf7496cf4b38c249240239cd077",
+      "rawRows": [
+        {
+          "mediaId": "media_kept",
+          "type": "image",
+          "title": "original",
+          "path": "image.png",
+          "createdAt": "fixed",
+          "updatedAt": "fixed"
+        }
+      ],
+      "storedRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "publicRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ]
+    },
+    {
+      "name": "ignored_key_bad_hex",
+      "kind": "ignored_key",
+      "document": "{\"ignored\":{\"\\uXXXX\":0},\"media\":[{\"mediaId\":\"media_kept\",\"type\":\"image\",\"title\":\"original\",\"path\":\"image.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"fixed\"}]}",
+      "documentSha256": "223f915bc2fe0c798c4b656404c4e7982fa4b5c1d62af5438048f3a7bb1dec89",
+      "rawRows": [],
+      "storedRows": [],
+      "publicRows": []
+    },
+    {
+      "name": "root_key_high",
+      "kind": "root_key",
+      "document": "{\"\\uD800\":0,\"media\":[{\"mediaId\":\"media_kept\",\"type\":\"image\",\"title\":\"original\",\"path\":\"image.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"fixed\"}]}",
+      "documentSha256": "42eaed105e5b5caee7d7d6a2b8798f38c45c99e4e0f4b4c60668e9ca166d588c",
+      "rawRows": [
+        {
+          "mediaId": "media_kept",
+          "type": "image",
+          "title": "original",
+          "path": "image.png",
+          "createdAt": "fixed",
+          "updatedAt": "fixed"
+        }
+      ],
+      "storedRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "publicRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ]
+    },
+    {
+      "name": "root_key_low",
+      "kind": "root_key",
+      "document": "{\"\\uDC00\":0,\"media\":[{\"mediaId\":\"media_kept\",\"type\":\"image\",\"title\":\"original\",\"path\":\"image.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"fixed\"}]}",
+      "documentSha256": "b124f02f4ba7f57f21d331a87d6a59be3a0c3d464d5d240bd4a6faa5652a1083",
+      "rawRows": [
+        {
+          "mediaId": "media_kept",
+          "type": "image",
+          "title": "original",
+          "path": "image.png",
+          "createdAt": "fixed",
+          "updatedAt": "fixed"
+        }
+      ],
+      "storedRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "publicRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ]
+    },
+    {
+      "name": "root_key_high_ascii",
+      "kind": "root_key",
+      "document": "{\"\\uD800\\u0041\":0,\"media\":[{\"mediaId\":\"media_kept\",\"type\":\"image\",\"title\":\"original\",\"path\":\"image.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"fixed\"}]}",
+      "documentSha256": "9de2a147235bfb87c87a16a64a7e534d5506ebbfaaa06a339b63fc5aef28102f",
+      "rawRows": [
+        {
+          "mediaId": "media_kept",
+          "type": "image",
+          "title": "original",
+          "path": "image.png",
+          "createdAt": "fixed",
+          "updatedAt": "fixed"
+        }
+      ],
+      "storedRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "publicRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ]
+    },
+    {
+      "name": "root_key_media_prefix",
+      "kind": "root_key",
+      "document": "{\"me\\uD800dia\":0,\"media\":[{\"mediaId\":\"media_kept\",\"type\":\"image\",\"title\":\"original\",\"path\":\"image.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"fixed\"}]}",
+      "documentSha256": "fb4ab00342a0d085475979483956843d45861566b2ba892b7304cb97de5f4443",
+      "rawRows": [
+        {
+          "mediaId": "media_kept",
+          "type": "image",
+          "title": "original",
+          "path": "image.png",
+          "createdAt": "fixed",
+          "updatedAt": "fixed"
+        }
+      ],
+      "storedRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "publicRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ]
+    },
+    {
+      "name": "array_scalar_high",
+      "kind": "array_scalar",
+      "document": "{\"media\":[\"\\uD800\",{\"mediaId\":\"media_kept\",\"type\":\"image\",\"title\":\"original\",\"path\":\"image.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"fixed\"}]}",
+      "documentSha256": "87766e3b2f4cbe2d12f112be13275e2fc45ed25740836aebe66ea3eaf715da76",
+      "rawRows": [
+        {
+          "mediaId": "media_kept",
+          "type": "image",
+          "title": "original",
+          "path": "image.png",
+          "createdAt": "fixed",
+          "updatedAt": "fixed"
+        }
+      ],
+      "storedRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "publicRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ]
+    },
+    {
+      "name": "array_scalar_low",
+      "kind": "array_scalar",
+      "document": "{\"media\":[\"\\uDC00\",{\"mediaId\":\"media_kept\",\"type\":\"image\",\"title\":\"original\",\"path\":\"image.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"fixed\"}]}",
+      "documentSha256": "08ee5b863c5fbb733b603ab86e9311abf63e87c6517c22bff7cb18e724549d67",
+      "rawRows": [
+        {
+          "mediaId": "media_kept",
+          "type": "image",
+          "title": "original",
+          "path": "image.png",
+          "createdAt": "fixed",
+          "updatedAt": "fixed"
+        }
+      ],
+      "storedRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "publicRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ]
+    },
+    {
+      "name": "array_scalar_high_ascii",
+      "kind": "array_scalar",
+      "document": "{\"media\":[\"\\uD800\\u0041\",{\"mediaId\":\"media_kept\",\"type\":\"image\",\"title\":\"original\",\"path\":\"image.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"fixed\"}]}",
+      "documentSha256": "6f093b94ee5c45340ca4c6bbe67ebb570754a4e25a21dbe145429343daa8892b",
+      "rawRows": [
+        {
+          "mediaId": "media_kept",
+          "type": "image",
+          "title": "original",
+          "path": "image.png",
+          "createdAt": "fixed",
+          "updatedAt": "fixed"
+        }
+      ],
+      "storedRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "publicRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ]
+    }
+  ]
+}

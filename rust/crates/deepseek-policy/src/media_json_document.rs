@@ -423,11 +423,12 @@ impl<R: Read> Parser<R> {
     }
 
     fn string(&mut self) -> Result<Key, Error> {
-        self.string_with(|_| Ok(()))
+        self.string_with(true, |_| Ok(()))
     }
 
     fn string_with(
         &mut self,
+        discarded: bool,
         mut accept: impl FnMut(&[u8]) -> Result<(), Error>,
     ) -> Result<Key, Error> {
         self.input.expect(b'"')?;
@@ -444,6 +445,13 @@ impl<R: Read> Parser<R> {
                     Some(b't') => 9,
                     Some(b'u') => {
                         let high = self.hex4()?;
+                        // Python accepts any escaped UTF-16 code unit. Discarded
+                        // strings do not need a UTF-8 representation; a surrogate
+                        // cannot match any of the ASCII document field names.
+                        if discarded && (0xd800..=0xdfff).contains(&high) {
+                            key.character(high);
+                            continue;
+                        }
                         if (0xd800..=0xdbff).contains(&high) {
                             self.input.expect(b'\\')?;
                             self.input.expect(b'u')?;
@@ -479,31 +487,10 @@ impl<R: Read> Parser<R> {
         }
     }
 
-    // The old worker's ValidatedSkip used IgnoredAny for unused map keys.
-    // Pinned serde's ignore_escape validates hex digits but does not combine
-    // surrogate pairs there. Gateway Value keys still use strict string().
-    fn ignored_key(&mut self) -> Result<(), Error> {
-        self.input.expect(b'"')?;
-        loop {
-            match self.input.next_byte()? {
-                Some(b'"') => return Ok(()),
-                Some(b'\\') => match self.input.next_byte()? {
-                    Some(b'"' | b'\\' | b'/' | b'b' | b'f' | b'n' | b'r' | b't') => {}
-                    Some(b'u') => {
-                        self.hex4()?;
-                    }
-                    _ => return Err(Error::Syntax),
-                },
-                Some(0..=31) | None => return Err(Error::Syntax),
-                Some(_) => {}
-            }
-        }
-    }
-
     fn numeric_string(&mut self) -> Result<(), Error> {
         self.input.space()?;
         let mut numeric = NumericString::Start;
-        self.string_with(|bytes| {
+        self.string_with(false, |bytes| {
             numeric.accept(bytes);
             Ok(())
         })?;
@@ -517,7 +504,7 @@ impl<R: Read> Parser<R> {
         let (size, hash) = {
             let mut output =
                 BufWriter::with_capacity(BUFFER, DigestWriter::new(file.as_file_mut()));
-            self.string_with(|bytes| {
+            self.string_with(false, |bytes| {
                 output
                     .write_all(bytes)
                     .map_err(|_| Error::Storage(super::invalid()))
@@ -633,12 +620,7 @@ impl<R: Read> Parser<R> {
                 loop {
                     if first == b'{' {
                         self.input.space()?;
-                        let key = if self.value_semantics {
-                            self.string()?
-                        } else {
-                            self.ignored_key()?;
-                            Key::Other
-                        };
+                        let key = self.string()?;
                         self.input.space()?;
                         self.input.expect(b':')?;
                         if self.value_semantics && first_member {

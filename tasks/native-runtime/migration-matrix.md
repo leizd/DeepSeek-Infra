@@ -1,3 +1,40 @@
+## 2026-11-04: discarded Unicode escapes use the original Python oracle
+
+The latest exact-source Rust cloud run for `c2b00a2a` failed a newly added
+test that incorrectly treated the previous native reader as the compatibility
+oracle. Actual original Python `_load_store` and `list_media` retain a legal
+record when unused document keys, values or non-object media items contain
+escaped lone UTF-16 surrogates. The new fixed fixture executes those original
+functions on 21 isolated documents: 17 retained results and four malformed
+escape/control inputs with empty results. No production data is used.
+
+The bounded shared reader now accepts these code-unit escapes only in strings
+that it discards. Captured/retained strings still use strict UTF-8 decoding;
+hex-digit validation, JSON grammar, raw UTF-8 and complete-source/error checks
+remain. Regression coverage compares gateway raw rows, worker normalized rows,
+normalized-image re-read, sorted windows, detail, raw membership and complete
+streamed responses with the actual Python fixture. The cloud process probe
+keeps every original case and adds actual authenticated list/detail/filter GET
+and HEAD requests for all 21 inputs, with stopped-process seeding, writer-fence
+advance and unchanged source/auth across restarts. The additional Windows case
+inventory grows by one; every original Windows step and original coverage
+floor remains. Native execution is PENDING for this new source, not implied
+by the offline oracle, Rust formatting or historical cloud passes.
+
+The original workspace HEAD and all 163 guarded entries remain unchanged.
+Rust/Go compilation, tests and Docker verification stay in GitHub Actions;
+only reports return locally. No main merge, release, production-data operation
+or PR action is included. The full product migration remains ACTIVE/NOT_READY.
+Full original-Python JSON parity is still required for retained/schema-ignored
+surrogates, private JSON tag objects, non-finite numeric domains and nesting;
+this slice does not close those gaps. All retained functionality, the original
+MCP test engine, unique writers, signed custody/cutover/Fleet/proofs, unknown
+remote effects, full recovery/rollback/power-loss/width/cancellation, all actual
+server/desktop/Android/browser/provider/model paths and exact-source original
+CI/Evidence/platform/coverage/performance/release gates remain mandatory.
+
+---
+
 <!-- native-20261104-media-valid-fixtures:start -->
 ## Current checkpoint: make new positive media fixtures valid, 2026-11-04
 

@@ -189,7 +189,7 @@ jobs:
             'media_records::document::tests::interrupted_reads_before_and_inside_a_record_are_retried_without_poisoning',
             'media_records::document::tests::first_key_number_and_raw_value_wrappers_match_the_existing_value_decoder',
             'media_records::document::tests::wrapped_media_arrays_and_inner_depth_match_full_value_decoding',
-            'media_records::document::tests::worker_discarded_keys_keep_original_ignored_any_surrogate_behavior'
+            'media_records::document::tests::discarded_surrogate_escapes_match_original_python_media_reader'
           )
           $spoolExpected = @(
             'media_segment_routes::media_read_spool::tests::source_order_first_match_stable_sort_and_all_fields_match_original',
@@ -198,7 +198,8 @@ jobs:
             'media_segment_routes::media_read_spool::tests::raw_membership_is_not_short_circuited_before_full_json_validation',
             'media_segment_routes::media_read_spool::tests::streamed_collection_matches_original_bytes_filters_headers_and_head',
             'media_segment_routes::media_read_spool::tests::dropping_a_stream_releases_its_private_file_without_modifying_the_library',
-            'media_segment_routes::media_read_spool::tests::changed_response_spool_fails_instead_of_claiming_a_complete_body'
+            'media_segment_routes::media_read_spool::tests::changed_response_spool_fails_instead_of_claiming_a_complete_body',
+            'media_segment_routes::media_read_spool::tests::discarded_unicode_collection_detail_membership_and_window_match_python'
           )
           foreach ($graph in @('policy', 'gateway-policy', 'gateway-spool')) {
             $packages = @('-p', 'deepseek-policy')

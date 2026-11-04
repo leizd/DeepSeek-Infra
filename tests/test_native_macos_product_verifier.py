@@ -146,7 +146,7 @@ def test_product_workflow_keeps_original_windows_job_and_both_existing_window_li
     assert len(added) == 1
     # Bind the approved additional gate separately; preserve the original job's frozen hash.
     extra = json.dumps(added[0], sort_keys=True, separators=(",", ":")).encode()
-    assert hashlib.sha256(extra).hexdigest() == "c15d0cf02c846e45cdc8c45668671e98d30907c366c2beffd323561ccd34b438"  # pragma: allowlist secret
+    assert hashlib.sha256(extra).hexdigest() == "289043d018cef0ed814d9c5cb2d35102ab8f9eb4b8ad62db6db5cb10eee9a600"  # pragma: allowlist secret
     original_job = dict(windows_job, steps=[step for step in windows_job["steps"] if step is not added[0]])
     original = json.dumps(original_job, sort_keys=True, separators=(",", ":")).encode()
     assert hashlib.sha256(original).hexdigest() == "8108d2be47dea2b3ee06cd760950a5d338fecea0f2e68a881106f7870f4ac537"

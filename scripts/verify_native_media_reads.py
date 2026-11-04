@@ -103,6 +103,7 @@ def request(origin: str, uri: str, method: str, token: str | None) -> tuple[int,
 def check_reads(origin: str, token: str, cases: list[dict[str, Any]],
                 expected: list[dict[str, Any]], profile: Path) -> list[dict[str, Any]]:
     before = media_snapshot(profile)
+    auth_before = (profile / ".auth-token").read_bytes()
     rows = []
     for case, original in zip(cases, expected, strict=True):
         status, body = request(origin, case["uri"], "GET", token)
@@ -111,8 +112,10 @@ def check_reads(origin: str, token: str, cases: list[dict[str, Any]],
         rows.append(row)
         require(status == original["status"] and row["bodyMatchesOriginal"],
                 "NATIVE_MEDIA_READ_DIFFERS_FROM_ORIGINAL:" + case["uri"])
+        require((profile / ".auth-token").read_bytes() == auth_before, "NATIVE_MEDIA_GET_CHANGED_AUTH")
         head_status, _ = request(origin, case["uri"], "HEAD", token)
         require(head_status == status, "NATIVE_MEDIA_HEAD_STATUS_DIFFERS:" + case["uri"])
+        require((profile / ".auth-token").read_bytes() == auth_before, "NATIVE_MEDIA_HEAD_CHANGED_AUTH")
         require(media_snapshot(profile) == before, "NATIVE_MEDIA_READ_CHANGED_STORE")
     return rows
 
@@ -249,6 +252,45 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
                     "reads": check_reads(origin, token, cases, expected, profile)}
                 shutdown()
                 require(media_snapshot(profile) == retained, "NATIVE_STOP_CHANGED_RETAINED_MEDIA")
+            unicode_path = ROOT / "tests/fixtures/native_media_discarded_unicode_v1.json"
+            unicode_fixture = json.loads(unicode_path.read_text(encoding="utf-8"))
+            unicode_cases = unicode_fixture["cases"]
+            require(unicode_fixture["schemaVersion"] == 1 and len(unicode_cases) == 21,
+                    "DISCARDED_UNICODE_ORIGINAL_FIXTURE_CONTRACT_DIFFERS")
+            unicode_reads = [
+                {"operation": "list", "uri": "/api/media"},
+                {"operation": "get", "mediaId": "media_kept", "uri": "/api/media/media_kept"},
+                {"operation": "list", "type": "image", "uri": "/api/media?type=image"},
+            ]
+            unicode_results = []
+            for case in unicode_cases:
+                # Provision the next original document only while all owned native children are stopped.
+                require(child is None and not identities, "UNICODE_FIXTURE_WRITTEN_WHILE_NATIVE_RUNNING")
+                source = case["document"].encode("utf-8")
+                require(hashlib.sha256(source).hexdigest() == case["documentSha256"],
+                        "DISCARDED_UNICODE_DOCUMENT_HASH_DIFFERS")
+                (directory / "library.json").write_bytes(source)
+                seeded = media_snapshot(profile)
+                original = oracle(profile, unicode_reads)
+                require(original[0] == {"status": 200, "body": {"ok": True, "media": case["publicRows"]}},
+                        "DISCARDED_UNICODE_ORIGINAL_ORACLE_DRIFT")
+                token, roles = launch("unicode-" + case["name"])
+                require((profile / ".auth-token").read_bytes() == token_bytes, "UNICODE_RESTART_REPLACED_AUTH")
+                observed = writer(profile)
+                require(observed[0] == generations[-1][0] + 1 and observed[1] != generations[-1][1],
+                        "UNICODE_RESTART_DID_NOT_ADVANCE_WRITER_FENCE")
+                generations.append(observed)
+                require(media_snapshot(profile) == seeded, "UNICODE_RESTART_CHANGED_MEDIA_STORE")
+                reads = check_reads(origin, token, unicode_reads, original, profile)
+                unicode_results.append({"case": case["name"], "documentSha256": case["documentSha256"],
+                                        "reads": reads, "processes": roles})
+                shutdown()
+                require((profile / ".auth-token").read_bytes() == token_bytes, "UNICODE_SHUTDOWN_CHANGED_AUTH")
+                require(media_snapshot(profile) == seeded, "UNICODE_SHUTDOWN_CHANGED_MEDIA_STORE")
+            report.update(discardedUnicodeCases=unicode_results, discardedUnicodeCaseCount=len(unicode_results),
+                discardedUnicodeHeadResponsesChecked=len(unicode_results) * len(unicode_reads),
+                discardedUnicodeFixtureSha256=hashlib.sha256(unicode_path.read_bytes()).hexdigest(),
+                discardedUnicodeAuthenticatedReadsMatchOriginal=True)
             report.update(status="PASS", controlledAuthenticatedMediaReadsQualified=True,
                 emptyReadCases=len(empty_cases), retainedReadCasesPerLaunch=len(cases),
                 retainedLaunchCount=2, headResponsesChecked=len(empty_cases) + 2 * len(cases),

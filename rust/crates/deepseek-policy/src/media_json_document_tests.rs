@@ -47,26 +47,31 @@ fn escaped_names_and_complete_last_key_match_the_full_document() {
     }
 }
 
+fn unicode_fixture() -> Value {
+    serde_json::from_str(include_str!(
+        "../../../../tests/fixtures/native_media_discarded_unicode_v1.json"
+    ))
+    .unwrap()
+}
+
 #[test]
 fn discarded_string_escapes_are_fully_validated_without_becoming_values() {
-    for string in [
-        r#""\uD834\uDD1E""#,
-        r#""\uD800""#,
-        r#""\uDC00""#,
-        r#""\uD800\u0061""#,
-        r#""\x00""#,
-        r#""quote\"and\\slash""#,
-        r#""\u0000""#,
-        r#""\u00xz""#,
-        "\"line\nfeed\"",
-    ] {
-        let text = format!(r#"{{"ignored":{},"media":[{}]}}"#, string, ROW);
+    let fixture = unicode_fixture();
+    let mut checked = 0;
+    for case in fixture["cases"].as_array().unwrap() {
+        if case["kind"] != "ignored_value" {
+            continue;
+        }
+        checked += 1;
+        let text = case["document"].as_str().unwrap();
         assert_eq!(
-            rows(text.as_bytes()).unwrap(),
-            legacy(text.as_bytes()),
-            "{string}"
+            Value::Array(rows(text.as_bytes()).unwrap()),
+            case["rawRows"],
+            "{}",
+            case["name"]
         );
     }
+    assert_eq!(checked, 9);
 }
 
 #[test]
@@ -356,30 +361,45 @@ fn wrapped_media_arrays_and_inner_depth_match_full_value_decoding() {
 }
 
 #[test]
-fn worker_discarded_keys_keep_original_ignored_any_surrogate_behavior() {
-    for key in [
-        r#"\uD800"#,
-        r#"\uDC00"#,
-        r#"\uD800\u0041"#,
-        r#"\uD83D\uDE00"#,
-        r#"\uXXXX"#,
-    ] {
-        let text = format!(r#"{{"ignored":{{"{}":0}},"media":[{}]}}"#, key, ROW);
-        let original = Records::parse_mode(
-            text.as_bytes(),
-            Records::empty().unwrap(),
-            Records::empty().unwrap(),
-            crate::media_schema::normalize_media_record,
-            false,
-            false,
-        )
-        .unwrap();
-        let actual = Records::from_reader(text.as_bytes()).unwrap();
-        assert_eq!(actual.len().unwrap(), original.len().unwrap(), "{text}");
+fn discarded_surrogate_escapes_match_original_python_media_reader() {
+    let fixture = unicode_fixture();
+    let cases = fixture["cases"].as_array().unwrap();
+    assert_eq!(cases.len(), 21);
+    for case in cases {
+        let text = case["document"].as_str().unwrap();
         assert_eq!(
-            rows(text.as_bytes()).unwrap(),
-            legacy(text.as_bytes()),
-            "gateway {text}"
+            Value::Array(rows(text.as_bytes()).unwrap()),
+            case["rawRows"],
+            "gateway {}",
+            case["name"]
         );
+        let actual = Records::from_reader(text.as_bytes()).unwrap();
+        let mut normalized = Vec::new();
+        actual
+            .visit_source(|value| {
+                normalized.push(value);
+                Ok::<_, Infallible>(())
+            })
+            .unwrap();
+        assert_eq!(
+            Value::Array(normalized),
+            case["storedRows"],
+            "worker {}",
+            case["name"]
+        );
+        // Recovery consumes the generated normalized image, never discarded source strings.
+        let mut image = br#"{"media":"#.to_vec();
+        actual.write_retained_array(&mut image).unwrap();
+        image.extend_from_slice(br#","nativePublication":{"phase":"PREPARED"}}"#);
+        let recovered = Records::from_image(image.as_slice()).unwrap();
+        assert_eq!(
+            recovered.len().unwrap(),
+            actual.len().unwrap(),
+            "recovery {}",
+            case["name"]
+        );
+        for index in 0..actual.len().unwrap() {
+            assert_eq!(recovered.get(index).unwrap(), actual.get(index).unwrap());
+        }
     }
 }
