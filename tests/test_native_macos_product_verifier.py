@@ -146,7 +146,7 @@ def test_product_workflow_keeps_original_windows_job_and_both_existing_window_li
     assert len(added) == 1
     # Bind the approved additional gate separately; preserve the original job's frozen hash.
     extra = json.dumps(added[0], sort_keys=True, separators=(",", ":")).encode()
-    assert hashlib.sha256(extra).hexdigest() == "8f20ec75cbd406e375d7047ac1fa32bf8e01da0c9725ee39690066f6f9ac06a1"  # pragma: allowlist secret
+    assert hashlib.sha256(extra).hexdigest() == "e40985f389cb457c60e083545b5456f3da208e7794759319e638ec2d195fdf91"  # pragma: allowlist secret
     prebuild = [step for step in windows_job["steps"]
                 if step.get("name") == "Build Windows media test binaries for all retained caller graphs"]
     assert len(prebuild) == 1

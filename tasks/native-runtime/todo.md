@@ -1,3 +1,40 @@
+<!-- native checkpoint 2026-11-04 complete retained HTTP oracle regressions -->
+
+Whole product Rust/Go migration remains ACTIVE / NOT_READY. Every original
+server, desktop, Android, background, retained feature, unique writer, recovery,
+zero-production-Python/server-TypeScript and original MCP requirement stays open
+until its own exact-source evidence proves completion.
+
+Parent c56bb3ca now has a complete standalone Rust workflow:1763 passes, sole
+original Redis ignore,82.803445% lines,49 checks and11 coverage gates. Its actual
+144182145-byte library PATCH completed in8.142351seconds under the unchanged
+10second deadline and retained610 records after restart. Windows/Mac controlled
+smoke6/6 and Android controlled emulator6/6 (70 instrumentation+25 AppUID custody)
+are verified for that parent only. Older f264e381 full CI passed37/37 and Evidence50
+with original Go/Python95 and Rust80 floors; current parent CI has its own run.
+These proofs do not qualify this changed source or a PR merge candidate.
+
+This source adds34 distinct native GET-renderer regressions from170 real isolated
+original TCP HTTP observations, with full expected bodies and source/digest binding.
+All34 cases check four native roles:full collection, selected detail, an independent
+legal detail and a filtered legal collection. Original401 auth refusals remain in
+the frozen fixture and original socket replay; these private renderer unit tests
+are not a full authenticated native socket or browser qualification. Existing
+Windows spool inventory extends8 to43 (34 original cases plus a lossless-number
+comparison control) with every original test retained; parser49,
+all five prebuild graphs, original10minute validation and all other gates stay.
+The two separately pinned Windows additions remain excluded from the unchanged
+original job hash8108d2be...ac537. Production Rust/Go and Proto are unchanged.
+
+Fixtures include the local original2048-depth observations; this does not prove
+all supported original interpreter boundaries. No blanket new depth/number/Unicode
+admission cap, fixture reduction or production Python fallback is authorized.
+New native regressions are not yet qualified and may expose real retained-value
+failures. Full winning numeric/UTF-16 normalization and actual process parity,
+all-width memory, media processing/GUI, authority/recovery and physical/end-user
+platform acceptance remain required. The original dirty checkout/data stay intact.
+Native builds/caches stay in cloud and only reports return. No release or cutover.
+
 <!-- native checkpoint 2026-11-04 raw capture result type -->
 
 Full product migration remains ACTIVE / NOT_READY. Source35680c0c run41822512132

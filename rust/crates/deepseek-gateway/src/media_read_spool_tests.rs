@@ -260,3 +260,5 @@ async fn discarded_unicode_collection_detail_membership_and_window_match_python(
         assert_eq!(fs::read(file.path()).unwrap(), bytes);
     }
 }
+
+include!("media_retained_http_tests.rs");
