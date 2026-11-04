@@ -146,8 +146,14 @@ def test_product_workflow_keeps_original_windows_job_and_both_existing_window_li
     assert len(added) == 1
     # Bind the approved additional gate separately; preserve the original job's frozen hash.
     extra = json.dumps(added[0], sort_keys=True, separators=(",", ":")).encode()
-    assert hashlib.sha256(extra).hexdigest() == "48e1c24ee45dad561fcf471832be2db17e46dc244c91b1a98a9fc428f94a8097"  # pragma: allowlist secret
-    original_job = dict(windows_job, steps=[step for step in windows_job["steps"] if step is not added[0]])
+    assert hashlib.sha256(extra).hexdigest() == "8f20ec75cbd406e375d7047ac1fa32bf8e01da0c9725ee39690066f6f9ac06a1"  # pragma: allowlist secret
+    prebuild = [step for step in windows_job["steps"]
+                if step.get("name") == "Build Windows media test binaries for all retained caller graphs"]
+    assert len(prebuild) == 1
+    prepared = json.dumps(prebuild[0], sort_keys=True, separators=(",", ":")).encode()
+    assert hashlib.sha256(prepared).hexdigest() == "0add0a41658794f014e157e6e9811c579dc1245f839e80a8f40944b7c7cdc08c"  # pragma: allowlist secret
+    original_job = dict(windows_job, steps=[step for step in windows_job["steps"]
+                                          if step is not added[0] and step is not prebuild[0]])
     original = json.dumps(original_job, sort_keys=True, separators=(",", ":")).encode()
     assert hashlib.sha256(original).hexdigest() == "8108d2be47dea2b3ee06cd760950a5d338fecea0f2e68a881106f7870f4ac537"
     assert workflow["jobs"]["macos-window"]["timeout-minutes"] == 15

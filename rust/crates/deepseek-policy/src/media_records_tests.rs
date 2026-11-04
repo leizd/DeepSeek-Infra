@@ -59,7 +59,7 @@ fn only_the_complete_winning_array_uses_normalization_clocks() {
     let mut clock = 0;
     let records = Records::parse(
         bytes.as_slice(),
-        Records::empty().unwrap(),
+        RawRecords::empty().unwrap(),
         Records::empty().unwrap(),
         |row| {
             clock += 1;
@@ -86,7 +86,7 @@ fn only_the_complete_winning_array_uses_normalization_clocks() {
         let mut calls = 0;
         let empty = Records::parse(
             data,
-            Records::empty().unwrap(),
+            RawRecords::empty().unwrap(),
             Records::empty().unwrap(),
             |row| {
                 calls += 1;
@@ -153,32 +153,84 @@ impl Seek for FullDisk {
     }
 }
 
+struct FlushFailure {
+    inner: fs::File,
+    successful_flushes: usize,
+}
+impl Write for FlushFailure {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.inner.write(bytes)
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        if self.successful_flushes == 0 {
+            return Err(io::Error::other("injected flush-only failure"));
+        }
+        self.successful_flushes -= 1;
+        Ok(())
+    }
+}
+impl Seek for FlushFailure {
+    fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
+        self.inner.seek(position)
+    }
+}
+
 #[test]
 fn source_spool_and_index_failures_never_become_an_empty_store() {
     assert!(Records::from_reader(BrokenRead).is_err());
     let bytes = document(&[record("media_one", "Retained")]);
     for normalized_failure in [false, true] {
-        let mut raw = Records::empty().unwrap();
+        let mut raw = RawRecords::empty().unwrap();
         let mut normalized = Records::empty().unwrap();
         let broken = if normalized_failure {
             &mut normalized
         } else {
-            &mut raw
+            &mut raw.inner
         };
         broken.writer = Box::new(FullDisk(broken.data.as_file().try_clone().unwrap()));
         assert!(Records::parse(bytes.as_slice(), raw, normalized, normalize_media_record).is_err());
     }
     for normalized_failure in [false, true] {
-        let raw = Records::empty().unwrap();
+        let raw = RawRecords::empty().unwrap();
         let normalized = Records::empty().unwrap();
         let broken = if normalized_failure {
             &normalized
         } else {
-            &raw
+            &raw.inner
         };
         broken.connection.execute("DROP TABLE records", []).unwrap();
         assert!(Records::parse(bytes.as_slice(), raw, normalized, normalize_media_record).is_err());
     }
+    // Bytes can reach the sink while its later flush fails. Neither raw nor
+    // normalized capture may report an empty/successful original store.
+    for normalized_failure in [false, true] {
+        let mut raw = RawRecords::empty().unwrap();
+        let mut normalized = Records::empty().unwrap();
+        let broken = if normalized_failure {
+            &mut normalized
+        } else {
+            &mut raw.inner
+        };
+        broken.writer = Box::new(FlushFailure {
+            inner: broken.data.as_file().try_clone().unwrap(),
+            successful_flushes: if normalized_failure { 0 } else { 2 },
+        });
+        assert!(Records::parse(bytes.as_slice(), raw, normalized, normalize_media_record).is_err());
+    }
+    let mut raw = RawRecords::empty().unwrap();
+    raw.inner.writer = Box::new(FlushFailure {
+        inner: raw.inner.data.as_file().try_clone().unwrap(),
+        successful_flushes: 1,
+    });
+    let mut capture = raw.begin_capture().unwrap();
+    capture.write_all(b"{}").unwrap();
+    assert!(raw.finish_capture(capture).is_err());
+    let count: i64 = raw
+        .inner
+        .connection
+        .query_row("SELECT COUNT(*) FROM records", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(count, 0, "flush failure cannot publish a raw index entry");
 }
 
 #[test]
@@ -217,13 +269,9 @@ fn discarded_values_still_validate_numbers_utf8_and_original_json_depth() {
         let mut bytes = format!(r#"{{"media":[{valid_record}]"#).into_bytes();
         bytes.extend_from_slice(suffix);
         assert!(serde_json::from_slice::<Value>(&bytes).is_err());
-        assert_eq!(
-            Records::from_reader(bytes.as_slice())
-                .unwrap()
-                .len()
-                .unwrap(),
-            0
-        );
+        // Original read_text(encoding="utf-8") raises UnicodeDecodeError;
+        // this source must never admit an empty-store mutation plan.
+        assert!(Records::from_reader(bytes.as_slice()).is_err());
     }
     for value in ["null", "true", "3", "\"text\"", "{}", "[]"] {
         let bytes = format!(r#"{{"media":[{{"mediaId":"media_discarded"}}],"media":{value}}}"#);
@@ -248,6 +296,17 @@ fn changed_private_spool_bytes_are_detected_before_emission_or_lookup() {
     file.write_all(b"{\"tampered\":true}").unwrap();
     assert!(records.first("media_one").is_err());
     assert!(records.write_retained_array(&mut Vec::new()).is_err());
+    let raw =
+        Records::from_raw_reader(document(&[record("media_one", "Retained")]).as_slice()).unwrap();
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .open(raw.inner.data.path())
+        .unwrap();
+    file.write_all(b"{\"tampered\":true}").unwrap();
+    assert!(matches!(
+        raw.visit_source(|_| Ok::<_, std::convert::Infallible>(())),
+        Err(VisitError::Storage(_))
+    ));
 }
 
 // Frozen full-value worker oracle; only its name differs.

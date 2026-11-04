@@ -7,7 +7,7 @@ use axum::{
 };
 use deepseek_policy::{
     app_error::AppError,
-    media_records::{Records, SourceReadError, VisitError},
+    media_records::{RawRecords, Records, SourceReadError, VisitError},
     media_stream_io::{DigestReader, DigestWriter},
 };
 use rusqlite::{Connection, params};
@@ -20,14 +20,14 @@ use std::{
 
 const BUFFER: usize = 64 * 1024;
 
-fn raw(path: &Path) -> Result<Records, AppError> {
+fn raw(path: &Path) -> Result<RawRecords, AppError> {
     let source = match File::open(path) {
         Ok(source) => source,
-        Err(_) => return Records::empty().map_err(|_| server_error()),
+        Err(_) => return RawRecords::empty().map_err(|_| server_error()),
     };
     match Records::from_raw_reader(source) {
         Ok(records) => Ok(records),
-        Err(SourceReadError::SourceIo) => Records::empty().map_err(|_| server_error()),
+        Err(SourceReadError::SourceIo) => RawRecords::empty().map_err(|_| server_error()),
         Err(SourceReadError::InvalidUtf8 | SourceReadError::Storage(_)) => Err(server_error()),
     }
 }

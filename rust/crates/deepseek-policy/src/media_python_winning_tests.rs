@@ -76,7 +76,7 @@ fn original_winning_clock_before_invalid_path() {
     };
     let records = Records::parse(
         text.as_bytes(),
-        Records::empty().unwrap(),
+        RawRecords::empty().unwrap(),
         Records::empty().unwrap(),
         |value| crate::media_schema::normalize_media_record_with_clock(value, &mut clock),
     )

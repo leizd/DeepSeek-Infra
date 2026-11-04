@@ -1,3 +1,50 @@
+<!-- native checkpoint 2026-11-04 raw media read-spool separation -->
+
+Whole server/desktop/Android/background Rust+Go production migration remains
+ACTIVE / NOT_READY; every original capability, gate, floor and recovery obligation
+stays required. Source904bfadc actual cloud run41798478357 fixed the original
+clock/MIME assertions in both test modes (six new passes, five remaining duplicate
+failures), with no ignored or removed tests. This source targets those remaining
+original duplicate-media/record/nested-key semantics.
+
+Initial media validation now writes only raw known-field spans to a temporary
+opaque read-only RawRecords facade. It validates full syntax/UTF-8/I/O and resolves
+the final media array before decoding any winning record. Capture occurs only on
+logical byte consumption with a fallible sink, preserves raw escape/number spelling,
+avoids read-ahead and negative replay, and flushes buffer/sink before indexing or
+truncation. Only normalized Records expose mutation/emission. Raw and normalized
+record reads keep length/digest verification. Deferred iterative dictionary
+selection uses Python UTF-16 key equality and first-insertion/last-value order,
+including literal non-BMP versus escaped surrogate-pair names. Three explicit
+node-selection cases extend the retained Windows parser inventory in both graphs.
+Existing source/normalized failures, flush-only failures before index publication,
+and changed raw bytes remain hard failures.
+
+A separately replayed original boundary also proves read_text UTF-8 decode errors
+propagate rather than produce an empty store. Worker invalid UTF-8 is now an error;
+malformed JSON keeps its original empty result, gateway typed behavior is retained.
+The original native empty assertion was contradicted by real original-reader
+outputs and corrected, not preserved as a legacy-native oracle.
+
+Parent f264 standalone Rust workflow is qualified at1749 passes, sole original
+Redis ignore,82.777530% lines,49 checks and11 coverage gates. Its144MB controlled
+PATCH completed in7.097155seconds under the original deadline. Full CI was still
+running Go race; Android passed6/6; Windows timed out while compiling a caller-graph
+test binary. A new bounded20minute no-run prebuild covers all five exact feature
+graphs before the unchanged10minute real validation. The original Windows job hash
+stays8108d2be...ac537 after removing only the two separately pinned additions.
+No runtime case, deadline, dependency, profile, Proto or original floor is relaxed.
+Those parent reports never qualify this changed source.
+
+Fresh scoped read-only code/CI reviews found no concrete issues; cross-model CLI
+was skipped in autonomous continuation. Native compilation/runtime and current
+platform acceptance still require this exact snapshot. Winning nonfinite/surrogate
+normalization beyond the explicit fixtures, all-width memory, full media processing,
+authority/recovery, physical/end-user platform acceptance, zero production Python/
+server TypeScript and the original MCP test engine remain required and incomplete.
+Original dirty checkout/data are preserved. Native builds/caches stay in cloud;
+only reports are retrieved. This checkpoint is not a release or production switch.
+
 <!-- native checkpoint 2026-11-04 original MIME and clock correction -->
 
 Full product migration remains ACTIVE / NOT_READY. Source4e29505c cloud run

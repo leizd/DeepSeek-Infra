@@ -130,7 +130,8 @@ pub(crate) fn from_slice(bytes: &[u8]) -> Result<Value, Error> {
                 state: Rc::clone(&state),
             },
         ),
-        returned: None,
+        capture: None,
+        capture_value: false,
     };
     let value = input.value()?;
     if input.space()?.is_some() {

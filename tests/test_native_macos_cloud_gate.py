@@ -23,8 +23,14 @@ def test_optional_macos_probe_preserves_the_complete_original_windows_job() -> N
     assert len(added) == 1
     # Bind the approved additional gate separately; preserve the original job's frozen hash.
     extra = json.dumps(added[0], sort_keys=True, separators=(",", ":")).encode()
-    assert hashlib.sha256(extra).hexdigest() == "48e1c24ee45dad561fcf471832be2db17e46dc244c91b1a98a9fc428f94a8097"  # pragma: allowlist secret
-    original_job = dict(windows_job, steps=[step for step in windows_job["steps"] if step is not added[0]])
+    assert hashlib.sha256(extra).hexdigest() == "8f20ec75cbd406e375d7047ac1fa32bf8e01da0c9725ee39690066f6f9ac06a1"  # pragma: allowlist secret
+    prebuild = [step for step in windows_job["steps"]
+                if step.get("name") == "Build Windows media test binaries for all retained caller graphs"]
+    assert len(prebuild) == 1
+    prepared = json.dumps(prebuild[0], sort_keys=True, separators=(",", ":")).encode()
+    assert hashlib.sha256(prepared).hexdigest() == "0add0a41658794f014e157e6e9811c579dc1245f839e80a8f40944b7c7cdc08c"  # pragma: allowlist secret
+    original_job = dict(windows_job, steps=[step for step in windows_job["steps"]
+                                          if step is not added[0] and step is not prebuild[0]])
     original = json.dumps(original_job, sort_keys=True, separators=(",", ":")).encode()
     # Public SHA256 of the original workflow structure, not a credential.
     assert hashlib.sha256(original).hexdigest() == "8108d2be47dea2b3ee06cd760950a5d338fecea0f2e68a881106f7870f4ac537"  # pragma: allowlist secret
@@ -84,3 +90,16 @@ def test_embedded_python_is_executable_source_and_writes_real_newlines() -> None
 def test_job_environment_does_not_use_the_step_only_runner_context() -> None:
     for job in workflow()["jobs"].values():
         assert not any("${{ runner." in str(value) for value in job.get("env", {}).values())
+
+
+def test_windows_media_prebuild_preserves_complete_graphs_and_runtime_budget() -> None:
+    steps = workflow()["jobs"]["windows-app"]["steps"]
+    prebuild = next(step for step in steps if step.get("name") == "Build Windows media test binaries for all retained caller graphs")
+    validate = next(step for step in steps if step.get("name") == "Verify streamed media images records compact results and digest corpus on Windows")
+    assert steps.index(prebuild) < steps.index(validate)
+    assert prebuild["timeout-minutes"] == 20 and validate["timeout-minutes"] == 10
+    assert "@('worker', 'worker-policy', 'policy', 'gateway-policy', 'gateway')" in prebuild["run"]
+    assert "-- test --locked @packages --lib --no-run" in prebuild["run"]
+    assert "--no-run" not in validate["run"]
+    assert "$LASTEXITCODE -ne 0" in prebuild["run"]
+    assert not prebuild.get("continue-on-error", False) and not validate.get("continue-on-error", False)

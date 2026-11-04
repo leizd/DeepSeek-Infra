@@ -1,10 +1,10 @@
 //! Bounded recognition of document keys and validated skipping of unused values.
 //! Only a media record (or an explicitly captured publication) becomes a Value.
-use super::Records;
-use serde_json::{Map, Value};
+use super::{RawRecords, raw::Capture};
+use serde_json::Value;
 use std::{
     cell::RefCell,
-    io::{self, BufRead, BufReader, Read},
+    io::{self, BufRead, BufReader, Read, Write},
     rc::Rc,
 };
 use tonic::Status;
@@ -99,26 +99,24 @@ impl<R: Read> Read for Probe<R> {
 
 struct Input<R> {
     source: BufReader<Probe<R>>,
-    returned: Option<u8>,
+    capture: Option<Capture>,
+    capture_value: bool,
 }
 
 impl<R: Read> Input<R> {
     fn peek(&mut self) -> Result<Option<u8>, Error> {
-        if self.returned.is_some() {
-            return Ok(self.returned);
-        }
         self.source
             .fill_buf()
             .map(|b| b.first().copied())
             .map_err(|_| Error::SourceIo)
     }
     fn next_byte(&mut self) -> Result<Option<u8>, Error> {
-        if let Some(byte) = self.returned.take() {
-            return Ok(Some(byte));
-        }
         let byte = self.peek()?;
-        if byte.is_some() {
+        if let Some(byte) = byte {
             self.source.consume(1);
+            if self.capture_value {
+                self.capture_bytes(&[byte])?;
+            }
         }
         Ok(byte)
     }
@@ -135,12 +133,12 @@ impl<R: Read> Input<R> {
             Err(Error::Syntax)
         }
     }
-    fn restore(&mut self, byte: u8) -> Result<(), Error> {
-        if self.returned.is_some() {
-            return Err(Error::Storage(super::invalid()));
-        }
-        self.returned = Some(byte);
-        Ok(())
+    fn capture_bytes(&mut self, bytes: &[u8]) -> Result<(), Error> {
+        self.capture
+            .as_mut()
+            .ok_or_else(|| Error::Storage(super::invalid()))?
+            .write_all(bytes)
+            .map_err(|_| Error::Storage(super::invalid()))
     }
 }
 
@@ -148,10 +146,6 @@ impl<R: Read> Read for Input<R> {
     fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
         if bytes.is_empty() {
             return Ok(0);
-        }
-        if let Some(byte) = self.returned.take() {
-            bytes[0] = byte;
-            return Ok(1);
         }
         self.source.read(bytes)
     }
@@ -305,21 +299,24 @@ impl<R: Read> Input<R> {
         if self.peek()? == Some(b'-') {
             accept(self.next_byte()?.ok_or(Error::Syntax)?);
         }
+        self.unsigned_number(&mut accept)
+    }
+    fn unsigned_number(&mut self, accept: &mut impl FnMut(u8)) -> Result<(), Error> {
         match self.peek()? {
             Some(b'0') => accept(self.next_byte()?.ok_or(Error::Syntax)?),
-            Some(b'1'..=b'9') => self.number_digits(&mut accept)?,
+            Some(b'1'..=b'9') => self.number_digits(accept)?,
             _ => return Err(Error::Syntax),
         }
         if self.peek()? == Some(b'.') {
             accept(self.next_byte()?.ok_or(Error::Syntax)?);
-            self.number_digits(&mut accept)?;
+            self.number_digits(accept)?;
         }
         if matches!(self.peek()?, Some(b'e' | b'E')) {
             accept(self.next_byte()?.ok_or(Error::Syntax)?);
             if matches!(self.peek()?, Some(b'+' | b'-')) {
                 accept(self.next_byte()?.ok_or(Error::Syntax)?);
             }
-            self.number_digits(&mut accept)?;
+            self.number_digits(accept)?;
         }
         Ok(())
     }
@@ -356,8 +353,7 @@ impl<R: Read> Input<R> {
                 if self.peek()? == Some(b'I') {
                     self.literal(b"Infinity")?;
                 } else {
-                    self.restore(b'-')?;
-                    self.number(|_| {})?;
+                    self.unsigned_number(&mut |_| {})?;
                 }
             }
             Some(b'0'..=b'9') => self.number(|_| {})?,
@@ -429,48 +425,78 @@ impl<R: Read> Input<R> {
     }
 }
 
+#[path = "media_json_deferred.rs"]
+mod deferred;
 #[path = "media_json_value.rs"]
 mod ordinary_value;
 pub(super) use ordinary_value::from_slice as decode_value_slice;
 
+pub(super) fn decode_raw_record(bytes: &[u8]) -> Result<Value, Error> {
+    if let Ok(value) = ordinary_value::from_slice(bytes) {
+        return Ok(value);
+    }
+    let selected = deferred::select_winners(bytes).map_err(|_| Error::Syntax)?;
+    ordinary_value::from_slice(&selected)
+}
+
 struct Parser<R> {
     input: Input<R>,
-    records: Records,
+    records: RawRecords,
     capture_publication: bool,
     publication: Option<Value>,
 }
 impl<R: Read> Parser<R> {
     /// The original normalizer reads exactly these 11 fields. Unknown values are
     /// fully validated and discarded before materialization, including surrogates.
-    fn record(&mut self) -> Result<Value, Error> {
+    fn record(&mut self) -> Result<(), Error> {
         self.input.expect(b'{')?;
-        let mut fields = Map::new();
+        if self.input.capture.is_some() {
+            return Err(Error::Storage(super::invalid()));
+        }
+        self.input.capture = Some(self.records.begin_capture().map_err(Error::Storage)?);
+        self.input.capture_bytes(b"{")?;
+        let mut retained = false;
         if self.input.space()? == Some(b'}') {
             self.input.next_byte()?;
-            return Ok(Value::Object(fields));
-        }
-        loop {
-            self.input.space()?;
-            let key = self.input.string()?;
-            self.input.space()?;
-            self.input.expect(b':')?;
-            if let Key::Field(name) = key {
-                fields.insert(name.to_owned(), self.input.value()?);
-            } else {
-                self.input.skip()?;
-            }
-            match self.input.space()? {
-                Some(b'}') => {
-                    self.input.next_byte()?;
-                    break;
+        } else {
+            loop {
+                self.input.space()?;
+                let key = self.input.string()?;
+                self.input.space()?;
+                self.input.expect(b':')?;
+                if let Key::Field(name) = key {
+                    if retained {
+                        self.input.capture_bytes(b",")?;
+                    }
+                    self.input.capture_bytes(b"\"")?;
+                    self.input.capture_bytes(name.as_bytes())?;
+                    self.input.capture_bytes(b"\":")?;
+                    self.input.capture_value = true;
+                    self.input.skip()?;
+                    self.input.capture_value = false;
+                    retained = true;
+                } else {
+                    self.input.skip()?;
                 }
-                Some(b',') => {
-                    self.input.next_byte()?;
+                match self.input.space()? {
+                    Some(b'}') => {
+                        self.input.next_byte()?;
+                        break;
+                    }
+                    Some(b',') => {
+                        self.input.next_byte()?;
+                    }
+                    _ => return Err(Error::Syntax),
                 }
-                _ => return Err(Error::Syntax),
             }
         }
-        Ok(Value::Object(fields))
+        self.input.capture_bytes(b"}")?;
+        let capture = self
+            .input
+            .capture
+            .take()
+            .ok_or_else(|| Error::Storage(super::invalid()))?;
+        self.records.finish_capture(capture).map_err(Error::Storage)
     }
     fn media(&mut self) -> Result<(), Error> {
         self.records.clear().map_err(Error::Storage)?;
@@ -484,10 +510,7 @@ impl<R: Read> Parser<R> {
         }
         loop {
             if self.input.space()? == Some(b'{') {
-                let value = self.record()?;
-                if value.is_object() {
-                    self.records.append_raw(&value).map_err(Error::Storage)?;
-                }
+                self.record()?;
             } else {
                 self.input.skip()?;
             }
@@ -547,25 +570,25 @@ impl<R: Read> Parser<R> {
 
 pub(super) fn read(
     reader: impl Read,
-    records: Records,
+    records: RawRecords,
     capture_publication: bool,
-) -> Result<(Records, Option<Value>), Error> {
+) -> Result<(RawRecords, Option<Value>), Error> {
     read_mode(reader, records, capture_publication)
 }
 
 pub(super) fn read_value(
     reader: impl Read,
-    records: Records,
+    records: RawRecords,
     capture_publication: bool,
-) -> Result<(Records, Option<Value>), Error> {
+) -> Result<(RawRecords, Option<Value>), Error> {
     read_mode(reader, records, capture_publication)
 }
 
 fn read_mode(
     reader: impl Read,
-    records: Records,
+    records: RawRecords,
     capture_publication: bool,
-) -> Result<(Records, Option<Value>), Error> {
+) -> Result<(RawRecords, Option<Value>), Error> {
     let state = Rc::new(RefCell::new(InputState::default()));
     let source = Probe {
         source: reader,
@@ -574,7 +597,8 @@ fn read_mode(
     let mut parser = Parser {
         input: Input {
             source: BufReader::with_capacity(BUFFER, source),
-            returned: None,
+            capture: None,
+            capture_value: false,
         },
         records,
         capture_publication,

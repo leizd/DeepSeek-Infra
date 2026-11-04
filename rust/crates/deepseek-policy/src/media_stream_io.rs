@@ -21,6 +21,12 @@ impl<W: Write> DigestWriter<W> {
     pub fn finish(self) -> (u64, Vec<u8>) {
         (self.bytes, self.hash.finalize().to_vec())
     }
+
+    /// Return an owned sink only after its flush has succeeded.
+    pub fn finish_into_inner(mut self) -> io::Result<(W, u64, Vec<u8>)> {
+        self.inner.flush()?;
+        Ok((self.inner, self.bytes, self.hash.finalize().to_vec()))
+    }
 }
 impl<W: Write> Write for DigestWriter<W> {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {

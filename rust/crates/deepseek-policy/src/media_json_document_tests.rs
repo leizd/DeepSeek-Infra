@@ -1,5 +1,5 @@
 use super::*;
-use crate::media_records::{SourceReadError, VisitError};
+use crate::media_records::{Records, SourceReadError, VisitError};
 use std::convert::Infallible;
 
 const ROW: &str = r#"{"mediaId":"kept","type":"image","title":"original"}"#;
@@ -227,7 +227,7 @@ fn first_key_number_and_raw_value_wrappers_match_the_existing_value_decoder() {
         let mut calls = 0;
         let actual = Records::parse(
             text.as_bytes(),
-            Records::empty().unwrap(),
+            RawRecords::empty().unwrap(),
             Records::empty().unwrap(),
             |value| {
                 calls += 1;

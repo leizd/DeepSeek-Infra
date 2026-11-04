@@ -23,6 +23,9 @@ fn invalid() -> Status {
 
 #[path = "media_json_document.rs"]
 mod document;
+#[path = "media_raw_records.rs"]
+mod raw;
+pub use raw::RawRecords;
 
 const BUFFER: usize = 64 * 1024;
 
@@ -77,7 +80,7 @@ impl Records {
     pub fn from_reader(reader: impl Read) -> Result<Self, Status> {
         Self::parse(
             reader,
-            Self::empty()?,
+            RawRecords::empty()?,
             Self::empty()?,
             normalize_media_record,
         )
@@ -85,15 +88,15 @@ impl Records {
 
     fn parse(
         reader: impl Read,
-        raw: Self,
+        raw: RawRecords,
         normalized: Self,
         normalize: impl FnMut(&Value) -> Result<Value, AppError>,
     ) -> Result<Self, Status> {
         let validate_phase = crate::media_phase_timing::Phase::start("records.validate_raw");
         let (raw, publication) = match document::read(reader, raw, false) {
             Ok(value) => value,
-            Err(document::Error::Syntax | document::Error::InvalidUtf8) => return Ok(normalized),
-            Err(document::Error::SourceIo) => return Err(invalid()),
+            Err(document::Error::Syntax) => return Ok(normalized),
+            Err(document::Error::InvalidUtf8 | document::Error::SourceIo) => return Err(invalid()),
             Err(document::Error::Storage(error)) => return Err(error),
         };
         drop(validate_phase);
@@ -101,9 +104,9 @@ impl Records {
     }
 
     /// Preserve complete validation while leaving normalization to the caller.
-    pub fn from_raw_reader(reader: impl Read) -> Result<Self, SourceReadError> {
-        let empty = Self::empty().map_err(SourceReadError::Storage)?;
-        let raw = Self::empty().map_err(SourceReadError::Storage)?;
+    pub fn from_raw_reader(reader: impl Read) -> Result<RawRecords, SourceReadError> {
+        let empty = RawRecords::empty().map_err(SourceReadError::Storage)?;
+        let raw = RawRecords::empty().map_err(SourceReadError::Storage)?;
         let _phase = crate::media_phase_timing::Phase::start("records.validate_raw");
         match document::read_value(reader, raw, false) {
             Ok((raw, _)) => Ok(raw),
@@ -116,7 +119,7 @@ impl Records {
 
     pub fn from_image(reader: impl Read) -> Result<Self, Status> {
         let validate_phase = crate::media_phase_timing::Phase::start("records.validate_raw");
-        let raw = Self::empty()?;
+        let raw = RawRecords::empty()?;
         let (raw, publication) =
             document::read(reader, raw, true).map_err(|error| match error {
                 document::Error::Storage(error) => error,
@@ -127,7 +130,7 @@ impl Records {
     }
 
     fn normalize_raw(
-        raw: &Self,
+        raw: &RawRecords,
         mut normalized: Self,
         publication: Option<Value>,
         mut normalize: impl FnMut(&Value) -> Result<Value, AppError>,
@@ -135,6 +138,7 @@ impl Records {
         let _normalize_phase = crate::media_phase_timing::Phase::start("records.normalize_spool");
         normalized.publication = publication;
         let mut statement = raw
+            .inner
             .connection
             .prepare("SELECT record_offset,record_bytes,digest FROM records ORDER BY record_index")
             .map_err(|_| invalid())?;
@@ -177,9 +181,6 @@ impl Records {
         ))
     }
 
-    fn append_raw(&mut self, value: &Value) -> Result<(), Status> {
-        self.append_with_id(value, "")
-    }
     pub fn append(&mut self, value: &Value) -> Result<(), Status> {
         let id = value
             .get("mediaId")
@@ -200,6 +201,16 @@ impl Records {
     }
 
     fn read_record(&self, offset: i64, length: i64, digest: Vec<u8>) -> Result<Value, Status> {
+        let bytes = self.read_record_bytes(offset, length, digest)?;
+        document::decode_value_slice(&bytes).map_err(|_| invalid())
+    }
+
+    fn read_record_bytes(
+        &self,
+        offset: i64,
+        length: i64,
+        digest: Vec<u8>,
+    ) -> Result<Vec<u8>, Status> {
         let offset = u64::try_from(offset).map_err(|_| invalid())?;
         let length = u64::try_from(length).map_err(|_| invalid())?;
         let mut file = fs::File::open(self.data.path()).map_err(|_| invalid())?;
@@ -214,7 +225,7 @@ impl Records {
         if Sha256::digest(&bytes).to_vec() != digest {
             return Err(invalid());
         }
-        document::decode_value_slice(&bytes).map_err(|_| invalid())
+        Ok(bytes)
     }
 
     /// Visit the complete stored sequence without accumulating its values.

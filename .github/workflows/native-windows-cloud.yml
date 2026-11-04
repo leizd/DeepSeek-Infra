@@ -106,6 +106,20 @@ jobs:
           foreach ($name in @('media_retained_publication_sync_never_creates_or_replaces_bytes', 'media_windows_readonly_recovery_keeps_original_unknown_until_sync_is_possible')) {
             if ($tests -notmatch ('test .*' + $name + ' \.\.\. ok')) { throw ('Windows recovery case missing: ' + $name) }
           }
+      - name: Build Windows media test binaries for all retained caller graphs
+        timeout-minutes: 20
+        run: |
+          foreach ($graph in @('worker', 'worker-policy', 'policy', 'gateway-policy', 'gateway')) {
+            $packages = switch ($graph) {
+              'worker' { @('-p', 'deepseek-worker') }
+              'worker-policy' { @('-p', 'deepseek-worker', '-p', 'deepseek-policy') }
+              'policy' { @('-p', 'deepseek-policy') }
+              'gateway-policy' { @('-p', 'deepseek-policy', '-p', 'deepseek-gateway') }
+              'gateway' { @('-p', 'deepseek-gateway') }
+            }
+            python scripts/rust_build.py --toolchain 1.85.0 --target-dir $env:CARGO_TARGET_DIR -- test --locked @packages --lib --no-run
+            if ($LASTEXITCODE -ne 0) { throw ('Windows media test prebuild failed: ' + $graph) }
+          }
       - name: Verify streamed media images records compact results and digest corpus on Windows
         timeout-minutes: 10
         run: |
@@ -223,7 +237,10 @@ jobs:
             'media_records::document::tests::original_winning_last_media_replaces_first_nan',
             'media_records::document::tests::original_winning_last_media_replaces_first_surrogate',
             'media_records::document::tests::original_winning_last_media_replaces_first_deep',
-            'media_records::document::tests::original_winning_clock_before_invalid_path'
+            'media_records::document::tests::original_winning_clock_before_invalid_path',
+            'media_records::document::deferred::tests::dictionary_winners_precede_scalar_interpretation',
+            'media_records::document::deferred::tests::literal_and_surrogate_pair_keys_have_python_equality',
+            'media_records::document::deferred::tests::complete_syntax_and_utf8_are_still_required'
           )
           $spoolExpected = @(
             'media_segment_routes::media_read_spool::tests::source_order_first_match_stable_sort_and_all_fields_match_original',
@@ -237,7 +254,7 @@ jobs:
           )
           foreach ($graph in @('policy', 'gateway-policy', 'gateway-spool')) {
             $packages = @('-p', 'deepseek-policy')
-            $filter = 'media_records::document::tests'
+            $filter = 'media_records::document'
             $graphExpected = $parserExpected
             $expectedCount = $graphExpected.Count
             $expectedSummaries = 1
