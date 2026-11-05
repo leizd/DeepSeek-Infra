@@ -1840,8 +1840,10 @@ async fn workspace_home_matches_python_and_leaves_missing_stores_absent() {
         ]);
         let (status, _headers, body, _) = home_exchange("GET", "/api/workspace/home", None).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
-        assert_eq!(body["error"]["code"], "UNAUTHORIZED");
-        assert_eq!(body["error"]["message"], "Auth required");
+        assert_eq!(
+            body,
+            json!({"error": "Auth required", "code": "unauthorized"})
+        );
         assert_home_stores_absent(guard.path());
 
         let (status, _, body, _) =

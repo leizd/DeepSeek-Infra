@@ -142,4 +142,33 @@ impl RawRecords {
         }
         Ok(())
     }
+
+    /// Read original accepted values without crossing the strict JSON response
+    /// boundary. The opaque raw spool still has no emission or mutation API.
+    pub fn visit_retained<E>(
+        &self,
+        mut visit: impl FnMut(super::retained::Document) -> Result<(), E>,
+    ) -> Result<(), VisitError<E>> {
+        let storage = |_: rusqlite::Error| VisitError::Storage(invalid());
+        let mut statement = self
+            .inner
+            .connection
+            .prepare("SELECT record_offset,record_bytes,digest FROM records ORDER BY record_index")
+            .map_err(storage)?;
+        let mut rows = statement.query([]).map_err(storage)?;
+        while let Some(row) = rows.next().map_err(storage)? {
+            let bytes = self
+                .inner
+                .read_record_bytes(
+                    row.get(0).map_err(storage)?,
+                    row.get(1).map_err(storage)?,
+                    row.get(2).map_err(storage)?,
+                )
+                .map_err(VisitError::Storage)?;
+            let value = super::retained::Document::decode(&bytes)
+                .map_err(|_| VisitError::Storage(invalid()))?;
+            visit(value).map_err(VisitError::Visitor)?;
+        }
+        Ok(())
+    }
 }

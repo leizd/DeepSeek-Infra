@@ -6,11 +6,14 @@ stopped. This probe does not qualify media writes, migration or a media GUI.
 from __future__ import annotations
 
 import argparse
-from contextlib import closing
+from collections.abc import Callable, Iterator
+from contextlib import closing, contextmanager
 import hashlib
+from http.client import HTTPConnection
 import json
 import os
 from pathlib import Path
+import signal
 import socket
 import sqlite3
 import subprocess
@@ -18,12 +21,11 @@ import sys
 import tempfile
 import time
 from typing import Any
-from urllib.error import HTTPError
-from urllib.request import Request, urlopen
+from urllib.parse import urlsplit
 
 import verify_agent_signing_process as signing
 import verify_native_default_bootstrap as bootstrap
-from native_json_comparison import json_values_equal
+from native_json_comparison import exact_json_values_equal, json_values_equal, load_exact_json
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "tests/fixtures/native_media_library_read_v1.json"
@@ -88,41 +90,134 @@ def oracle(profile: Path, cases: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return result
 
 
-def request(origin: str, uri: str, method: str, token: str | None) -> tuple[int, Any]:
-    headers = {} if token is None else {"Authorization": "Bearer " + token}
+def request(origin: str, uri: str, method: str, token: str | None, *, exact_numbers: bool = False) -> tuple[int, Any]:
+    endpoint = urlsplit(origin)
+    require(endpoint.scheme == "http" and endpoint.hostname == "127.0.0.1" and endpoint.port is not None
+            and endpoint.username is None and endpoint.password is None and not endpoint.path
+            and not endpoint.query and not endpoint.fragment, "NATIVE_MEDIA_ORIGIN_IS_NOT_LOOPBACK")
+    require(uri.startswith("/") and not uri.startswith("//"), "NATIVE_MEDIA_REQUEST_TARGET_INVALID")
+    headers = {"Connection": "close"}
+    if token is not None:
+        headers["Authorization"] = "Bearer " + token
+    connection = HTTPConnection("127.0.0.1", endpoint.port, timeout=10)
     try:
-        response = urlopen(Request(origin + uri, headers=headers, method=method), timeout=10)
-    except HTTPError as error:
-        response = error
-    with response:
-        raw = response.read(LIMIT + 1)
-        require(len(raw) <= LIMIT, "NATIVE_MEDIA_RESPONSE_EXCEEDED_BOUND")
-        if method == "HEAD":
-            require(not raw, "NATIVE_MEDIA_HEAD_RETURNED_BODY")
-            body = None
-        else:
-            body = json.loads(raw)
-        return response.status, body
+        connection.request(method, uri, headers=headers)
+        with connection.getresponse() as response:
+            require(not 300 <= response.status < 400, "NATIVE_MEDIA_UNEXPECTED_REDIRECT:" + uri)
+            if method == "HEAD":
+                # HTTPResponse.read suppresses HEAD data by design. Inspect the
+                # socket-backed file after the headers until EOF or a byte.
+                wire = response.fp
+                if wire is None:
+                    raise ProbeFailure("NATIVE_MEDIA_HEAD_WIRE_UNAVAILABLE")
+                require(not wire.read(1), "NATIVE_MEDIA_HEAD_RETURNED_BODY:" + uri)
+                return response.status, None
+            raw = response.read(LIMIT + 1)
+            require(len(raw) <= LIMIT, "NATIVE_MEDIA_RESPONSE_EXCEEDED_BOUND")
+            require(response.length in (None, 0), "NATIVE_MEDIA_RESPONSE_TRUNCATED")
+            require(response.getheader("Content-Type", "").startswith("application/json"), "NATIVE_MEDIA_RESPONSE_NOT_JSON")
+            return response.status, load_exact_json(raw) if exact_numbers else json.loads(raw)
+    finally:
+        connection.close()
 
 
 def check_reads(origin: str, token: str, cases: list[dict[str, Any]],
-                expected: list[dict[str, Any]], profile: Path) -> list[dict[str, Any]]:
+                expected: list[dict[str, Any]], profile: Path, *, exact_numbers: bool = False) -> list[dict[str, Any]]:
     before = media_snapshot(profile)
     auth_before = (profile / ".auth-token").read_bytes()
     rows = []
     for case, original in zip(cases, expected, strict=True):
-        status, body = request(origin, case["uri"], "GET", token)
+        status, body = request(origin, case["uri"], "GET", token, exact_numbers=exact_numbers)
+        expected_body = load_exact_json(original["bodyJson"]) if exact_numbers else original["body"]
+        same = exact_json_values_equal if exact_numbers else json_values_equal
+        compare_home_media = case.get("compareHomeMedia", False)
+        if compare_home_media:
+            require(status == original["status"] == 200, "NATIVE_MEDIA_HOME_STATUS_DIFFERS")
+            body = home_media_fields(body)
+            require(set(expected_body) == {"ok", "media", "count"}, "RETAINED_HOME_PROJECTION_DIFFERS")
         row = {"uri": case["uri"], "originalStatus": original["status"],
-            "nativeStatus": status, "bodyMatchesOriginal": json_values_equal(body, original["body"])}
+            "nativeStatus": status, "bodyMatchesOriginal": same(body, expected_body)}
+        if compare_home_media:
+            row["bodyComparisonScope"] = ["ok", "recent.media", "counts.media"]
         rows.append(row)
         require(status == original["status"] and row["bodyMatchesOriginal"],
                 "NATIVE_MEDIA_READ_DIFFERS_FROM_ORIGINAL:" + case["uri"])
         require((profile / ".auth-token").read_bytes() == auth_before, "NATIVE_MEDIA_GET_CHANGED_AUTH")
+        require(media_snapshot(profile) == before, "NATIVE_MEDIA_GET_CHANGED_STORE")
         head_status, _ = request(origin, case["uri"], "HEAD", token)
         require(head_status == status, "NATIVE_MEDIA_HEAD_STATUS_DIFFERS:" + case["uri"])
         require((profile / ".auth-token").read_bytes() == auth_before, "NATIVE_MEDIA_HEAD_CHANGED_AUTH")
         require(media_snapshot(profile) == before, "NATIVE_MEDIA_READ_CHANGED_STORE")
     return rows
+
+
+def home_media_fields(value: Any) -> dict[str, Any]:
+    return {"ok": value["ok"], "media": value["recent"]["media"], "count": value["counts"]["media"]}
+
+
+def frozen_retained_cases() -> tuple[list[dict[str, Any]], dict[str, str]]:
+    directory = ROOT / "tests/fixtures"
+    retained_path = directory / "native_media_retained_http_v1.json"
+    boundary_path = directory / "native_media_retained_boundaries_v1.json"
+    retained_raw, boundary_raw = retained_path.read_bytes(), boundary_path.read_bytes()
+    retained, boundaries = json.loads(retained_raw), json.loads(boundary_raw)
+    require(retained["schemaVersion"] == boundaries["schemaVersion"] == 1
+            and retained["provenance"]["actualSocketRequests"] == 170 and len(retained["cases"]) == 34
+            and boundaries["actualOriginalLoopbackRequests"] == 18 and boundaries["actualAuthenticatedRequests"] == 16
+            and boundaries["unauthorized"]["status"] == boundaries["workspaceHomeUnauthorized"]["status"] == 401
+            and json_values_equal(boundaries["unauthorized"]["body"], boundaries["workspaceHomeUnauthorized"]["body"])
+            and len(boundaries["variants"]) == 3,
+            "RETAINED_ORIGINAL_FIXTURE_CONTRACT_DIFFERS")
+    for relative, digest in boundaries["originalInputHashes"].items():
+        require(hashlib.sha256((ROOT / relative).read_bytes()).hexdigest() == digest,
+                "RETAINED_BOUNDARY_ORIGINAL_SOURCE_DRIFT")
+    original_reader = ROOT / "deepseek_infra/infra/media/library.py"
+    require(hashlib.sha256(original_reader.read_bytes()).hexdigest() == retained["provenance"]["originalReaderSha256"],
+            "RETAINED_VALUE_ORIGINAL_READER_DRIFT")
+    paths = {"list": "/api/media", "detail": "/api/media/media_kept",
+             "independentDetail": "/api/media/media_control", "filteredList": "/api/media?type=pdf"}
+    result = []
+    for case in retained["cases"]:
+        auth = case["results"]["unauthorized"]
+        require(auth["status"] == 401, "RETAINED_VALUE_ORIGINAL_AUTH_DIFFERS")
+        reads = [dict(case["results"][role], uri=uri) for role, uri in paths.items()]
+        result.append(dict(case, kind="retained", reads=reads, unauthorizedBody=auth["body"]))
+    expected_boundary_routes = {
+        "off_window_and_segment_encoding": {
+            "collection": ("/api/media", 500), "filter": ("/api/media?type=pdf", 200),
+            "visible": ("/api/media/visible", 200), "unencodable": ("/api/media/unencodable", 500),
+            "segments": ("/api/media/unencodable/segments", 200),
+            "window_one": ("/api/workspace/home?limit=1", 200), "window_two": ("/api/workspace/home?limit=2", 500),
+        },
+        "scalar_sort_and_normalization": {
+            "collection": ("/api/media", 200), "filter": ("/api/media?type=video", 200),
+            "window_one": ("/api/workspace/home?limit=1", 200), "window_all": ("/api/workspace/home?limit=3", 200),
+        },
+        "normalization_precedes_encoding": {
+            "collection": ("/api/media", 400), "window_one": ("/api/workspace/home?limit=1", 400),
+            "unencodable": ("/api/media/unencodable", 500), "segments": ("/api/media/unencodable/segments", 200),
+            "invalid_public_path": ("/api/media/invalid_public_path", 400),
+        },
+    }
+    denied_body = boundaries["unauthorized"]["body"]
+    for case in boundaries["variants"]:
+        routes = {role: (read["uri"], read["status"]) for role, read in case["results"].items()}
+        require(routes == expected_boundary_routes.get(case["name"]), "RETAINED_BOUNDARY_ROUTE_INVENTORY_DIFFERS")
+        for read in case["results"].values():
+            scope = ["ok", "recent.media", "counts.media"] if read["uri"].startswith("/api/workspace/home?") and read["status"] == 200 else None
+            require(read.get("bodyComparisonScope") == scope, "RETAINED_BOUNDARY_COMPARISON_SCOPE_DIFFERS")
+        result.append(dict(case, kind="boundaries", reads=list(case["results"].values()), unauthorizedBody=denied_body))
+    require(len({case["name"] for case in result}) == 37
+            and sum(len(case["reads"]) for case in result) == 152,
+            "RETAINED_VALUE_SOCKET_INVENTORY_DIFFERS")
+    for case in result:
+        for read in case["reads"]:
+            require(read["uri"].startswith(("/api/media", "/api/workspace/home?limit="))
+                    and hashlib.sha256(read["bodyJson"].encode("utf8")).hexdigest() == read["bodySha256"]
+                    and json_values_equal(json.loads(read["bodyJson"]), read["body"]),
+                    "RETAINED_VALUE_ORIGINAL_RESPONSE_BINDING_DIFFERS")
+    return result, {"retainedHttp": hashlib.sha256(retained_raw).hexdigest(),
+                    "retainedBoundaries": hashlib.sha256(boundary_raw).hexdigest()}
 
 
 def process_identity(pid: int) -> str | None:
@@ -222,9 +317,42 @@ def writer(profile: Path) -> tuple[int, str]:
     return row
 
 
+@contextmanager
+def previous_corpus_deadline() -> Iterator[Callable[[], float]]:
+    set_timer = getattr(signal, "setitimer", None)
+    alarm_signal = getattr(signal, "SIGALRM", None)
+    real_timer = getattr(signal, "ITIMER_REAL", None)
+    if not callable(set_timer) or alarm_signal is None or real_timer is None:
+        raise ProbeFailure("NATIVE_MEDIA_PHASE_DEADLINE_UNAVAILABLE")
+    budget = 15 * 60
+    started = time.monotonic()
+
+    def expired(_signum: int, _frame: Any) -> None:
+        raise ProbeFailure("EXISTING_MEDIA_READ_CORPUS_EXCEEDED_ORIGINAL_BUDGET")
+
+    def finish() -> float:
+        elapsed = time.monotonic() - started
+        require(elapsed < budget, "EXISTING_MEDIA_READ_CORPUS_EXCEEDED_ORIGINAL_BUDGET")
+        set_timer(real_timer, 0)
+        return elapsed
+
+    handler = signal.signal(alarm_signal, expired)
+    try:
+        set_timer(real_timer, budget)
+        yield finish
+    finally:
+        set_timer(real_timer, 0)
+        signal.signal(alarm_signal, handler)
+
+
 def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
     require(os.environ.get("GITHUB_ACTIONS") == "true" and os.name == "posix",
             "NATIVE_MEDIA_PROCESS_VERIFICATION_IS_CLOUD_ONLY")
+    with previous_corpus_deadline() as finish_previous_corpus:
+        run_corpus(args, report, finish_previous_corpus)
+
+
+def run_corpus(args: argparse.Namespace, report: dict[str, Any], finish_previous_corpus: Callable[[], float]) -> None:
     revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     require(revision == os.environ.get("GITHUB_SHA"), "CLOUD_SOURCE_REVISION_DIFFERS")
     require(not subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=no"], cwd=ROOT),
@@ -268,7 +396,7 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
         child: subprocess.Popen[bytes] | None = None
         identities: list[dict[str, Any]] = []
 
-        def launch(label: str) -> tuple[str, list[dict[str, Any]]]:
+        def launch(label: str, *, check_startup_auth: bool = True) -> tuple[str, list[dict[str, Any]]]:
             nonlocal child, identities
             with (args.out / (label + ".log")).open("wb") as log:
                 child = subprocess.Popen([str(binaries / "deepseek-launch"), "--server", "--no-prompt",
@@ -284,9 +412,10 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
             token = auth.read_text().strip()
             require(len(token) == 64 and all(char in "0123456789abcdef" for char in token),
                     "DEFAULT_LAUNCHER_AUTH_TOKEN_INVALID")
-            for uri in ("/api/media", "/api/media/media_keep"):
-                for method in ("GET", "HEAD"):
-                    require(request(origin, uri, method, None)[0] == 401, "MEDIA_UNAUTHENTICATED_READ_NOT_DENIED")
+            if check_startup_auth:
+                for uri in ("/api/media", "/api/media/media_keep"):
+                    for method in ("GET", "HEAD"):
+                        require(request(origin, uri, method, None)[0] == 401, "MEDIA_UNAUTHENTICATED_READ_NOT_DENIED")
             return token, identities
 
         def shutdown() -> None:
@@ -427,6 +556,48 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
                 selectedNormalizationUnauthorizedResponsesChecked=selected_count * 2,
                 selectedNormalizationFixtureSha256=hashlib.sha256(selected_path.read_bytes()).hexdigest(),
                 selectedNormalizationAuthenticatedReadsMatchOriginal=True)
+            report["previousMediaReadCorpusSeconds"] = finish_previous_corpus()
+            retained_values, fixture_hashes = frozen_retained_cases()
+            retained_value_results = []
+            for case in retained_values:
+                require(child is None and not identities, "RETAINED_VALUE_FIXTURE_WRITTEN_WHILE_NATIVE_RUNNING")
+                raw = case["document"].encode("utf8")
+                require(hashlib.sha256(raw).hexdigest() == case["documentSha256"],
+                        "RETAINED_VALUE_DOCUMENT_HASH_DIFFERS")
+                (directory / "library.json").write_bytes(raw)
+                seeded = media_snapshot(profile)
+                # Each new case checks its own complete auth matrix below.
+                token, roles_observed = launch("retained-value-" + case["name"], check_startup_auth=False)
+                require((profile / ".auth-token").read_bytes() == token_bytes, "RETAINED_VALUE_RESTART_REPLACED_AUTH")
+                observed = writer(profile)
+                require(observed[0] == generations[-1][0] + 1 and observed[1] not in {item[1] for item in generations},
+                        "RETAINED_VALUE_RESTART_DID_NOT_ADVANCE_WRITER_FENCE")
+                generations.append(observed)
+                require(media_snapshot(profile) == seeded, "RETAINED_VALUE_RESTART_CHANGED_MEDIA_STORE")
+                reads = []
+                for frozen in case["reads"]:
+                    uri = frozen["uri"]
+                    compare_home = bool(frozen.get("bodyComparisonScope"))
+                    reads.append({"uri": uri, "compareHomeMedia": compare_home})
+                    for method in ("GET", "HEAD"):
+                        denied, body = request(origin, uri, method, None)
+                        require(denied == 401, "RETAINED_VALUE_UNAUTHENTICATED_READ_NOT_DENIED:" + uri)
+                        if method == "GET":
+                            require(json_values_equal(body, case["unauthorizedBody"]), "RETAINED_VALUE_AUTH_BODY_DIFFERS")
+                        require(media_snapshot(profile) == seeded and (profile / ".auth-token").read_bytes() == token_bytes,
+                                "RETAINED_VALUE_AUTH_REFUSAL_CHANGED_SOURCE")
+                checked = check_reads(origin, token, reads, case["reads"], profile, exact_numbers=True)
+                retained_value_results.append(dict(case=case["name"], kind=case["kind"],
+                    documentSha256=case["documentSha256"], reads=checked, processes=roles_observed))
+                shutdown()
+                require(media_snapshot(profile) == seeded and (profile / ".auth-token").read_bytes() == token_bytes,
+                        "RETAINED_VALUE_SHUTDOWN_CHANGED_SOURCE")
+            retained_value_count = sum(len(case["reads"]) for case in retained_value_results)
+            require(retained_value_count == 152 and len(generations) == 63, "RETAINED_VALUE_SOCKET_OBSERVATION_COUNT_DIFFERS")
+            report.update(retainedValueCases=retained_value_results, retainedValueCaseCount=37,
+                retainedValueGETResponsesChecked=retained_value_count, retainedValueHEADResponsesChecked=retained_value_count,
+                retainedValueUnauthorizedResponsesChecked=retained_value_count * 2, retainedValueFixtureSha256=fixture_hashes,
+                retainedValueAuthenticatedReadsMatchOriginal=True)
             report.update(status="PASS", controlledAuthenticatedMediaReadsQualified=True,
                 emptyReadCases=len(empty_cases), retainedReadCasesPerLaunch=len(cases),
                 retainedLaunchCount=2, headResponsesChecked=len(empty_cases) + 2 * len(cases),

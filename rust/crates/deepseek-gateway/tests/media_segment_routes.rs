@@ -669,7 +669,11 @@ async fn media_reads_keep_missing_stores_auth_and_existing_mutation_routing() {
     let (auth_status, auth_body, _) = fixture
         .request("GET", "/api/media/media_keep/segments", false)
         .await;
-    assert!([401, 403].contains(&auth_status.as_u16()));
+    assert_eq!(auth_status, StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        auth_body,
+        json!({"error": "Auth required", "code": "unauthorized"})
+    );
     for uri in ["/api/media", "/api/media/media_keep"] {
         let (status, body, _) = fixture.request("GET", uri, false).await;
         assert_eq!(status, auth_status);

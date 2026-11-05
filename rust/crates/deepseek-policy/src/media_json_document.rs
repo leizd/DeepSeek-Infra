@@ -426,7 +426,7 @@ impl<R: Read> Input<R> {
 }
 
 #[path = "media_json_deferred.rs"]
-mod deferred;
+pub(super) mod deferred;
 #[path = "media_json_value.rs"]
 mod ordinary_value;
 pub(super) use ordinary_value::from_slice as decode_value_slice;
@@ -627,3 +627,7 @@ fn read_mode(
 #[cfg(test)]
 #[path = "media_json_document_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "media_retained_value_tests.rs"]
+mod retained_tests;

@@ -86,9 +86,12 @@ fn is_drive_path(raw: &str) -> bool {
 
 /// `PurePosixPath.suffix.lower()`, where a leading or trailing dot is empty.
 pub fn posix_suffix(filename: &str) -> String {
-    let name = filename.rsplit('/').next().unwrap_or(filename);
+    let name = filename
+        .rsplit('/')
+        .find(|part| !part.is_empty() && *part != ".")
+        .unwrap_or("");
     match name.rfind('.') {
-        Some(index) if index > 0 && index + 1 < name.len() => name[index..].to_ascii_lowercase(),
+        Some(index) if index > 0 && index + 1 < name.len() => name[index..].to_lowercase(),
         _ => String::new(),
     }
 }
@@ -182,7 +185,9 @@ pub fn media_status(value: Option<&Value>) -> Result<String, AppError> {
 /// `mimetypes.guess_type` for the suffixes the library actually stores.
 /// An unregistered suffix is the oracle's `application/octet-stream` default.
 pub fn guess_mime_type(filename: &str) -> String {
-    match posix_suffix(filename).as_str() {
+    // MIME guessing uses the raw filename, unlike PurePosixPath type inference.
+    let name = filename.rsplit('/').next().unwrap_or("");
+    match posix_suffix(name).as_str() {
         ".png" => "image/png",
         ".jpg" | ".jpeg" => "image/jpeg",
         ".gif" => "image/gif",
@@ -209,7 +214,7 @@ pub fn guess_mime_type(filename: &str) -> String {
     .to_string()
 }
 
-fn utc_now_z() -> String {
+pub(crate) fn utc_now_z() -> String {
     let seconds = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|elapsed| elapsed.as_secs() as i64)

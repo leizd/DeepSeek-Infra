@@ -25,6 +25,8 @@ chrono = "=0.4.45"
 fancy-regex = "=0.19.2"
 serde = { workspace = true }
 serde_json = { workspace = true }
+# Use ties-to-even shortest decimal formatting for retained Python float text.
+ryu = "=1.0.23"
 regex = { workspace = true }
 sha2 = { workspace = true }
 sha1 = { workspace = true }

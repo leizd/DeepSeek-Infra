@@ -23,10 +23,14 @@ use axum::{Json, Router};
 use deepseek_policy::app_error::{AppError, codes};
 use deepseek_policy::core_utils::{python_float_opt, python_int_opt, python_truthy, text_or_empty};
 use deepseek_policy::entropy::SystemEntropy;
+use deepseek_policy::media_records::retained::MediaRecord;
+#[cfg(test)]
+use deepseek_policy::media_schema::normalize_media_record;
 use deepseek_policy::media_schema::{
     MAX_SEGMENT_TEXT_CHARS, declared_media_type, media_status, normalize_media_path,
-    normalize_media_record, python_truthy_opt,
+    python_truthy_opt,
 };
+#[cfg(test)]
 use deepseek_policy::python_json::value_str;
 use deepseek_policy::workspace_schema::{
     new_id, redact_sensitive_text, validate_project_id, validate_workspace_id,
@@ -43,7 +47,7 @@ const SEGMENT_TYPES: [&str; 6] = [
 ];
 
 #[path = "media_read_spool.rs"]
-mod media_read_spool;
+pub(crate) mod media_read_spool;
 
 pub fn router() -> Router {
     Router::new()
@@ -76,7 +80,7 @@ async fn item_dispatch(
             Ok(AxumPath(media_id)) => media_id,
             Err(rejection) => return rejection.into_response(),
         };
-        return read_response(method, move || read_media_item(&media_id).map(Json)).await;
+        return read_response(method, move || read_media_item(&media_id)).await;
     }
     crate::control_proxy::proxy_api_to_go(method, headers, OriginalUri(uri), body).await
 }
@@ -138,23 +142,27 @@ fn read_media_collection(uri: &Uri) -> Result<media_read_spool::CompletedJson, A
         media_status(Some(&Value::String(raw_status.to_string())))?
     };
     media_read_spool::PublicIndex::load(&library_path())?.collection(|item| {
-        (project.is_empty() || item["projectId"].as_str() == Some(project.as_str()))
-            && (media_type.is_empty() || item["type"].as_str() == Some(media_type.as_str()))
-            && (status.is_empty() || item["status"].as_str() == Some(status.as_str()))
+        (project.is_empty() || item.field_equals("projectId", &project))
+            && (media_type.is_empty() || item.field_equals("type", &media_type))
+            && (status.is_empty() || item.field_equals("status", &status))
     })
 }
 
-fn read_media_item(media_id: &str) -> Result<Value, AppError> {
+fn lookup_media_item(media_id: &str) -> Result<MediaRecord, AppError> {
     let safe_id = validate_workspace_id(media_id, "media id")?;
     let media = media_read_spool::find(&library_path(), &safe_id)?
         .ok_or_else(|| AppError::not_found("Media not found"))?;
-    Ok(json!({"ok": true, "media": media}))
+    Ok(media)
+}
+
+fn read_media_item(media_id: &str) -> Result<media_read_spool::CompletedJson, AppError> {
+    media_read_spool::CompletedJson::item(&lookup_media_item(media_id)?)
 }
 
 fn read_segments(media_id: &str) -> Result<Value, AppError> {
     let safe_id = validate_workspace_id(media_id, "media id")?;
     // The original route calls library.get_media before reading any segments.
-    read_media_item(&safe_id)?;
+    lookup_media_item(&safe_id)?;
     Ok(json!({"ok": true, "segments": load_segments(&safe_id)?}))
 }
 
@@ -330,10 +338,11 @@ fn str_or_default(value: Option<&Value>, default: &str) -> String {
 /// `library.list_media()` with no filters: normalise each row, skip `AppError`,
 /// and sort by `str(updatedAt)` descending before selecting the home window. A missing library is `[]` and is
 /// not created. Invalid UTF-8 is the oracle's uncaught `UnicodeDecodeError`.
-pub(crate) fn media_window(limit: usize) -> Result<(Vec<Value>, usize), AppError> {
+pub(crate) fn media_window(limit: usize) -> Result<(Vec<MediaRecord>, usize), AppError> {
     media_read_spool::PublicIndex::load(&library_path())?.window(limit)
 }
 
+#[cfg(test)]
 fn media_sort_key(row: &Value) -> String {
     match row.get("updatedAt") {
         Some(value) if python_truthy(value) => value_str(value),

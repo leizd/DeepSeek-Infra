@@ -240,7 +240,19 @@ jobs:
             'media_records::document::tests::original_winning_clock_before_invalid_path',
             'media_records::document::deferred::tests::dictionary_winners_precede_scalar_interpretation',
             'media_records::document::deferred::tests::literal_and_surrogate_pair_keys_have_python_equality',
-            'media_records::document::deferred::tests::complete_syntax_and_utf8_are_still_required'
+            'media_records::document::deferred::tests::complete_syntax_and_utf8_are_still_required',
+            'media_records::document::retained_tests::retained_original_http_schema_and_strict_encoding_match_all_thirty_four_cases',
+            'media_records::document::retained_tests::retained_integer_tokens_survive_without_workspace_feature_unification',
+            'media_records::document::retained_tests::retained_floats_parse_before_stringification_and_preserve_negative_zero',
+            'media_records::document::retained_tests::retained_source_and_metadata_container_stringification_preserves_repr_order',
+            'media_records::document::retained_tests::retained_repr_uses_the_cloud_oracles_unicode_15_printability',
+            'media_records::document::retained_tests::retained_surrogates_only_fail_at_the_selected_strict_output_boundary',
+            'media_records::document::retained_tests::retained_sort_keys_follow_python_scalars_with_surrogate_pairs_and_stable_equals',
+            'media_records::document::retained_tests::retained_normalization_keeps_business_caps_without_cutting_a_surrogate_pair',
+            'media_records::document::retained_tests::retained_sanitized_keys_duplicates_and_empty_children_follow_original_order',
+            'media_records::document::retained_tests::retained_document_validates_tail_and_utf8_and_uses_dictionary_winners',
+            'media_records::document::retained_tests::retained_clock_and_second_path_validation_keep_original_phase_order',
+            'media_records::document::retained_tests::retained_deep_normalization_and_drop_use_heap_frames'
           )
           $spoolExpected = @(
             'media_segment_routes::media_read_spool::tests::source_order_first_match_stable_sort_and_all_fields_match_original',

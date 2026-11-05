@@ -739,6 +739,7 @@ dependencies = [
  "quick-xml 0.31.0",
  "regex",
  "rusqlite",
+ "ryu",
  "sqlite-vec",
  "serde",
  "serde_json",

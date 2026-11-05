@@ -1,5 +1,5 @@
 use axum::{
-    extract::Request,
+    extract::{MatchedPath, Request},
     http::{HeaderMap, HeaderValue, Method, StatusCode, header},
     middleware::Next,
     response::{IntoResponse, Json, Response},
@@ -317,7 +317,23 @@ pub async fn require_production_auth(
     }
     if !tokens_match(&provided, expected) {
         let path = request.uri().path();
-        let error = if path == "/api/skills" || path.starts_with("/api/skills/") {
+        let media_read = matches!(*request.method(), Method::GET | Method::HEAD)
+            && matches!(
+                request
+                    .extensions()
+                    .get::<MatchedPath>()
+                    .map(MatchedPath::as_str),
+                Some(
+                    "/api/media"
+                        | "/api/media/:media_id"
+                        | "/api/media/:media_id/segments"
+                        | "/api/workspace/home"
+                )
+            );
+        if media_read && request.method() == Method::HEAD {
+            return StatusCode::UNAUTHORIZED.into_response();
+        }
+        let error = if media_read || path == "/api/skills" || path.starts_with("/api/skills/") {
             json!({"error":"Auth required","code":"unauthorized"})
         } else {
             json!({"error": {"code": "UNAUTHORIZED", "message": "Auth required"}})

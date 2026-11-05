@@ -1,3 +1,41 @@
+<!-- native checkpoint 2026-11-05 retained media values -->
+
+Whole product migration remains ACTIVE / NOT_READY. All original server,
+desktop, Android, background, retained functions, unique writer, recovery,
+production runtime and original MCP acceptance requirements remain in scope.
+
+The original selected-public-normalization commit f842fce5 passed that case in
+both Rust modes of run 41961153815. Each mode still observed 26 retained-value
+failures among 35 cases. The exact logs and named results are preserved.
+
+Gateway reads now use an iterative lossless arena before selecting or encoding
+media. Decimal integers remain exact, floats undergo IEEE parsing, and UTF-16
+units survive until business normalization and strict response construction.
+Private stored/public spools retain source ordinals and digest-checked bytes.
+Collections complete selected public normalization in source order then sort by
+Python scalar order. Home normalizes the whole collection, loads its remaining
+sections, and encodes the selected window. Segments require the public lookup. Media and home read denials preserve the
+original 401 response, and the stream verifies its final chunk before delivery.
+
+A separate original TCP proof adds 16 authenticated requests and two auth denials for output boundaries, including
+unencodable off-window records, a legal segments read for the same record,
+stable scalar sorting, and normalization errors preceding response encoding.
+The cloud process probe retains the prior 26 generations and adds 37 cases,
+152 authenticated GETs, 152 HEADs and 304 auth denials. Home success compares
+its media window/count and ok flag; other results compare complete bodies.
+Windows includes 61 parser and 43 spool cases across the existing graphs.
+
+Repr printability and lowercase mappings use the cloud Python 3.12 oracle's
+Unicode 15.0.0. Float parsing handles balanced long exponents and uses the
+already locked Ryu formatter for ties to even. The wire probe rejects redirects,
+checks HEAD bytes directly, and compares exact numeric response tokens. The
+existing process corpus retains its 15 minute limit and the extended corpus
+has its own time allowance for the real writer lease waits. Per-interpreter and host MIME database variation remains open.
+Worker mutations, durable images/recovery and wider native protocol support for
+retained values require separate qualification. Current-source standalone Rust,
+coverage, actual sockets, source CI, controlled platforms, Rust/browser push,
+PR candidate, and the full release remain pending until observed on this source.
+
 <!-- native checkpoint 2026-11-05 original selected public normalization -->
 
 Whole product migration remains ACTIVE / NOT_READY. All original server, desktop,

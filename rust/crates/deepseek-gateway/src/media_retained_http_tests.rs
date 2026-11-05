@@ -87,7 +87,9 @@ fn retained_exact_json(bytes: &[u8]) -> Result<Value, ()> {
 fn retained_native_response(path: &std::path::Path, role: &str) -> axum::response::Response {
     let result = match role {
         "list" | "filteredList" => PublicIndex::load(path)
-            .and_then(|index| index.collection(|value| role == "list" || value["type"] == "pdf"))
+            .and_then(|index| {
+                index.collection(|value| role == "list" || value.field_equals("type", "pdf"))
+            })
             .map(IntoResponse::into_response),
         "detail" | "independentDetail" => {
             let id = if role == "detail" {
@@ -97,7 +99,8 @@ fn retained_native_response(path: &std::path::Path, role: &str) -> axum::respons
             };
             find(path, id)
                 .and_then(|row| row.ok_or_else(|| AppError::not_found("Media not found")))
-                .map(|row| axum::Json(json!({"ok": true, "media": row})).into_response())
+                .and_then(|row| CompletedJson::item(&row))
+                .map(IntoResponse::into_response)
         }
         _ => panic!("unknown original retained HTTP role"),
     };

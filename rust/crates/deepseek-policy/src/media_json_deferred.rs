@@ -2,7 +2,7 @@
 //! Raw leaf spans keep escaped UTF-16 units and non-finite numbers lossless here.
 use std::{collections::HashMap, ops::Range};
 
-enum Node {
+pub(crate) enum Node {
     Leaf(Range<usize>),
     Array(Vec<usize>),
     Object(Vec<(Range<usize>, usize)>),
@@ -151,7 +151,7 @@ impl Cursor<'_> {
     }
 }
 
-fn parse(bytes: &[u8]) -> Result<(Vec<Node>, usize), ()> {
+pub(crate) fn parse(bytes: &[u8]) -> Result<(Vec<Node>, usize), ()> {
     let text = std::str::from_utf8(bytes).map_err(|_| ())?;
     let mut cursor = Cursor { bytes, text, at: 0 };
     let mut nodes = Vec::new();
@@ -240,6 +240,29 @@ fn parse(bytes: &[u8]) -> Result<(Vec<Node>, usize), ()> {
             }
         }
     }
+}
+
+/// Decode Python's UTF-16 escapes without requiring Unicode scalar values yet.
+/// The complete record has already been validated before this operation.
+pub(crate) fn text_units(bytes: &[u8]) -> Result<Vec<u16>, ()> {
+    let text = std::str::from_utf8(bytes).map_err(|_| ())?;
+    if let Some(contents) = text
+        .strip_prefix('"')
+        .and_then(|text| text.strip_suffix('"'))
+        .filter(|contents| !contents.contains('\\'))
+    {
+        // Already syntax checked by parse(), but keep the helper self-contained.
+        if contents.bytes().any(|byte| byte < 32 || byte == b'"') {
+            return Err(());
+        }
+        return Ok(contents.encode_utf16().collect());
+    }
+    let mut cursor = Cursor { bytes, text, at: 0 };
+    let (_, units) = cursor.string(true)?;
+    if cursor.at != bytes.len() {
+        return Err(());
+    }
+    Ok(units)
 }
 
 /// Emit only dictionary winners, keeping first insertion order and raw leaves.

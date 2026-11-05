@@ -19,6 +19,7 @@
 
 use std::path::Path;
 
+use crate::media_segment_routes::media_read_spool::CompletedJson;
 use axum::extract::Query;
 use axum::http::{HeaderValue, Method, StatusCode, header};
 use axum::response::{IntoResponse, Response};
@@ -57,7 +58,7 @@ async fn dispatch(method: Method, Query(query): Query<HomeQuery>) -> Response {
     };
     match tokio::task::spawn_blocking(move || workspace_home(limit)).await {
         Ok(Ok(_body)) if method == Method::HEAD => StatusCode::OK.into_response(),
-        Ok(Ok(body)) => Json(body).into_response(),
+        Ok(Ok(body)) => body.into_response(),
         Ok(Err(error)) => method_error(method, error),
         Err(_) => method_error(method, server_error()),
     }
@@ -76,7 +77,7 @@ fn home_limit(raw: Option<&str>) -> Result<i64, AppError> {
     Ok(parsed.clamp(1, 50))
 }
 
-fn workspace_home(limit: i64) -> Result<Value, AppError> {
+fn workspace_home(limit: i64) -> Result<CompletedJson, AppError> {
     let root = crate::data_routes::workspace_root();
     let window = usize::try_from(limit).unwrap_or(1);
     let projects = workspace_projects::list_projects(&root, &SystemEntropy)?;
@@ -89,7 +90,7 @@ fn workspace_home(limit: i64) -> Result<Value, AppError> {
     let (media, media_count) = crate::media_segment_routes::media_window(window)?;
     let exports = list_exports(&root)?;
     let memories = memory_schema::list_memories("", "", &root, &SystemClock);
-    Ok(json!({
+    let body = json!({
         "ok": true,
         "version": crate::gateway_version(),
         "modules": modules(),
@@ -97,7 +98,7 @@ fn workspace_home(limit: i64) -> Result<Value, AppError> {
             "projects": take(&projects, window),
             "memories": take(&memories, window),
             "skills": take(&skill_runs, window),
-            "media": media,
+            "media": [],
             "automations": take(&automation_runs, window),
             "artifacts": take(&artifacts, window),
             "savedItems": take(&saved_items, window),
@@ -119,7 +120,9 @@ fn workspace_home(limit: i64) -> Result<Value, AppError> {
             "evidence": evidence_status(&root),
             "runtime": "local",
         },
-    }))
+    });
+    // The original constructs JSONResponse after every home loader has run.
+    CompletedJson::home(&body, &media)
 }
 
 fn modules() -> Vec<Value> {

@@ -27,6 +27,14 @@ mod document;
 mod raw;
 pub use raw::RawRecords;
 
+#[path = "media_retained_value.rs"]
+pub mod retained;
+#[path = "media_retained_records.rs"]
+mod retained_records;
+#[path = "media_retained_schema.rs"]
+mod retained_schema;
+pub use retained_records::RetainedRecords;
+
 const BUFFER: usize = 64 * 1024;
 
 /// Storage failures and caller policy errors must not collapse into one result.

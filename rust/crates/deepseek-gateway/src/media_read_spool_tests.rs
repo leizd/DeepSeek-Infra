@@ -1,4 +1,17 @@
 use super::*;
+
+fn ordinary(value: MediaRecord) -> Value {
+    let mut bytes = Vec::new();
+    value.write_response(&mut bytes).unwrap();
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+fn ordinary_window(
+    result: Result<(Vec<MediaRecord>, usize), AppError>,
+) -> Result<(Vec<Value>, usize), AppError> {
+    result.map(|(values, count)| (values.into_iter().map(ordinary).collect(), count))
+}
+
 use axum::body::to_bytes;
 use axum::http::Method;
 use std::fs;
@@ -51,7 +64,7 @@ fn source_order_first_match_stable_sort_and_all_fields_match_original() {
     let file = fixture(&bytes);
     let mut expected = original(&bytes).unwrap();
     assert_eq!(
-        find(file.path(), "same").unwrap(),
+        find(file.path(), "same").unwrap().map(ordinary),
         Some(expected[0].clone())
     );
     expected.sort_by_key(|item| std::cmp::Reverse(media_sort_key(item)));
@@ -59,14 +72,17 @@ fn source_order_first_match_stable_sort_and_all_fields_match_original() {
     let mut actual = Vec::new();
     index
         .visit_sorted(|value| {
-            actual.push(value);
+            actual.push(ordinary(value));
             Ok(())
         })
         .unwrap();
     assert_eq!(actual, expected);
-    assert_eq!(index.window(2).unwrap(), (expected[..2].to_vec(), 4));
-    assert_eq!(index.window(0).unwrap(), (Vec::new(), 4));
-    assert_eq!(index.window(99).unwrap(), (expected, 4));
+    assert_eq!(
+        ordinary_window(index.window(2)).unwrap(),
+        (expected[..2].to_vec(), 4)
+    );
+    assert_eq!(ordinary_window(index.window(0)).unwrap(), (Vec::new(), 4));
+    assert_eq!(ordinary_window(index.window(99)).unwrap(), (expected, 4));
 }
 
 #[tokio::test]
@@ -85,7 +101,7 @@ async fn second_normalization_follows_original_selection_and_complete_windows() 
         // This old native helper still describes the unfiltered list's error.
         assert_eq!(original(bytes).unwrap_err().status, 400);
         assert_eq!(
-            find(file.path(), "first").unwrap(),
+            find(file.path(), "first").unwrap().map(ordinary),
             Some(expected["selectedFirst"]["body"]["media"].clone())
         );
         assert_eq!(find(file.path(), "later").unwrap_err().status, 400);
@@ -95,7 +111,7 @@ async fn second_normalization_follows_original_selection_and_complete_windows() 
             assert_eq!(index.window(limit).unwrap_err().status, 400);
         }
         let response = index
-            .collection(|value| value["type"] == "pdf")
+            .collection(|value| value.field_equals("type", "pdf"))
             .unwrap()
             .into_response();
         assert_eq!(response.status(), StatusCode::OK);
@@ -108,7 +124,7 @@ async fn second_normalization_follows_original_selection_and_complete_windows() 
         );
         if let Some(project) = expected.get("selectedProject") {
             let response = index
-                .collection(|value| value["projectId"] == "proj_first")
+                .collection(|value| value.field_equals("projectId", "proj_first"))
                 .unwrap()
                 .into_response();
             assert_eq!(response.status(), StatusCode::OK);
@@ -141,7 +157,7 @@ fn complete_document_last_key_utf8_and_missing_sources_preserve_old_results() {
             Ok(expected) => {
                 let index = PublicIndex::load(file.path()).unwrap();
                 assert_eq!(
-                    index.window(99).unwrap(),
+                    ordinary_window(index.window(99)).unwrap(),
                     (expected.clone(), expected.len())
                 );
             }
@@ -153,15 +169,12 @@ fn complete_document_last_key_utf8_and_missing_sources_preserve_old_results() {
     let directory = tempfile::tempdir().unwrap();
     let missing = directory.path().join("absent.json");
     assert_eq!(
-        PublicIndex::load(&missing).unwrap().window(1).unwrap(),
+        ordinary_window(PublicIndex::load(&missing).unwrap().window(1)).unwrap(),
         (vec![], 0)
     );
     assert!(!missing.exists());
     assert_eq!(
-        PublicIndex::load(directory.path())
-            .unwrap()
-            .window(1)
-            .unwrap(),
+        ordinary_window(PublicIndex::load(directory.path()).unwrap().window(1)).unwrap(),
         (vec![], 0)
     );
 }
@@ -208,7 +221,7 @@ async fn streamed_collection_matches_original_bytes_filters_headers_and_head() {
         expected
     );
     let response = index
-        .collection(|value| value["mediaId"] == "media_alpha")
+        .collection(|value| value.field_equals("mediaId", "media_alpha"))
         .unwrap()
         .into_response();
     let value: Value =
@@ -245,18 +258,61 @@ async fn dropping_a_stream_releases_its_private_file_without_modifying_the_libra
 
 #[tokio::test]
 async fn changed_response_spool_fails_instead_of_claiming_a_complete_body() {
-    let bytes = serde_json::to_vec(&json!({"media":[row("media_alpha","1")]})).unwrap();
+    use futures_util::StreamExt;
+
+    let mut wide = row("media_alpha", "1");
+    wide["metadata"]["wide"] = json!("x".repeat(120_000));
+    let bytes = serde_json::to_vec(&json!({"media":[wide]})).unwrap();
     let file = fixture(&bytes);
-    let output = PublicIndex::load(file.path())
-        .unwrap()
-        .collection(|_| true)
-        .unwrap();
-    let temporary_path = output.file.path().to_path_buf();
-    fs::write(&temporary_path, b"changed").unwrap();
-    let (body, producer) = output.stream();
-    assert!(to_bytes(body, usize::MAX).await.is_err());
-    producer.await.unwrap();
-    assert!(!temporary_path.exists());
+    for mode in [
+        "truncated",
+        "same-length",
+        "trailing",
+        "trailing-full-buffer",
+    ] {
+        let output = if mode == "trailing-full-buffer" {
+            // The extra byte must be detected by the read after Content-Length.
+            let payload = serde_json::to_vec(&"x".repeat(2 * BUFFER - 2)).unwrap();
+            assert_eq!(payload.len(), 2 * BUFFER);
+            CompletedJson::build(|output| output.write_all(&payload).map_err(|_| server_error()))
+                .unwrap()
+        } else {
+            PublicIndex::load(file.path())
+                .unwrap()
+                .collection(|_| true)
+                .unwrap()
+        };
+        let temporary_path = output.file.path().to_path_buf();
+        let mut changed = fs::read(&temporary_path).unwrap();
+        let expected_length = changed.len();
+        assert!(expected_length > BUFFER);
+        match mode {
+            "truncated" => changed = b"changed".to_vec(),
+            "same-length" => changed[0] ^= 1,
+            "trailing" | "trailing-full-buffer" => changed.push(b'!'),
+            _ => unreachable!(),
+        }
+        fs::write(&temporary_path, changed).unwrap();
+        let (body, producer) = output.stream();
+        let mut stream = Box::pin(body.into_data_stream());
+        let mut delivered = 0usize;
+        let mut failed = false;
+        while let Some(part) = stream.next().await {
+            match part {
+                Ok(bytes) => delivered += bytes.len(),
+                Err(_) => {
+                    failed = true;
+                    break;
+                }
+            }
+        }
+        assert!(
+            failed && delivered < expected_length,
+            "{mode}: {delivered}/{expected_length}"
+        );
+        producer.await.unwrap();
+        assert!(!temporary_path.exists());
+    }
     assert_eq!(fs::read(file.path()).unwrap(), bytes);
 }
 
@@ -274,13 +330,13 @@ async fn discarded_unicode_collection_detail_membership_and_window_match_python(
         let expected = case["publicRows"].as_array().unwrap();
         let index = PublicIndex::load(file.path()).unwrap();
         assert_eq!(
-            index.window(99).unwrap(),
+            ordinary_window(index.window(99)).unwrap(),
             (expected.clone(), expected.len()),
             "{}",
             case["name"]
         );
         assert_eq!(
-            find(file.path(), "media_kept").unwrap(),
+            find(file.path(), "media_kept").unwrap().map(ordinary),
             expected.first().cloned(),
             "{}",
             case["name"]
