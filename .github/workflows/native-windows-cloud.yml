@@ -244,7 +244,7 @@ jobs:
           )
           $spoolExpected = @(
             'media_segment_routes::media_read_spool::tests::source_order_first_match_stable_sort_and_all_fields_match_original',
-            'media_segment_routes::media_read_spool::tests::later_second_normalization_errors_propagate_before_filter_find_and_window',
+            'media_segment_routes::media_read_spool::tests::second_normalization_follows_original_selection_and_complete_windows',
             'media_segment_routes::media_read_spool::tests::complete_document_last_key_utf8_and_missing_sources_preserve_old_results',
             'media_segment_routes::media_read_spool::tests::raw_membership_is_not_short_circuited_before_full_json_validation',
             'media_segment_routes::media_read_spool::tests::streamed_collection_matches_original_bytes_filters_headers_and_head',

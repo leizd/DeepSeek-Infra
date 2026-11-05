@@ -1,0 +1,203 @@
+{
+  "schemaVersion": 1,
+  "actualOriginalLoopbackRequests": 13,
+  "originalSourceCommit": "c56bb3ca94c3d8b6389c81bdacb9c584ac0db011",
+  "originalSourceTree": "daffcc6b4d7f585f3d0802e122f77296c8dce8b5",
+  "originalProofSha256": "9266a0188a2676fc0822ab0ba609c8f744df3f1fa64e5dcf175fc9e7ae58f093",
+  "originalReaderSha256": "1b1ae1f169609b0f83606c142726d2361902d4515845ed4465d9f93f69b2f7dd",
+  "variants": [
+    {
+      "name": "exact_legacy_native_test",
+      "document": "{\"media\":[{\"mediaId\":\"first\",\"type\":\"image\",\"path\":\"image.png\",\"title\":\"first\",\"createdAt\":\"fixed\",\"updatedAt\":\"z\",\"metadata\":{\"preserved\":[1,true,\"\u03bb\"]}},{\"mediaId\":\"later\",\"type\":\"image\",\"path\":\"./C:/x.png\"}]}",
+      "documentSha256": "e0231b6c4b8852c4c5c37e0ac8490cec27e8cf55b2d710577b5ce5d616ed5aef",
+      "rawNormalizationAcceptedRows": 2,
+      "rawNormalizedLaterPath": "C:/x.png",
+      "selectedLaterPublicErrorStatus": 400,
+      "results": {
+        "fullList": {
+          "uri": "/api/media",
+          "status": 400,
+          "body": {
+            "error": "Media path must be relative to the media library",
+            "code": "invalid_payload"
+          },
+          "bodySha256": "fbb5f007d78a9f47eb10f333029be290efd035986a2739b81ebefbc19becf88e"
+        },
+        "selectedFirst": {
+          "uri": "/api/media/first",
+          "status": 200,
+          "body": {
+            "ok": true,
+            "media": {
+              "mediaId": "first",
+              "projectId": "",
+              "type": "image",
+              "title": "first",
+              "mimeType": "image/png",
+              "path": "image.png",
+              "source": {},
+              "status": "pending",
+              "createdAt": "fixed",
+              "updatedAt": "z",
+              "metadata": {
+                "preserved": [
+                  1,
+                  true,
+                  "\u03bb"
+                ]
+              }
+            }
+          },
+          "bodySha256": "052f33d8fce5e7f3ba63ed41ce01930cc3c1694347874122ce214cd385d0efe3"
+        },
+        "selectedLater": {
+          "uri": "/api/media/later",
+          "status": 400,
+          "body": {
+            "error": "Media path must be relative to the media library",
+            "code": "invalid_payload"
+          },
+          "bodySha256": "fbb5f007d78a9f47eb10f333029be290efd035986a2739b81ebefbc19becf88e"
+        },
+        "emptyFilter": {
+          "uri": "/api/media?type=pdf",
+          "status": 200,
+          "body": {
+            "ok": true,
+            "media": []
+          },
+          "bodySha256": "33438a1d69a0ea11ce18aaa2db3ee880b1d7e5d8b6700eb24789253c86eb6460"
+        },
+        "segmentsLater": {
+          "uri": "/api/media/later/segments",
+          "status": 400,
+          "body": {
+            "error": "Media path must be relative to the media library",
+            "code": "invalid_payload"
+          },
+          "bodySha256": "fbb5f007d78a9f47eb10f333029be290efd035986a2739b81ebefbc19becf88e"
+        },
+        "unauthorized": {
+          "uri": "/api/media",
+          "status": 401,
+          "body": {
+            "error": "Auth required",
+            "code": "unauthorized"
+          },
+          "bodySha256": "7839bbb4362202487a845cce649515313af47ea13a010d14866b216865c47c13"
+        }
+      }
+    },
+    {
+      "name": "project_selected_variant",
+      "document": "{\"media\":[{\"mediaId\":\"first\",\"type\":\"image\",\"path\":\"image.png\",\"title\":\"first\",\"createdAt\":\"fixed\",\"updatedAt\":\"z\",\"metadata\":{\"preserved\":[1,true,\"\u03bb\"]},\"projectId\":\"proj_first\"},{\"mediaId\":\"later\",\"type\":\"image\",\"path\":\"./C:/x.png\",\"projectId\":\"proj_later\",\"createdAt\":\"fixed\",\"updatedAt\":\"z\"}]}",
+      "documentSha256": "996fda787fa22f47a40600150ffbccd643da1ce66dfb1799a0c320b8a9ead92c",
+      "rawNormalizationAcceptedRows": 2,
+      "rawNormalizedLaterPath": "C:/x.png",
+      "selectedLaterPublicErrorStatus": 400,
+      "results": {
+        "fullList": {
+          "uri": "/api/media",
+          "status": 400,
+          "body": {
+            "error": "Media path must be relative to the media library",
+            "code": "invalid_payload"
+          },
+          "bodySha256": "fbb5f007d78a9f47eb10f333029be290efd035986a2739b81ebefbc19becf88e"
+        },
+        "selectedFirst": {
+          "uri": "/api/media/first",
+          "status": 200,
+          "body": {
+            "ok": true,
+            "media": {
+              "mediaId": "first",
+              "projectId": "proj_first",
+              "type": "image",
+              "title": "first",
+              "mimeType": "image/png",
+              "path": "image.png",
+              "source": {},
+              "status": "pending",
+              "createdAt": "fixed",
+              "updatedAt": "z",
+              "metadata": {
+                "preserved": [
+                  1,
+                  true,
+                  "\u03bb"
+                ]
+              }
+            }
+          },
+          "bodySha256": "1148ba13331ea7c39bca351c96ec3d9f6ef429af549018f0df0f3c15f1590bc3"
+        },
+        "selectedLater": {
+          "uri": "/api/media/later",
+          "status": 400,
+          "body": {
+            "error": "Media path must be relative to the media library",
+            "code": "invalid_payload"
+          },
+          "bodySha256": "fbb5f007d78a9f47eb10f333029be290efd035986a2739b81ebefbc19becf88e"
+        },
+        "emptyFilter": {
+          "uri": "/api/media?type=pdf",
+          "status": 200,
+          "body": {
+            "ok": true,
+            "media": []
+          },
+          "bodySha256": "33438a1d69a0ea11ce18aaa2db3ee880b1d7e5d8b6700eb24789253c86eb6460"
+        },
+        "segmentsLater": {
+          "uri": "/api/media/later/segments",
+          "status": 400,
+          "body": {
+            "error": "Media path must be relative to the media library",
+            "code": "invalid_payload"
+          },
+          "bodySha256": "fbb5f007d78a9f47eb10f333029be290efd035986a2739b81ebefbc19becf88e"
+        },
+        "unauthorized": {
+          "uri": "/api/media",
+          "status": 401,
+          "body": {
+            "error": "Auth required",
+            "code": "unauthorized"
+          },
+          "bodySha256": "7839bbb4362202487a845cce649515313af47ea13a010d14866b216865c47c13"
+        },
+        "selectedProject": {
+          "uri": "/api/media?projectId=proj_first",
+          "status": 200,
+          "body": {
+            "ok": true,
+            "media": [
+              {
+                "mediaId": "first",
+                "projectId": "proj_first",
+                "type": "image",
+                "title": "first",
+                "mimeType": "image/png",
+                "path": "image.png",
+                "source": {},
+                "status": "pending",
+                "createdAt": "fixed",
+                "updatedAt": "z",
+                "metadata": {
+                  "preserved": [
+                    1,
+                    true,
+                    "\u03bb"
+                  ]
+                }
+              }
+            ]
+          },
+          "bodySha256": "ad85e3a9df5dd0b5bdb406e1cbfe6932a1d9beb5273367c79b68a1bc5c8439b7"
+        }
+      }
+    }
+  ]
+}

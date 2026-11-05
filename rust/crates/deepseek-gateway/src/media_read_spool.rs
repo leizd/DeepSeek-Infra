@@ -1,5 +1,5 @@
 //! Complete, private read snapshots; only one record and one response chunk are resident.
-use super::{accepted_media_id, media_sort_key, normalize_media_record, server_error};
+use super::{media_sort_key, normalize_media_record, server_error};
 use axum::{
     body::{Body, Bytes},
     http::{StatusCode, header},
@@ -39,7 +39,7 @@ fn visited(result: Result<(), VisitError<AppError>>) -> Result<(), AppError> {
     })
 }
 
-fn public(
+fn stored(
     path: &Path,
     mut visit: impl FnMut(Value) -> Result<(), AppError>,
 ) -> Result<(), AppError> {
@@ -48,37 +48,34 @@ fn public(
         let Ok(stored) = normalize_media_record(&value) else {
             return Ok(());
         };
-        // Every row completes the second normalization, even after a match or
-        // outside a filter/window. Its AppError must propagate, as before.
-        visit(normalize_media_record(&stored)?)
+        // `_load_store` completes this first normalization for every row.
+        // `public_media` is a later operation on selected records only.
+        visit(stored)
     }))
 }
 
 pub(super) fn find(path: &Path, id: &str) -> Result<Option<Value>, AppError> {
     let mut found = None;
-    public(path, |value| {
+    stored(path, |value| {
         if found.is_none() && value["mediaId"].as_str() == Some(id) {
             found = Some(value);
         }
         Ok(())
     })?;
-    Ok(found)
+    found
+        .map(|value| normalize_media_record(&value))
+        .transpose()
 }
 
+#[cfg(test)]
 pub(super) fn contains(path: &Path, id: &str) -> Result<bool, AppError> {
-    // Parsing has already consumed and validated the full original source.
-    // Membership reproduces the raw first-normalization acceptance check.
-    match raw(path)?.visit_source(|value| {
-        if accepted_media_id(&value).as_deref() == Some(id) {
-            Err(())
-        } else {
-            Ok(())
-        }
-    }) {
-        Ok(()) => Ok(false),
-        Err(VisitError::Visitor(())) => Ok(true),
-        Err(VisitError::Storage(_)) => Err(server_error()),
-    }
+    // Raw membership is useful for oracle tests, but public segments use get_media.
+    let mut found = false;
+    stored(path, |value| {
+        found |= value["mediaId"].as_str() == Some(id);
+        Ok(())
+    })?;
+    Ok(found)
 }
 
 pub(super) struct PublicIndex {
@@ -99,7 +96,7 @@ impl PublicIndex {
         ).map_err(|_| server_error())?;
         let mut records = Records::empty().map_err(|_| server_error())?;
         let mut count = 0usize;
-        public(path, |value| {
+        stored(path, |value| {
             let ordinal = i64::try_from(count).map_err(|_| server_error())?;
             let sort_key = media_sort_key(&value);
             records.append(&value).map_err(|_| server_error())?;
@@ -120,7 +117,7 @@ impl PublicIndex {
         })
     }
 
-    fn visit_sorted(
+    fn visit_stored_sorted(
         &self,
         mut visit: impl FnMut(Value) -> Result<(), AppError>,
     ) -> Result<(), AppError> {
@@ -141,24 +138,22 @@ impl PublicIndex {
         Ok(())
     }
 
+    fn visit_sorted(
+        &self,
+        mut visit: impl FnMut(Value) -> Result<(), AppError>,
+    ) -> Result<(), AppError> {
+        self.visit_stored_sorted(|value| visit(normalize_media_record(&value)?))
+    }
+
     pub(super) fn window(&self, limit: usize) -> Result<(Vec<Value>, usize), AppError> {
         let mut values = Vec::new();
-        // All source rows were normalized during load, before selecting a window.
-        let mut statement = self
-            .order
-            .prepare("SELECT ordinal FROM ordering ORDER BY sort_key DESC,ordinal ASC LIMIT ?1")
-            .map_err(|_| server_error())?;
-        let limit = i64::try_from(limit.min(self.count)).map_err(|_| server_error())?;
-        let mut rows = statement.query([limit]).map_err(|_| server_error())?;
-        while let Some(row) = rows.next().map_err(|_| server_error())? {
-            let ordinal: i64 = row.get(0).map_err(|_| server_error())?;
-            values.push(
-                self.records
-                    .get(ordinal)
-                    .map_err(|_| server_error())?
-                    .ok_or_else(server_error)?,
-            );
-        }
+        // Home takes a window of list_media(), so all public rows must validate.
+        self.visit_sorted(|value| {
+            if values.len() < limit {
+                values.push(value);
+            }
+            Ok(())
+        })?;
         Ok((values, self.count))
     }
 
@@ -166,6 +161,16 @@ impl PublicIndex {
         &self,
         mut include: impl FnMut(&Value) -> bool,
     ) -> Result<CompletedJson, AppError> {
+        // Complete selected public normalization before constructing the response.
+        let mut public = Records::empty().map_err(|_| server_error())?;
+        self.visit_stored_sorted(|value| {
+            if include(&value) {
+                public
+                    .append(&normalize_media_record(&value)?)
+                    .map_err(|_| server_error())?;
+            }
+            Ok(())
+        })?;
         let envelope =
             serde_json::to_vec(&json!({"ok":true,"media":[]})).map_err(|_| server_error())?;
         let split = envelope
@@ -180,16 +185,13 @@ impl PublicIndex {
                 .write_all(&envelope[..split + 1])
                 .map_err(|_| server_error())?;
             let mut first = true;
-            self.visit_sorted(|value| {
-                if !include(&value) {
-                    return Ok(());
-                }
+            visited(public.visit_source(|value| {
                 if !first {
                     output.write_all(b",").map_err(|_| server_error())?;
                 }
                 first = false;
                 serde_json::to_writer(&mut output, &value).map_err(|_| server_error())
-            })?;
+            }))?;
             output
                 .write_all(&envelope[split + 1..])
                 .map_err(|_| server_error())?;

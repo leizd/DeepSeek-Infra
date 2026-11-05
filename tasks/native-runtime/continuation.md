@@ -1,3 +1,43 @@
+<!-- native checkpoint 2026-11-05 original selected public normalization -->
+
+Whole product migration remains ACTIVE / NOT_READY. All original server, desktop,
+Android, background, retained features, unique-writer/recovery, zero-production-
+Python/server-TypeScript and original MCP requirements remain required.
+
+A real isolated original TCP replay of13 requests proves that later stored path
+./C:/x.png is accepted by first normalization, but fails public normalization as
+C:/x.png. Full list and that item's detail/segments fail400; selecting an earlier
+legal item or filtering the later row out succeeds200. The earlier native-only
+helper incorrectly made find(first) fail. This correction retains that regression
+with the original selected outcomes and complete-list/window errors, including
+limit0; no test is removed. Windows spool43/parser49, prebuild and original
+10minute validation remain required with only the renamed case/step hash rebound.
+
+The gateway now completes first normalization for all raw rows, then public
+normalization for the selected detail/filter results. Home windows still validate
+the entire public collection before selecting their limit. Collection public
+normalization completes before response construction. Segment reads require the
+same public get_media lookup as the original route. Source bytes remain read-only.
+The real default-launcher process probe also replays both original variants,
+checking11 authenticated GETs+11 HEADs+22 auth refusals and unchanged media/auth
+bytes with two additional writer generations. These actual native probes are
+unqualified until this exact source really executes them; all previous probes stay.
+
+Parent6278f3a0 has34 original-value regressions plus a lossless numeric-comparison
+control in the existing full Rust run41952489148. Retained numeric/UTF-16 handling,
+all-width memory, actual media processing/GUI, authority/recovery and physical/end-
+user platform acceptance remain incomplete. Parent c56bb3ca's full Rust, CI37+
+Evidence50 and controlled Windows/Mac/Android reports apply only to that parent.
+No original coverage floor or effect-recovery invariant is relaxed. Original dirty
+source/data remain preserved, native builds/caches stay in cloud, and only reports
+return. This is not a release, production switch or full migration completion.
+
+The read probe also compares401 GET bodies and JSON boolean/number types,
+retains arbitrary integers in offline comparisons, and waits for identity-fenced
+children plus native guardian completion even after a launcher timeout or failed
+process discovery. Native guardians keep their own pidfd/subreaper custody;
+process-group checks use signal0 only. These verifier changes remain cloud-only.
+
 <!-- native checkpoint 2026-11-04 complete retained HTTP oracle regressions -->
 
 Whole product Rust/Go migration remains ACTIVE / NOT_READY. Every original

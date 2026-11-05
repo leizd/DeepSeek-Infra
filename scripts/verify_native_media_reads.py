@@ -23,6 +23,7 @@ from urllib.request import Request, urlopen
 
 import verify_agent_signing_process as signing
 import verify_native_default_bootstrap as bootstrap
+from native_json_comparison import json_values_equal
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "tests/fixtures/native_media_library_read_v1.json"
@@ -30,13 +31,17 @@ LIMIT = 2 * 1024**2
 ORACLE = r'''
 import json, sys
 from deepseek_infra.core.errors import AppError
-from deepseek_infra.infra.media.library import get_media, list_media
+from deepseek_infra.infra.media.library import get_media, list_media, list_segments
 results = []
 for case in json.load(sys.stdin):
     try:
         if case["operation"] == "list":
             media = list_media(project_id=case.get("projectId", ""),
                 media_type=case.get("type", ""), status=case.get("status", ""))
+        elif case["operation"] == "segments":
+            get_media(case["mediaId"])
+            results.append({"status": 200, "body": {"ok": True, "segments": list_segments(case["mediaId"])}})
+            continue
         else:
             media = get_media(case["mediaId"])
         results.append({"status": 200, "body": {"ok": True, "media": media}})
@@ -108,7 +113,7 @@ def check_reads(origin: str, token: str, cases: list[dict[str, Any]],
     for case, original in zip(cases, expected, strict=True):
         status, body = request(origin, case["uri"], "GET", token)
         row = {"uri": case["uri"], "originalStatus": original["status"],
-            "nativeStatus": status, "bodyMatchesOriginal": body == original["body"]}
+            "nativeStatus": status, "bodyMatchesOriginal": json_values_equal(body, original["body"])}
         rows.append(row)
         require(status == original["status"] and row["bodyMatchesOriginal"],
                 "NATIVE_MEDIA_READ_DIFFERS_FROM_ORIGINAL:" + case["uri"])
@@ -122,18 +127,90 @@ def check_reads(origin: str, token: str, cases: list[dict[str, Any]],
 
 def process_identity(pid: int) -> str | None:
     try:
-        return (Path("/proc") / str(pid) / "stat").read_text().rsplit(")", 1)[1].split()[19]
+        fields = (Path("/proc") / str(pid) / "stat").read_bytes().rsplit(b")", 1)[1].split()
+        return None if fields[0] in {b"Z", b"X"} else fields[19].decode("ascii")
     except (FileNotFoundError, ProcessLookupError):
         # A process exiting after procfs open makes the read fail with ESRCH.
         return None
 
 
+def session_identities(session: int) -> dict[int, str]:
+    result = {}
+    for path in Path("/proc").iterdir():
+        if not path.name.isdigit():
+            continue
+        try:
+            fields = (path / "stat").read_bytes().rsplit(b")", 1)[1].split()
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+        if int(fields[3]) == session and fields[0] not in {b"Z", b"X"}:
+            result[int(path.name)] = fields[19].decode("ascii")
+    return result
+
+
+def session_group_alive(session: int) -> bool:
+    # Signal zero only observes the dedicated launcher/guardian process group.
+    query = getattr(os, "killpg", None)
+    if not callable(query):
+        raise ProbeFailure("NATIVE_MEDIA_SESSION_OBSERVATION_UNAVAILABLE")
+    try:
+        query(session, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
 def stop(child: subprocess.Popen[bytes], identities: list[dict[str, Any]]) -> None:
-    bootstrap.stop(child)
-    deadline = time.monotonic() + 10
-    while any(process_identity(row["pid"]) == row["startTicks"] for row in identities):
-        require(time.monotonic() < deadline, "OWNED_NATIVE_CHILD_SURVIVED_LAUNCHER_STOP")
-        time.sleep(0.05)
+    tracked = {row["pid"]: row["startTicks"] for row in identities}
+    discovery_error: Exception | None = None
+    primary_error: BaseException | None = None
+
+    def discover() -> None:
+        nonlocal discovery_error
+        try:
+            tracked.update(session_identities(child.pid))
+        except Exception as error:
+            discovery_error = error
+
+    discover()
+    try:
+        bootstrap.stop(child)
+    except BaseException as error:
+        primary_error = error
+    finally:
+        # The native Linux guardians own lifetime pipes, pidfds and subreapers.
+        # Killing a guardian would abandon its escaped-session children. Observe
+        # it until reaping completes, even if the launcher itself timed out.
+        deadline = time.monotonic() + 10
+        cleanup_error: Exception | None = None
+        while True:
+            discover()
+            pending = False
+            for pid, start in tracked.items():
+                try:
+                    pending |= process_identity(pid) == start
+                except Exception as error:
+                    discovery_error, pending = error, True
+            try:
+                pending |= session_group_alive(child.pid)
+            except Exception as error:
+                discovery_error, pending = error, True
+            if not pending:
+                break
+            if time.monotonic() >= deadline:
+                cleanup_error = ProbeFailure("OWNED_NATIVE_CHILD_SURVIVED_LAUNCHER_STOP")
+                break
+            time.sleep(0.05)
+        if primary_error is not None:
+            if cleanup_error is not None:
+                raise primary_error from cleanup_error
+            raise primary_error
+        if cleanup_error is not None:
+            raise cleanup_error
+        if discovery_error is not None:
+            raise discovery_error
 
 
 def writer(profile: Path) -> tuple[int, str]:
@@ -195,7 +272,8 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
             nonlocal child, identities
             with (args.out / (label + ".log")).open("wb") as log:
                 child = subprocess.Popen([str(binaries / "deepseek-launch"), "--server", "--no-prompt",
-                    "--port", str(public_port)], cwd=scratch, env=launch_env, stdout=log, stderr=subprocess.STDOUT)
+                    "--port", str(public_port)], cwd=scratch, env=launch_env, stdout=log, stderr=subprocess.STDOUT,
+                    start_new_session=True)
             bootstrap.wait_public(origin, child)
             roles = bootstrap.process_roles(child.pid)
             identities = [{**row, "startTicks": process_identity(row["pid"])} for row in roles]
@@ -291,6 +369,64 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
                 discardedUnicodeHeadResponsesChecked=len(unicode_results) * len(unicode_reads),
                 discardedUnicodeFixtureSha256=hashlib.sha256(unicode_path.read_bytes()).hexdigest(),
                 discardedUnicodeAuthenticatedReadsMatchOriginal=True)
+            selected_path = ROOT / "tests/fixtures/native_media_selected_normalization_v1.json"
+            selected_fixture = json.loads(selected_path.read_text(encoding="utf8"))
+            selected_variants = selected_fixture["variants"]
+            require(selected_fixture["schemaVersion"] == 1 and len(selected_variants) == 2
+                    and selected_fixture["actualOriginalLoopbackRequests"] == 13,
+                    "SELECTED_NORMALIZATION_ORIGINAL_FIXTURE_CONTRACT_DIFFERS")
+            selected_results = []
+            for case in selected_variants:
+                require(child is None and not identities, "SELECTED_FIXTURE_WRITTEN_WHILE_NATIVE_RUNNING")
+                source = case["document"].encode("utf8")
+                require(hashlib.sha256(source).hexdigest() == case["documentSha256"],
+                        "SELECTED_NORMALIZATION_DOCUMENT_HASH_DIFFERS")
+                (directory / "library.json").write_bytes(source)
+                seeded = media_snapshot(profile)
+                reads = [
+                    {"operation": "list", "uri": "/api/media"},
+                    {"operation": "get", "mediaId": "first", "uri": "/api/media/first"},
+                    {"operation": "get", "mediaId": "later", "uri": "/api/media/later"},
+                    {"operation": "list", "type": "pdf", "uri": "/api/media?type=pdf"},
+                    {"operation": "segments", "mediaId": "later", "uri": "/api/media/later/segments"},
+                ]
+                selected_roles = ["fullList", "selectedFirst", "selectedLater", "emptyFilter", "segmentsLater"]
+                if "selectedProject" in case["results"]:
+                    reads.append({"operation": "list", "projectId": "proj_first", "uri": "/api/media?projectId=proj_first"})
+                    selected_roles.append("selectedProject")
+                original = oracle(profile, reads)
+                for expected_result, role in zip(original, selected_roles, strict=True):
+                    frozen = case["results"][role]
+                    require(json_values_equal(expected_result, {"status": frozen["status"], "body": frozen["body"]}),
+                            "SELECTED_NORMALIZATION_ORIGINAL_ORACLE_DRIFT")
+                token, roles_observed = launch("selected-" + case["name"])
+                require((profile / ".auth-token").read_bytes() == token_bytes, "SELECTED_RESTART_REPLACED_AUTH")
+                observed = writer(profile)
+                require(observed[0] == generations[-1][0] + 1 and observed[1] != generations[-1][1],
+                        "SELECTED_RESTART_DID_NOT_ADVANCE_WRITER_FENCE")
+                generations.append(observed)
+                require(media_snapshot(profile) == seeded, "SELECTED_RESTART_CHANGED_MEDIA_STORE")
+                for read in reads:
+                    for method in ["GET", "HEAD"]:
+                        status, denied_body = request(origin, read["uri"], method, None)
+                        require(status == 401, "SELECTED_UNAUTHENTICATED_READ_NOT_DENIED")
+                        if method == "GET":
+                            require(json_values_equal(denied_body, case["results"]["unauthorized"]["body"]),
+                                    "SELECTED_AUTH_REFUSAL_BODY_DIFFERS_FROM_ORIGINAL")
+                checked = check_reads(origin, token, reads, original, profile)
+                selected_results.append(dict(case=case["name"], documentSha256=case["documentSha256"],
+                                             reads=checked, processes=roles_observed))
+                shutdown()
+                require((profile / ".auth-token").read_bytes() == token_bytes, "SELECTED_SHUTDOWN_CHANGED_AUTH")
+                require(media_snapshot(profile) == seeded, "SELECTED_SHUTDOWN_CHANGED_MEDIA_STORE")
+            selected_count = sum(len(case["reads"]) for case in selected_results)
+            require(selected_count == 11, "SELECTED_NORMALIZATION_READ_COUNT_DIFFERS")
+            report.update(selectedNormalizationCases=selected_results, selectedNormalizationCaseCount=2,
+                selectedNormalizationGETResponsesChecked=selected_count,
+                selectedNormalizationHEADResponsesChecked=selected_count,
+                selectedNormalizationUnauthorizedResponsesChecked=selected_count * 2,
+                selectedNormalizationFixtureSha256=hashlib.sha256(selected_path.read_bytes()).hexdigest(),
+                selectedNormalizationAuthenticatedReadsMatchOriginal=True)
             report.update(status="PASS", controlledAuthenticatedMediaReadsQualified=True,
                 emptyReadCases=len(empty_cases), retainedReadCasesPerLaunch=len(cases),
                 retainedLaunchCount=2, headResponsesChecked=len(empty_cases) + 2 * len(cases),

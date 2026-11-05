@@ -69,17 +69,61 @@ fn source_order_first_match_stable_sort_and_all_fields_match_original() {
     assert_eq!(index.window(99).unwrap(), (expected, 4));
 }
 
-#[test]
-fn later_second_normalization_errors_propagate_before_filter_find_and_window() {
-    let bytes = serde_json::to_vec(&json!({"media":[row("first","z"),
-        {"mediaId":"later","type":"image","path":"./C:/x.png"}]}))
+#[tokio::test]
+async fn second_normalization_follows_original_selection_and_complete_windows() {
+    let golden: Value = serde_json::from_str(include_str!(
+        "../../../../tests/fixtures/native_media_selected_normalization_v1.json"
+    ))
     .unwrap();
-    let file = fixture(&bytes);
-    assert_eq!(original(&bytes).unwrap_err().status, 400);
-    assert_eq!(find(file.path(), "first").unwrap_err().status, 400);
-    assert!(matches!(PublicIndex::load(file.path()), Err(error) if error.status == 400));
-    // Segment membership uses the first raw acceptance only, as before.
-    assert!(contains(file.path(), "later").unwrap());
+    assert_eq!(golden["actualOriginalLoopbackRequests"], 13);
+    let variants = golden["variants"].as_array().unwrap();
+    assert_eq!(variants.len(), 2);
+    for variant in variants {
+        let bytes = variant["document"].as_str().unwrap().as_bytes();
+        let file = fixture(bytes);
+        let expected = &variant["results"];
+        // This old native helper still describes the unfiltered list's error.
+        assert_eq!(original(bytes).unwrap_err().status, 400);
+        assert_eq!(
+            find(file.path(), "first").unwrap(),
+            Some(expected["selectedFirst"]["body"]["media"].clone())
+        );
+        assert_eq!(find(file.path(), "later").unwrap_err().status, 400);
+        let index = PublicIndex::load(file.path()).unwrap();
+        assert_eq!(index.collection(|_| true).err().unwrap().status, 400);
+        for limit in [0, 1, 99] {
+            assert_eq!(index.window(limit).unwrap_err().status, 400);
+        }
+        let response = index
+            .collection(|value| value["type"] == "pdf")
+            .unwrap()
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), 2 * 1024 * 1024)
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&body).unwrap(),
+            expected["emptyFilter"]["body"]
+        );
+        if let Some(project) = expected.get("selectedProject") {
+            let response = index
+                .collection(|value| value["projectId"] == "proj_first")
+                .unwrap()
+                .into_response();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = to_bytes(response.into_body(), 2 * 1024 * 1024)
+                .await
+                .unwrap();
+            assert_eq!(
+                serde_json::from_slice::<Value>(&body).unwrap(),
+                project["body"]
+            );
+        }
+        // Component membership has no public validation; segment routes use get_media.
+        assert!(contains(file.path(), "later").unwrap());
+        assert!(fs::read(file.path()).unwrap() == bytes);
+    }
 }
 
 #[test]

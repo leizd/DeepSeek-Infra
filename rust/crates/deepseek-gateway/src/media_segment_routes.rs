@@ -24,9 +24,8 @@ use deepseek_policy::app_error::{AppError, codes};
 use deepseek_policy::core_utils::{python_float_opt, python_int_opt, python_truthy, text_or_empty};
 use deepseek_policy::entropy::SystemEntropy;
 use deepseek_policy::media_schema::{
-    MAX_SEGMENT_TEXT_CHARS, MEDIA_STATUSES, MEDIA_TYPES, declared_media_type, media_status,
-    media_type_from_mime, normalize_media_path, normalize_media_record, normalize_mime,
-    python_truthy_opt,
+    MAX_SEGMENT_TEXT_CHARS, declared_media_type, media_status, normalize_media_path,
+    normalize_media_record, python_truthy_opt,
 };
 use deepseek_policy::python_json::value_str;
 use deepseek_policy::workspace_schema::{
@@ -154,14 +153,9 @@ fn read_media_item(media_id: &str) -> Result<Value, AppError> {
 
 fn read_segments(media_id: &str) -> Result<Value, AppError> {
     let safe_id = validate_workspace_id(media_id, "media id")?;
-    if !library_contains(&safe_id)? {
-        return Err(AppError::not_found("Media not found"));
-    }
+    // The original route calls library.get_media before reading any segments.
+    read_media_item(&safe_id)?;
     Ok(json!({"ok": true, "segments": load_segments(&safe_id)?}))
-}
-
-fn library_contains(safe_id: &str) -> Result<bool, AppError> {
-    media_read_spool::contains(&library_path(), safe_id)
 }
 
 fn load_segments(safe_id: &str) -> Result<Vec<Value>, AppError> {
@@ -215,49 +209,6 @@ fn segments_path(media_id: &str) -> std::path::PathBuf {
 
 /// The raise points of `normalize_media_record`, in order. The public record
 /// is discarded by the route, so only acceptance is reproduced.
-fn accepted_media_id(value: &Value) -> Option<String> {
-    let media_id = validate_workspace_id(&text_or_empty(value.get("mediaId")), "media id").ok()?;
-    let project = text_or_empty(value.get("projectId"));
-    let project = project.trim();
-    if !project.is_empty() && validate_project_id(project).is_err() {
-        return None;
-    }
-    let mime = normalize_mime(value.get("mimeType"));
-    let title = text_or_empty(value.get("title"));
-    if media_type_of(value.get("type"), &mime, &title).is_err() {
-        return None;
-    }
-    if normalize_media_path(value.get("path")).is_err() {
-        return None;
-    }
-    if normalize_status(value.get("status")).is_err() {
-        return None;
-    }
-    Some(media_id)
-}
-
-fn media_type_of(value: Option<&Value>, mime: &str, title: &str) -> Result<(), AppError> {
-    let candidate = text_or_empty(value).trim().to_lowercase();
-    if MEDIA_TYPES.contains(&candidate.as_str()) || !media_type_from_mime(mime, title).is_empty() {
-        return Ok(());
-    }
-    Err(AppError::invalid_payload("Unsupported media type"))
-}
-
-fn normalize_status(value: Option<&Value>) -> Result<(), AppError> {
-    let status = if python_truthy_opt(value) {
-        text_or_empty(value)
-    } else {
-        "pending".to_string()
-    };
-    let status = status.trim().to_lowercase();
-    if MEDIA_STATUSES.contains(&status.as_str()) {
-        Ok(())
-    } else {
-        Err(AppError::invalid_payload("Unsupported media status"))
-    }
-}
-
 /// `Ok(None)` is the oracle's `except AppError: continue`. `Err` is an
 /// uncaught `ValueError`/`TypeError` from `int()`, which fails the request.
 fn normalize_segment(
