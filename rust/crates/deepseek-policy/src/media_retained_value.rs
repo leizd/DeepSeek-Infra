@@ -7,6 +7,8 @@ use super::document::deferred;
 use crate::app_error::AppError;
 use std::io::{self, Write};
 
+#[path = "media_retained_flat_patch.rs"]
+mod flat_patch;
 #[path = "media_retained_float.rs"]
 mod float;
 #[path = "media_retained_patch.rs"]

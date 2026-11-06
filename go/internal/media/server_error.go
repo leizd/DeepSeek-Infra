@@ -14,7 +14,8 @@ const ServerErrorOutcomeVersion = 3
 var serverErrorSignatureDomain = []byte("deepseek-infra:media-patch-outcome-v3\x00")
 
 func serverErrorNegotiated(intent *mediav1.MediaPatchIntent) bool {
-	return intent != nil && intent.MaxOutcomeSchemaVersion == ServerErrorOutcomeVersion &&
+	return intent != nil &&
+		(intent.MaxOutcomeSchemaVersion == ServerErrorOutcomeVersion || intent.MaxOutcomeSchemaVersion == FlatPatchOutcomeVersion) &&
 		(intent.Kind == mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_UNSPECIFIED ||
 			intent.Kind == mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_DELETE)
 }

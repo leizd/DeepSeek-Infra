@@ -19,10 +19,10 @@ fn delete_claim(mut claim: MediaPatchClaim, operation: &str, media: &str) -> Med
 fn media_signer_binds_patch_and_delete_result_shapes_to_the_original_operation() {
     let (root, key, _journal, claim) = fixture();
     let before = read_library(root.path()).unwrap();
-    let (patch, _) = media_library::plan(root.path(), &claim, &before).unwrap();
+    let (patch, _, _) = media_library::plan(root.path(), &claim, &before).unwrap();
     assert!(key.sign_media_patch_outcome(&patch).is_ok());
     let deletion = delete_claim(claim, "media-delete-signing", "media_one");
-    let (deleted, _) = media_library::plan(root.path(), &deletion, &before).unwrap();
+    let (deleted, _, _) = media_library::plan(root.path(), &deletion, &before).unwrap();
     assert_eq!(deleted.deleted_count, 1);
     assert!(key.sign_media_patch_outcome(&deleted).is_ok());
     let mut missing = deleted.clone();

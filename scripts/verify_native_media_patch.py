@@ -361,13 +361,20 @@ def generation_observation(profile: Path) -> dict[str, Any]:
 
 
 RETAINED_MUTATION_ORACLE_SHA256 = "792e84e834886db4bd09babba350e66ca192f47c49bd4fb71966716689386f21"
-RETAINED_COMBINED_ORACLE_SHA256 = "11f0783debb657fb6ee3082948aef6656c791f611f99b4d0b24d36f90ba4f8a0"
-RETAINED_MUTATION_SEED_SHA256 = "74b2b277d13eb5eaae513ff0ae792eda4f176e37049627f256a82111f3cf0948"
+RETAINED_COMBINED_ORACLE_SHA256 = "258af9dcf6b19d1736fd21c4114835c0bdf3a6c8851f8daeb8c174788a4569ae"
+RETAINED_MUTATION_SEED_SHA256 = "ff70c2c7be7d29138368c4740cf6288812626303e637246579f2c62525f9c438"
 RETAINED_EXACT_INTEGER = 1234567890123456789012345678901234567890
 
 
-def retained_error_receipt(scratch: Path, profile: Path, operation: str, state: str,
-                           before: str, after: str | None) -> dict[str, Any]:
+def retained_deep_value() -> dict[str, Any]:
+    value: dict[str, Any] = {"last": 1}
+    for _ in range(160):
+        value = {"next": value}
+    return value
+
+
+def retained_mutation_receipt(scratch: Path, profile: Path, operation: str, state: str,
+                              before: str, after: str | None, version: int) -> dict[str, Any]:
     worker = list(scratch.rglob("media-effects.sqlite3"))
     require(len(worker) == 1, "RETAINED_MUTATION_WORKER_JOURNAL_NOT_UNIQUE")
     control = profile / "go-control/control.sqlite3"
@@ -386,19 +393,38 @@ def retained_error_receipt(scratch: Path, profile: Path, operation: str, state: 
     _, preparation, _, raw = rows[0]
     outcome = media_outcome_type().FromString(raw)
     states = outcome.DESCRIPTOR.fields_by_name["state"].enum_type.values_by_name
-    require(outcome.schema_version == 3 and outcome.operation_id == operation
+    require(outcome.schema_version == version and outcome.operation_id == operation
             and outcome.original_fence.action_id == operation and outcome.original_fence.execution_epoch == 1
-            and outcome.http_status == 500 and outcome.error_code == "internal" and outcome.error_message == "Server error"
             and outcome.before_sha256.hex() == before and outcome.after_sha256.hex() == (after or "")
             and len(outcome.signature) == 64 and len(outcome.request_sha256) == 32
             and outcome.state == states["MEDIA_PATCH_EFFECT_STATE_" + state].number,
-            "RETAINED_MUTATION_SIGNED_SERVER_ERROR_SHAPE_DIFFERS")
+            "RETAINED_MUTATION_SIGNED_RECEIPT_DIFFERS")
+    evidence: dict[str, Any] = {"operationId": operation, "state": state,
+        "outcomeSha256": hashlib.sha256(raw).hexdigest(), "beforeSha256": before, "afterSha256": after,
+        "schemaVersion": version, "settledGoAndRustBytesIdentical": True, "dispatchDigestMatches": True}
+    if version == 3:
+        require(outcome.http_status == 500 and outcome.error_code == "internal" and outcome.error_message == "Server error"
+                and not outcome.HasField("patched"), "RETAINED_MUTATION_SIGNED_SERVER_ERROR_SHAPE_DIFFERS")
+    else:
+        manifest = outcome.patched
+        require(version == 4 and state == "APPLIED" and outcome.http_status == 200 and not outcome.error_code
+                and not outcome.error_message and not outcome.HasField("media") and outcome.HasField("patched")
+                and manifest.original_fence == outcome.original_fence and len(manifest.preparation_sha256) == 32
+                and len(manifest.record_sha256) == 32 and 0 < manifest.record_bytes < 1024**2,
+                "RETAINED_MUTATION_FLAT_RECEIPT_SHAPE_DIFFERS")
+        identity = hashlib.sha256(operation.encode()).hexdigest()
+        records = list(scratch.glob(f"**/patch-results/{identity}/record.pb"))
+        require(len(records) == 1 and records[0].is_file() and not records[0].is_symlink()
+                and records[0].resolve().is_relative_to(scratch.resolve())
+                and records[0].stat().st_size == manifest.record_bytes,
+                "RETAINED_MUTATION_FLAT_RECORD_FILE_DIFFERS")
+        require(hashlib.sha256(records[0].read_bytes()).digest() == manifest.record_sha256,
+                "RETAINED_MUTATION_FLAT_RECORD_DIGEST_DIFFERS")
+        evidence.update(recordBytes=manifest.record_bytes, recordSha256=manifest.record_sha256.hex())
     outcome.signature = b""
     require(hashlib.sha256(outcome.SerializeToString(deterministic=True)).digest() == preparation,
             "RETAINED_MUTATION_RECEIPT_DIFFERS_FROM_DISPATCH_PREPARATION")
-    return {"operationId": operation, "state": state, "outcomeSha256": hashlib.sha256(raw).hexdigest(),
-            "beforeSha256": before, "afterSha256": after, "schemaVersion": 3,
-            "settledGoAndRustBytesIdentical": True, "dispatchDigestMatches": True}
+    return evidence
 
 
 def verify_retained_mutations(scratch: Path, profile: Path, origin: str, token: str,
@@ -410,6 +436,7 @@ def verify_retained_mutations(scratch: Path, profile: Path, origin: str, token: 
         ("applied_nan", "PATCH", "media_nonfinite", 500, True),
         ("unrelated_nan", "PATCH", "media_target", 200, True),
         ("exact_integer", "PATCH", "media_exact", 200, True),
+        ("deep_object", "PATCH", "media_deep", 200, True),
     )
     observations: dict[str, dict[str, Any]] = {}
     report["retainedMutationCases"] = observations
@@ -433,8 +460,8 @@ def verify_retained_mutations(scratch: Path, profile: Path, origin: str, token: 
                                    "workspaceGeneration": generation_after["value"]}
         if status == 500:
             require(body == {"error": "Server error", "code": "internal"}, "RETAINED_MUTATION_PUBLIC_ERROR_DIFFERS")
-            evidence["receipt"] = retained_error_receipt(scratch, profile, operation,
-                "APPLIED" if applied else "REFUSED", before, after if applied else None)
+            evidence["receipt"] = retained_mutation_receipt(scratch, profile, operation,
+                "APPLIED" if applied else "REFUSED", before, after if applied else None, 3)
         elif method == "DELETE":
             require(body == {"ok": True, "deleted": 1}, "RETAINED_MUTATION_DELETE_COUNT_DIFFERS")
         else:
@@ -442,11 +469,16 @@ def verify_retained_mutations(scratch: Path, profile: Path, origin: str, token: 
             if label == "exact_integer":
                 require(body["media"]["metadata"]["wide"] == RETAINED_EXACT_INTEGER,
                         "RETAINED_MUTATION_INTEGER_CHANGED_IN_PATCH_RESPONSE")
+            if label == "deep_object":
+                require(body["media"]["metadata"]["value"] == retained_deep_value(),
+                        "RETAINED_MUTATION_DEEP_VALUE_CHANGED_IN_PATCH_RESPONSE")
+                evidence["receipt"] = retained_mutation_receipt(scratch, profile, operation, "APPLIED", before, after, 4)
         observations[label] = evidence
     stored = {item["mediaId"]: item for item in json.loads(library.read_bytes())["media"]}
     require("media_unpaired" not in stored and stored["media_nonfinite"]["title"] == "applied_nan"
             and str(stored["media_nonfinite"]["metadata"]["f"]) == "nan"
-            and stored["media_exact"]["metadata"]["wide"] == RETAINED_EXACT_INTEGER,
+            and stored["media_exact"]["metadata"]["wide"] == RETAINED_EXACT_INTEGER
+            and stored["media_deep"]["metadata"]["value"] == retained_deep_value(),
             "RETAINED_MUTATION_VALUES_CHANGED_IN_DURABLE_STORE")
 
 
@@ -547,6 +579,7 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
                     {"mediaId": "media_unpaired", "type": "image", "metadata": {"text": "\ud800"}},
                     {"mediaId": "media_nonfinite", "type": "image", "metadata": {"f": float("nan")}},
                     {"mediaId": "media_exact", "type": "image", "metadata": {"wide": RETAINED_EXACT_INTEGER}},
+                    {"mediaId": "media_deep", "type": "image", "metadata": {"value": retained_deep_value()}},
                 ]
                 seed_bytes = (json.dumps({"media": rows}, ensure_ascii=True) + "\n").encode()
                 require(hashlib.sha256(seed_bytes).hexdigest() == RETAINED_MUTATION_SEED_SHA256,
@@ -564,17 +597,22 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
                 token = launch("retained-mutation-restart")
                 require((profile / ".auth-token").read_bytes() == original_auth,
                         "RETAINED_MUTATION_RESTART_REPLACED_AUTH")
-                for media_id, wanted_status in (("media_unpaired", 404), ("media_nonfinite", 500), ("media_exact", 200)):
+                for media_id, wanted_status in (
+                    ("media_unpaired", 404), ("media_nonfinite", 500), ("media_exact", 200), ("media_deep", 200),
+                ):
                     status, raw, _ = exchange(origin, "/api/media/" + media_id, "GET", token)
                     require(status == wanted_status, "RETAINED_MUTATION_GET_AFTER_RESTART_DIFFERS")
                     if media_id == "media_exact":
                         require(json.loads(raw)["media"]["metadata"]["wide"] == RETAINED_EXACT_INTEGER,
                                 "RETAINED_MUTATION_INTEGER_CHANGED_AFTER_RESTART")
+                    if media_id == "media_deep":
+                        require(json.loads(raw)["media"]["metadata"]["value"] == retained_deep_value(),
+                                "RETAINED_MUTATION_DEEP_VALUE_CHANGED_AFTER_RESTART")
                 for case in report["retainedMutationCases"].values():
                     if receipt := case.get("receipt"):
-                        require(retained_error_receipt(scratch, profile, receipt["operationId"], receipt["state"],
-                            receipt["beforeSha256"], receipt["afterSha256"]) == receipt,
-                            "RETAINED_MUTATION_SERVER_ERROR_RECEIPT_CHANGED_AFTER_RESTART")
+                        require(retained_mutation_receipt(scratch, profile, receipt["operationId"], receipt["state"],
+                            receipt["beforeSha256"], receipt["afterSha256"], receipt["schemaVersion"]) == receipt,
+                            "RETAINED_MUTATION_RECEIPT_CHANGED_AFTER_RESTART")
                 require(library.read_bytes() == retained_bytes and generation_observation(profile) == retained_generation,
                         "RETAINED_MUTATION_RESTART_CHANGED_LIBRARY_OR_GENERATION")
                 report.update(status="PASS", nativeRetainedMutationCasesQualified=True,

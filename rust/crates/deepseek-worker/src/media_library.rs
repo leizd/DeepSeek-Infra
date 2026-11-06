@@ -10,9 +10,10 @@ use deepseek_policy::{
     workspace_schema::validate_workspace_id,
 };
 use deepseek_protocol::generated::deepseek::media::v1::{
-    MediaMutationKind, MediaPatchClaim, MediaPatchEffectState, MediaPatchOutcome,
+    MediaFlatPatchRecord, MediaMutationKind, MediaPatchClaim, MediaPatchEffectState,
+    MediaPatchOutcome,
 };
-use deepseek_protocol::media_server_error;
+use deepseek_protocol::{media_patch_result as patch_wire, media_server_error};
 use prost::Message as _;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -117,11 +118,17 @@ pub(super) fn outcome(
     })
 }
 
+pub(super) type LibraryPlan = (
+    MediaPatchOutcome,
+    Option<Image>,
+    Option<MediaFlatPatchRecord>,
+);
+
 pub(super) fn plan(
     root: &Path,
     claim: &MediaPatchClaim,
     before: &(impl LibrarySource + ?Sized),
-) -> Result<(MediaPatchOutcome, Option<Image>), Status> {
+) -> Result<LibraryPlan, Status> {
     let intent = claim.intent.as_ref().ok_or_else(invalid)?;
     let mut result = outcome(claim, before)?;
     if intent.kind == MediaMutationKind::Delete as i32 {
@@ -134,6 +141,7 @@ pub(super) fn plan(
                 return Ok((
                     refusal(result, error.status as u32, error.code, &error.message),
                     None,
+                    None,
                 ));
             }
         };
@@ -142,55 +150,108 @@ pub(super) fn plan(
             // Missing records do not clean orphan files, normalize the store or
             // advance its generation. Preserve the original delete=0 behavior.
             result.after_sha256 = before.identity().sha256;
-            return Ok((result, None));
+            return Ok((result, None, None));
         }
         crate::media_delete::preflight(root, &safe)?;
         if media_server_error::negotiated(intent) && items.has_unencodable_retained_text()? {
-            return Ok((server_error(result, MediaPatchEffectState::Refused), None));
+            return Ok((
+                server_error(result, MediaPatchEffectState::Refused),
+                None,
+                None,
+            ));
         }
         result.deleted_count = 1;
-        return planned_bytes(claim, result, items);
+        let (result, image) = planned_bytes(claim, result, items)?;
+        return Ok((result, image, None));
     }
     if intent.kind != MediaMutationKind::Unspecified as i32 || intent.patch.is_none() {
         return Err(invalid());
     }
     let safe = match validate_workspace_id(&intent.media_id, "media id") {
         Ok(v) => v,
-        Err(e) => return Ok((refusal(result, e.status as u32, e.code, &e.message), None)),
+        Err(e) => {
+            return Ok((
+                refusal(result, e.status as u32, e.code, &e.message),
+                None,
+                None,
+            ));
+        }
     };
     let mut items = normalized_records(before)?;
     let Some((index, existing)) = items.first_retained(&safe)? else {
         return Ok((
             refusal(result, 404, codes::NOT_FOUND, "Media not found"),
             None,
+            None,
         ));
     };
     let stored = match prepare_media(root, claim, &existing) {
         Ok(value) => value,
-        Err(e) => return Ok((refusal(result, e.status as u32, e.code, &e.message), None)),
+        Err(e) => {
+            return Ok((
+                refusal(result, e.status as u32, e.code, &e.message),
+                None,
+                None,
+            ));
+        }
     };
     items.replace_retained(index, &stored)?;
     let negotiated = media_server_error::negotiated(intent);
     if negotiated && items.has_unencodable_retained_text()? {
-        return Ok((server_error(result, MediaPatchEffectState::Refused), None));
+        return Ok((
+            server_error(result, MediaPatchEffectState::Refused),
+            None,
+            None,
+        ));
     }
     let public = match stored.normalize_again() {
         Ok(public) => public,
-        Err(e) => return Ok((refusal(result, e.status as u32, e.code, &e.message), None)),
+        Err(e) => {
+            return Ok((
+                refusal(result, e.status as u32, e.code, &e.message),
+                None,
+                None,
+            ));
+        }
     };
-    match public.public_patch_object() {
-        Ok(media) => result.media = Some(media),
+    let flat_negotiated = patch_wire::negotiated(intent, patch_wire::FLAT_VERSION);
+    let record = match public.public_patch_object() {
+        Ok(media) => {
+            result.media = Some(media);
+            // An inline receipt must also survive the journal's protobuf
+            // decoder. Its nesting budget can be lower than the value limit.
+            if flat_negotiated
+                && result.encoded_len() <= crate::media_patch_result::INLINE_LIMIT
+                && MediaPatchOutcome::decode(result.encode_to_vec().as_slice()).is_err()
+            {
+                result.media = None;
+                public.flat_patch_record().map(Some)
+            } else {
+                Ok(None)
+            }
+        }
+        Err(PublicRecordError::TooDeep) if flat_negotiated => public.flat_patch_record().map(Some),
+        Err(error) => Err(error),
+    };
+    let flat = match record {
+        Ok(record) => record,
         Err(PublicRecordError::Unencodable) if negotiated => {
             result = server_error(result, MediaPatchEffectState::Applied);
+            None
         }
         Err(PublicRecordError::TooDeep)
             if negotiated && public.write_response(&mut std::io::sink()).is_err() =>
         {
             result = server_error(result, MediaPatchEffectState::Applied);
+            None
+        }
+        Err(PublicRecordError::TooLarge) => {
+            return Err(Status::resource_exhausted("MEDIA_MESSAGE_LIMIT"));
         }
         Err(_) => return Err(invalid()),
-    }
-    planned_bytes(claim, result, items)
+    };
+    let (result, image) = planned_bytes(claim, result, items)?;
+    Ok((result, image, flat))
 }
 
 fn server_error(mut result: MediaPatchOutcome, state: MediaPatchEffectState) -> MediaPatchOutcome {

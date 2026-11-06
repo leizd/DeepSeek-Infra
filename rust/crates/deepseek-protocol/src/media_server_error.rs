@@ -9,9 +9,11 @@ pub const CODE: &str = "internal";
 pub const MESSAGE: &str = "Server error";
 
 pub fn negotiated(intent: &MediaPatchIntent) -> bool {
-    intent.max_outcome_schema_version == VERSION
-        && (intent.kind == MediaMutationKind::Unspecified as i32
-            || intent.kind == MediaMutationKind::Delete as i32)
+    matches!(
+        intent.max_outcome_schema_version,
+        VERSION | crate::media_patch_result::FLAT_VERSION
+    ) && (intent.kind == MediaMutationKind::Unspecified as i32
+        || intent.kind == MediaMutationKind::Delete as i32)
 }
 
 pub fn valid_shape(outcome: &MediaPatchOutcome) -> bool {

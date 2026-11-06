@@ -12,6 +12,7 @@ const LEGACY_VALUE_DEPTH: usize = 128;
 pub enum PublicRecordError {
     Unencodable,
     TooDeep,
+    TooLarge,
 }
 
 fn invalid_patch() -> AppError {

@@ -151,6 +151,7 @@ jobs:
             'media_journal::patch_result_tests::compact_patch_missing_or_corrupt_preparation_never_publishes_or_reconstructs',
             'media_journal::patch_result_tests::compact_patch_original_applied_recovery_does_not_require_a_live_lease',
             'media_journal::patch_result_tests::compact_patch_refusals_and_unknown_keep_the_frozen_v1_shape',
+            'media_journal::patch_result_tests::flat_patch_preserves_the_deep_original_result_and_codec_binding_after_restart',
             'media_records::tests::an_early_syntax_error_cannot_hide_a_later_source_io_failure',
             'media_records::tests::changed_private_spool_bytes_are_detected_before_emission_or_lookup',
             'media_records::tests::discarded_values_still_validate_numbers_utf8_and_original_json_depth',
@@ -187,7 +188,7 @@ jobs:
             $totalPassed += [int]$summary.Groups[1].Value
           }
           $summaryPasses = @($summaries | ForEach-Object { [int]$_.Groups[1].Value } | Sort-Object)
-          $expectedPasses = @(1, 3, 3, 4, 9, 12)
+          $expectedPasses = @(1, 3, 3, 5, 9, 12)
           for ($summaryIndex = 0; $summaryIndex -lt $expectedPasses.Count; $summaryIndex++) {
             if ($summaryPasses[$summaryIndex] -ne $expectedPasses[$summaryIndex]) { throw 'Windows media corpus package summary distribution differs' }
           }

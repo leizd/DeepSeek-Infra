@@ -89,12 +89,29 @@ func writeMediaOutcome(w http.ResponseWriter, request *http.Request, outcome *me
 }
 
 func writeMediaPatchOutcome(w http.ResponseWriter, request *http.Request, client *worker.Client, outcome *mediav1.MediaPatchOutcome) {
-	if outcome.SchemaVersion != 2 {
+	if outcome.SchemaVersion != mediamodel.CompactPatchOutcomeVersion &&
+		outcome.SchemaVersion != mediamodel.FlatPatchOutcomeVersion {
 		writeMediaOutcome(w, request, outcome)
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(request.Context()), 10*time.Second)
 	defer cancel()
+	if outcome.SchemaVersion == mediamodel.FlatPatchOutcomeVersion {
+		if request.Method != http.MethodPatch {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		record, err := client.ReadFlatMediaPatchResult(ctx, outcome)
+		if err != nil {
+			mediaUnknown(w, outcome.OperationId)
+			return
+		}
+		w.Header().Set("X-DeepSeek-Operation-Id", outcome.OperationId)
+		w.Header().Set("Content-Type", "application/json")
+		body := append([]byte("{\"ok\":true,\"media\":"), record...)
+		_, _ = w.Write(append(body, '}', '\n'))
+		return
+	}
 	record, err := client.ReadMediaPatchResult(ctx, outcome)
 	if err != nil {
 		mediaUnknown(w, outcome.OperationId)
@@ -171,7 +188,7 @@ func mediaPatch(w http.ResponseWriter, r *http.Request, control *store.Control, 
 	}
 	operation := prefix + hex.EncodeToString(nonce[:])
 	intent := &mediav1.MediaPatchIntent{SchemaVersion: 1, OperationId: operation, MediaId: id,
-		Patch: patch, Kind: kind, MaxOutcomeSchemaVersion: mediamodel.ServerErrorOutcomeVersion}
+		Patch: patch, Kind: kind, MaxOutcomeSchemaVersion: mediamodel.FlatPatchOutcomeVersion}
 	claim, err := control.AdmitMediaPatch(intent)
 	if err != nil {
 		mediaUnknown(w, operation)

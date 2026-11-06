@@ -10,7 +10,7 @@ use deepseek_protocol::{
         MediaMutationKind, MediaPatchClaim, MediaPatchOutcome, QueryMediaPatchRequest,
         QueryMediaPatchResponse, media_mutation_worker_server::MediaMutationWorker,
     },
-    media_server_error,
+    media_patch_result as patch_wire, media_server_error,
 };
 use prost::Message as _;
 use std::path::Path;
@@ -51,7 +51,9 @@ pub(super) fn validate_claim(
     let supported_outcome_version = match intent.max_outcome_schema_version {
         0 => true,
         2 => intent.kind == MediaMutationKind::Unspecified as i32,
-        media_server_error::VERSION => media_server_error::negotiated(intent),
+        media_server_error::VERSION | patch_wire::FLAT_VERSION => {
+            media_server_error::negotiated(intent)
+        }
         _ => false,
     };
     if c.schema_version != 1

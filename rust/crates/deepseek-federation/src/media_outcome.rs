@@ -1,7 +1,7 @@
 //! Purpose-bound media publication receipts; no generic signing oracle.
 use super::*;
 use deepseek_protocol::generated::deepseek::media::v1::{MediaPatchEffectState, MediaPatchOutcome};
-use deepseek_protocol::media_server_error;
+use deepseek_protocol::{media_patch_result as patch_wire, media_server_error};
 use prost::Message as _;
 
 impl ControlSigningKey {
@@ -25,8 +25,8 @@ impl ControlSigningKey {
         &self,
         outcome: &MediaPatchOutcome,
     ) -> Result<Vec<u8>, FederationIdentityError> {
-        if outcome.schema_version == 2 {
-            return self.media_patch_outcome_v2_message(outcome);
+        if let Some(domain) = patch_wire::signature_domain(outcome.schema_version) {
+            return self.media_patch_compact_outcome_message(outcome, domain);
         }
         if outcome.schema_version == media_server_error::VERSION {
             if !media_server_error::valid_shape(outcome)
@@ -137,16 +137,16 @@ impl ControlSigningKey {
         Ok(message)
     }
 
-    fn media_patch_outcome_v2_message(
+    fn media_patch_compact_outcome_message(
         &self,
         outcome: &MediaPatchOutcome,
+        domain: &[u8],
     ) -> Result<Vec<u8>, FederationIdentityError> {
         let invalid = || error("MEDIA_OUTCOME_INVALID");
         let fence = outcome.original_fence.as_ref().ok_or_else(invalid)?;
         deepseek_protocol::validate_fence(fence).map_err(|_| invalid())?;
         let patched = outcome.patched.as_ref().ok_or_else(invalid)?;
-        if outcome.schema_version != 2
-            || !outcome.operation_id.starts_with("media-patch-")
+        if !outcome.operation_id.starts_with("media-patch-")
             || outcome.operation_id != fence.action_id
             || outcome.operation_id.len() > 128
             || outcome.request_sha256.len() != 32
@@ -175,7 +175,7 @@ impl ControlSigningKey {
         if bytes.len() > 2 * 1024 * 1024 {
             return Err(invalid());
         }
-        let mut message = b"deepseek-infra:media-patch-outcome-v2\0".to_vec();
+        let mut message = domain.to_vec();
         message.extend(bytes);
         Ok(message)
     }

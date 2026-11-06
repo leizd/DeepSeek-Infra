@@ -1,5 +1,7 @@
 use super::*;
-use deepseek_protocol::generated::deepseek::media::v1::MediaObject;
+use deepseek_protocol::generated::deepseek::media::v1::{
+    MediaFlatPatchRecord, MediaObject, media_flat_patch_node::Kind,
+};
 use serde_json::{Value, json};
 
 fn fixture() -> (
@@ -20,6 +22,89 @@ fn fixture() -> (
     document["media"][0]["metadata"] = Value::Object(metadata);
     fs::write(path, serde_json::to_vec(&document).unwrap()).unwrap();
     (root, key, journal, claim)
+}
+
+#[test]
+fn flat_patch_preserves_the_deep_original_result_and_codec_binding_after_restart() {
+    let (root, key, mut journal, mut claim) = super::tests::fixture();
+    let intent = claim.intent.as_mut().unwrap();
+    intent.max_outcome_schema_version = patch_wire::FLAT_VERSION;
+    claim.request_sha256 = sha(&intent.encode_to_vec());
+    let deep = format!(
+        "{}{}{}",
+        r#"{"next":"#.repeat(160),
+        r#"{"last":1}"#,
+        "}".repeat(160)
+    );
+    let before = format!(
+        r#"{{"media":[{{"mediaId":"media_one","type":"pdf","metadata":{{"value":{deep}}}}}]}}"#
+    );
+    fs::write(media_library::library_path(root.path()), &before).unwrap();
+    let prepared = journal.prepare(&claim).unwrap();
+    let operation = &claim.intent.as_ref().unwrap().operation_id;
+    let planned = journal.retained(operation).unwrap().unwrap().planned;
+    assert_eq!(planned.schema_version, patch_wire::FLAT_VERSION);
+    assert_eq!(prepared.digest, sha(&planned.encode_to_vec()));
+    assert_eq!(
+        read_library(root.path()).unwrap().as_slice(),
+        before.as_bytes()
+    );
+    let applied = journal.publish(&claim, &prepared.digest, &key).unwrap();
+    assert_eq!(applied.state, MediaPatchEffectState::Applied as i32);
+    assert_eq!(applied.http_status, 200);
+    assert_eq!(applied.signature.len(), 64);
+    assert!(applied.media.is_none());
+    let after = read_library(root.path()).unwrap();
+    assert!(std::str::from_utf8(&after).unwrap().contains(deep.as_str()));
+    assert_eq!(applied.after_sha256, sha(&after));
+    drop(journal);
+
+    let journal = MediaJournal::open(
+        root.path(),
+        &root.path().join("state"),
+        &key.public_key(),
+        "fleet-a",
+        "test",
+    )
+    .unwrap();
+    let (manifest, mut file) = journal.patched_record(&claim).unwrap();
+    assert_eq!(applied.patched.as_ref(), Some(&manifest));
+    assert!(
+        crate::media_patch_result::open_record(
+            journal.creation_staging(),
+            &claim,
+            patch_wire::COMPACT_VERSION,
+            &manifest,
+        )
+        .is_err()
+    );
+    let mut encoded = Vec::new();
+    file.read_to_end(&mut encoded).unwrap();
+    assert_eq!(manifest.record_bytes, encoded.len() as u64);
+    assert_eq!(manifest.record_sha256, sha(&encoded));
+    let record = MediaFlatPatchRecord::decode(encoded.as_slice()).unwrap();
+    let field = |index: u32, name: &str| {
+        let Some(Kind::ObjectValue(object)) = &record.nodes[(index - 1) as usize].kind else {
+            panic!("flat result field parent is not an object");
+        };
+        object
+            .members
+            .iter()
+            .find(|member| member.key == name)
+            .unwrap()
+            .child
+    };
+    let metadata = field(record.nodes.len() as u32, "metadata");
+    let mut value = field(metadata, "value");
+    for _ in 0..160 {
+        value = field(value, "next");
+    }
+    let last = field(value, "last");
+    assert_eq!(
+        record.nodes[(last - 1) as usize].kind,
+        Some(Kind::NumberValue("1".into()))
+    );
+    assert_eq!(read_library(root.path()).unwrap(), after);
 }
 
 #[test]

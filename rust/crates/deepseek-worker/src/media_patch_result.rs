@@ -6,9 +6,10 @@ use crate::{
     media_values::invalid,
 };
 use deepseek_protocol::generated::deepseek::media::v1::{
-    MediaMutationKind, MediaPatchClaim, MediaPatchEffectState, MediaPatchOutcome,
+    MediaFlatPatchRecord, MediaPatchClaim, MediaPatchEffectState, MediaPatchOutcome,
     MediaPatchPreparation, MediaPatchResultChunk, MediaPatchedResult, ReadMediaPatchResultRequest,
 };
+use deepseek_protocol::media_patch_result as patch_wire;
 use futures_util::{Stream, StreamExt, stream};
 use prost::Message as _;
 use sha2::{Digest, Sha256};
@@ -45,11 +46,16 @@ pub(super) fn record_path(staging: &Path, operation: &str) -> Result<PathBuf, St
     Ok(path)
 }
 
-fn preparation(claim: &MediaPatchClaim, record_sha256: &[u8], record_bytes: u64) -> Vec<u8> {
+fn preparation(
+    claim: &MediaPatchClaim,
+    schema_version: u32,
+    record_sha256: &[u8],
+    record_bytes: u64,
+) -> Vec<u8> {
     let mut original = claim.clone();
     original.state = "CLAIMED".into();
     MediaPatchPreparation {
-        schema_version: 1,
+        schema_version,
         claim: Some(original),
         record_sha256: record_sha256.to_vec(),
         record_bytes,
@@ -79,35 +85,48 @@ fn prepare_custody_root(staging: &Path) -> Result<(), Status> {
     Ok(())
 }
 
+pub(super) const INLINE_LIMIT: usize = 2 * 1024 * 1024;
+
 pub(super) fn prepare(
     staging: &Path,
     claim: &MediaPatchClaim,
     mut planned: MediaPatchOutcome,
+    flat: Option<MediaFlatPatchRecord>,
 ) -> Result<MediaPatchOutcome, Status> {
-    if planned.encoded_len() <= 2 * 1024 * 1024
-        || claim.intent.as_ref().is_none_or(|i| {
-            i.kind != MediaMutationKind::Unspecified as i32
-                || i.patch.is_none()
-                || !matches!(
-                    i.max_outcome_schema_version,
-                    2 | deepseek_protocol::media_server_error::VERSION
-                )
-        })
-        || planned.state != MediaPatchEffectState::Applied as i32
-    {
+    let version = if flat.is_some() {
+        patch_wire::FLAT_VERSION
+    } else {
+        patch_wire::COMPACT_VERSION
+    };
+    let supported = claim
+        .intent
+        .as_ref()
+        .is_some_and(|intent| patch_wire::negotiated(intent, version));
+    let applied = planned.state == MediaPatchEffectState::Applied as i32;
+    if flat.is_none() && (planned.encoded_len() <= INLINE_LIMIT || !supported || !applied) {
         return Ok(planned);
     }
-    let record = planned.media.take().ok_or_else(invalid)?.encode_to_vec();
+    if !supported || !applied || planned.schema_version != 1 {
+        return Err(invalid());
+    }
+    let record = match flat {
+        Some(record) if planned.media.is_none() && !record.nodes.is_empty() => {
+            record.encode_to_vec()
+        }
+        Some(_) => return Err(invalid()),
+        None => planned.media.take().ok_or_else(invalid)?.encode_to_vec(),
+    };
     let digest = sha(&record);
     let length = record.len() as u64;
-    let binding = preparation(claim, &digest, length);
+    let schema = patch_wire::preparation_schema(version).ok_or_else(invalid)?;
+    let binding = preparation(claim, schema, &digest, length);
     prepare_custody_root(staging)?;
     let path = record_path(staging, &planned.operation_id)?;
     // The caller still holds the original mutation gate. Persist exact content
     // without replacing any previous preparation; the journal is inserted only
     // after its file and containing directories have been synchronized.
     persist_bound_limited(&path, &record, record.len())?;
-    planned.schema_version = 2;
+    planned.schema_version = version;
     planned.patched = Some(MediaPatchedResult {
         record_sha256: digest,
         record_bytes: length,
@@ -120,21 +139,19 @@ pub(super) fn prepare(
 pub(super) fn open_record(
     staging: &Path,
     claim: &MediaPatchClaim,
+    version: u32,
     receipt: &MediaPatchedResult,
 ) -> Result<fs::File, Status> {
     let intent = claim.intent.as_ref().ok_or_else(invalid)?;
-    if intent.kind != MediaMutationKind::Unspecified as i32
-        || intent.patch.is_none()
-        || !matches!(
-            intent.max_outcome_schema_version,
-            2 | deepseek_protocol::media_server_error::VERSION
-        )
+    let schema = patch_wire::preparation_schema(version).ok_or_else(invalid)?;
+    if !patch_wire::negotiated(intent, version)
         || receipt.original_fence != claim.fence
         || receipt.record_sha256.len() != 32
         || receipt.record_bytes == 0
         || receipt.preparation_sha256
             != sha(&preparation(
                 claim,
+                schema,
                 &receipt.record_sha256,
                 receipt.record_bytes,
             ))

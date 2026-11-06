@@ -512,7 +512,8 @@ type MediaPatchIntent struct {
 	// this is neither CREATE nor permission to replace an uncertain operation.
 	Process *MediaProcessOptions `protobuf:"bytes,7,opt,name=process,proto3" json:"process,omitempty"`
 	// Explicit controller capability, included in canonical request bytes.
-	// Zero retains the frozen v1 path; only 2 permits a compact v2 PATCH result.
+	// Zero retains v1. Versions 2 through 4 understand compact PATCH receipts.
+	// Version 3 adds signed HTTP 500 outcomes, and 4 adds flat typed PATCH results.
 	// Old durable intents are never upgraded or rebound during recovery.
 	MaxOutcomeSchemaVersion uint32 `protobuf:"varint,8,opt,name=max_outcome_schema_version,json=maxOutcomeSchemaVersion,proto3" json:"max_outcome_schema_version,omitempty"`
 	unknownFields           protoimpl.UnknownFields
@@ -1023,9 +1024,8 @@ type MediaPatchOutcome struct {
 	// Only an applied PROCESS. Failed processing can retain a failed record and
 	// original side effects; it cannot be represented as a no-effect refusal.
 	Processed *MediaProcessedResult `protobuf:"bytes,18,opt,name=processed,proto3" json:"processed,omitempty"`
-	// Only an applied schema-v2 PATCH. The v1 signer/verifier must reject this
-	// field. Its distinct signing domain binds a compact receipt to the exact
-	// retained typed record, without enlarging historical control rows.
+	// Only an applied schema-v2 or schema-v4 PATCH. The signing domain binds
+	// the outcome version, original fence and exact retained record bytes.
 	Patched       *MediaPatchedResult `protobuf:"bytes,19,opt,name=patched,proto3" json:"patched,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1264,6 +1264,7 @@ func (x *MediaPatchedResult) GetOriginalFence() *commonv1.ActionFence {
 
 // Rust-local binding; never an execution permit or caller-selected file path.
 // The original claim is normalized to CLAIMED just as in the effect journal.
+// Schema 1 binds MediaObject bytes. Schema 2 binds MediaFlatPatchRecord bytes.
 type MediaPatchPreparation struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	SchemaVersion uint32                 `protobuf:"varint,1,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
@@ -1394,7 +1395,8 @@ func (x *ReadMediaPatchResultRequest) GetOriginalFence() *commonv1.ActionFence {
 
 // First message: manifest only, zero offset, no data. Subsequent messages:
 // no manifest, contiguous byte offsets and 1..262144 bytes of the deterministic
-// encoded MediaObject. EOF must match the signed total length and SHA-256.
+// encoded record. The signed outcome selects MediaObject (v2) or
+// MediaFlatPatchRecord (v4). EOF must match its total length and SHA-256.
 // No JSON request/response, private key or authority crosses this transport.
 type MediaPatchResultChunk struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -3100,6 +3102,339 @@ func (x *QueryMediaPatchResponse) GetOutcome() *MediaPatchOutcome {
 	return nil
 }
 
+// An ordered JSON object expressed as a flat typed tree. Nodes are numbered
+// from 1 and the final node is the root object. Each child precedes its
+// parent and appears once. Object members retain their insertion order.
+type MediaFlatPatchRecord struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Nodes         []*MediaFlatPatchNode  `protobuf:"bytes,1,rep,name=nodes,proto3" json:"nodes,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MediaFlatPatchRecord) Reset() {
+	*x = MediaFlatPatchRecord{}
+	mi := &file_media_v1_media_proto_msgTypes[38]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MediaFlatPatchRecord) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MediaFlatPatchRecord) ProtoMessage() {}
+
+func (x *MediaFlatPatchRecord) ProtoReflect() protoreflect.Message {
+	mi := &file_media_v1_media_proto_msgTypes[38]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MediaFlatPatchRecord.ProtoReflect.Descriptor instead.
+func (*MediaFlatPatchRecord) Descriptor() ([]byte, []int) {
+	return file_media_v1_media_proto_rawDescGZIP(), []int{38}
+}
+
+func (x *MediaFlatPatchRecord) GetNodes() []*MediaFlatPatchNode {
+	if x != nil {
+		return x.Nodes
+	}
+	return nil
+}
+
+type MediaFlatPatchNode struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Kind:
+	//
+	//	*MediaFlatPatchNode_NullValue
+	//	*MediaFlatPatchNode_BoolValue
+	//	*MediaFlatPatchNode_TextValue
+	//	*MediaFlatPatchNode_NumberValue
+	//	*MediaFlatPatchNode_ObjectValue
+	//	*MediaFlatPatchNode_ArrayValue
+	Kind          isMediaFlatPatchNode_Kind `protobuf_oneof:"kind"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MediaFlatPatchNode) Reset() {
+	*x = MediaFlatPatchNode{}
+	mi := &file_media_v1_media_proto_msgTypes[39]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MediaFlatPatchNode) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MediaFlatPatchNode) ProtoMessage() {}
+
+func (x *MediaFlatPatchNode) ProtoReflect() protoreflect.Message {
+	mi := &file_media_v1_media_proto_msgTypes[39]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MediaFlatPatchNode.ProtoReflect.Descriptor instead.
+func (*MediaFlatPatchNode) Descriptor() ([]byte, []int) {
+	return file_media_v1_media_proto_rawDescGZIP(), []int{39}
+}
+
+func (x *MediaFlatPatchNode) GetKind() isMediaFlatPatchNode_Kind {
+	if x != nil {
+		return x.Kind
+	}
+	return nil
+}
+
+func (x *MediaFlatPatchNode) GetNullValue() bool {
+	if x != nil {
+		if x, ok := x.Kind.(*MediaFlatPatchNode_NullValue); ok {
+			return x.NullValue
+		}
+	}
+	return false
+}
+
+func (x *MediaFlatPatchNode) GetBoolValue() bool {
+	if x != nil {
+		if x, ok := x.Kind.(*MediaFlatPatchNode_BoolValue); ok {
+			return x.BoolValue
+		}
+	}
+	return false
+}
+
+func (x *MediaFlatPatchNode) GetTextValue() string {
+	if x != nil {
+		if x, ok := x.Kind.(*MediaFlatPatchNode_TextValue); ok {
+			return x.TextValue
+		}
+	}
+	return ""
+}
+
+func (x *MediaFlatPatchNode) GetNumberValue() string {
+	if x != nil {
+		if x, ok := x.Kind.(*MediaFlatPatchNode_NumberValue); ok {
+			return x.NumberValue
+		}
+	}
+	return ""
+}
+
+func (x *MediaFlatPatchNode) GetObjectValue() *MediaFlatPatchObject {
+	if x != nil {
+		if x, ok := x.Kind.(*MediaFlatPatchNode_ObjectValue); ok {
+			return x.ObjectValue
+		}
+	}
+	return nil
+}
+
+func (x *MediaFlatPatchNode) GetArrayValue() *MediaFlatPatchArray {
+	if x != nil {
+		if x, ok := x.Kind.(*MediaFlatPatchNode_ArrayValue); ok {
+			return x.ArrayValue
+		}
+	}
+	return nil
+}
+
+type isMediaFlatPatchNode_Kind interface {
+	isMediaFlatPatchNode_Kind()
+}
+
+type MediaFlatPatchNode_NullValue struct {
+	NullValue bool `protobuf:"varint,1,opt,name=null_value,json=nullValue,proto3,oneof"` // Must be true when selected.
+}
+
+type MediaFlatPatchNode_BoolValue struct {
+	BoolValue bool `protobuf:"varint,2,opt,name=bool_value,json=boolValue,proto3,oneof"`
+}
+
+type MediaFlatPatchNode_TextValue struct {
+	TextValue string `protobuf:"bytes,3,opt,name=text_value,json=textValue,proto3,oneof"`
+}
+
+type MediaFlatPatchNode_NumberValue struct {
+	NumberValue string `protobuf:"bytes,4,opt,name=number_value,json=numberValue,proto3,oneof"` // Finite JSON decimal, with original integer precision.
+}
+
+type MediaFlatPatchNode_ObjectValue struct {
+	ObjectValue *MediaFlatPatchObject `protobuf:"bytes,5,opt,name=object_value,json=objectValue,proto3,oneof"`
+}
+
+type MediaFlatPatchNode_ArrayValue struct {
+	ArrayValue *MediaFlatPatchArray `protobuf:"bytes,6,opt,name=array_value,json=arrayValue,proto3,oneof"`
+}
+
+func (*MediaFlatPatchNode_NullValue) isMediaFlatPatchNode_Kind() {}
+
+func (*MediaFlatPatchNode_BoolValue) isMediaFlatPatchNode_Kind() {}
+
+func (*MediaFlatPatchNode_TextValue) isMediaFlatPatchNode_Kind() {}
+
+func (*MediaFlatPatchNode_NumberValue) isMediaFlatPatchNode_Kind() {}
+
+func (*MediaFlatPatchNode_ObjectValue) isMediaFlatPatchNode_Kind() {}
+
+func (*MediaFlatPatchNode_ArrayValue) isMediaFlatPatchNode_Kind() {}
+
+type MediaFlatPatchObject struct {
+	state         protoimpl.MessageState  `protogen:"open.v1"`
+	Members       []*MediaFlatPatchMember `protobuf:"bytes,1,rep,name=members,proto3" json:"members,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MediaFlatPatchObject) Reset() {
+	*x = MediaFlatPatchObject{}
+	mi := &file_media_v1_media_proto_msgTypes[40]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MediaFlatPatchObject) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MediaFlatPatchObject) ProtoMessage() {}
+
+func (x *MediaFlatPatchObject) ProtoReflect() protoreflect.Message {
+	mi := &file_media_v1_media_proto_msgTypes[40]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MediaFlatPatchObject.ProtoReflect.Descriptor instead.
+func (*MediaFlatPatchObject) Descriptor() ([]byte, []int) {
+	return file_media_v1_media_proto_rawDescGZIP(), []int{40}
+}
+
+func (x *MediaFlatPatchObject) GetMembers() []*MediaFlatPatchMember {
+	if x != nil {
+		return x.Members
+	}
+	return nil
+}
+
+type MediaFlatPatchMember struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Key           string                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
+	Child         uint32                 `protobuf:"varint,2,opt,name=child,proto3" json:"child,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MediaFlatPatchMember) Reset() {
+	*x = MediaFlatPatchMember{}
+	mi := &file_media_v1_media_proto_msgTypes[41]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MediaFlatPatchMember) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MediaFlatPatchMember) ProtoMessage() {}
+
+func (x *MediaFlatPatchMember) ProtoReflect() protoreflect.Message {
+	mi := &file_media_v1_media_proto_msgTypes[41]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MediaFlatPatchMember.ProtoReflect.Descriptor instead.
+func (*MediaFlatPatchMember) Descriptor() ([]byte, []int) {
+	return file_media_v1_media_proto_rawDescGZIP(), []int{41}
+}
+
+func (x *MediaFlatPatchMember) GetKey() string {
+	if x != nil {
+		return x.Key
+	}
+	return ""
+}
+
+func (x *MediaFlatPatchMember) GetChild() uint32 {
+	if x != nil {
+		return x.Child
+	}
+	return 0
+}
+
+type MediaFlatPatchArray struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Children      []uint32               `protobuf:"varint,1,rep,packed,name=children,proto3" json:"children,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MediaFlatPatchArray) Reset() {
+	*x = MediaFlatPatchArray{}
+	mi := &file_media_v1_media_proto_msgTypes[42]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MediaFlatPatchArray) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MediaFlatPatchArray) ProtoMessage() {}
+
+func (x *MediaFlatPatchArray) ProtoReflect() protoreflect.Message {
+	mi := &file_media_v1_media_proto_msgTypes[42]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MediaFlatPatchArray.ProtoReflect.Descriptor instead.
+func (*MediaFlatPatchArray) Descriptor() ([]byte, []int) {
+	return file_media_v1_media_proto_rawDescGZIP(), []int{42}
+}
+
+func (x *MediaFlatPatchArray) GetChildren() []uint32 {
+	if x != nil {
+		return x.Children
+	}
+	return nil
+}
+
 var File_media_v1_media_proto protoreflect.FileDescriptor
 
 const file_media_v1_media_proto_rawDesc = "" +
@@ -3354,7 +3689,28 @@ const file_media_v1_media_proto_rawDesc = "" +
 	"\x0eoriginal_fence\x18\x03 \x01(\v2\x1f.deepseek.common.v1.ActionFenceR\roriginalFence\"o\n" +
 	"\x17QueryMediaPatchResponse\x12\x14\n" +
 	"\x05found\x18\x01 \x01(\bR\x05found\x12>\n" +
-	"\aoutcome\x18\x02 \x01(\v2$.deepseek.media.v1.MediaPatchOutcomeR\aoutcome*\x99\x01\n" +
+	"\aoutcome\x18\x02 \x01(\v2$.deepseek.media.v1.MediaPatchOutcomeR\aoutcome\"S\n" +
+	"\x14MediaFlatPatchRecord\x12;\n" +
+	"\x05nodes\x18\x01 \x03(\v2%.deepseek.media.v1.MediaFlatPatchNodeR\x05nodes\"\xbd\x02\n" +
+	"\x12MediaFlatPatchNode\x12\x1f\n" +
+	"\n" +
+	"null_value\x18\x01 \x01(\bH\x00R\tnullValue\x12\x1f\n" +
+	"\n" +
+	"bool_value\x18\x02 \x01(\bH\x00R\tboolValue\x12\x1f\n" +
+	"\n" +
+	"text_value\x18\x03 \x01(\tH\x00R\ttextValue\x12#\n" +
+	"\fnumber_value\x18\x04 \x01(\tH\x00R\vnumberValue\x12L\n" +
+	"\fobject_value\x18\x05 \x01(\v2'.deepseek.media.v1.MediaFlatPatchObjectH\x00R\vobjectValue\x12I\n" +
+	"\varray_value\x18\x06 \x01(\v2&.deepseek.media.v1.MediaFlatPatchArrayH\x00R\n" +
+	"arrayValueB\x06\n" +
+	"\x04kind\"Y\n" +
+	"\x14MediaFlatPatchObject\x12A\n" +
+	"\amembers\x18\x01 \x03(\v2'.deepseek.media.v1.MediaFlatPatchMemberR\amembers\">\n" +
+	"\x14MediaFlatPatchMember\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05child\x18\x02 \x01(\rR\x05child\"1\n" +
+	"\x13MediaFlatPatchArray\x12\x1a\n" +
+	"\bchildren\x18\x01 \x03(\rR\bchildren*\x99\x01\n" +
 	"\x11MediaMutationKind\x12#\n" +
 	"\x1fMEDIA_MUTATION_KIND_UNSPECIFIED\x10\x00\x12\x1e\n" +
 	"\x1aMEDIA_MUTATION_KIND_DELETE\x10\x01\x12\x1e\n" +
@@ -3397,7 +3753,7 @@ func file_media_v1_media_proto_rawDescGZIP() []byte {
 }
 
 var file_media_v1_media_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_media_v1_media_proto_msgTypes = make([]protoimpl.MessageInfo, 38)
+var file_media_v1_media_proto_msgTypes = make([]protoimpl.MessageInfo, 43)
 var file_media_v1_media_proto_goTypes = []any{
 	(MediaMutationKind)(0),                  // 0: deepseek.media.v1.MediaMutationKind
 	(MediaPatchEffectState)(0),              // 1: deepseek.media.v1.MediaPatchEffectState
@@ -3439,7 +3795,12 @@ var file_media_v1_media_proto_goTypes = []any{
 	(*ExecuteMediaProcessRequest)(nil),      // 37: deepseek.media.v1.ExecuteMediaProcessRequest
 	(*QueryMediaPatchRequest)(nil),          // 38: deepseek.media.v1.QueryMediaPatchRequest
 	(*QueryMediaPatchResponse)(nil),         // 39: deepseek.media.v1.QueryMediaPatchResponse
-	(*commonv1.ActionFence)(nil),            // 40: deepseek.common.v1.ActionFence
+	(*MediaFlatPatchRecord)(nil),            // 40: deepseek.media.v1.MediaFlatPatchRecord
+	(*MediaFlatPatchNode)(nil),              // 41: deepseek.media.v1.MediaFlatPatchNode
+	(*MediaFlatPatchObject)(nil),            // 42: deepseek.media.v1.MediaFlatPatchObject
+	(*MediaFlatPatchMember)(nil),            // 43: deepseek.media.v1.MediaFlatPatchMember
+	(*MediaFlatPatchArray)(nil),             // 44: deepseek.media.v1.MediaFlatPatchArray
+	(*commonv1.ActionFence)(nil),            // 45: deepseek.common.v1.ActionFence
 }
 var file_media_v1_media_proto_depIdxs = []int32{
 	4,  // 0: deepseek.media.v1.MediaValue.object_value:type_name -> deepseek.media.v1.MediaObject
@@ -3455,24 +3816,24 @@ var file_media_v1_media_proto_depIdxs = []int32{
 	19, // 10: deepseek.media.v1.MediaPatchIntent.create:type_name -> deepseek.media.v1.MediaCreateManifest
 	8,  // 11: deepseek.media.v1.MediaPatchIntent.process:type_name -> deepseek.media.v1.MediaProcessOptions
 	7,  // 12: deepseek.media.v1.MediaPatchClaim.intent:type_name -> deepseek.media.v1.MediaPatchIntent
-	40, // 13: deepseek.media.v1.MediaPatchClaim.fence:type_name -> deepseek.common.v1.ActionFence
-	40, // 14: deepseek.media.v1.GetMediaPatchClaimRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	40, // 15: deepseek.media.v1.BeginMediaPatchDispatchRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	45, // 13: deepseek.media.v1.MediaPatchClaim.fence:type_name -> deepseek.common.v1.ActionFence
+	45, // 14: deepseek.media.v1.GetMediaPatchClaimRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	45, // 15: deepseek.media.v1.BeginMediaPatchDispatchRequest.fence:type_name -> deepseek.common.v1.ActionFence
 	9,  // 16: deepseek.media.v1.MediaPatchDispatchPermit.claim:type_name -> deepseek.media.v1.MediaPatchClaim
-	40, // 17: deepseek.media.v1.MediaPatchOutcome.original_fence:type_name -> deepseek.common.v1.ActionFence
+	45, // 17: deepseek.media.v1.MediaPatchOutcome.original_fence:type_name -> deepseek.common.v1.ActionFence
 	1,  // 18: deepseek.media.v1.MediaPatchOutcome.state:type_name -> deepseek.media.v1.MediaPatchEffectState
 	4,  // 19: deepseek.media.v1.MediaPatchOutcome.media:type_name -> deepseek.media.v1.MediaObject
 	22, // 20: deepseek.media.v1.MediaPatchOutcome.created:type_name -> deepseek.media.v1.MediaCreatedResult
 	18, // 21: deepseek.media.v1.MediaPatchOutcome.processed:type_name -> deepseek.media.v1.MediaProcessedResult
 	14, // 22: deepseek.media.v1.MediaPatchOutcome.patched:type_name -> deepseek.media.v1.MediaPatchedResult
-	40, // 23: deepseek.media.v1.MediaPatchedResult.original_fence:type_name -> deepseek.common.v1.ActionFence
+	45, // 23: deepseek.media.v1.MediaPatchedResult.original_fence:type_name -> deepseek.common.v1.ActionFence
 	9,  // 24: deepseek.media.v1.MediaPatchPreparation.claim:type_name -> deepseek.media.v1.MediaPatchClaim
-	40, // 25: deepseek.media.v1.ReadMediaPatchResultRequest.original_fence:type_name -> deepseek.common.v1.ActionFence
+	45, // 25: deepseek.media.v1.ReadMediaPatchResultRequest.original_fence:type_name -> deepseek.common.v1.ActionFence
 	14, // 26: deepseek.media.v1.MediaPatchResultChunk.manifest:type_name -> deepseek.media.v1.MediaPatchedResult
-	40, // 27: deepseek.media.v1.MediaProcessedResult.original_fence:type_name -> deepseek.common.v1.ActionFence
+	45, // 27: deepseek.media.v1.MediaProcessedResult.original_fence:type_name -> deepseek.common.v1.ActionFence
 	4,  // 28: deepseek.media.v1.MediaCreatePayload.registration:type_name -> deepseek.media.v1.MediaObject
 	21, // 29: deepseek.media.v1.MediaCreatePayload.upload:type_name -> deepseek.media.v1.MediaUploadPayload
-	40, // 30: deepseek.media.v1.MediaCreatedResult.original_fence:type_name -> deepseek.common.v1.ActionFence
+	45, // 30: deepseek.media.v1.MediaCreatedResult.original_fence:type_name -> deepseek.common.v1.ActionFence
 	4,  // 31: deepseek.media.v1.MediaCreatePreparation.record:type_name -> deepseek.media.v1.MediaObject
 	24, // 32: deepseek.media.v1.MediaCreatePreparation.processing:type_name -> deepseek.media.v1.MediaProcessingPreparation
 	4,  // 33: deepseek.media.v1.MediaProcessingPreparation.processing_record:type_name -> deepseek.media.v1.MediaObject
@@ -3484,46 +3845,50 @@ var file_media_v1_media_proto_depIdxs = []int32{
 	5,  // 39: deepseek.media.v1.MediaProcessPreparation.result_segments:type_name -> deepseek.media.v1.MediaArray
 	25, // 40: deepseek.media.v1.MediaStoredIndexRow.record:type_name -> deepseek.media.v1.MediaIndexItem
 	28, // 41: deepseek.media.v1.MediaStoredIndexRow.vector:type_name -> deepseek.media.v1.MediaStoredVectorRow
-	40, // 42: deepseek.media.v1.MediaCreateStageRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	45, // 42: deepseek.media.v1.MediaCreateStageRequest.fence:type_name -> deepseek.common.v1.ActionFence
 	19, // 43: deepseek.media.v1.MediaCreateStageRequest.manifest:type_name -> deepseek.media.v1.MediaCreateManifest
 	19, // 44: deepseek.media.v1.MediaCreateStageResponse.manifest:type_name -> deepseek.media.v1.MediaCreateManifest
-	40, // 45: deepseek.media.v1.ReadMediaCreateResultRequest.original_fence:type_name -> deepseek.common.v1.ActionFence
+	45, // 45: deepseek.media.v1.ReadMediaCreateResultRequest.original_fence:type_name -> deepseek.common.v1.ActionFence
 	4,  // 46: deepseek.media.v1.ReadMediaCreateResultResponse.media:type_name -> deepseek.media.v1.MediaObject
 	5,  // 47: deepseek.media.v1.ReadMediaCreateResultResponse.segments:type_name -> deepseek.media.v1.MediaArray
 	13, // 48: deepseek.media.v1.RecordMediaPatchOutcomeRequest.outcome:type_name -> deepseek.media.v1.MediaPatchOutcome
-	40, // 49: deepseek.media.v1.RecordMediaPatchOutcomeRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	40, // 50: deepseek.media.v1.ExecuteMediaPatchRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	40, // 51: deepseek.media.v1.ExecuteMediaDeleteRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	40, // 52: deepseek.media.v1.ExecuteMediaProcessRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	40, // 53: deepseek.media.v1.QueryMediaPatchRequest.original_fence:type_name -> deepseek.common.v1.ActionFence
+	45, // 49: deepseek.media.v1.RecordMediaPatchOutcomeRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	45, // 50: deepseek.media.v1.ExecuteMediaPatchRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	45, // 51: deepseek.media.v1.ExecuteMediaDeleteRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	45, // 52: deepseek.media.v1.ExecuteMediaProcessRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	45, // 53: deepseek.media.v1.QueryMediaPatchRequest.original_fence:type_name -> deepseek.common.v1.ActionFence
 	13, // 54: deepseek.media.v1.QueryMediaPatchResponse.outcome:type_name -> deepseek.media.v1.MediaPatchOutcome
-	10, // 55: deepseek.media.v1.MediaMutationControl.GetClaim:input_type -> deepseek.media.v1.GetMediaPatchClaimRequest
-	11, // 56: deepseek.media.v1.MediaMutationControl.BeginDispatch:input_type -> deepseek.media.v1.BeginMediaPatchDispatchRequest
-	33, // 57: deepseek.media.v1.MediaMutationControl.RecordOutcome:input_type -> deepseek.media.v1.RecordMediaPatchOutcomeRequest
-	35, // 58: deepseek.media.v1.MediaMutationWorker.ExecutePatch:input_type -> deepseek.media.v1.ExecuteMediaPatchRequest
-	36, // 59: deepseek.media.v1.MediaMutationWorker.ExecuteDelete:input_type -> deepseek.media.v1.ExecuteMediaDeleteRequest
-	35, // 60: deepseek.media.v1.MediaMutationWorker.ExecuteCreate:input_type -> deepseek.media.v1.ExecuteMediaPatchRequest
-	37, // 61: deepseek.media.v1.MediaMutationWorker.ExecuteProcess:input_type -> deepseek.media.v1.ExecuteMediaProcessRequest
-	38, // 62: deepseek.media.v1.MediaMutationWorker.QueryPatch:input_type -> deepseek.media.v1.QueryMediaPatchRequest
-	16, // 63: deepseek.media.v1.MediaMutationWorker.ReadPatchResult:input_type -> deepseek.media.v1.ReadMediaPatchResultRequest
-	29, // 64: deepseek.media.v1.MediaCreationPayloads.Stage:input_type -> deepseek.media.v1.MediaCreateStageRequest
-	31, // 65: deepseek.media.v1.MediaCreationPayloads.ReadResult:input_type -> deepseek.media.v1.ReadMediaCreateResultRequest
-	9,  // 66: deepseek.media.v1.MediaMutationControl.GetClaim:output_type -> deepseek.media.v1.MediaPatchClaim
-	12, // 67: deepseek.media.v1.MediaMutationControl.BeginDispatch:output_type -> deepseek.media.v1.MediaPatchDispatchPermit
-	34, // 68: deepseek.media.v1.MediaMutationControl.RecordOutcome:output_type -> deepseek.media.v1.RecordMediaPatchOutcomeResponse
-	13, // 69: deepseek.media.v1.MediaMutationWorker.ExecutePatch:output_type -> deepseek.media.v1.MediaPatchOutcome
-	13, // 70: deepseek.media.v1.MediaMutationWorker.ExecuteDelete:output_type -> deepseek.media.v1.MediaPatchOutcome
-	13, // 71: deepseek.media.v1.MediaMutationWorker.ExecuteCreate:output_type -> deepseek.media.v1.MediaPatchOutcome
-	13, // 72: deepseek.media.v1.MediaMutationWorker.ExecuteProcess:output_type -> deepseek.media.v1.MediaPatchOutcome
-	39, // 73: deepseek.media.v1.MediaMutationWorker.QueryPatch:output_type -> deepseek.media.v1.QueryMediaPatchResponse
-	17, // 74: deepseek.media.v1.MediaMutationWorker.ReadPatchResult:output_type -> deepseek.media.v1.MediaPatchResultChunk
-	30, // 75: deepseek.media.v1.MediaCreationPayloads.Stage:output_type -> deepseek.media.v1.MediaCreateStageResponse
-	32, // 76: deepseek.media.v1.MediaCreationPayloads.ReadResult:output_type -> deepseek.media.v1.ReadMediaCreateResultResponse
-	66, // [66:77] is the sub-list for method output_type
-	55, // [55:66] is the sub-list for method input_type
-	55, // [55:55] is the sub-list for extension type_name
-	55, // [55:55] is the sub-list for extension extendee
-	0,  // [0:55] is the sub-list for field type_name
+	41, // 55: deepseek.media.v1.MediaFlatPatchRecord.nodes:type_name -> deepseek.media.v1.MediaFlatPatchNode
+	42, // 56: deepseek.media.v1.MediaFlatPatchNode.object_value:type_name -> deepseek.media.v1.MediaFlatPatchObject
+	44, // 57: deepseek.media.v1.MediaFlatPatchNode.array_value:type_name -> deepseek.media.v1.MediaFlatPatchArray
+	43, // 58: deepseek.media.v1.MediaFlatPatchObject.members:type_name -> deepseek.media.v1.MediaFlatPatchMember
+	10, // 59: deepseek.media.v1.MediaMutationControl.GetClaim:input_type -> deepseek.media.v1.GetMediaPatchClaimRequest
+	11, // 60: deepseek.media.v1.MediaMutationControl.BeginDispatch:input_type -> deepseek.media.v1.BeginMediaPatchDispatchRequest
+	33, // 61: deepseek.media.v1.MediaMutationControl.RecordOutcome:input_type -> deepseek.media.v1.RecordMediaPatchOutcomeRequest
+	35, // 62: deepseek.media.v1.MediaMutationWorker.ExecutePatch:input_type -> deepseek.media.v1.ExecuteMediaPatchRequest
+	36, // 63: deepseek.media.v1.MediaMutationWorker.ExecuteDelete:input_type -> deepseek.media.v1.ExecuteMediaDeleteRequest
+	35, // 64: deepseek.media.v1.MediaMutationWorker.ExecuteCreate:input_type -> deepseek.media.v1.ExecuteMediaPatchRequest
+	37, // 65: deepseek.media.v1.MediaMutationWorker.ExecuteProcess:input_type -> deepseek.media.v1.ExecuteMediaProcessRequest
+	38, // 66: deepseek.media.v1.MediaMutationWorker.QueryPatch:input_type -> deepseek.media.v1.QueryMediaPatchRequest
+	16, // 67: deepseek.media.v1.MediaMutationWorker.ReadPatchResult:input_type -> deepseek.media.v1.ReadMediaPatchResultRequest
+	29, // 68: deepseek.media.v1.MediaCreationPayloads.Stage:input_type -> deepseek.media.v1.MediaCreateStageRequest
+	31, // 69: deepseek.media.v1.MediaCreationPayloads.ReadResult:input_type -> deepseek.media.v1.ReadMediaCreateResultRequest
+	9,  // 70: deepseek.media.v1.MediaMutationControl.GetClaim:output_type -> deepseek.media.v1.MediaPatchClaim
+	12, // 71: deepseek.media.v1.MediaMutationControl.BeginDispatch:output_type -> deepseek.media.v1.MediaPatchDispatchPermit
+	34, // 72: deepseek.media.v1.MediaMutationControl.RecordOutcome:output_type -> deepseek.media.v1.RecordMediaPatchOutcomeResponse
+	13, // 73: deepseek.media.v1.MediaMutationWorker.ExecutePatch:output_type -> deepseek.media.v1.MediaPatchOutcome
+	13, // 74: deepseek.media.v1.MediaMutationWorker.ExecuteDelete:output_type -> deepseek.media.v1.MediaPatchOutcome
+	13, // 75: deepseek.media.v1.MediaMutationWorker.ExecuteCreate:output_type -> deepseek.media.v1.MediaPatchOutcome
+	13, // 76: deepseek.media.v1.MediaMutationWorker.ExecuteProcess:output_type -> deepseek.media.v1.MediaPatchOutcome
+	39, // 77: deepseek.media.v1.MediaMutationWorker.QueryPatch:output_type -> deepseek.media.v1.QueryMediaPatchResponse
+	17, // 78: deepseek.media.v1.MediaMutationWorker.ReadPatchResult:output_type -> deepseek.media.v1.MediaPatchResultChunk
+	30, // 79: deepseek.media.v1.MediaCreationPayloads.Stage:output_type -> deepseek.media.v1.MediaCreateStageResponse
+	32, // 80: deepseek.media.v1.MediaCreationPayloads.ReadResult:output_type -> deepseek.media.v1.ReadMediaCreateResultResponse
+	70, // [70:81] is the sub-list for method output_type
+	59, // [59:70] is the sub-list for method input_type
+	59, // [59:59] is the sub-list for extension type_name
+	59, // [59:59] is the sub-list for extension extendee
+	0,  // [0:59] is the sub-list for field type_name
 }
 
 func init() { file_media_v1_media_proto_init() }
@@ -3544,13 +3909,21 @@ func file_media_v1_media_proto_init() {
 		(*MediaCreateStageRequest_Manifest)(nil),
 		(*MediaCreateStageRequest_Chunk)(nil),
 	}
+	file_media_v1_media_proto_msgTypes[39].OneofWrappers = []any{
+		(*MediaFlatPatchNode_NullValue)(nil),
+		(*MediaFlatPatchNode_BoolValue)(nil),
+		(*MediaFlatPatchNode_TextValue)(nil),
+		(*MediaFlatPatchNode_NumberValue)(nil),
+		(*MediaFlatPatchNode_ObjectValue)(nil),
+		(*MediaFlatPatchNode_ArrayValue)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_media_v1_media_proto_rawDesc), len(file_media_v1_media_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   38,
+			NumMessages:   43,
 			NumExtensions: 0,
 			NumServices:   3,
 		},

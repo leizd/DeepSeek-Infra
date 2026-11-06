@@ -69,7 +69,8 @@ message MediaPatchIntent {
   // this is neither CREATE nor permission to replace an uncertain operation.
   MediaProcessOptions process = 7;
   // Explicit controller capability, included in canonical request bytes.
-  // Zero retains the frozen v1 path; only 2 permits a compact v2 PATCH result.
+  // Zero retains v1. Versions 2 through 4 understand compact PATCH receipts.
+  // Version 3 adds signed HTTP 500 outcomes, and 4 adds flat typed PATCH results.
   // Old durable intents are never upgraded or rebound during recovery.
   uint32 max_outcome_schema_version = 8;
 }
@@ -153,9 +154,8 @@ message MediaPatchOutcome {
   // Only an applied PROCESS. Failed processing can retain a failed record and
   // original side effects; it cannot be represented as a no-effect refusal.
   MediaProcessedResult processed = 18;
-  // Only an applied schema-v2 PATCH. The v1 signer/verifier must reject this
-  // field. Its distinct signing domain binds a compact receipt to the exact
-  // retained typed record, without enlarging historical control rows.
+  // Only an applied schema-v2 or schema-v4 PATCH. The signing domain binds
+  // the outcome version, original fence and exact retained record bytes.
   MediaPatchedResult patched = 19;
 }
 
@@ -168,6 +168,7 @@ message MediaPatchedResult {
 
 // Rust-local binding; never an execution permit or caller-selected file path.
 // The original claim is normalized to CLAIMED just as in the effect journal.
+// Schema 1 binds MediaObject bytes. Schema 2 binds MediaFlatPatchRecord bytes.
 message MediaPatchPreparation {
   uint32 schema_version = 1;
   MediaPatchClaim claim = 2;
@@ -183,7 +184,8 @@ message ReadMediaPatchResultRequest {
 
 // First message: manifest only, zero offset, no data. Subsequent messages:
 // no manifest, contiguous byte offsets and 1..262144 bytes of the deterministic
-// encoded MediaObject. EOF must match the signed total length and SHA-256.
+// encoded record. The signed outcome selects MediaObject (v2) or
+// MediaFlatPatchRecord (v4). EOF must match its total length and SHA-256.
 // No JSON request/response, private key or authority crosses this transport.
 message MediaPatchResultChunk {
   uint32 schema_version = 1;
@@ -408,4 +410,35 @@ service MediaMutationWorker {
 service MediaCreationPayloads {
   rpc Stage(stream MediaCreateStageRequest) returns (MediaCreateStageResponse);
   rpc ReadResult(ReadMediaCreateResultRequest) returns (ReadMediaCreateResultResponse);
+}
+
+// An ordered JSON object expressed as a flat typed tree. Nodes are numbered
+// from 1 and the final node is the root object. Each child precedes its
+// parent and appears once. Object members retain their insertion order.
+message MediaFlatPatchRecord {
+  repeated MediaFlatPatchNode nodes = 1;
+}
+
+message MediaFlatPatchNode {
+  oneof kind {
+    bool null_value = 1; // Must be true when selected.
+    bool bool_value = 2;
+    string text_value = 3;
+    string number_value = 4; // Finite JSON decimal, with original integer precision.
+    MediaFlatPatchObject object_value = 5;
+    MediaFlatPatchArray array_value = 6;
+  }
+}
+
+message MediaFlatPatchObject {
+  repeated MediaFlatPatchMember members = 1;
+}
+
+message MediaFlatPatchMember {
+  string key = 1;
+  uint32 child = 2;
+}
+
+message MediaFlatPatchArray {
+  repeated uint32 children = 1;
 }

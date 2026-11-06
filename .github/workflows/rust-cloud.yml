@@ -125,7 +125,7 @@ jobs:
         timeout-minutes: 15
         run: |
           set -o pipefail
-          CGO_ENABLED=0 go test -v -count=1 -timeout=10m -run 'CompactPatch|PatchResult|^TestMediaPublicTLSSeparatesTheTwoSignedServerErrorEffects$' ./internal/media ./internal/worker ./internal/store ./internal/api 2>&1 | tee ../artifacts/rust-cloud/compact-patch-go.log
+          CGO_ENABLED=0 go test -v -count=1 -timeout=10m -run 'CompactPatch|FlatPatch|PatchResult|^TestMediaPublicTLSSeparatesTheTwoSignedServerErrorEffects$' ./internal/media ./internal/worker ./internal/store ./internal/api 2>&1 | tee ../artifacts/rust-cloud/compact-patch-go.log
       - name: Build the production Rust worker and custody provisioner on the cloud runner
         if: matrix.mode == 'checks'
         run: |

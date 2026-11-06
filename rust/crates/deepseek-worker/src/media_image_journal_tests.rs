@@ -50,7 +50,7 @@ fn failed_prepared_insert_retires_both_images_without_a_public_effect() {
 fn restart_retires_a_durably_owned_partial_copy_and_sealed_images_are_untouched() {
     let (root, key, journal, claim) = fixture();
     let before = read_snapshot(root.path()).unwrap();
-    let (_, after) = media_library::plan(root.path(), &claim, &before).unwrap();
+    let (_, after, _) = media_library::plan(root.path(), &claim, &before).unwrap();
     media_image_custody::reserve(&journal.connection, &claim, &before, after.as_ref()).unwrap();
     let directory = media_image_custody::directory(&journal.image_root, &claim).unwrap();
     before.retain(&directory.join("before.json")).unwrap();

@@ -1,3 +1,4 @@
+pub mod media_patch_result;
 pub mod media_server_error;
 
 pub mod generated {

@@ -1,3 +1,22 @@
+<!-- native checkpoint 2026-11-06 flat media PATCH response -->
+
+Whole product migration remains ACTIVE / NOT_READY. The original authenticated
+HTTP server returned the selected 160-layer mapping after PATCH. A combined
+11-request oracle now covers that response and the two earlier HTTP 500
+effects using the same synthetic library seed as the native probe.
+
+The controller advertises media outcome capability 4. Rust plans a flat
+typed record when the legacy public conversion or inline journal decoder
+cannot represent the retained depth. The v4 receipt uses its own signature
+domain and preparation schema 2. The original dispatch, before and after
+images, typed bytes, length and digest remain bound to the original fence.
+
+Go verifies the compact receipt, consumes the same authenticated chunk RPC,
+validates the ordered tree and encodes the HTTP object iteratively. The new
+regressions cover exact decimals, ordered members, invalid references,
+wrong signing and preparation domains, and retained restart. Cloud validation
+still needs to demonstrate the actual PATCH response and preserved receipt.
+
 <!-- native checkpoint 2026-11-06 signed media response errors -->
 
 Whole product migration remains ACTIVE / NOT_READY. The original authenticated

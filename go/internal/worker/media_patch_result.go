@@ -21,10 +21,34 @@ type mediaPatchResultReceiver interface {
 // The caller must first settle the signed receipt through the authoritative
 // control store. This is a read of that original operation, never a retry.
 func (c *Client) ReadMediaPatchResult(ctx context.Context, outcome *mediav1.MediaPatchOutcome) (*mediav1.MediaObject, error) {
+	stream, err := c.patchResultStream(ctx, outcome, mediamodel.CompactPatchOutcomeVersion)
+	if err != nil {
+		return nil, err
+	}
+	return receiveMediaPatchResult(stream, outcome.Patched)
+}
+
+func (c *Client) ReadFlatMediaPatchResult(ctx context.Context, outcome *mediav1.MediaPatchOutcome) ([]byte, error) {
+	stream, err := c.patchResultStream(ctx, outcome, mediamodel.FlatPatchOutcomeVersion)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := receiveMediaPatchResultBytes(stream, outcome.Patched)
+	if err != nil {
+		return nil, err
+	}
+	result, err := mediamodel.FlatPatchJSON(raw)
+	if err != nil {
+		return nil, ErrInvalidWorkerResponse
+	}
+	return result, nil
+}
+
+func (c *Client) patchResultStream(ctx context.Context, outcome *mediav1.MediaPatchOutcome, version uint32) (mediaPatchResultReceiver, error) {
 	if c == nil || !c.tlsSecured || !c.bearerAttached || c.media == nil {
 		return nil, ErrWorkerTLSRequired
 	}
-	if outcome == nil || outcome.SchemaVersion != 2 || outcome.Patched == nil || outcome.OriginalFence == nil ||
+	if outcome == nil || outcome.SchemaVersion != version || outcome.Patched == nil || outcome.OriginalFence == nil ||
 		outcome.State != mediav1.MediaPatchEffectState_MEDIA_PATCH_EFFECT_STATE_APPLIED {
 		return nil, ErrInvalidWorkerResponse
 	}
@@ -32,16 +56,12 @@ func (c *Client) ReadMediaPatchResult(ctx context.Context, outcome *mediav1.Medi
 	if err != nil {
 		return nil, err
 	}
-	stream, err := c.media.ReadPatchResult(ctx, &mediav1.ReadMediaPatchResultRequest{
+	return c.media.ReadPatchResult(ctx, &mediav1.ReadMediaPatchResultRequest{
 		SchemaVersion: 1, OperationId: outcome.OperationId, OriginalFence: outcome.OriginalFence,
 	}, grpc.MaxCallRecvMsgSize(mediaPatchResultChunkBytes+1024))
-	if err != nil {
-		return nil, err
-	}
-	return receiveMediaPatchResult(stream, outcome.Patched)
 }
 
-func receiveMediaPatchResult(stream mediaPatchResultReceiver, receipt *mediav1.MediaPatchedResult) (*mediav1.MediaObject, error) {
+func receiveMediaPatchResultBytes(stream mediaPatchResultReceiver, receipt *mediav1.MediaPatchedResult) ([]byte, error) {
 	if stream == nil || receipt == nil || receipt.RecordBytes == 0 || len(receipt.RecordSha256) != 32 ||
 		receipt.RecordBytes > uint64(int(^uint(0)>>1)) {
 		return nil, ErrInvalidWorkerResponse
@@ -76,6 +96,14 @@ func receiveMediaPatchResult(stream mediaPatchResultReceiver, receipt *mediav1.M
 	}
 	if offset != receipt.RecordBytes || !bytes.Equal(digest.Sum(nil), receipt.RecordSha256) {
 		return nil, ErrInvalidWorkerResponse
+	}
+	return encoded, nil
+}
+
+func receiveMediaPatchResult(stream mediaPatchResultReceiver, receipt *mediav1.MediaPatchedResult) (*mediav1.MediaObject, error) {
+	encoded, err := receiveMediaPatchResultBytes(stream, receipt)
+	if err != nil {
+		return nil, err
 	}
 	record := &mediav1.MediaObject{}
 	if proto.Unmarshal(encoded, record) != nil {

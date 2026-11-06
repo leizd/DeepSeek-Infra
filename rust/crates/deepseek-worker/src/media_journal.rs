@@ -11,7 +11,7 @@ use deepseek_policy::mutation_gate::{assert_mutation_allowed, exclusive_gate, mu
 use deepseek_protocol::{
     ActionFence,
     generated::deepseek::media::v1::{MediaPatchClaim, MediaPatchEffectState, MediaPatchOutcome},
-    media_server_error,
+    media_patch_result as patch_wire, media_server_error,
 };
 use ed25519_dalek::{Signature, VerifyingKey};
 use prost::Message as _;
@@ -329,16 +329,25 @@ impl MediaJournal {
         unsigned.signature.clear();
         let domain: &[u8] = match result.schema_version {
             1 if result.patched.is_none()
-                && !(matches!(row.planned.schema_version, 2 | media_server_error::VERSION)
-                    && result.state == MediaPatchEffectState::Applied as i32) =>
+                && !(matches!(
+                    row.planned.schema_version,
+                    patch_wire::COMPACT_VERSION
+                        | patch_wire::FLAT_VERSION
+                        | media_server_error::VERSION
+                ) && result.state == MediaPatchEffectState::Applied as i32) =>
             {
                 b"deepseek-infra:media-patch-outcome-v1\0"
             }
-            2 if result.state == MediaPatchEffectState::Applied as i32
-                && result.patched.is_some()
-                && unsigned == row.planned =>
+            version @ (patch_wire::COMPACT_VERSION | patch_wire::FLAT_VERSION)
+                if result.state == MediaPatchEffectState::Applied as i32
+                    && result.patched.is_some()
+                    && claim
+                        .intent
+                        .as_ref()
+                        .is_some_and(|intent| patch_wire::negotiated(intent, version))
+                    && unsigned == row.planned =>
             {
-                b"deepseek-infra:media-patch-outcome-v2\0"
+                patch_wire::signature_domain(version).ok_or_else(invalid)?
             }
             media_server_error::VERSION
                 if claim
@@ -390,18 +399,23 @@ impl MediaJournal {
         // before a fresh plan may reuse its deterministic private filenames.
         self.collect_unsealed_images(&intent.operation_id)?;
         let before = read_snapshot(&self.root)?;
-        let (planned, after) = if intent.kind
+        let (planned, after, flat) = if intent.kind
             == deepseek_protocol::generated::deepseek::media::v1::MediaMutationKind::Process as i32
         {
-            crate::media_process::plan(&self.root, &self.creation_staging, claim, &before)?
+            let (planned, after) =
+                crate::media_process::plan(&self.root, &self.creation_staging, claim, &before)?;
+            (planned, after, None)
         } else if intent.kind
             == deepseek_protocol::generated::deepseek::media::v1::MediaMutationKind::Create as i32
         {
-            crate::media_create::plan(&self.root, &self.creation_staging, claim, &before)?
+            let (planned, after) =
+                crate::media_create::plan(&self.root, &self.creation_staging, claim, &before)?;
+            (planned, after, None)
         } else {
             media_library::plan(&self.root, claim, &before)?
         };
-        let planned = crate::media_patch_result::prepare(&self.creation_staging, claim, planned)?;
+        let planned =
+            crate::media_patch_result::prepare(&self.creation_staging, claim, planned, flat)?;
         if planned.encoded_len() > 4 * 1024 * 1024 {
             return Err(Status::resource_exhausted("MEDIA_MESSAGE_LIMIT"));
         }
@@ -495,7 +509,12 @@ impl MediaJournal {
         }
         if outcome.state == MediaPatchEffectState::Applied as i32 {
             if let Some(patched) = &outcome.patched {
-                crate::media_patch_result::open_record(&self.creation_staging, &claim, patched)?;
+                crate::media_patch_result::open_record(
+                    &self.creation_staging,
+                    &claim,
+                    outcome.schema_version,
+                    patched,
+                )?;
             }
             if outcome.created.is_some() {
                 crate::media_create::retained_preparation(
@@ -656,11 +675,18 @@ impl MediaJournal {
             return Err(invalid());
         }
         let terminal = self.terminal(&row)?.ok_or_else(invalid)?;
-        if terminal.schema_version != 2 || terminal.state != MediaPatchEffectState::Applied as i32 {
+        if patch_wire::signature_domain(terminal.schema_version).is_none()
+            || terminal.state != MediaPatchEffectState::Applied as i32
+        {
             return Err(invalid());
         }
         let receipt = terminal.patched.ok_or_else(invalid)?;
-        let file = crate::media_patch_result::open_record(&self.creation_staging, claim, &receipt)?;
+        let file = crate::media_patch_result::open_record(
+            &self.creation_staging,
+            claim,
+            terminal.schema_version,
+            &receipt,
+        )?;
         Ok((receipt, file))
     }
 
@@ -679,6 +705,7 @@ impl MediaJournal {
                     crate::media_patch_result::open_record(
                         &self.creation_staging,
                         &claim,
+                        row.planned.schema_version,
                         patched,
                     )?;
                 }
@@ -740,7 +767,12 @@ impl MediaJournal {
             if let Some(patched) = result.patched.as_ref() {
                 let row = self.retained(operation)?.ok_or_else(invalid)?;
                 let claim = MediaPatchClaim::decode(row.claim.as_slice()).map_err(|_| invalid())?;
-                crate::media_patch_result::open_record(&self.creation_staging, &claim, patched)?;
+                crate::media_patch_result::open_record(
+                    &self.creation_staging,
+                    &claim,
+                    result.schema_version,
+                    patched,
+                )?;
             }
         }
         result.signature = key
@@ -800,7 +832,12 @@ impl MediaJournal {
         key.validate_media_patch_outcome(&row.planned)
             .map_err(|_| invalid())?;
         if let Some(patched) = row.planned.patched.as_ref() {
-            crate::media_patch_result::open_record(&self.creation_staging, claim, patched)?;
+            crate::media_patch_result::open_record(
+                &self.creation_staging,
+                claim,
+                row.planned.schema_version,
+                patched,
+            )?;
         }
         Self::verify_images(&row)?;
         if let Some(after) = row.after.as_ref() {

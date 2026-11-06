@@ -37,11 +37,11 @@ func RequestDigest(intent *mediav1.MediaPatchIntent) ([]byte, error) {
 	}
 	switch intent.MaxOutcomeSchemaVersion {
 	case 0:
-	case 2:
+	case CompactPatchOutcomeVersion:
 		if intent.Kind != mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_UNSPECIFIED {
 			return nil, ErrInvalid
 		}
-	case ServerErrorOutcomeVersion:
+	case ServerErrorOutcomeVersion, FlatPatchOutcomeVersion:
 		if !serverErrorNegotiated(intent) {
 			return nil, ErrInvalid
 		}
@@ -316,7 +316,7 @@ func VerifyOutcome(outcome *mediav1.MediaPatchOutcome, claim *mediav1.MediaPatch
 	if outcome != nil && outcome.SchemaVersion == ServerErrorOutcomeVersion {
 		return verifyServerErrorOutcome(outcome, claim, public)
 	}
-	if outcome != nil && outcome.SchemaVersion == 2 {
+	if outcome != nil && (outcome.SchemaVersion == CompactPatchOutcomeVersion || outcome.SchemaVersion == FlatPatchOutcomeVersion) {
 		return verifyCompactPatchOutcome(outcome, claim, public)
 	}
 	if outcome != nil && outcome.Patched != nil {

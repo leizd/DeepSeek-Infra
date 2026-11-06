@@ -10,14 +10,20 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+const (
+	CompactPatchOutcomeVersion = 2
+	FlatPatchOutcomeVersion    = 4
+)
+
 var compactPatchSignatureDomain = []byte("deepseek-infra:media-patch-outcome-v2\x00")
+var flatPatchSignatureDomain = []byte("deepseek-infra:media-patch-outcome-v4\x00")
 
 func verifyCompactPatchOutcome(outcome *mediav1.MediaPatchOutcome, claim *mediav1.MediaPatchClaim, public []byte) error {
 	if outcome == nil || claim == nil || claim.Intent == nil || claim.Fence == nil ||
-		claim.SchemaVersion != 1 || (claim.Intent.MaxOutcomeSchemaVersion != 2 && claim.Intent.MaxOutcomeSchemaVersion != ServerErrorOutcomeVersion) ||
+		claim.SchemaVersion != 1 ||
 		claim.Intent.Kind != mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_UNSPECIFIED ||
 		claim.Intent.Patch == nil || !strings.HasPrefix(outcome.OperationId, "media-patch-") ||
-		outcome.SchemaVersion != 2 || outcome.OperationId != claim.Intent.OperationId ||
+		outcome.OperationId != claim.Intent.OperationId ||
 		outcome.OperationId != claim.Fence.ActionId || claim.Fence.ExecutionEpoch != 1 ||
 		len(outcome.OperationId) > 128 || !proto.Equal(outcome.OriginalFence, claim.Fence) ||
 		!bytes.Equal(outcome.RequestSha256, claim.RequestSha256) || len(claim.RequestSha256) != 32 ||
@@ -29,6 +35,23 @@ func verifyCompactPatchOutcome(outcome *mediav1.MediaPatchOutcome, claim *mediav
 		outcome.HttpStatus != 200 || outcome.ErrorCode != "" || outcome.ErrorMessage != "" ||
 		len(outcome.BeforeSha256) != 32 || len(outcome.AfterSha256) != 32 ||
 		outcome.Media != nil || outcome.Created != nil || outcome.Processed != nil || outcome.DeletedCount != 0 {
+		return ErrInvalid
+	}
+	var preparationSchema uint32
+	var domain []byte
+	capability := claim.Intent.MaxOutcomeSchemaVersion
+	switch outcome.SchemaVersion {
+	case CompactPatchOutcomeVersion:
+		if capability != CompactPatchOutcomeVersion && capability != ServerErrorOutcomeVersion && capability != FlatPatchOutcomeVersion {
+			return ErrInvalid
+		}
+		preparationSchema, domain = 1, compactPatchSignatureDomain
+	case FlatPatchOutcomeVersion:
+		if capability != FlatPatchOutcomeVersion {
+			return ErrInvalid
+		}
+		preparationSchema, domain = 2, flatPatchSignatureDomain
+	default:
 		return ErrInvalid
 	}
 	requestDigest, err := RequestDigest(claim.Intent)
@@ -44,7 +67,7 @@ func verifyCompactPatchOutcome(outcome *mediav1.MediaPatchOutcome, claim *mediav
 	original := proto.Clone(claim).(*mediav1.MediaPatchClaim)
 	original.State = "CLAIMED"
 	preparation, err := (proto.MarshalOptions{Deterministic: true}).Marshal(&mediav1.MediaPatchPreparation{
-		SchemaVersion: 1, Claim: original, RecordSha256: receipt.RecordSha256, RecordBytes: receipt.RecordBytes,
+		SchemaVersion: preparationSchema, Claim: original, RecordSha256: receipt.RecordSha256, RecordBytes: receipt.RecordBytes,
 	})
 	if err != nil {
 		return ErrInvalid
@@ -59,7 +82,7 @@ func verifyCompactPatchOutcome(outcome *mediav1.MediaPatchOutcome, claim *mediav
 	if err != nil || len(encoded) > 2*1024*1024 {
 		return ErrInvalid
 	}
-	message := append(append([]byte(nil), compactPatchSignatureDomain...), encoded...)
+	message := append(append([]byte(nil), domain...), encoded...)
 	if !ed25519.Verify(public, message, outcome.Signature) {
 		return ErrInvalid
 	}
