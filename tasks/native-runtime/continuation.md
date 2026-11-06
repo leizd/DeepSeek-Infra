@@ -1,3 +1,28 @@
+<!-- native checkpoint 2026-11-06 signed media response errors -->
+
+Whole product migration remains ACTIVE / NOT_READY. The original authenticated
+TCP oracle observed identical HTTP 500 responses for two different effects.
+A retained unpaired unit blocked the write. A selected NaN allowed the library
+publication and failed strict public response encoding afterwards.
+
+Both Rust jobs on parent 0965937 failed the same two fixture assertions.
+The original deep success fixture retained nested mappings. The unpaired
+string was under a surviving metadata key. The corrected tests use those
+inputs and check that the invalid key discarded by normalization stays absent.
+
+The Rust PATCH planner updates the selected retained record directly. Exact
+decimal integers reach the existing typed public record without a float
+conversion. The version 3 terminal error uses the existing protobuf envelope
+and a separate signing domain. Its refused form binds the before image. Its
+applied PATCH form binds both images and the Go dispatch preparation.
+The controller can continue verifying stored v1 and compact v2 receipts.
+
+New regressions exercise recovery after a committed image and interrupted
+receipt, no-effect refusal, exact selected integers, and Go settlement over
+TLS. The cloud launcher probe checks five native mutations, the actual file
+digests and the two durable receipts across restart. The selected deep success
+case still needs a response representation beyond the legacy nesting limit.
+
 <!-- native checkpoint 2026-11-06 retained media publication -->
 
 Whole product migration remains ACTIVE / NOT_READY. The retained library writer

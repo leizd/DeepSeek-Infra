@@ -88,7 +88,10 @@ pub(super) fn prepare(
         || claim.intent.as_ref().is_none_or(|i| {
             i.kind != MediaMutationKind::Unspecified as i32
                 || i.patch.is_none()
-                || i.max_outcome_schema_version != 2
+                || !matches!(
+                    i.max_outcome_schema_version,
+                    2 | deepseek_protocol::media_server_error::VERSION
+                )
         })
         || planned.state != MediaPatchEffectState::Applied as i32
     {
@@ -122,7 +125,10 @@ pub(super) fn open_record(
     let intent = claim.intent.as_ref().ok_or_else(invalid)?;
     if intent.kind != MediaMutationKind::Unspecified as i32
         || intent.patch.is_none()
-        || intent.max_outcome_schema_version != 2
+        || !matches!(
+            intent.max_outcome_schema_version,
+            2 | deepseek_protocol::media_server_error::VERSION
+        )
         || receipt.original_fence != claim.fence
         || receipt.record_sha256.len() != 32
         || receipt.record_bytes == 0

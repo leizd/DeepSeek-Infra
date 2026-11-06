@@ -67,7 +67,8 @@ func recoverMediaPatch(ctx context.Context, control *store.Control, client media
 }
 func writeMediaOutcome(w http.ResponseWriter, request *http.Request, outcome *mediav1.MediaPatchOutcome) {
 	w.Header().Set("X-DeepSeek-Operation-Id", outcome.OperationId)
-	if outcome.State == mediav1.MediaPatchEffectState_MEDIA_PATCH_EFFECT_STATE_REFUSED {
+	if outcome.State == mediav1.MediaPatchEffectState_MEDIA_PATCH_EFFECT_STATE_REFUSED ||
+		outcome.SchemaVersion == mediamodel.ServerErrorOutcomeVersion {
 		policyWriteError(w, int(outcome.HttpStatus), outcome.ErrorCode, outcome.ErrorMessage)
 		return
 	}
@@ -169,10 +170,8 @@ func mediaPatch(w http.ResponseWriter, r *http.Request, control *store.Control, 
 		prefix = "media-delete-"
 	}
 	operation := prefix + hex.EncodeToString(nonce[:])
-	intent := &mediav1.MediaPatchIntent{SchemaVersion: 1, OperationId: operation, MediaId: id, Patch: patch, Kind: kind}
-	if r.Method == http.MethodPatch {
-		intent.MaxOutcomeSchemaVersion = 2
-	}
+	intent := &mediav1.MediaPatchIntent{SchemaVersion: 1, OperationId: operation, MediaId: id,
+		Patch: patch, Kind: kind, MaxOutcomeSchemaVersion: mediamodel.ServerErrorOutcomeVersion}
 	claim, err := control.AdmitMediaPatch(intent)
 	if err != nil {
 		mediaUnknown(w, operation)

@@ -1,3 +1,5 @@
+pub mod media_server_error;
+
 pub mod generated {
     pub mod deepseek {
         pub mod common {

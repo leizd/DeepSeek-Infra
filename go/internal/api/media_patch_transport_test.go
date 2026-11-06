@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
@@ -59,6 +60,9 @@ func (p *mediaWirePeer) ExecutePatch(_ context.Context, r *mediav1.ExecuteMediaP
 	if err != nil {
 		return nil, status.Error(codes.FailedPrecondition, err.Error())
 	}
+	if strings.HasPrefix(p.mode, "server-error-") {
+		return p.executeServerError(claim)
+	}
 	_, err = p.control.BeginMediaPatchDispatch(&mediav1.BeginMediaPatchDispatchRequest{SchemaVersion: 1, OperationId: r.OperationId, Fence: r.Fence, ClaimToken: claim.ClaimToken, WriterFencingToken: claim.WriterFencingToken, PreparationSha256: bytes.Repeat([]byte{7}, 32)})
 	if err != nil {
 		return nil, status.Error(codes.FailedPrecondition, err.Error())
@@ -105,6 +109,42 @@ func (p *mediaWirePeer) ExecutePatch(_ context.Context, r *mediav1.ExecuteMediaP
 	}
 	return proto.Clone(outcome).(*mediav1.MediaPatchOutcome), nil
 }
+func (p *mediaWirePeer) executeServerError(claim *mediav1.MediaPatchClaim) (*mediav1.MediaPatchOutcome, error) {
+	outcome := &mediav1.MediaPatchOutcome{
+		SchemaVersion: mediamodel.ServerErrorOutcomeVersion,
+		OperationId:   claim.Intent.OperationId, OriginalFence: claim.Fence, RequestSha256: claim.RequestSha256,
+		FleetId: claim.FleetId, Environment: claim.Environment, WriterFencingToken: claim.WriterFencingToken,
+		State: mediav1.MediaPatchEffectState_MEDIA_PATCH_EFFECT_STATE_APPLIED, HttpStatus: 500,
+		ErrorCode: "internal", ErrorMessage: "Server error",
+		BeforeSha256: bytes.Repeat([]byte{1}, 32), AfterSha256: bytes.Repeat([]byte{2}, 32),
+	}
+	if p.mode == "server-error-refused" {
+		outcome.State = mediav1.MediaPatchEffectState_MEDIA_PATCH_EFFECT_STATE_REFUSED
+		outcome.AfterSha256 = nil
+	}
+	unsigned, err := mediamodel.Encode(outcome)
+	if err != nil {
+		return nil, err
+	}
+	preparation := sha256.Sum256(unsigned)
+	if p.mode == "server-error-foreign-plan" {
+		preparation = sha256.Sum256([]byte("another preparation"))
+	}
+	if _, err := p.control.BeginMediaPatchDispatch(&mediav1.BeginMediaPatchDispatchRequest{
+		SchemaVersion: 1, OperationId: outcome.OperationId, Fence: claim.Fence,
+		ClaimToken: claim.ClaimToken, WriterFencingToken: claim.WriterFencingToken,
+		PreparationSha256: preparation[:],
+	}); err != nil {
+		return nil, err
+	}
+	outcome.Signature = ed25519.Sign(p.key, append([]byte("deepseek-infra:media-patch-outcome-v3\x00"), unsigned...))
+	p.retained = outcome
+	if p.mode == "server-error-lost" {
+		return nil, status.Error(codes.Unavailable, "isolated reply lost after retention")
+	}
+	return outcome, nil
+}
+
 func (p *mediaWirePeer) QueryPatch(_ context.Context, r *mediav1.QueryMediaPatchRequest) (*mediav1.QueryMediaPatchResponse, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -226,6 +266,39 @@ func TestMediaPublicTLSRoundTripSettlesOnlyTheBoundSignedOutcome(t *testing.T) {
 		t.Fatal("unexpected dispatch/query counts", peer.executed, peer.queried)
 	}
 }
+func TestMediaPublicTLSSeparatesTheTwoSignedServerErrorEffects(t *testing.T) {
+	for _, test := range []struct {
+		mode, state, code, message string
+		status                     int
+	}{
+		{"server-error-applied", "APPLIED", "internal", "Server error", 500},
+		{"server-error-lost", "APPLIED", "internal", "Server error", 500},
+		{"server-error-refused", "REFUSED", "internal", "Server error", 500},
+		{"server-error-foreign-plan", "DISPATCHED", "EFFECT_UNKNOWN", "", 503},
+	} {
+		t.Run(test.mode, func(t *testing.T) {
+			control, peer, server := mediaWireFixture(t, test.mode)
+			code, body, operation := mediaWirePatch(t, server)
+			if code != test.status || body["code"] != test.code || operation == "" {
+				t.Fatalf("response %d %#v", code, body)
+			}
+			if test.message != "" && (len(body) != 2 || body["error"] != test.message) {
+				t.Fatalf("original public error differs: %#v", body)
+			}
+			fence := &commonv1.ActionFence{ActionId: operation, ExecutionEpoch: 1}
+			claim, err := control.GetMediaPatchClaim(operation, fence)
+			if err != nil || claim.State != test.state {
+				t.Fatalf("state %v, %v", claim, err)
+			}
+			peer.mu.Lock()
+			defer peer.mu.Unlock()
+			if peer.executed != 1 || (test.mode == "server-error-lost" && peer.queried != 1) {
+				t.Fatal("unexpected dispatch or query count", peer.executed, peer.queried)
+			}
+		})
+	}
+}
+
 func TestMediaPublicLostTLSReplyQueriesTheOriginalWithoutRedispatch(t *testing.T) {
 	control, peer, server := mediaWireFixture(t, "lost")
 	code, body, id := mediaWirePatch(t, server)

@@ -1,5 +1,5 @@
 //! Digest-checked, private normalized records. Never a durable media writer.
-use super::{Records, invalid, retained::MediaRecord};
+use super::{Records, retained::MediaRecord};
 use tonic::Status;
 
 pub struct RetainedRecords {
@@ -18,12 +18,6 @@ impl RetainedRecords {
     }
 
     pub fn get(&self, ordinal: i64) -> Result<Option<MediaRecord>, Status> {
-        self.inner
-            .record_at(ordinal)?
-            .map(|record| {
-                let bytes = self.inner.read_record_bytes(&record)?;
-                MediaRecord::from_spool(&bytes).map_err(|_| invalid())
-            })
-            .transpose()
+        self.inner.retained_at(ordinal)
     }
 }

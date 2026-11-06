@@ -14,7 +14,7 @@ var compactPatchSignatureDomain = []byte("deepseek-infra:media-patch-outcome-v2\
 
 func verifyCompactPatchOutcome(outcome *mediav1.MediaPatchOutcome, claim *mediav1.MediaPatchClaim, public []byte) error {
 	if outcome == nil || claim == nil || claim.Intent == nil || claim.Fence == nil ||
-		claim.SchemaVersion != 1 || claim.Intent.MaxOutcomeSchemaVersion != 2 ||
+		claim.SchemaVersion != 1 || (claim.Intent.MaxOutcomeSchemaVersion != 2 && claim.Intent.MaxOutcomeSchemaVersion != ServerErrorOutcomeVersion) ||
 		claim.Intent.Kind != mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_UNSPECIFIED ||
 		claim.Intent.Patch == nil || !strings.HasPrefix(outcome.OperationId, "media-patch-") ||
 		outcome.SchemaVersion != 2 || outcome.OperationId != claim.Intent.OperationId ||

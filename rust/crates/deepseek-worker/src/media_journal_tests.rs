@@ -115,6 +115,153 @@ fn media_patch_keeps_unencodable_library_bytes_and_delete_can_remove_the_bad_row
     assert_eq!(rows[0]["title"], "Before");
 }
 
+fn server_error_claim(mut claim: MediaPatchClaim) -> MediaPatchClaim {
+    let intent = claim.intent.as_mut().unwrap();
+    intent.max_outcome_schema_version = media_server_error::VERSION;
+    claim.request_sha256 = sha(&intent.encode_to_vec());
+    claim
+}
+
+#[test]
+fn media_applied_response_error_reconciles_the_published_image_after_restart() {
+    let (root, key, mut journal, claim) = fixture();
+    let claim = server_error_claim(claim);
+    let before = br#"{"media":[
+        {"mediaId":"media_one","type":"pdf","title":"Before","metadata":{"f":NaN}}
+    ]}"#;
+    let operation = &claim.intent.as_ref().unwrap().operation_id;
+    let fence = claim.fence.as_ref().unwrap();
+    fs::write(media_library::library_path(root.path()), before).unwrap();
+    let prepared = journal.prepare(&claim).unwrap();
+    assert_eq!(read_library(root.path()).unwrap().as_slice(), before);
+    // Leave the publication durable while preventing its terminal journal commit.
+    journal
+        .connection
+        .execute_batch(
+            "CREATE TRIGGER fail_server_error_settle BEFORE UPDATE ON media_operations
+         WHEN NEW.state='APPLIED' BEGIN SELECT RAISE(ABORT,'controlled terminal failure'); END;",
+        )
+        .unwrap();
+    assert!(journal.publish(&claim, &prepared.digest, &key).is_err());
+    assert_eq!(
+        journal.retained(operation).unwrap().unwrap().state,
+        "APPLYING"
+    );
+    let after = read_library(root.path()).unwrap();
+    assert_ne!(after.as_slice(), before);
+    let recovered = deepseek_policy::media_records::Records::from_image(after.as_slice()).unwrap();
+    let (_, record) = recovered.first_retained("media_one").unwrap().unwrap();
+    assert!(record.field_equals("title", "After"));
+    assert!(record.write_response(&mut std::io::sink()).is_err());
+    journal
+        .connection
+        .execute_batch("DROP TRIGGER fail_server_error_settle")
+        .unwrap();
+    drop(journal);
+
+    let mut journal = MediaJournal::open(
+        root.path(),
+        &root.path().join("state"),
+        &key.public_key(),
+        "fleet-a",
+        "test",
+    )
+    .unwrap();
+    let receipt = journal
+        .query(operation, fence, true, &key)
+        .unwrap()
+        .unwrap();
+    assert!(media_server_error::valid_shape(&receipt));
+    assert_eq!(receipt.state, MediaPatchEffectState::Applied as i32);
+    assert_eq!(receipt.before_sha256, sha(before));
+    assert_eq!(receipt.after_sha256, sha(&after));
+    assert_eq!(receipt.signature.len(), 64);
+    assert_eq!(
+        journal.query(operation, fence, true, &key).unwrap(),
+        Some(receipt)
+    );
+    assert_eq!(read_library(root.path()).unwrap(), after);
+}
+
+#[test]
+fn media_retained_store_error_signs_refusal_before_any_publication() {
+    let (root, key, mut journal, claim) = fixture();
+    let claim = server_error_claim(claim);
+    let before = br#"{"media":[
+        {"mediaId":"media_one","type":"pdf","title":"Before"},
+        {"mediaId":"media_unsafe","type":"image","metadata":{"text":"\ud800"}}
+    ]}"#;
+    fs::write(media_library::library_path(root.path()), before).unwrap();
+    let prepared = journal.prepare(&claim).unwrap();
+    let receipt = journal.publish(&claim, &prepared.digest, &key).unwrap();
+    assert!(media_server_error::valid_shape(&receipt));
+    assert_eq!(receipt.state, MediaPatchEffectState::Refused as i32);
+    assert_eq!(receipt.before_sha256, sha(before));
+    assert_eq!(receipt.signature.len(), 64);
+    assert_eq!(read_library(root.path()).unwrap().as_slice(), before);
+    assert_eq!(
+        deepseek_policy::mutation_gate::read_generation(root.path()),
+        0
+    );
+    assert!(journal.active().unwrap().is_none());
+    assert_eq!(
+        journal
+            .query(
+                &receipt.operation_id,
+                claim.fence.as_ref().unwrap(),
+                true,
+                &key
+            )
+            .unwrap(),
+        Some(receipt)
+    );
+}
+
+#[test]
+fn media_patch_returns_a_selected_integer_without_float_rounding() {
+    let (root, key, mut journal, claim) = fixture();
+    let claim = server_error_claim(claim);
+    let before = br#"{"media":[{"mediaId":"media_one","type":"pdf",
+        "metadata":{"wide":1234567890123456789012345678901234567890}}]}"#;
+    fs::write(media_library::library_path(root.path()), before).unwrap();
+    let prepared = journal.prepare(&claim).unwrap();
+    let receipt = journal.publish(&claim, &prepared.digest, &key).unwrap();
+    assert_eq!(receipt.state, MediaPatchEffectState::Applied as i32);
+    assert_eq!(receipt.http_status, 200);
+    let record = receipt.media.unwrap();
+    let metadata = record
+        .members
+        .iter()
+        .find(|member| member.key == "metadata")
+        .unwrap()
+        .value
+        .as_ref()
+        .unwrap()
+        .kind
+        .as_ref()
+        .unwrap();
+    use deepseek_protocol::generated::deepseek::media::v1::media_value::Kind;
+    let Kind::ObjectValue(metadata) = metadata else {
+        panic!("metadata result is not an object");
+    };
+    let number = metadata
+        .members
+        .iter()
+        .find(|member| member.key == "wide")
+        .unwrap()
+        .value
+        .as_ref()
+        .unwrap()
+        .kind
+        .as_ref()
+        .unwrap();
+    const EXACT: &str = "1234567890123456789012345678901234567890";
+    assert_eq!(number, &Kind::NumberValue(EXACT.into()));
+    let after = read_library(root.path()).unwrap();
+    assert!(std::str::from_utf8(&after).unwrap().contains(EXACT));
+    assert_eq!(receipt.after_sha256, sha(&after));
+}
+
 fn seed_delete_data(root: &Path, vectors: bool) {
     let media = root.join(".media");
     fs::create_dir_all(media.join("segments")).unwrap();

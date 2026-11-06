@@ -67,24 +67,30 @@ func TestCompactPatchOutcomeBindsOriginalClaimAndUsesDistinctDomain(t *testing.T
 
 func TestCompactPatchCapabilityIsExplicitAndCannotAuthorizeOtherKinds(t *testing.T) {
 	_, claim, _ := compactPatchFixture(t)
-	for _, version := range []uint32{0, 2, 1, 3} {
+	for _, version := range []uint32{0, 2, ServerErrorOutcomeVersion, 1, 4} {
 		intent := proto.Clone(claim.Intent).(*mediav1.MediaPatchIntent)
 		intent.MaxOutcomeSchemaVersion = version
 		_, err := RequestDigest(intent)
-		if (version == 0 || version == 2) != (err == nil) {
+		if (version == 0 || version == 2 || version == ServerErrorOutcomeVersion) != (err == nil) {
 			t.Fatalf("version %d: %v", version, err)
 		}
 	}
 	claim.Intent.Kind = mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_DELETE
+	claim.Intent.OperationId = "media-delete-capability"
+	claim.Intent.Patch = nil
 	if _, err := RequestDigest(claim.Intent); err == nil {
 		t.Fatal("PATCH capability accepted for DELETE")
+	}
+	claim.Intent.MaxOutcomeSchemaVersion = ServerErrorOutcomeVersion
+	if _, err := RequestDigest(claim.Intent); err != nil {
+		t.Fatalf("server error capability refused for DELETE: %v", err)
 	}
 }
 
 func TestCompactPatchOutcomeRejectsTamperingEvenWithAValidSignature(t *testing.T) {
 	tests := map[string]func(*mediav1.MediaPatchOutcome, *mediav1.MediaPatchClaim){
 		"capability":             func(o *mediav1.MediaPatchOutcome, c *mediav1.MediaPatchClaim) { c.Intent.MaxOutcomeSchemaVersion = 0 },
-		"unsupported-capability": func(o *mediav1.MediaPatchOutcome, c *mediav1.MediaPatchClaim) { c.Intent.MaxOutcomeSchemaVersion = 3 },
+		"unsupported-capability": func(o *mediav1.MediaPatchOutcome, c *mediav1.MediaPatchClaim) { c.Intent.MaxOutcomeSchemaVersion = 4 },
 		"delete": func(o *mediav1.MediaPatchOutcome, c *mediav1.MediaPatchClaim) {
 			c.Intent.Kind = mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_DELETE
 		},

@@ -1,6 +1,7 @@
 //! Purpose-bound media publication receipts; no generic signing oracle.
 use super::*;
 use deepseek_protocol::generated::deepseek::media::v1::{MediaPatchEffectState, MediaPatchOutcome};
+use deepseek_protocol::media_server_error;
 use prost::Message as _;
 
 impl ControlSigningKey {
@@ -26,6 +27,22 @@ impl ControlSigningKey {
     ) -> Result<Vec<u8>, FederationIdentityError> {
         if outcome.schema_version == 2 {
             return self.media_patch_outcome_v2_message(outcome);
+        }
+        if outcome.schema_version == media_server_error::VERSION {
+            if !media_server_error::valid_shape(outcome)
+                || !outcome.signature.is_empty()
+                || self.binding["fleetId"].as_str() != Some(outcome.fleet_id.as_str())
+                || self.binding["environment"].as_str() != Some(outcome.environment.as_str())
+            {
+                return Err(error("MEDIA_OUTCOME_INVALID"));
+            }
+            let encoded = outcome.encode_to_vec();
+            if encoded.len() > 2 * 1024 * 1024 {
+                return Err(error("MEDIA_OUTCOME_INVALID"));
+            }
+            let mut message = media_server_error::SIGNATURE_DOMAIN.to_vec();
+            message.extend(encoded);
+            return Ok(message);
         }
         let invalid = || error("MEDIA_OUTCOME_INVALID");
         let fence = outcome.original_fence.as_ref().ok_or_else(invalid)?;

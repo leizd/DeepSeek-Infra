@@ -125,7 +125,7 @@ jobs:
         timeout-minutes: 15
         run: |
           set -o pipefail
-          CGO_ENABLED=0 go test -v -count=1 -timeout=10m -run 'CompactPatch|PatchResult' ./internal/media ./internal/worker ./internal/store ./internal/api 2>&1 | tee ../artifacts/rust-cloud/compact-patch-go.log
+          CGO_ENABLED=0 go test -v -count=1 -timeout=10m -run 'CompactPatch|PatchResult|^TestMediaPublicTLSSeparatesTheTwoSignedServerErrorEffects$' ./internal/media ./internal/worker ./internal/store ./internal/api 2>&1 | tee ../artifacts/rust-cloud/compact-patch-go.log
       - name: Build the production Rust worker and custody provisioner on the cloud runner
         if: matrix.mode == 'checks'
         run: |
@@ -192,6 +192,7 @@ jobs:
         run: |
           set -o pipefail
           python scripts/verify_native_media_patch.py --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --out artifacts/rust-cloud/media-patch-process 2>&1 | tee artifacts/rust-cloud/media-patch-process.log
+          python scripts/verify_native_media_patch.py --retained-mutation-cases --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --out artifacts/rust-cloud/media-patch-process/retained-writes 2>&1 | tee artifacts/rust-cloud/media-retained-writes.log
       - name: Preserve authenticated media patch process evidence
         if: always() && matrix.mode == 'checks'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

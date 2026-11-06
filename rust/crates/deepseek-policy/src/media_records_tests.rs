@@ -317,11 +317,18 @@ fn changed_private_spool_bytes_are_detected_before_emission_or_lookup() {
 #[test]
 fn durable_records_preserve_nonfinite_exact_numbers_and_deep_values_during_recovery() {
     const WIDE: &str = "1234567890123456789012345678901234567890";
-    let deep = format!("{}0{}", "[".repeat(160), "]".repeat(160));
+    // The original oracle retained a chain of nested mappings. Its metadata
+    // normalizer coerces nested list elements through a different path.
+    let deep = format!(
+        "{}{}{}",
+        r#"{"next":"#.repeat(160),
+        r#"{"last":1}"#,
+        "}".repeat(160)
+    );
     let source = format!(
         r#"{{"media":[{{"mediaId":"media_edit","type":"image"}},
         {{"mediaId":"media_nonfinite","type":"image","metadata":{{"f":NaN,"p":Infinity,"n":-Infinity}}}},
-        {{"mediaId":"media_exact","type":"image","metadata":{{"number":{WIDE},"deep":{deep}}}}}]}}"#
+        {{"mediaId":"media_exact","type":"image","metadata":{{"number":{WIDE},"value":{deep}}}}}]}}"#
     );
     let mut records = Records::from_reader(source.as_bytes()).unwrap();
     let (index, mut edited) = records.first("media_edit").unwrap().unwrap();
@@ -368,8 +375,8 @@ fn durable_records_preserve_nonfinite_exact_numbers_and_deep_values_during_recov
 #[test]
 fn only_the_published_tail_requires_unicode_scalar_strings() {
     let source = br#"{"media":[
-        {"mediaId":"media_unsafe","type":"image","metadata":{"\udfff":"\ud800"}},
-        {"mediaId":"media_kept","type":"image","metadata":{"literal":"\\ud800"}}
+        {"mediaId":"media_unsafe","type":"image","metadata":{"value":"\ud800"}},
+        {"mediaId":"media_kept","type":"image","metadata":{"literal":"\\ud800","\udfff":"\ud800"}}
     ]}"#;
     let mut records = Records::from_reader(source.as_slice()).unwrap();
     assert_eq!(records.len().unwrap(), 2);
@@ -385,7 +392,7 @@ fn only_the_published_tail_requires_unicode_scalar_strings() {
     assert!(records.write_retained_array(&mut Vec::new()).is_err());
     assert_eq!(records.remove_all("media_unsafe").unwrap(), 1);
     let kept = retained(&records);
-    assert_eq!(kept[0]["metadata"]["literal"], r"\ud800");
+    assert_eq!(kept[0]["metadata"], json!({"literal": r"\ud800"}));
 
     let mut records = Records::from_reader(source.as_slice()).unwrap();
     let row = record("media_tail", "Tail");

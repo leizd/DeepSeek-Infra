@@ -1,9 +1,8 @@
 //! Typed, authenticated, Go-admitted media effects. No Python or task-program path.
 use crate::{
-    WorkerAuthorityConfig, WorkerRpcService,
-    media_journal::MediaJournal,
-    media_values::{invalid, to_json},
+    WorkerAuthorityConfig, WorkerRpcService, media_journal::MediaJournal, media_values::invalid,
 };
+use deepseek_policy::media_records::retained::validate_patch_values;
 use deepseek_protocol::{
     ActionFence,
     generated::deepseek::media::v1::{
@@ -11,6 +10,7 @@ use deepseek_protocol::{
         MediaMutationKind, MediaPatchClaim, MediaPatchOutcome, QueryMediaPatchRequest,
         QueryMediaPatchResponse, media_mutation_worker_server::MediaMutationWorker,
     },
+    media_server_error,
 };
 use prost::Message as _;
 use std::path::Path;
@@ -48,10 +48,14 @@ pub(super) fn validate_claim(
     } else {
         "media-patch-"
     };
+    let supported_outcome_version = match intent.max_outcome_schema_version {
+        0 => true,
+        2 => intent.kind == MediaMutationKind::Unspecified as i32,
+        media_server_error::VERSION => media_server_error::negotiated(intent),
+        _ => false,
+    };
     if c.schema_version != 1
-        || ![0, 2].contains(&intent.max_outcome_schema_version)
-        || (intent.max_outcome_schema_version == 2
-            && intent.kind != MediaMutationKind::Unspecified as i32)
+        || !supported_outcome_version
         || intent.schema_version != 1
         || intent.operation_id != operation
         || c.fence.as_ref() != Some(fence)
@@ -124,13 +128,7 @@ pub(super) fn validate_claim(
     if patch.title.is_none() && patch.project_id.is_none() && patch.metadata.is_none() {
         return Err(invalid());
     }
-    for v in [&patch.title, &patch.project_id, &patch.metadata]
-        .into_iter()
-        .flatten()
-    {
-        to_json(v)?;
-    }
-    Ok(())
+    validate_patch_values(patch).map_err(|_| invalid())
 }
 impl WorkerRpcService {
     pub fn with_media_journal(

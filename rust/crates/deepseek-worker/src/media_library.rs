@@ -2,16 +2,17 @@
 use crate::{
     media_image::{Image, LibrarySource},
     media_records::Records,
-    media_values::{from_json_legacy, invalid, to_json},
+    media_values::invalid,
 };
 use deepseek_policy::{
     app_error::{AppError, codes},
-    media_schema::normalize_media_record,
+    media_records::retained::{MediaRecord, PublicRecordError},
     workspace_schema::validate_workspace_id,
 };
 use deepseek_protocol::generated::deepseek::media::v1::{
-    MediaMutationKind, MediaPatchClaim, MediaPatchEffectState, MediaPatchOutcome, media_value::Kind,
+    MediaMutationKind, MediaPatchClaim, MediaPatchEffectState, MediaPatchOutcome,
 };
+use deepseek_protocol::media_server_error;
 use prost::Message as _;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -20,6 +21,9 @@ use std::{
     path::{Path, PathBuf},
 };
 use tonic::Status;
+
+#[cfg(test)]
+use deepseek_policy::media_schema::normalize_media_record;
 
 pub(super) fn reject_links(path: &Path) -> Result<(), Status> {
     for ancestor in path.ancestors() {
@@ -141,6 +145,9 @@ pub(super) fn plan(
             return Ok((result, None));
         }
         crate::media_delete::preflight(root, &safe)?;
+        if media_server_error::negotiated(intent) && items.has_unencodable_retained_text()? {
+            return Ok((server_error(result, MediaPatchEffectState::Refused), None));
+        }
         result.deleted_count = 1;
         return planned_bytes(claim, result, items);
     }
@@ -152,23 +159,47 @@ pub(super) fn plan(
         Err(e) => return Ok((refusal(result, e.status as u32, e.code, &e.message), None)),
     };
     let mut items = normalized_records(before)?;
-    let Some((index, existing)) = items.first(&safe)? else {
+    let Some((index, existing)) = items.first_retained(&safe)? else {
         return Ok((
             refusal(result, 404, codes::NOT_FOUND, "Media not found"),
             None,
         ));
     };
-    let (public, stored) = match prepare_media(root, claim, &existing) {
+    let stored = match prepare_media(root, claim, &existing) {
         Ok(value) => value,
         Err(e) => return Ok((refusal(result, e.status as u32, e.code, &e.message), None)),
     };
-    items.replace(index, &stored)?;
-    let value = from_json_legacy(&public)?;
-    result.media = match value.kind {
-        Some(Kind::ObjectValue(object)) => Some(object),
-        _ => return Err(invalid()),
+    items.replace_retained(index, &stored)?;
+    let negotiated = media_server_error::negotiated(intent);
+    if negotiated && items.has_unencodable_retained_text()? {
+        return Ok((server_error(result, MediaPatchEffectState::Refused), None));
+    }
+    let public = match stored.normalize_again() {
+        Ok(public) => public,
+        Err(e) => return Ok((refusal(result, e.status as u32, e.code, &e.message), None)),
     };
+    match public.public_patch_object() {
+        Ok(media) => result.media = Some(media),
+        Err(PublicRecordError::Unencodable) if negotiated => {
+            result = server_error(result, MediaPatchEffectState::Applied);
+        }
+        Err(PublicRecordError::TooDeep)
+            if negotiated && public.write_response(&mut std::io::sink()).is_err() =>
+        {
+            result = server_error(result, MediaPatchEffectState::Applied);
+        }
+        Err(_) => return Err(invalid()),
+    }
     planned_bytes(claim, result, items)
+}
+
+fn server_error(mut result: MediaPatchOutcome, state: MediaPatchEffectState) -> MediaPatchOutcome {
+    result.schema_version = media_server_error::VERSION;
+    result.state = state as i32;
+    result.http_status = 500;
+    result.error_code = media_server_error::CODE.into();
+    result.error_message = media_server_error::MESSAGE.into();
+    result
 }
 
 pub(super) fn planned_bytes(
@@ -221,37 +252,19 @@ pub(super) fn normalized_items(before: &[u8]) -> Vec<Value> {
 fn prepare_media(
     root: &Path,
     claim: &MediaPatchClaim,
-    existing: &Value,
-) -> Result<(Value, Value), AppError> {
+    existing: &MediaRecord,
+) -> Result<MediaRecord, AppError> {
     let bad = || AppError::invalid_payload("Invalid media update");
     let intent = claim.intent.as_ref().ok_or_else(bad)?;
     let safe = validate_workspace_id(&intent.media_id, "media id")?;
-    let mut merged = existing.clone();
     let patch = intent.patch.as_ref().ok_or_else(bad)?;
-    for (key, value) in [
-        ("title", patch.title.as_ref()),
-        ("projectId", patch.project_id.as_ref()),
-    ] {
-        if let Some(value) = value {
-            merged[key] = to_json(value).map_err(|_| bad())?;
-        }
-    }
-    if let Some(metadata) = patch.metadata.as_ref() {
-        let new = to_json(metadata).map_err(|_| bad())?;
-        if let Some(o) = new.as_object() {
-            let existing = merged["metadata"].as_object_mut().ok_or_else(bad)?;
-            for (k, v) in o {
-                existing.insert(k.clone(), v.clone());
-            }
-        }
-    }
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|_| bad())?
         .as_secs() as i64;
-    merged["updatedAt"] = Value::String(deepseek_policy::core_utils::utc_now_iso(now));
-    let normalized = normalize_media_record(&merged)?;
-    if let Some(path) = normalized["path"].as_str().filter(|p| !p.is_empty()) {
+    let normalized = existing.apply_patch(patch, &deepseek_policy::core_utils::utc_now_iso(now))?;
+    let path = normalized.object_path()?;
+    if !path.is_empty() {
         let mut parts = path.split('/');
         if parts.next() != Some("objects") || parts.next() != Some(safe.as_str()) {
             return Err(AppError::invalid_payload(
@@ -262,7 +275,7 @@ fn prepare_media(
             AppError::invalid_payload("Media file must stay inside the media library")
         })?;
     }
-    Ok((normalize_media_record(&normalized)?, normalized))
+    Ok(normalized)
 }
 fn sync_published(file: &fs::File, directory: &Path) -> Result<(), Status> {
     file.sync_all().map_err(|_| invalid())?;

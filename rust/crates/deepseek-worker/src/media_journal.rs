@@ -11,6 +11,7 @@ use deepseek_policy::mutation_gate::{assert_mutation_allowed, exclusive_gate, mu
 use deepseek_protocol::{
     ActionFence,
     generated::deepseek::media::v1::{MediaPatchClaim, MediaPatchEffectState, MediaPatchOutcome},
+    media_server_error,
 };
 use ed25519_dalek::{Signature, VerifyingKey};
 use prost::Message as _;
@@ -328,7 +329,7 @@ impl MediaJournal {
         unsigned.signature.clear();
         let domain: &[u8] = match result.schema_version {
             1 if result.patched.is_none()
-                && !(row.planned.schema_version == 2
+                && !(matches!(row.planned.schema_version, 2 | media_server_error::VERSION)
                     && result.state == MediaPatchEffectState::Applied as i32) =>
             {
                 b"deepseek-infra:media-patch-outcome-v1\0"
@@ -338,6 +339,16 @@ impl MediaJournal {
                 && unsigned == row.planned =>
             {
                 b"deepseek-infra:media-patch-outcome-v2\0"
+            }
+            media_server_error::VERSION
+                if claim
+                    .intent
+                    .as_ref()
+                    .is_some_and(media_server_error::negotiated)
+                    && media_server_error::valid_shape(&result)
+                    && unsigned == row.planned =>
+            {
+                media_server_error::SIGNATURE_DOMAIN
             }
             _ => return Err(invalid()),
         };

@@ -1,3 +1,4 @@
+use deepseek_policy::media_records::retained::ordered_media_members;
 use deepseek_protocol::generated::deepseek::media::v1::{
     MediaArray, MediaMember, MediaObject, MediaValue, media_value::Kind,
 };
@@ -97,23 +98,7 @@ fn to_json_at(value: &MediaValue, depth: usize) -> Result<Value, Status> {
         )),
         Kind::ObjectValue(o) => {
             let mut result = Map::new();
-            let mut previous: Option<&str> = None;
-            for m in &o.members {
-                if previous.is_some_and(|p| p.as_bytes() >= m.key.as_bytes()) {
-                    return Err(invalid());
-                }
-                previous = Some(&m.key);
-            }
-            let mut members = o.members.iter().collect::<Vec<_>>();
-            if members.iter().any(|m| m.source_ordinal != 0) {
-                members.sort_by_key(|m| m.source_ordinal);
-                for (position, member) in members.iter().enumerate() {
-                    if member.source_ordinal as usize != position + 1 {
-                        return Err(invalid());
-                    }
-                }
-            }
-            for m in members {
+            for m in ordered_media_members(&o.members).map_err(|_| invalid())? {
                 result.insert(
                     m.key.clone(),
                     to_json_at(m.value.as_ref().ok_or_else(invalid)?, depth + 1)?,

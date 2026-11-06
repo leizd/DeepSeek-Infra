@@ -32,11 +32,20 @@ func Encode(message proto.Message) ([]byte, error) {
 	return b, nil
 }
 func RequestDigest(intent *mediav1.MediaPatchIntent) ([]byte, error) {
-	if intent != nil && (intent.MaxOutcomeSchemaVersion != 0 && intent.MaxOutcomeSchemaVersion != 2 ||
-		intent.MaxOutcomeSchemaVersion == 2 && intent.Kind != mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_UNSPECIFIED) {
+	if intent == nil || intent.SchemaVersion != 1 || intent.OperationId == "" || len(intent.OperationId) > 128 || intent.MediaId == "" || len(intent.MediaId) > 512 {
 		return nil, ErrInvalid
 	}
-	if intent == nil || intent.SchemaVersion != 1 || intent.OperationId == "" || len(intent.OperationId) > 128 || intent.MediaId == "" || len(intent.MediaId) > 512 {
+	switch intent.MaxOutcomeSchemaVersion {
+	case 0:
+	case 2:
+		if intent.Kind != mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_UNSPECIFIED {
+			return nil, ErrInvalid
+		}
+	case ServerErrorOutcomeVersion:
+		if !serverErrorNegotiated(intent) {
+			return nil, ErrInvalid
+		}
+	default:
 		return nil, ErrInvalid
 	}
 	if len(intent.ProtoReflect().GetUnknown()) != 0 || (intent.Kind != mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_PROCESS && intent.Process != nil) {
@@ -304,6 +313,9 @@ func toJSON(v *mediav1.MediaValue, depth int) (any, error) {
 	}
 }
 func VerifyOutcome(outcome *mediav1.MediaPatchOutcome, claim *mediav1.MediaPatchClaim, public []byte) error {
+	if outcome != nil && outcome.SchemaVersion == ServerErrorOutcomeVersion {
+		return verifyServerErrorOutcome(outcome, claim, public)
+	}
 	if outcome != nil && outcome.SchemaVersion == 2 {
 		return verifyCompactPatchOutcome(outcome, claim, public)
 	}

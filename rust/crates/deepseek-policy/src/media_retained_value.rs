@@ -9,8 +9,11 @@ use std::io::{self, Write};
 
 #[path = "media_retained_float.rs"]
 mod float;
+#[path = "media_retained_patch.rs"]
+mod patch;
 #[path = "media_unicode15_repr.rs"]
 mod unicode15;
+pub use patch::{PublicRecordError, ordered_media_members, validate_patch_values};
 
 #[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
 pub(super) struct Text(pub(super) Vec<u16>);

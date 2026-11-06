@@ -173,7 +173,9 @@ func (store *Control) RecordMediaPatchOutcome(outcome *mediav1.MediaPatchOutcome
 		if err := mediamodel.VerifyOutcome(outcome, claim, public); err != nil {
 			return err
 		}
-		if (claim.Intent.Kind == mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_PROCESS || outcome.SchemaVersion == 2) && outcome.State == mediav1.MediaPatchEffectState_MEDIA_PATCH_EFFECT_STATE_APPLIED {
+		bindsPreparation := claim.Intent.Kind == mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_PROCESS ||
+			outcome.SchemaVersion == 2 || outcome.SchemaVersion == mediamodel.ServerErrorOutcomeVersion
+		if bindsPreparation && outcome.State == mediav1.MediaPatchEffectState_MEDIA_PATCH_EFFECT_STATE_APPLIED {
 			// The permit binds the complete planned receipt, including its
 			// private preparation, segments, result and count. A valid signature
 			// over another result cannot replace the admitted processing plan.

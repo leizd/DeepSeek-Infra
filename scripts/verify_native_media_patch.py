@@ -7,6 +7,7 @@ qualification. Neither the oracle nor the verifier is in the production tree.
 from __future__ import annotations
 
 import argparse
+from contextlib import closing
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -26,7 +27,7 @@ from urllib.request import Request, urlopen
 import verify_agent_signing_process as signing
 import verify_native_default_bootstrap as bootstrap
 import verify_native_media_reads as reads
-from native_media_compact_receipt import compact_patch_observation
+from native_media_compact_receipt import compact_patch_observation, media_outcome_type
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "tests/fixtures/native_media_library_read_v1.json"
@@ -319,6 +320,12 @@ def original_http_patch(profile: Path, diagnostic: Path | None = None) -> tuple[
 
 def exchange(origin: str, path: str, method: str, token: str | None,
              payload: dict[str, Any] | None = None) -> tuple[int, bytes, str]:
+    status, raw, content_type, _ = exchange_with_operation(origin, path, method, token, payload)
+    return status, raw, content_type
+
+
+def exchange_with_operation(origin: str, path: str, method: str, token: str | None,
+                            payload: dict[str, Any] | None = None) -> tuple[int, bytes, str, str]:
     headers = {"Content-Type": "application/json"}
     if token is not None:
         headers["Authorization"] = "Bearer " + token
@@ -330,7 +337,8 @@ def exchange(origin: str, path: str, method: str, token: str | None,
     with response:
         raw = response.read(LIMIT + 1)
         require(len(raw) <= LIMIT, "NATIVE_MEDIA_PATCH_RESPONSE_EXCEEDED_BOUND")
-        return response.status, raw, response.headers.get("Content-Type", "")
+        return (response.status, raw, response.headers.get("Content-Type", ""),
+                response.headers.get("X-DeepSeek-Operation-Id", ""))
 
 
 def without_update_time(body: dict[str, Any]) -> dict[str, Any]:
@@ -350,6 +358,96 @@ def generation_observation(profile: Path) -> dict[str, Any]:
     raw = path.read_bytes()
     require(len(raw) <= 32 and raw.strip().isdigit(), "MEDIA_PATCH_GENERATION_COUNTER_INVALID")
     return {"present": True, "value": int(raw.strip()), "sha256": hashlib.sha256(raw).hexdigest()}
+
+
+RETAINED_MUTATION_ORACLE_SHA256 = "792e84e834886db4bd09babba350e66ca192f47c49bd4fb71966716689386f21"
+RETAINED_COMBINED_ORACLE_SHA256 = "11f0783debb657fb6ee3082948aef6656c791f611f99b4d0b24d36f90ba4f8a0"
+RETAINED_MUTATION_SEED_SHA256 = "74b2b277d13eb5eaae513ff0ae792eda4f176e37049627f256a82111f3cf0948"
+RETAINED_EXACT_INTEGER = 1234567890123456789012345678901234567890
+
+
+def retained_error_receipt(scratch: Path, profile: Path, operation: str, state: str,
+                           before: str, after: str | None) -> dict[str, Any]:
+    worker = list(scratch.rglob("media-effects.sqlite3"))
+    require(len(worker) == 1, "RETAINED_MUTATION_WORKER_JOURNAL_NOT_UNIQUE")
+    control = profile / "go-control/control.sqlite3"
+    rows = []
+    for path, table in ((worker[0], "media_operations"), (control, "control_media_operations")):
+        require(path.is_file() and not path.is_symlink() and path.resolve().is_relative_to(scratch.resolve()),
+                "RETAINED_MUTATION_JOURNAL_OUTSIDE_PROFILE")
+        with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)) as db:
+            row = db.execute(f"SELECT state,preparation_sha256,length(outcome),substr(outcome,1,4096) "
+                             f"FROM {table} WHERE operation_id=?", (operation,)).fetchone()
+        require(row is not None and row[0] == state and isinstance(row[2], int) and 0 < row[2] < 4096
+                and isinstance(row[3], bytes) and len(row[3]) == row[2],
+                "RETAINED_MUTATION_TERMINAL_RECEIPT_MISSING")
+        rows.append(row)
+    require(rows[0] == rows[1], "RETAINED_MUTATION_GO_AND_RUST_RECEIPTS_DIFFER")
+    _, preparation, _, raw = rows[0]
+    outcome = media_outcome_type().FromString(raw)
+    states = outcome.DESCRIPTOR.fields_by_name["state"].enum_type.values_by_name
+    require(outcome.schema_version == 3 and outcome.operation_id == operation
+            and outcome.original_fence.action_id == operation and outcome.original_fence.execution_epoch == 1
+            and outcome.http_status == 500 and outcome.error_code == "internal" and outcome.error_message == "Server error"
+            and outcome.before_sha256.hex() == before and outcome.after_sha256.hex() == (after or "")
+            and len(outcome.signature) == 64 and len(outcome.request_sha256) == 32
+            and outcome.state == states["MEDIA_PATCH_EFFECT_STATE_" + state].number,
+            "RETAINED_MUTATION_SIGNED_SERVER_ERROR_SHAPE_DIFFERS")
+    outcome.signature = b""
+    require(hashlib.sha256(outcome.SerializeToString(deterministic=True)).digest() == preparation,
+            "RETAINED_MUTATION_RECEIPT_DIFFERS_FROM_DISPATCH_PREPARATION")
+    return {"operationId": operation, "state": state, "outcomeSha256": hashlib.sha256(raw).hexdigest(),
+            "beforeSha256": before, "afterSha256": after, "schemaVersion": 3,
+            "settledGoAndRustBytesIdentical": True, "dispatchDigestMatches": True}
+
+
+def verify_retained_mutations(scratch: Path, profile: Path, origin: str, token: str,
+                              report: dict[str, Any]) -> None:
+    library = profile / ".media/library.json"
+    cases = (
+        ("refused_unicode", "PATCH", "media_target", 500, False),
+        ("delete_unpaired", "DELETE", "media_unpaired", 200, True),
+        ("applied_nan", "PATCH", "media_nonfinite", 500, True),
+        ("unrelated_nan", "PATCH", "media_target", 200, True),
+        ("exact_integer", "PATCH", "media_exact", 200, True),
+    )
+    observations: dict[str, dict[str, Any]] = {}
+    report["retainedMutationCases"] = observations
+    for label, method, media_id, wanted_status, applied in cases:
+        before = hashlib.sha256(library.read_bytes()).hexdigest()
+        generation_before = generation_observation(profile)
+        payload = {"title": label} if method == "PATCH" else None
+        report["nativePatchRequestStarted"] = True
+        report["nativePatchReplyObserved"] = False
+        status, raw, _, operation = exchange_with_operation(origin, "/api/media/" + media_id, method, token, payload)
+        report["nativePatchReplyObserved"] = True
+        report["nativePatchHTTPStatus"] = status
+        after = hashlib.sha256(library.read_bytes()).hexdigest()
+        generation_after = generation_observation(profile)
+        require(status == wanted_status and bool(operation) and (before != after) == applied,
+                "RETAINED_MUTATION_HTTP_OR_DURABLE_EFFECT_DIFFERS_" + label)
+        require(generation_after["value"] == generation_before["value"] + (2 if applied else 0),
+                "RETAINED_MUTATION_GENERATION_DIFFERS_" + label)
+        body = json.loads(raw)
+        evidence: dict[str, Any] = {"status": status, "beforeSha256": before, "afterSha256": after,
+                                   "workspaceGeneration": generation_after["value"]}
+        if status == 500:
+            require(body == {"error": "Server error", "code": "internal"}, "RETAINED_MUTATION_PUBLIC_ERROR_DIFFERS")
+            evidence["receipt"] = retained_error_receipt(scratch, profile, operation,
+                "APPLIED" if applied else "REFUSED", before, after if applied else None)
+        elif method == "DELETE":
+            require(body == {"ok": True, "deleted": 1}, "RETAINED_MUTATION_DELETE_COUNT_DIFFERS")
+        else:
+            require(body.get("ok") is True and body["media"]["title"] == label, "RETAINED_MUTATION_SUCCESS_BODY_DIFFERS")
+            if label == "exact_integer":
+                require(body["media"]["metadata"]["wide"] == RETAINED_EXACT_INTEGER,
+                        "RETAINED_MUTATION_INTEGER_CHANGED_IN_PATCH_RESPONSE")
+        observations[label] = evidence
+    stored = {item["mediaId"]: item for item in json.loads(library.read_bytes())["media"]}
+    require("media_unpaired" not in stored and stored["media_nonfinite"]["title"] == "applied_nan"
+            and str(stored["media_nonfinite"]["metadata"]["f"]) == "nan"
+            and stored["media_exact"]["metadata"]["wide"] == RETAINED_EXACT_INTEGER,
+            "RETAINED_MUTATION_VALUES_CHANGED_IN_DURABLE_STORE")
 
 
 def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
@@ -440,6 +538,49 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
             initial_writer = reads.writer(profile)
             shutdown()
             original_auth = (profile / ".auth-token").read_bytes()
+            if getattr(args, "retained_mutation_cases", False):
+                library = profile / ".media/library.json"
+                require(child is None and not library.parent.exists(), "RETAINED_MUTATION_SEED_PROFILE_NOT_FRESH")
+                library.parent.mkdir()
+                rows = [
+                    {"mediaId": "media_target", "type": "image", "title": "Before"},
+                    {"mediaId": "media_unpaired", "type": "image", "metadata": {"text": "\ud800"}},
+                    {"mediaId": "media_nonfinite", "type": "image", "metadata": {"f": float("nan")}},
+                    {"mediaId": "media_exact", "type": "image", "metadata": {"wide": RETAINED_EXACT_INTEGER}},
+                ]
+                seed_bytes = (json.dumps({"media": rows}, ensure_ascii=True) + "\n").encode()
+                require(hashlib.sha256(seed_bytes).hexdigest() == RETAINED_MUTATION_SEED_SHA256,
+                        "RETAINED_MUTATION_SEED_DIFFERS_FROM_ORIGINAL_ORACLE")
+                library.write_bytes(seed_bytes)
+                report.update(offlineMediaFixtureSeeded=True, semanticStageReached=True,
+                              originalMutationOracleSha256=RETAINED_MUTATION_ORACLE_SHA256,
+                              originalCombinedMutationOracleSha256=RETAINED_COMBINED_ORACLE_SHA256,
+                              retainedMutationSeedSha256=RETAINED_MUTATION_SEED_SHA256)
+                token = launch("retained-mutation-launch")
+                verify_retained_mutations(scratch, profile, origin, token, report)
+                retained_bytes = library.read_bytes()
+                retained_generation = generation_observation(profile)
+                shutdown()
+                token = launch("retained-mutation-restart")
+                require((profile / ".auth-token").read_bytes() == original_auth,
+                        "RETAINED_MUTATION_RESTART_REPLACED_AUTH")
+                for media_id, wanted_status in (("media_unpaired", 404), ("media_nonfinite", 500), ("media_exact", 200)):
+                    status, raw, _ = exchange(origin, "/api/media/" + media_id, "GET", token)
+                    require(status == wanted_status, "RETAINED_MUTATION_GET_AFTER_RESTART_DIFFERS")
+                    if media_id == "media_exact":
+                        require(json.loads(raw)["media"]["metadata"]["wide"] == RETAINED_EXACT_INTEGER,
+                                "RETAINED_MUTATION_INTEGER_CHANGED_AFTER_RESTART")
+                for case in report["retainedMutationCases"].values():
+                    if receipt := case.get("receipt"):
+                        require(retained_error_receipt(scratch, profile, receipt["operationId"], receipt["state"],
+                            receipt["beforeSha256"], receipt["afterSha256"]) == receipt,
+                            "RETAINED_MUTATION_SERVER_ERROR_RECEIPT_CHANGED_AFTER_RESTART")
+                require(library.read_bytes() == retained_bytes and generation_observation(profile) == retained_generation,
+                        "RETAINED_MUTATION_RESTART_CHANGED_LIBRARY_OR_GENERATION")
+                report.update(status="PASS", nativeRetainedMutationCasesQualified=True,
+                              mediaRetainedAfterLauncherRestart=True, mediaEffectJournalRetained=True,
+                              workspaceGenerationFenced=True, workspaceGenerationRetainedAfterRestart=True)
+                return
             if capacity_case:
                 require(child is None and not identities, "MEDIA_CAPACITY_SEEDED_WITH_NATIVE_RUNNING")
             seed(profile, fixture_media)
@@ -630,12 +771,17 @@ def main() -> int:
     parser.add_argument("--field-case", choices=tuple(FIELD_PATCHES))
     parser.add_argument("--large-library-case", action="store_true", help="Generate a legal144MB isolated library on the cloud runner only")
     parser.add_argument("--large-record-case", action="store_true", help="Exercise a retained legal record larger than4MiB through actual native HTTP")
+    parser.add_argument("--retained-mutation-cases", action="store_true",
+                        help="Exercise retained record writes and signed HTTP 500 receipts")
     args = parser.parse_args()
     require(not args.field_case or args.metadata_order_case == "baseline", "MEDIA_PATCH_CASE_SELECTION_CONFLICT")
     require(not args.large_library_case or not args.field_case and args.metadata_order_case == "baseline",
             "MEDIA_PATCH_CAPACITY_CASE_SELECTION_CONFLICT")
     require(not args.large_record_case or not args.large_library_case and not args.field_case
             and args.metadata_order_case == "baseline", "MEDIA_PATCH_LARGE_RECORD_CASE_SELECTION_CONFLICT")
+    require(not args.retained_mutation_cases or not args.large_record_case and not args.large_library_case
+            and not args.field_case and args.metadata_order_case == "baseline",
+            "RETAINED_MUTATION_CASE_SELECTION_CONFLICT")
     # Only this new retained-record workload needs a larger report/read bound.
     # Existing cases retain their original 2MiB response/report constraint.
     LIMIT = (8 if args.large_record_case else 2) * 1024**2

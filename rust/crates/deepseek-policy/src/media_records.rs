@@ -360,6 +360,22 @@ impl Records {
         Ok(Some((index, self.get(index)?.ok_or_else(invalid)?)))
     }
 
+    fn retained_at(&self, index: i64) -> Result<Option<MediaRecord>, Status> {
+        self.record_at(index)?
+            .map(|record| {
+                let bytes = self.read_record_bytes(&record)?;
+                MediaRecord::from_spool(&bytes).map_err(|_| invalid())
+            })
+            .transpose()
+    }
+
+    pub fn first_retained(&self, id: &str) -> Result<Option<(i64, MediaRecord)>, Status> {
+        let Some(index) = self.first_index(id)? else {
+            return Ok(None);
+        };
+        Ok(Some((index, self.retained_at(index)?.ok_or_else(invalid)?)))
+    }
+
     pub fn first_index(&self, id: &str) -> Result<Option<i64>, Status> {
         self.connection
             .query_row(
@@ -385,6 +401,15 @@ impl Records {
             .and_then(Value::as_str)
             .ok_or_else(invalid)?;
         let stored = self.store_value(value)?;
+        self.replace_index(index, id, stored)
+    }
+
+    pub fn replace_retained(&mut self, index: i64, value: &MediaRecord) -> Result<(), Status> {
+        let stored = self.store(|out| value.write_spool(out))?;
+        self.replace_index(index, &value.id(), stored)
+    }
+
+    fn replace_index(&self, index: i64, id: &str, stored: StoredRecord) -> Result<(), Status> {
         if self.connection.execute(
             "UPDATE records SET media_id=?1,record_offset=?2,record_bytes=?3,digest=?4,durable_unicode=?5 WHERE record_index=?6",
             params![id, stored.offset, stored.length, stored.digest, stored.durable_unicode, index],
@@ -405,6 +430,17 @@ impl Records {
     pub fn len(&self) -> Result<i64, Status> {
         self.connection
             .query_row("SELECT count(*) FROM records", [], |r| r.get(0))
+            .map_err(|_| invalid())
+    }
+
+    pub fn has_unencodable_retained_text(&self) -> Result<bool, Status> {
+        self.connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM (SELECT durable_unicode FROM records
+              ORDER BY record_index DESC LIMIT 1000) WHERE durable_unicode=0)",
+                [],
+                |row| row.get(0),
+            )
             .map_err(|_| invalid())
     }
 
