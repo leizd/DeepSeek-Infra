@@ -1,6 +1,5 @@
 // Original socket observations; this unit exercises the shared GET renderers.
 // Full authenticated process/socket qualification remains a separate requirement.
-use sha2::Digest as _;
 
 // Compare exact decimal tokens without changing the production serde features.
 // Prefix every string/key and number differently so data cannot impersonate a tag.

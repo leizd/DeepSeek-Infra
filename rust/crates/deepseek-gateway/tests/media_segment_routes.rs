@@ -368,7 +368,7 @@ async fn media_segments_match_the_library_without_creating_a_missing_store() {
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(
         body,
-        json!({"error": {"code": "UNAUTHORIZED", "message": "Auth required"}})
+        json!({"error": "Auth required", "code": "unauthorized"})
     );
     assert!(!fixture.media_dir().exists());
 
