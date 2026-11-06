@@ -24,7 +24,7 @@ impl<R: Read> Input<R> {
         String::from_utf8(bytes).map_err(|_| Error::Syntax)
     }
 
-    pub(super) fn value(&mut self) -> Result<Value, Error> {
+    pub(super) fn value(&mut self, exact_integers: bool) -> Result<Value, Error> {
         let mut frames = Vec::new();
         loop {
             let value = match self.space()? {
@@ -45,9 +45,18 @@ impl<R: Read> Input<R> {
                     let mut bytes = Vec::new();
                     self.number(|byte| bytes.push(byte))?;
                     let text = std::str::from_utf8(&bytes).map_err(|_| Error::Syntax)?;
-                    Some(Value::Number(
-                        Number::from_str(text).map_err(|_| Error::Syntax)?,
-                    ))
+                    let number = Number::from_str(text).map_err(|_| Error::Syntax)?;
+                    // Without arbitrary_precision, Number can accept an
+                    // out-of-range integer by silently rounding it to f64.
+                    // Legacy mutation callers must not rewrite such a row.
+                    if exact_integers
+                        && !text.contains(['.', 'e', 'E'])
+                        && text != "-0"
+                        && number.to_string() != text
+                    {
+                        return Err(Error::Syntax);
+                    }
+                    Some(Value::Number(number))
                 }
                 Some(b'[') => {
                     self.next_byte()?;
@@ -120,7 +129,7 @@ impl<R: Read> Input<R> {
 
 /// The digest-checked private record spool uses the same ordinary map semantics.
 /// Complete UTF-8 and EOF remain mandatory before accepting the stored value.
-pub(crate) fn from_slice(bytes: &[u8]) -> Result<Value, Error> {
+pub(super) fn from_slice(bytes: &[u8], exact_integers: bool) -> Result<Value, Error> {
     let state = Rc::new(RefCell::new(InputState::default()));
     let mut input = Input {
         source: BufReader::with_capacity(
@@ -133,7 +142,7 @@ pub(crate) fn from_slice(bytes: &[u8]) -> Result<Value, Error> {
         capture: None,
         capture_value: false,
     };
-    let value = input.value()?;
+    let value = input.value(exact_integers)?;
     if input.space()?.is_some() {
         return Err(Error::Syntax);
     }

@@ -231,7 +231,7 @@ fn first_key_number_and_raw_value_wrappers_match_the_existing_value_decoder() {
             Records::empty().unwrap(),
             |value| {
                 calls += 1;
-                crate::media_schema::normalize_media_record(value)
+                value.normalize_media()
             },
         )
         .unwrap();

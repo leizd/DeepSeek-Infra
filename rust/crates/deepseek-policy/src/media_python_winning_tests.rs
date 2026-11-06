@@ -78,7 +78,7 @@ fn original_winning_clock_before_invalid_path() {
         text.as_bytes(),
         RawRecords::empty().unwrap(),
         Records::empty().unwrap(),
-        |value| crate::media_schema::normalize_media_record_with_clock(value, &mut clock),
+        |value| super::super::retained_schema::normalize_with_clock(value, &mut clock),
     )
     .unwrap();
     let mut worker = Vec::new();

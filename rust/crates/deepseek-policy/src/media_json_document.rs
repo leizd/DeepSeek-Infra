@@ -429,14 +429,16 @@ impl<R: Read> Input<R> {
 pub(super) mod deferred;
 #[path = "media_json_value.rs"]
 mod ordinary_value;
-pub(super) use ordinary_value::from_slice as decode_value_slice;
+pub(super) fn decode_stored_value(bytes: &[u8]) -> Result<Value, Error> {
+    ordinary_value::from_slice(bytes, true)
+}
 
 pub(super) fn decode_raw_record(bytes: &[u8]) -> Result<Value, Error> {
-    if let Ok(value) = ordinary_value::from_slice(bytes) {
+    if let Ok(value) = ordinary_value::from_slice(bytes, false) {
         return Ok(value);
     }
     let selected = deferred::select_winners(bytes).map_err(|_| Error::Syntax)?;
-    ordinary_value::from_slice(&selected)
+    ordinary_value::from_slice(&selected, false)
 }
 
 struct Parser<R> {
@@ -542,7 +544,7 @@ impl<R: Read> Parser<R> {
                     match key {
                         Key::Media => self.media()?,
                         Key::Publication if self.capture_publication => {
-                            self.publication = Some(self.input.value()?)
+                            self.publication = Some(self.input.value(false)?)
                         }
                         _ => self.input.skip()?,
                     }

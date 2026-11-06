@@ -1,7 +1,6 @@
 //! Opaque read-only raw rows. Only normalized Records expose output/mutation APIs.
-use super::{Records, VisitError, document, invalid};
+use super::{Records, StoredRecord, VisitError, document, invalid};
 use crate::media_stream_io::{DigestWriter, WriteSeek};
-use rusqlite::params;
 use serde_json::Value;
 use std::io::{self, BufWriter, Seek, SeekFrom, Write};
 use tonic::Status;
@@ -93,14 +92,7 @@ impl RawRecords {
         } = capture.finish()?;
         self.inner.writer = writer;
         self.inner
-            .connection
-            .execute(
-                "INSERT INTO records VALUES(?1,'',?2,?3,?4)",
-                params![self.inner.next, offset, length, hash],
-            )
-            .map_err(|_| invalid())?;
-        self.inner.next = self.inner.next.checked_add(1).ok_or_else(invalid)?;
-        Ok(())
+            .append_index("", StoredRecord::new(offset, length, &hash, false))
     }
 
     pub(super) fn clear(&mut self) -> Result<(), Status> {
@@ -108,39 +100,16 @@ impl RawRecords {
         self.inner.clear()
     }
 
-    pub(super) fn read_record(
-        &self,
-        offset: i64,
-        length: i64,
-        hash: Vec<u8>,
-    ) -> Result<Value, Status> {
-        let bytes = self.inner.read_record_bytes(offset, length, hash)?;
-        document::decode_raw_record(&bytes).map_err(|_| invalid())
-    }
-
     /// There is deliberately no raw emission, append, replacement or retention API.
     pub fn visit_source<E>(
         &self,
         mut visit: impl FnMut(Value) -> Result<(), E>,
     ) -> Result<(), VisitError<E>> {
-        let storage = |_: rusqlite::Error| VisitError::Storage(invalid());
-        let mut statement = self
-            .inner
-            .connection
-            .prepare("SELECT record_offset,record_bytes,digest FROM records ORDER BY record_index")
-            .map_err(storage)?;
-        let mut rows = statement.query([]).map_err(storage)?;
-        while let Some(row) = rows.next().map_err(storage)? {
-            let value = self
-                .read_record(
-                    row.get(0).map_err(storage)?,
-                    row.get(1).map_err(storage)?,
-                    row.get(2).map_err(storage)?,
-                )
-                .map_err(VisitError::Storage)?;
-            visit(value).map_err(VisitError::Visitor)?;
-        }
-        Ok(())
+        self.inner.visit_bytes(|bytes| {
+            let value =
+                document::decode_raw_record(bytes).map_err(|_| VisitError::Storage(invalid()))?;
+            visit(value).map_err(VisitError::Visitor)
+        })
     }
 
     /// Read original accepted values without crossing the strict JSON response
@@ -149,26 +118,18 @@ impl RawRecords {
         &self,
         mut visit: impl FnMut(super::retained::Document) -> Result<(), E>,
     ) -> Result<(), VisitError<E>> {
-        let storage = |_: rusqlite::Error| VisitError::Storage(invalid());
-        let mut statement = self
-            .inner
-            .connection
-            .prepare("SELECT record_offset,record_bytes,digest FROM records ORDER BY record_index")
-            .map_err(storage)?;
-        let mut rows = statement.query([]).map_err(storage)?;
-        while let Some(row) = rows.next().map_err(storage)? {
-            let bytes = self
-                .inner
-                .read_record_bytes(
-                    row.get(0).map_err(storage)?,
-                    row.get(1).map_err(storage)?,
-                    row.get(2).map_err(storage)?,
-                )
-                .map_err(VisitError::Storage)?;
-            let value = super::retained::Document::decode(&bytes)
+        self.inner.visit_bytes(|bytes| {
+            let value = super::retained::Document::decode(bytes)
                 .map_err(|_| VisitError::Storage(invalid()))?;
-            visit(value).map_err(VisitError::Visitor)?;
-        }
-        Ok(())
+            visit(value).map_err(VisitError::Visitor)
+        })
+    }
+
+    pub(super) fn visit_bytes<E>(
+        &self,
+        mut visit: impl FnMut(&[u8]) -> Result<(), E>,
+    ) -> Result<(), VisitError<E>> {
+        self.inner
+            .visit_bytes(|bytes| visit(bytes).map_err(VisitError::Visitor))
     }
 }

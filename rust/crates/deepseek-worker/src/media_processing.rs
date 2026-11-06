@@ -282,7 +282,7 @@ pub(super) fn intermediate(
             .map_err(|_| unknown());
     }
     let mut items = Records::from_image(after.reader()?)?;
-    let Some((index, _)) = items.first(id)? else {
+    let Some(index) = items.first_index(id)? else {
         return Err(unknown());
     };
     items.replace(

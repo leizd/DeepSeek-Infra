@@ -41,6 +41,11 @@ impl Text {
         String::from_utf16(&self.0).map_err(|_| ())
     }
 
+    fn has_only_scalars(&self) -> bool {
+        self.scalars()
+            .all(|scalar| char::from_u32(scalar).is_some())
+    }
+
     pub(super) fn equals(&self, text: &str) -> bool {
         self.0.iter().copied().eq(text.encode_utf16())
     }
@@ -118,9 +123,10 @@ impl Text {
         &self,
         output: &mut (impl Write + ?Sized),
         strict: bool,
-    ) -> io::Result<()> {
+    ) -> io::Result<bool> {
         if let Ok(text) = self.utf8() {
-            return serde_json::to_writer(&mut *output, &text).map_err(io::Error::other);
+            serde_json::to_writer(&mut *output, &text).map_err(io::Error::other)?;
+            return Ok(true);
         }
         if strict {
             return Err(encoding_error());
@@ -144,7 +150,8 @@ impl Text {
                 }
             }
         }
-        output.write_all(b"\"")
+        output.write_all(b"\"")?;
+        Ok(false)
     }
 }
 
@@ -361,13 +368,14 @@ impl Document {
         &self,
         output: &mut (impl Write + ?Sized),
         strict: bool,
-    ) -> io::Result<()> {
+    ) -> io::Result<bool> {
         enum Part {
             Value(usize),
             Byte(u8),
             Key(usize, usize),
         }
         let mut pending = vec![Part::Value(self.root)];
+        let mut durable_unicode = true;
         while let Some(part) = pending.pop() {
             match part {
                 Part::Byte(byte) => output.write_all(&[byte])?,
@@ -375,7 +383,7 @@ impl Document {
                     let Node::Object(fields) = &self.nodes[id] else {
                         return Err(encoding_error());
                     };
-                    fields[index].0.write_json(output, strict)?;
+                    durable_unicode &= fields[index].0.write_json(output, strict)?;
                 }
                 Part::Value(id) => match &self.nodes[id] {
                     Node::Null => output.write_all(b"null")?,
@@ -394,7 +402,7 @@ impl Document {
                     } else {
                         b"-Infinity"
                     })?,
-                    Node::Text(text) => text.write_json(output, strict)?,
+                    Node::Text(text) => durable_unicode &= text.write_json(output, strict)?,
                     Node::Array(values) => {
                         output.write_all(b"[")?;
                         pending.push(Part::Byte(b']'));
@@ -420,7 +428,7 @@ impl Document {
                 },
             }
         }
-        Ok(())
+        Ok(durable_unicode)
     }
 }
 
@@ -527,15 +535,33 @@ impl MediaRecord {
     }
 
     pub fn write_response(&self, output: &mut (impl Write + ?Sized)) -> io::Result<()> {
-        self.0.write_json(output, true)
+        self.0.write_json(output, true).map(|_| ())
     }
 
-    pub(super) fn write_spool(&self, output: &mut impl Write) -> io::Result<()> {
+    /// True when the emitted strings can also be written by the durable store.
+    pub(super) fn write_spool(&self, output: &mut (impl Write + ?Sized)) -> io::Result<bool> {
         self.0.write_json(output, false)
     }
 
     pub(super) fn from_spool(bytes: &[u8]) -> Result<Self, ()> {
-        Document::decode(bytes).map(Self)
+        let record = Self(Document::decode(bytes)?);
+        if !record
+            .text_field("mediaId")
+            .is_some_and(Text::has_only_scalars)
+        {
+            return Err(());
+        }
+        Ok(record)
+    }
+
+    /// Published images have Unicode scalar values throughout. Nonfinite
+    /// numbers are valid in these images and do not affect this check.
+    pub(super) fn has_durable_unicode(&self) -> bool {
+        self.0.nodes.iter().all(|node| match node {
+            Node::Text(text) => text.has_only_scalars(),
+            Node::Object(fields) => fields.iter().all(|(key, _)| key.has_only_scalars()),
+            _ => true,
+        })
     }
 
     #[cfg(test)]

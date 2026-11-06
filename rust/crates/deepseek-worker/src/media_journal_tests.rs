@@ -59,6 +59,62 @@ fn media_signer_binds_patch_and_delete_result_shapes_to_the_original_operation()
     assert_eq!(read_library(root.path()).unwrap(), before);
 }
 
+#[test]
+fn media_patch_publishes_without_discarding_an_unrelated_nonfinite_record() {
+    let (root, key, mut journal, claim) = fixture();
+    let before = br#"{"media":[
+        {"mediaId":"media_one","type":"pdf","title":"Before"},
+        {"mediaId":"media_retained","type":"image","metadata":{"f":NaN}}
+    ]}"#;
+    fs::write(media_library::library_path(root.path()), before).unwrap();
+    let prepared = journal.prepare(&claim).unwrap();
+    assert_eq!(read_library(root.path()).unwrap().as_slice(), before);
+    let applied = journal.publish(&claim, &prepared.digest, &key).unwrap();
+    assert_eq!(applied.state, MediaPatchEffectState::Applied as i32);
+    assert_eq!(applied.signature.len(), 64);
+    let after = read_library(root.path()).unwrap();
+    assert_eq!(applied.before_sha256, sha(before));
+    assert_eq!(applied.after_sha256, sha(&after));
+    assert!(std::str::from_utf8(&after).unwrap().contains(r#""f":NaN"#));
+    let recovered = deepseek_policy::media_records::Records::from_image(after.as_slice()).unwrap();
+    assert_eq!(
+        recovered.first("media_one").unwrap().unwrap().1["title"],
+        "After"
+    );
+    assert_eq!(recovered.first_index("media_retained").unwrap(), Some(1));
+}
+
+#[test]
+fn media_patch_keeps_unencodable_library_bytes_and_delete_can_remove_the_bad_row() {
+    let (root, key, mut journal, claim) = fixture();
+    let before = br#"{"media":[
+        {"mediaId":"media_one","type":"pdf","title":"Before"},
+        {"mediaId":"media_unsafe","type":"image","metadata":{"text":"\ud800"}}
+    ]}"#;
+    fs::write(media_library::library_path(root.path()), before).unwrap();
+    assert!(journal.prepare(&claim).is_err());
+    assert!(journal.active().unwrap().is_none());
+    assert_eq!(read_library(root.path()).unwrap().as_slice(), before);
+    assert_eq!(
+        deepseek_policy::mutation_gate::read_generation(root.path()),
+        0
+    );
+
+    let deletion = delete_claim(claim, "media-delete-unsafe-retained", "media_unsafe");
+    let prepared = journal.prepare(&deletion).unwrap();
+    let applied = journal.publish(&deletion, &prepared.digest, &key).unwrap();
+    assert_eq!(applied.state, MediaPatchEffectState::Applied as i32);
+    assert_eq!(applied.deleted_count, 1);
+    assert_eq!(applied.signature.len(), 64);
+    let after = read_library(root.path()).unwrap();
+    assert_eq!(applied.after_sha256, sha(&after));
+    let document: Value = serde_json::from_slice(&after).unwrap();
+    let rows = document["media"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["mediaId"], "media_one");
+    assert_eq!(rows[0]["title"], "Before");
+}
+
 fn seed_delete_data(root: &Path, vectors: bool) {
     let media = root.join(".media");
     fs::create_dir_all(media.join("segments")).unwrap();

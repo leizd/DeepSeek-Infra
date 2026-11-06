@@ -154,8 +154,10 @@ jobs:
             'media_records::tests::an_early_syntax_error_cannot_hide_a_later_source_io_failure',
             'media_records::tests::changed_private_spool_bytes_are_detected_before_emission_or_lookup',
             'media_records::tests::discarded_values_still_validate_numbers_utf8_and_original_json_depth',
+            'media_records::tests::durable_records_preserve_nonfinite_exact_numbers_and_deep_values_during_recovery',
             'media_records::tests::first_match_delete_all_and_post_mutation_tail_match_the_original_order',
             'media_records::tests::only_the_complete_winning_array_uses_normalization_clocks',
+            'media_records::tests::only_the_published_tail_requires_unicode_scalar_strings',
             'media_records::tests::source_spool_and_index_failures_never_become_an_empty_store',
             'media_records::tests::streaming_parser_matches_legacy_normalization_for_valid_and_malformed_documents',
             'media_records::tests::shared_records_match_original_worker_normalizer',
@@ -185,7 +187,7 @@ jobs:
             $totalPassed += [int]$summary.Groups[1].Value
           }
           $summaryPasses = @($summaries | ForEach-Object { [int]$_.Groups[1].Value } | Sort-Object)
-          $expectedPasses = @(1, 3, 3, 4, 7, 12)
+          $expectedPasses = @(1, 3, 3, 4, 9, 12)
           for ($summaryIndex = 0; $summaryIndex -lt $expectedPasses.Count; $summaryIndex++) {
             if ($summaryPasses[$summaryIndex] -ne $expectedPasses[$summaryIndex]) { throw 'Windows media corpus package summary distribution differs' }
           }

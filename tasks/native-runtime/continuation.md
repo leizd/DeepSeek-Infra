@@ -1,3 +1,24 @@
+<!-- native checkpoint 2026-11-06 retained media publication -->
+
+Whole product migration remains ACTIVE / NOT_READY. The retained library writer
+now normalizes source rows through the lossless value model. Publication admits
+nonfinite values and validates Unicode scalars in the final retained tail.
+Recovery copies the value bytes of each generated image record, retaining the
+numeric spelling and field order needed for intermediate-image replay.
+
+The original authenticated TCP oracle observed 19 requests. An unrelated NaN
+survived a successful PATCH. Retained unpaired text caused a 500 with the original
+store bytes intact. Deleting the offending record succeeded. A selected NaN
+produced a 500 after commit. A selected 40-digit integer and depth-160 value
+survived a successful PATCH. The original report has SHA-256
+792e84e834886db4bd09babba350e66ca192f47c49bd4fb71966716689386f21.
+
+Rust regressions cover retention and recovery bytes, patching around an unrelated
+NaN, and deleting an unencodable row after a rejected publication. The signed
+selected-record result and original post-commit response error still require
+compatibility work. Native compilation, coverage, capacity and platform
+qualification are evaluated on their exact cloud revisions.
+
 <!-- native checkpoint 2026-11-05 retained media values -->
 
 Whole product migration remains ACTIVE / NOT_READY. All original server,

@@ -1,4 +1,5 @@
 use super::*;
+use crate::media_schema::normalize_media_record;
 use serde_json::json;
 use std::io::{Cursor, Seek};
 
@@ -63,9 +64,7 @@ fn only_the_complete_winning_array_uses_normalization_clocks() {
         Records::empty().unwrap(),
         |row| {
             clock += 1;
-            let mut value = normalize_media_record(row)?;
-            value["createdAt"] = json!(clock);
-            Ok(value)
+            retained_schema::normalize_with_clock(row, || format!("clock-{clock}"))
         },
     )
     .unwrap();
@@ -73,11 +72,11 @@ fn only_the_complete_winning_array_uses_normalization_clocks() {
     assert!(!records.contains("media_discarded").unwrap());
     assert_eq!(
         records.first("media_first").unwrap().unwrap().1["createdAt"],
-        1
+        "clock-1"
     );
     assert_eq!(
         records.first("media_second").unwrap().unwrap().1["createdAt"],
-        2
+        "clock-2"
     );
     for data in [
         br#"{"media":[{"mediaId":"media_one"}]} trailing"#.as_slice(),
@@ -90,7 +89,7 @@ fn only_the_complete_winning_array_uses_normalization_clocks() {
             Records::empty().unwrap(),
             |row| {
                 calls += 1;
-                normalize_media_record(row)
+                row.normalize_media()
             },
         )
         .unwrap();
@@ -188,7 +187,9 @@ fn source_spool_and_index_failures_never_become_an_empty_store() {
             &mut raw.inner
         };
         broken.writer = Box::new(FullDisk(broken.data.as_file().try_clone().unwrap()));
-        assert!(Records::parse(bytes.as_slice(), raw, normalized, normalize_media_record).is_err());
+        assert!(
+            Records::parse(bytes.as_slice(), raw, normalized, Document::normalize_media).is_err()
+        );
     }
     for normalized_failure in [false, true] {
         let raw = RawRecords::empty().unwrap();
@@ -199,7 +200,9 @@ fn source_spool_and_index_failures_never_become_an_empty_store() {
             &raw.inner
         };
         broken.connection.execute("DROP TABLE records", []).unwrap();
-        assert!(Records::parse(bytes.as_slice(), raw, normalized, normalize_media_record).is_err());
+        assert!(
+            Records::parse(bytes.as_slice(), raw, normalized, Document::normalize_media).is_err()
+        );
     }
     // Bytes can reach the sink while its later flush fails. Neither raw nor
     // normalized capture may report an empty/successful original store.
@@ -215,7 +218,9 @@ fn source_spool_and_index_failures_never_become_an_empty_store() {
             inner: broken.data.as_file().try_clone().unwrap(),
             successful_flushes: if normalized_failure { 0 } else { 2 },
         });
-        assert!(Records::parse(bytes.as_slice(), raw, normalized, normalize_media_record).is_err());
+        assert!(
+            Records::parse(bytes.as_slice(), raw, normalized, Document::normalize_media).is_err()
+        );
     }
     let mut raw = RawRecords::empty().unwrap();
     raw.inner.writer = Box::new(FlushFailure {
@@ -307,6 +312,90 @@ fn changed_private_spool_bytes_are_detected_before_emission_or_lookup() {
         raw.visit_source(|_| Ok::<_, std::convert::Infallible>(())),
         Err(VisitError::Storage(_))
     ));
+}
+
+#[test]
+fn durable_records_preserve_nonfinite_exact_numbers_and_deep_values_during_recovery() {
+    const WIDE: &str = "1234567890123456789012345678901234567890";
+    let deep = format!("{}0{}", "[".repeat(160), "]".repeat(160));
+    let source = format!(
+        r#"{{"media":[{{"mediaId":"media_edit","type":"image"}},
+        {{"mediaId":"media_nonfinite","type":"image","metadata":{{"f":NaN,"p":Infinity,"n":-Infinity}}}},
+        {{"mediaId":"media_exact","type":"image","metadata":{{"number":{WIDE},"deep":{deep}}}}}]}}"#
+    );
+    let mut records = Records::from_reader(source.as_bytes()).unwrap();
+    let (index, mut edited) = records.first("media_edit").unwrap().unwrap();
+    edited["title"] = json!("Updated");
+    records.replace(index, &edited).unwrap();
+    assert!(records.first("media_nonfinite").is_err());
+    let exact = records.first("media_exact");
+    if WIDE
+        .parse::<serde_json::Number>()
+        .is_ok_and(|number| number.to_string() == WIDE)
+    {
+        let (_, exact) = exact.unwrap().unwrap();
+        assert_eq!(exact["metadata"]["number"].to_string(), WIDE);
+    } else {
+        assert!(exact.is_err());
+    }
+
+    let mut array = Vec::new();
+    records.write_retained_array(&mut array).unwrap();
+    let text = std::str::from_utf8(&array).unwrap();
+    for retained in ["NaN", "Infinity", "-Infinity", WIDE, deep.as_str()] {
+        assert!(text.contains(retained), "lost {retained}");
+    }
+    let mut image = br#"{"media":"#.to_vec();
+    image.extend_from_slice(&array);
+    image.extend_from_slice(br#","nativePublication":{"phase":"PREPARED"}}"#);
+    let recovered = Records::from_image(image.as_slice()).unwrap();
+    assert_eq!(recovered.len().unwrap(), 3);
+    assert_eq!(recovered.first_index("media_nonfinite").unwrap(), Some(1));
+    assert_eq!(recovered.publication, Some(json!({"phase":"PREPARED"})));
+    let mut reemitted = Vec::new();
+    recovered.write_retained_array(&mut reemitted).unwrap();
+    assert_eq!(reemitted, array);
+
+    let legacy =
+        br#"{"media":[{"metadata":{"positive":1e+16,"negative":-0.0},"mediaId":"media_old"}]}"#;
+    let recovered = Records::from_image(legacy.as_slice()).unwrap();
+    let mut bytes = Vec::new();
+    recovered.write_retained_array(&mut bytes).unwrap();
+    let expected = legacy.strip_prefix(br#"{"media":"#).unwrap();
+    assert_eq!(bytes.as_slice(), expected.strip_suffix(b"}").unwrap());
+}
+
+#[test]
+fn only_the_published_tail_requires_unicode_scalar_strings() {
+    let source = br#"{"media":[
+        {"mediaId":"media_unsafe","type":"image","metadata":{"\udfff":"\ud800"}},
+        {"mediaId":"media_kept","type":"image","metadata":{"literal":"\\ud800"}}
+    ]}"#;
+    let mut records = Records::from_reader(source.as_slice()).unwrap();
+    assert_eq!(records.len().unwrap(), 2);
+    assert!(records.write_retained_array(&mut Vec::new()).is_err());
+    assert!(Records::from_image(source.as_slice()).is_err());
+    records
+        .connection
+        .execute(
+            "UPDATE records SET durable_unicode=1 WHERE record_index=0",
+            [],
+        )
+        .unwrap();
+    assert!(records.write_retained_array(&mut Vec::new()).is_err());
+    assert_eq!(records.remove_all("media_unsafe").unwrap(), 1);
+    let kept = retained(&records);
+    assert_eq!(kept[0]["metadata"]["literal"], r"\ud800");
+
+    let mut records = Records::from_reader(source.as_slice()).unwrap();
+    let row = record("media_tail", "Tail");
+    for _ in 0..999 {
+        records.append(&row).unwrap();
+    }
+    let tail = retained(&records);
+    assert_eq!(tail.len(), 1000);
+    assert_eq!(tail[0]["mediaId"], "media_kept");
+    assert_eq!(tail[999]["mediaId"], "media_tail");
 }
 
 // Frozen full-value worker oracle; only its name differs.
