@@ -1,3 +1,22 @@
+<!-- native checkpoint 2026-11-06 media PATCH response order and JSON errors -->
+
+Whole product migration remains ACTIVE / NOT_READY. Exact source d7d342395
+passed the Rust workspace tests, Rust 83.02788779 percent line coverage and
+Windows verification. Its real launcher media PATCH probe failed on the
+normalized duplicate's response order. The Rust encoder sorted response keys
+and wrote zero source ordinals. Flat-input claims now retain signed source
+ordinals on inline and compact results. Legacy claims and previously prepared
+or settled journal bytes keep their established handling.
+
+An original authenticated TCP run issued 73 requests for 36 malformed JSON
+cases on a synthetic profile, with byte-identical library and reads. The
+project's Python 3.12 oracle replays the exact original source helper. Its two
+trailing-comma messages differ from Python 3.13. The native rejection includes
+the 3.12 diagnostic and Unicode character position. The exact-source cloud
+probe checks original and native TCP, both effect journals, workspace
+generation and retained reads. The focused Go race inventory includes all
+115 selected tests and the original full coverage gates remain required.
+
 <!-- native checkpoint 2026-11-06 lossless media PATCH input -->
 
 Whole product migration remains ACTIVE / NOT_READY. The parent a0552e0186

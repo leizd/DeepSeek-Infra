@@ -239,7 +239,11 @@ func parseMediaPublicPatch(w http.ResponseWriter, r *http.Request) (*mediav1.Med
 	case mediamodel.ErrPatchUTF8:
 		policyWriteError(w, 500, "internal", "Server error")
 	default:
-		policyWriteError(w, 400, "invalid_payload", "Invalid JSON body")
+		message := "Invalid JSON body"
+		if syntax, ok := err.(*mediamodel.PatchJSONSyntaxError); ok {
+			message = syntax.Error()
+		}
+		policyWriteError(w, 400, "invalid_payload", message)
 	}
 	return nil, false
 }

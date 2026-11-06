@@ -210,7 +210,12 @@ impl Document {
         Ok(self.add(node))
     }
 
-    fn public_value(&self, id: usize, depth: usize) -> Result<MediaValue, PublicRecordError> {
+    fn public_value(
+        &self,
+        id: usize,
+        depth: usize,
+        retain_positions: bool,
+    ) -> Result<MediaValue, PublicRecordError> {
         if depth > LEGACY_VALUE_DEPTH {
             return Err(PublicRecordError::TooDeep);
         }
@@ -226,17 +231,23 @@ impl Document {
             Node::Array(items) => Kind::ArrayValue(MediaArray {
                 values: items
                     .iter()
-                    .map(|child| self.public_value(*child, depth + 1))
+                    .map(|child| self.public_value(*child, depth + 1, retain_positions))
                     .collect::<Result<_, _>>()?,
             }),
             Node::Object(fields) => {
                 let mut members = fields
                     .iter()
-                    .map(|(key, child)| {
+                    .enumerate()
+                    .map(|(position, (key, child))| {
+                        let source_ordinal = if retain_positions {
+                            u32::try_from(position + 1).map_err(|_| PublicRecordError::TooLarge)?
+                        } else {
+                            0
+                        };
                         Ok(MediaMember {
                             key: key.utf8().map_err(|_| PublicRecordError::Unencodable)?,
-                            value: Some(self.public_value(*child, depth + 1)?),
-                            source_ordinal: 0,
+                            value: Some(self.public_value(*child, depth + 1, retain_positions)?),
+                            source_ordinal,
                         })
                     })
                     .collect::<Result<Vec<_>, _>>()?;
@@ -301,8 +312,11 @@ impl MediaRecord {
             .map_err(|_| AppError::invalid_payload("Invalid media path"))
     }
 
-    pub fn public_patch_object(&self) -> Result<MediaObject, PublicRecordError> {
-        match self.0.public_value(self.0.root, 0)?.kind {
+    pub fn public_patch_object(
+        &self,
+        retain_positions: bool,
+    ) -> Result<MediaObject, PublicRecordError> {
+        match self.0.public_value(self.0.root, 0, retain_positions)?.kind {
             Some(Kind::ObjectValue(object)) => Ok(object),
             _ => Err(PublicRecordError::Unencodable),
         }

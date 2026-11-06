@@ -59,7 +59,7 @@ func ParsePublicPatch(raw []byte) (*mediav1.MediaPatch, error) {
 	}
 	masked, special := maskPatchNumbers(raw)
 	if !json.Valid(masked) {
-		return nil, ErrInvalid
+		return nil, diagnosePatchJSON(raw)
 	}
 	if bytes.TrimSpace(masked)[0] != '{' {
 		return nil, ErrPatchObject

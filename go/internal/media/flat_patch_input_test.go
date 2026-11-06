@@ -2,6 +2,8 @@ package media
 
 import (
 	"bytes"
+	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 
@@ -128,14 +130,49 @@ func TestFlatPatchInputRejectsInvalidBodyBeforeAdmittingAnOperation(t *testing.T
 		want error
 	}{
 		{"{\"metadata\":{\"value\":\"\xff\"}}", ErrPatchUTF8},
-		{"{\"metadata\":{}} trailing", ErrInvalid},
-		{"{\"metadata\":{\"value\":NaNx}}", ErrInvalid},
 		{"[NaN]", ErrPatchObject},
 		{"{\"ignored\":NaN}", ErrPatchFields},
 	} {
 		if patch, err := ParsePublicPatch([]byte(test.raw)); patch != nil || err != test.want {
 			t.Fatalf("invalid body result %v, %v", patch, err)
 		}
+	}
+}
+
+func TestFlatPatchSyntaxMatchesOriginalDiagnostics(t *testing.T) {
+	raw, err := os.ReadFile("../../../tests/fixtures/native_media_patch_json_errors_v1.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		CanonicalPythonVersion string `json:"canonicalPythonVersion"`
+		Cases                  []struct {
+			Name     string `json:"name"`
+			Request  []byte `json:"requestBase64"`
+			BodyJSON string `json:"bodyJson"`
+		} `json:"cases"`
+	}
+	if err := json.Unmarshal(raw, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	if fixture.CanonicalPythonVersion != "3.12.12" || len(fixture.Cases) != 36 {
+		t.Fatal("unexpected original diagnostics corpus")
+	}
+	for _, sample := range fixture.Cases {
+		t.Run(sample.Name, func(t *testing.T) {
+			var body struct {
+				Error string `json:"error"`
+				Code  string `json:"code"`
+			}
+			if err := json.Unmarshal([]byte(sample.BodyJSON), &body); err != nil {
+				t.Fatal(err)
+			}
+			patch, err := ParsePublicPatch(sample.Request)
+			syntax, classified := err.(*PatchJSONSyntaxError)
+			if patch != nil || !classified || syntax.Error() != body.Error || body.Code != "invalid_payload" {
+				t.Fatalf("diagnostic %v, want %q", err, body.Error)
+			}
+		})
 	}
 }
 

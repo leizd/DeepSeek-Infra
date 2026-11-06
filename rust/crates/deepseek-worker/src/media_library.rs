@@ -215,7 +215,12 @@ pub(super) fn plan(
         }
     };
     let flat_negotiated = patch_wire::negotiated(intent, patch_wire::FLAT_VERSION);
-    let record = match public.public_patch_object() {
+    let retain_positions = flat_negotiated
+        && intent
+            .patch
+            .as_ref()
+            .is_some_and(|patch| patch.flat_values.is_some());
+    let record = match public.public_patch_object(retain_positions) {
         Ok(media) => {
             result.media = Some(media);
             // An inline receipt must also survive the journal's protobuf

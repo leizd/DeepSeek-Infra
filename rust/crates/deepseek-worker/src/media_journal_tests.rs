@@ -3,6 +3,7 @@ use deepseek_federation::{create_control_signer_bundle, load_control_signer};
 use deepseek_protocol::generated::deepseek::media::v1::{
     MediaFlatPatchMember, MediaFlatPatchNode, MediaFlatPatchObject, MediaFlatPatchRecord,
     MediaPatch, MediaPatchIntent, media_flat_patch_node::Kind as FlatKind,
+    media_value::Kind as TypedKind,
 };
 use serde_json::{Value, json};
 use std::sync::OnceLock;
@@ -219,6 +220,51 @@ fn flat_patch_input_keeps_original_pre_and_post_write_error_phases() {
             assert!(receipt.after_sha256.is_empty());
         }
     }
+}
+
+#[test]
+fn flat_patch_input_signs_source_positions_on_the_inline_result() {
+    let (root, key, mut journal, legacy_claim) = fixture();
+    let before =
+        br#"{"media":[{"mediaId":"media_one","type":"pdf","metadata":{"z_previous":"kept"}}]}"#;
+    fs::write(media_library::library_path(root.path()), before).unwrap();
+    let (legacy, _, _) = media_library::plan(root.path(), &legacy_claim, before).unwrap();
+    assert!(
+        legacy
+            .media
+            .unwrap()
+            .members
+            .iter()
+            .all(|member| member.source_ordinal == 0)
+    );
+
+    let claim = flat_input_claim(legacy_claim, FlatKind::TextValue("new".into()), 0);
+    let prepared = journal.prepare(&claim).unwrap();
+    let outcome = journal.publish(&claim, &prepared.digest, &key).unwrap();
+    assert_eq!(outcome.schema_version, 1);
+    assert_eq!(outcome.state, MediaPatchEffectState::Applied as i32);
+    assert_eq!(outcome.signature.len(), 64);
+    let record = outcome.media.as_ref().unwrap();
+    let metadata = record
+        .members
+        .iter()
+        .find(|member| member.key == "metadata")
+        .unwrap();
+    let Some(TypedKind::ObjectValue(metadata)) = &metadata.value.as_ref().unwrap().kind else {
+        panic!("signed result did not retain metadata");
+    };
+    assert_eq!(
+        metadata
+            .members
+            .iter()
+            .map(|member| (member.key.as_str(), member.source_ordinal))
+            .collect::<Vec<_>>(),
+        [("value", 2), ("z_previous", 1)],
+    );
+    assert_eq!(
+        journal.publish(&claim, &prepared.digest, &key).unwrap(),
+        outcome
+    );
 }
 
 #[test]

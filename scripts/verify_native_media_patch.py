@@ -34,6 +34,8 @@ ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "tests/fixtures/native_media_library_read_v1.json"
 PATCH_INPUT_FIXTURE = ROOT / "tests/fixtures/native_media_patch_input_v1.json"
 PATCH_INPUT_FIXTURE_SHA256 = "f801b9784e88c4571a4da280c189dbb07c15a6b80d25414cf1262eb3d9182b1e"
+PATCH_JSON_ERROR_FIXTURE = ROOT / "tests/fixtures/native_media_patch_json_errors_v1.json"
+PATCH_JSON_ERROR_FIXTURE_SHA256 = "0ddbdde27c2944f4d7f7609c3664125c3a4eeb1ebb0e717a38d44e16c74a4ad4"
 MEDIA_ID = "media_keep"
 BASE_PATCH = {"title": "Native media update", "metadata": {"nativePatchProof": "controlled"}}
 # These requests deliberately include fields accepted only by the internal
@@ -73,6 +75,35 @@ try:
     print(json.dumps({"status": response.status_code, "body": response.json()}))
 finally:
     client.close()
+'''
+JSON_ERROR_HTTP_ORACLE = r'''
+import base64, hashlib, json, sys
+from pathlib import Path
+from deepseek_infra.core.config import settings
+from deepseek_infra.infra.media import library
+from tests.test_web_media_routes import _auth_headers, _request, _running_server
+
+assert sys.version_info[:2] == (3, 12) and settings.auth.enabled
+profile = Path(sys.argv[1]).resolve()
+store = library.store_path().resolve()
+assert store.is_relative_to(profile) and settings.root == profile
+cases = json.load(sys.stdin)
+path = "/api/media/" + cases[0]["mediaId"]
+initial = store.read_bytes()
+with _running_server() as server:
+    baseline_status, baseline, _ = _request(server, "GET", path, headers=_auth_headers())
+    assert baseline_status == 200
+    for case in cases:
+        assert path == "/api/media/" + case["mediaId"]
+        request = base64.b64decode(case["requestBase64"], validate=True)
+        assert hashlib.sha256(request).hexdigest() == case["requestSha256"]
+        status, raw, _ = _request(server, "PATCH", path, body=request, headers=_auth_headers())
+        assert status == case["status"] and json.loads(raw) == json.loads(case["bodyJson"]), (case["name"], status, raw)
+        assert store.read_bytes() == initial
+        read_status, read_raw, _ = _request(server, "GET", path, headers=_auth_headers())
+        assert read_status == baseline_status and read_raw == baseline
+print(json.dumps({"status": "PASS", "originalTCP": True, "cases": len(cases), "requests": 1 + 2 * len(cases),
+                  "python": ".".join(map(str, sys.version_info[:3])), "unchangedStoreSha256": hashlib.sha256(initial).hexdigest()}))
 '''
 CAPACITY_ORACLE = r'''
 import json
@@ -499,9 +530,16 @@ def verify_patch_input_read(origin: str, token: str, case: dict[str, Any]) -> No
     label = case["name"]
     require(status == case["getStatus"], "PATCH_INPUT_GET_STATUS_DIFFERS_" + label)
     if case["status"] == 200:
-        assert_patch_input_record(json.loads(raw), json.loads(case["bodyJson"]), label)
+        assert_patch_input_record(json.loads(raw), json.loads(case["bodyJson"]), label + "_get")
     elif status == 500:
         require(json.loads(raw) == {"error": "Server error", "code": "internal"}, "PATCH_INPUT_GET_ERROR_DIFFERS_" + label)
+
+
+def patch_input_request(case: dict[str, Any]) -> bytes:
+    request = base64.b64decode(case["requestBase64"], validate=True)
+    require(0 < len(request) <= 1_000_000 and hashlib.sha256(request).hexdigest() == case["requestSha256"],
+            "PATCH_INPUT_REQUEST_DIFFERS_FROM_ORIGINAL_" + case["name"])
+    return request
 
 
 def verify_patch_inputs(scratch: Path, profile: Path, origin: str, token: str,
@@ -511,9 +549,7 @@ def verify_patch_inputs(scratch: Path, profile: Path, origin: str, token: str,
     report["patchInputCases"] = observations
     for case in cases:
         label = case["name"]
-        request = base64.b64decode(case["requestBase64"], validate=True)
-        require(0 < len(request) <= 1_000_000 and hashlib.sha256(request).hexdigest() == case["requestSha256"],
-                "PATCH_INPUT_REQUEST_DIFFERS_FROM_ORIGINAL_" + label)
+        request = patch_input_request(case)
         before = hashlib.sha256(library.read_bytes()).hexdigest()
         generation_before = generation_observation(profile)
         report.update(nativePatchRequestStarted=True, nativePatchReplyObserved=False)
@@ -534,12 +570,9 @@ def verify_patch_inputs(scratch: Path, profile: Path, origin: str, token: str,
                 and (applied or generation_after == generation_before), "PATCH_INPUT_GENERATION_DIFFERS_" + label)
         body, expected = json.loads(raw), json.loads(case["bodyJson"])
         if status == 200:
-            assert_patch_input_record(body, expected, label)
+            assert_patch_input_record(body, expected, label + "_patch")
             if label == "deep_object":
                 evidence["receipt"] = retained_mutation_receipt(scratch, profile, operation, "APPLIED", before, after, 4)
-        elif label == "malformed_trailing":
-            require(body == {"error": "Invalid JSON body", "code": expected["code"]}, "PATCH_INPUT_MALFORMED_ERROR_DIFFERS")
-            evidence.update(originalError=expected["error"], nativeError=body["error"])
         else:
             require(body == expected, "PATCH_INPUT_ERROR_BODY_DIFFERS_" + label)
             if admitted:
@@ -553,6 +586,61 @@ def verify_patch_inputs(scratch: Path, profile: Path, origin: str, token: str,
         require(library.read_bytes() == stored and generation_observation(profile) == generation_after,
                 "PATCH_INPUT_GET_CHANGED_LIBRARY_OR_GENERATION_" + label)
         evidence["getStatus"] = case["getStatus"]
+
+
+def verify_original_patch_json_errors(profile: Path, seed_bytes: bytes, corpus: dict[str, Any], out: Path) -> dict[str, Any]:
+    for path, key in (
+        ("deepseek_infra/web/http_utils.py", "originalHelperSha256"),
+        ("deepseek_infra/web/routes/media.py", "originalRouteSha256"),
+    ):
+        require(hashlib.sha256((ROOT / path).read_bytes()).hexdigest() == corpus[key], "PATCH_JSON_ORIGINAL_HANDLER_CHANGED")
+    library = profile / ".media/library.json"
+    library.parent.mkdir(parents=True)
+    library.write_bytes(seed_bytes)
+    environment = {key: value for key, value in os.environ.items() if key in {"PATH", "HOME", "LANG", "LC_ALL", "TZ", "TMPDIR"}}
+    environment.update(DEEPSEEK_INFRA_ROOT=str(profile), DEEPSEEK_RUNTIME_MODE="python_authoritative", AUTH_DISABLED="0",
+                       PYTHONDONTWRITEBYTECODE="1", PYTHONUTF8="1")
+    result = subprocess.run([sys.executable, "-B", "-c", JSON_ERROR_HTTP_ORACLE, str(profile)], cwd=ROOT, env=environment,
+        input=json.dumps(corpus["cases"]).encode(), stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120, check=False)
+    require(len(result.stdout) <= LIMIT and len(result.stderr) <= LIMIT, "PATCH_JSON_ORIGINAL_HTTP_OUTPUT_EXCEEDED_BOUND")
+    (out / "patch-json-original-http.log").write_bytes(result.stderr)
+    require(result.returncode == 0, "PATCH_JSON_ORIGINAL_HTTP_REPLAY_FAILED")
+    observed = json.loads(result.stdout.splitlines()[-1])
+    require(observed["status"] == "PASS" and observed["originalTCP"] and observed["cases"] == len(corpus["cases"])
+            and observed["requests"] == corpus["originalRequests"] and observed["python"].startswith("3.12.")
+            and observed["unchangedStoreSha256"] == corpus["seedSha256"], "PATCH_JSON_ORIGINAL_HTTP_REPORT_DIFFERS")
+    return observed
+
+
+def verify_native_patch_json_errors(scratch: Path, profile: Path, origin: str, token: str,
+                                    cases: list[dict[str, Any]], report: dict[str, Any]) -> None:
+    library = profile / ".media/library.json"
+    path = "/api/media/" + cases[0]["mediaId"]
+    status, baseline, _ = exchange(origin, path, "GET", token)
+    require(status == 200, "PATCH_JSON_NATIVE_SEED_READ_FAILED")
+    initial = library.read_bytes()
+    generation = generation_observation(profile)
+    observed: dict[str, Any] = {}
+    report["nativeMalformedPatchCases"] = observed
+    for case in cases:
+        label = case["name"]
+        require(path == "/api/media/" + case["mediaId"], "PATCH_JSON_CASE_MEDIA_ID_DIFFERS")
+        report.update(nativePatchRequestStarted=True, nativePatchReplyObserved=False)
+        status, raw, _, operation = exchange_with_operation(origin, path, "PATCH", token, patch_input_request(case))
+        report.update(nativePatchReplyObserved=True, nativePatchHTTPStatus=status)
+        expected = json.loads(case["bodyJson"])
+        observed[label] = dict(status=status, expectedStatus=case["status"], responseSha256=hashlib.sha256(raw).hexdigest())
+        require(status == case["status"] == 400 and json.loads(raw) == expected and not operation,
+                "PATCH_JSON_NATIVE_DIAGNOSTIC_DIFFERS_" + label)
+        get_status, get_raw, _ = exchange(origin, path, "GET", token)
+        require(get_status == 200 and get_raw == baseline, "PATCH_JSON_NATIVE_READ_CHANGED_" + label)
+        require(library.read_bytes() == initial and generation_observation(profile) == generation, "PATCH_JSON_NATIVE_STORE_CHANGED_" + label)
+    control = diagnostic_table(profile, "control.sqlite3", "SELECT count(*) FROM control_media_operations", ("operationCount",))
+    journal = journal_observation(scratch, allow_empty=True)
+    require(control == {"status": "OBSERVED", "rows": [{"operationCount": 0}]}
+            and journal == {"state": "EMPTY", "operationCount": 0}, "PATCH_JSON_NATIVE_REJECTION_ADMITTED_OPERATION")
+    report.update(nativeMalformedPatchDiagnosticsQualified=True, malformedPatchNativeRequests=1 + 2 * len(cases),
+                  malformedPatchGoOperations=0, malformedPatchRustOperations=0)
 
 
 def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
@@ -656,6 +744,15 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
                         "PATCH_INPUT_ORIGINAL_CORPUS_CONTRACT_DIFFERS")
                 seed_bytes = base64.b64decode(corpus["seedBase64"], validate=True)
                 require(hashlib.sha256(seed_bytes).hexdigest() == corpus["seedSha256"], "PATCH_INPUT_SEED_BYTES_DIFFER")
+                error_fixture = PATCH_JSON_ERROR_FIXTURE.read_bytes()
+                require(hashlib.sha256(error_fixture).hexdigest() == PATCH_JSON_ERROR_FIXTURE_SHA256, "PATCH_JSON_FIXTURE_CHANGED")
+                error_corpus = json.loads(error_fixture)
+                require(error_corpus["schemaVersion"] == 1 and error_corpus["seedSha256"] == corpus["seedSha256"]
+                        and error_corpus["originalSourceCommit"] == corpus["originalSourceCommit"]
+                        and error_corpus["originalSourceTree"] == corpus["originalSourceTree"]
+                        and len(error_corpus["cases"]) == 36, "PATCH_JSON_ORIGINAL_CORPUS_CONTRACT_DIFFERS")
+                report["originalMalformedPatchHTTP"] = verify_original_patch_json_errors(mirror, seed_bytes, error_corpus, args.out)
+                report["originalMalformedPatchCorpusSha256"] = PATCH_JSON_ERROR_FIXTURE_SHA256
                 library.parent.mkdir()
                 library.write_bytes(seed_bytes)
                 report.update(offlineMediaFixtureSeeded=True, semanticStageReached=True,
@@ -667,6 +764,7 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
                               patchInputSeedSha256=corpus["seedSha256"])
                 token = launch("patch-input-launch")
                 require(library.read_bytes() == seed_bytes, "PATCH_INPUT_LAUNCH_CHANGED_SEED")
+                verify_native_patch_json_errors(scratch, profile, origin, token, error_corpus["cases"], report)
                 verify_patch_inputs(scratch, profile, origin, token, cases, report)
                 retained_bytes = library.read_bytes()
                 retained_generation = generation_observation(profile)
