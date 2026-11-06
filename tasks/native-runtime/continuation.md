@@ -1,3 +1,25 @@
+<!-- native checkpoint 2026-11-06 lossless media PATCH input -->
+
+Whole product migration remains ACTIVE / NOT_READY. The parent a0552e0186
+failed both Rust jobs and Windows verification in generated Protobuf code.
+The new flat value oneof now derives Eq alongside the existing media value
+oneof. This correction still requires compilation of this exact source.
+
+The original authenticated HTTP server verified ten input cases against two
+isolated fixture runs. The Go ingress sends selected values as ordered,
+child-first Protobuf nodes and keeps the original 1,000,000-byte body limit.
+The retained Rust writer restores exact numbers and lone UTF-16 units and
+keeps the existing authority, preparation and recovery contracts. Legacy
+nested claims still decode and keep their original signing digests. The Go
+PATCH response restores the field positions on legacy and compact results.
+
+The cloud probe replays the exact request bytes and checks PATCH and GET,
+published bytes, workspace generation, and signed receipts across restart.
+An invalid UTF-8 body fails before admission. A surviving unpaired string
+refuses publication, while selected nonfinite numbers persist before the
+response fails. Malformed JSON retains status 400 and invalid_payload.
+The original line-and-column diagnostic wording remains a compatibility gap.
+
 <!-- native checkpoint 2026-11-06 flat media PATCH response -->
 
 Whole product migration remains ACTIVE / NOT_READY. The original authenticated

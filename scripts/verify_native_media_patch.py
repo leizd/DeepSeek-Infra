@@ -7,6 +7,7 @@ qualification. Neither the oracle nor the verifier is in the production tree.
 from __future__ import annotations
 
 import argparse
+import base64
 from contextlib import closing
 from datetime import datetime, timezone
 import hashlib
@@ -31,6 +32,8 @@ from native_media_compact_receipt import compact_patch_observation, media_outcom
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "tests/fixtures/native_media_library_read_v1.json"
+PATCH_INPUT_FIXTURE = ROOT / "tests/fixtures/native_media_patch_input_v1.json"
+PATCH_INPUT_FIXTURE_SHA256 = "f801b9784e88c4571a4da280c189dbb07c15a6b80d25414cf1262eb3d9182b1e"
 MEDIA_ID = "media_keep"
 BASE_PATCH = {"title": "Native media update", "metadata": {"nativePatchProof": "controlled"}}
 # These requests deliberately include fields accepted only by the internal
@@ -325,11 +328,11 @@ def exchange(origin: str, path: str, method: str, token: str | None,
 
 
 def exchange_with_operation(origin: str, path: str, method: str, token: str | None,
-                            payload: dict[str, Any] | None = None) -> tuple[int, bytes, str, str]:
+                            payload: dict[str, Any] | bytes | None = None) -> tuple[int, bytes, str, str]:
     headers = {"Content-Type": "application/json"}
     if token is not None:
         headers["Authorization"] = "Bearer " + token
-    data = None if payload is None else wire_payload(payload)
+    data = wire_payload(payload) if isinstance(payload, dict) else payload
     try:
         response = urlopen(Request(origin + path, method=method, headers=headers, data=data), timeout=10)
     except HTTPError as error:
@@ -482,6 +485,76 @@ def verify_retained_mutations(scratch: Path, profile: Path, origin: str, token: 
             "RETAINED_MUTATION_VALUES_CHANGED_IN_DURABLE_STORE")
 
 
+def assert_patch_input_record(actual: dict[str, Any], expected: dict[str, Any], label: str) -> None:
+    require(without_update_time(actual) == without_update_time(expected),
+            "PATCH_INPUT_RESPONSE_RECORD_DIFFERS_" + label)
+    # Dictionary equality alone cannot detect the order of duplicate and
+    # normalized metadata keys, including ordered values within that metadata.
+    require(json.dumps(actual["media"]["metadata"]) == json.dumps(expected["media"]["metadata"]),
+            "PATCH_INPUT_METADATA_ORDER_DIFFERS_" + label)
+
+
+def verify_patch_input_read(origin: str, token: str, case: dict[str, Any]) -> None:
+    status, raw, _ = exchange(origin, "/api/media/" + case["mediaId"], "GET", token)
+    label = case["name"]
+    require(status == case["getStatus"], "PATCH_INPUT_GET_STATUS_DIFFERS_" + label)
+    if case["status"] == 200:
+        assert_patch_input_record(json.loads(raw), json.loads(case["bodyJson"]), label)
+    elif status == 500:
+        require(json.loads(raw) == {"error": "Server error", "code": "internal"}, "PATCH_INPUT_GET_ERROR_DIFFERS_" + label)
+
+
+def verify_patch_inputs(scratch: Path, profile: Path, origin: str, token: str,
+                        cases: list[dict[str, Any]], report: dict[str, Any]) -> None:
+    library = profile / ".media/library.json"
+    observations: dict[str, dict[str, Any]] = {}
+    report["patchInputCases"] = observations
+    for case in cases:
+        label = case["name"]
+        request = base64.b64decode(case["requestBase64"], validate=True)
+        require(0 < len(request) <= 1_000_000 and hashlib.sha256(request).hexdigest() == case["requestSha256"],
+                "PATCH_INPUT_REQUEST_DIFFERS_FROM_ORIGINAL_" + label)
+        before = hashlib.sha256(library.read_bytes()).hexdigest()
+        generation_before = generation_observation(profile)
+        report.update(nativePatchRequestStarted=True, nativePatchReplyObserved=False)
+        status, raw, _, operation = exchange_with_operation(origin, "/api/media/" + case["mediaId"], "PATCH", token, request)
+        report.update(nativePatchReplyObserved=True, nativePatchHTTPStatus=status)
+        stored = library.read_bytes()
+        after = hashlib.sha256(stored).hexdigest()
+        generation_after = generation_observation(profile)
+        applied = case["storeChanged"]
+        evidence = observations[label] = {
+            "requestSha256": case["requestSha256"], "originalStatus": case["status"], "status": status,
+            "beforeSha256": before, "afterSha256": after, "workspaceGeneration": generation_after["value"],
+        }
+        admitted = label not in {"invalid_utf8", "malformed_trailing"}
+        require(status == case["status"] and bool(operation) == admitted and (before != after) == applied,
+                "PATCH_INPUT_HTTP_OR_DURABLE_EFFECT_DIFFERS_" + label)
+        require(generation_after["value"] == generation_before["value"] + (2 if applied else 0)
+                and (applied or generation_after == generation_before), "PATCH_INPUT_GENERATION_DIFFERS_" + label)
+        body, expected = json.loads(raw), json.loads(case["bodyJson"])
+        if status == 200:
+            assert_patch_input_record(body, expected, label)
+            if label == "deep_object":
+                evidence["receipt"] = retained_mutation_receipt(scratch, profile, operation, "APPLIED", before, after, 4)
+        elif label == "malformed_trailing":
+            require(body == {"error": "Invalid JSON body", "code": expected["code"]}, "PATCH_INPUT_MALFORMED_ERROR_DIFFERS")
+            evidence.update(originalError=expected["error"], nativeError=body["error"])
+        else:
+            require(body == expected, "PATCH_INPUT_ERROR_BODY_DIFFERS_" + label)
+            if admitted:
+                evidence["receipt"] = retained_mutation_receipt(scratch, profile, operation,
+                    "APPLIED" if applied else "REFUSED", before, after if applied else None, 3)
+        if label in {"literal_nan", "decimal_overflow"}:
+            value = next(row["metadata"]["value"] for row in json.loads(stored)["media"] if row["mediaId"] == case["mediaId"])
+            require(isinstance(value, float) and str(value) == ("nan" if label == "literal_nan" else "inf"),
+                    "PATCH_INPUT_NONFINITE_VALUE_CHANGED_" + label)
+        verify_patch_input_read(origin, token, case)
+        require(library.read_bytes() == stored and generation_observation(profile) == generation_after,
+                "PATCH_INPUT_GET_CHANGED_LIBRARY_OR_GENERATION_" + label)
+        evidence["getStatus"] = case["getStatus"]
+
+
 def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
     require(os.environ.get("GITHUB_ACTIONS") == "true" and os.name == "posix",
             "NATIVE_MEDIA_PATCH_VERIFICATION_IS_CLOUD_ONLY")
@@ -570,6 +643,48 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
             initial_writer = reads.writer(profile)
             shutdown()
             original_auth = (profile / ".auth-token").read_bytes()
+            if getattr(args, "patch_input_cases", False):
+                library = profile / ".media/library.json"
+                require(child is None and not library.parent.exists(), "PATCH_INPUT_SEED_PROFILE_NOT_FRESH")
+                raw_corpus = PATCH_INPUT_FIXTURE.read_bytes()
+                require(hashlib.sha256(raw_corpus).hexdigest() == PATCH_INPUT_FIXTURE_SHA256,
+                        "PATCH_INPUT_ORIGINAL_CORPUS_FIXTURE_CHANGED")
+                corpus = json.loads(raw_corpus)
+                cases = corpus["cases"]
+                require(corpus["schemaVersion"] == 1 and corpus["authEnabled"] and corpus["actualOriginalTCP"]
+                        and corpus["originalRequests"] == 20 and len(cases) == 10,
+                        "PATCH_INPUT_ORIGINAL_CORPUS_CONTRACT_DIFFERS")
+                seed_bytes = base64.b64decode(corpus["seedBase64"], validate=True)
+                require(hashlib.sha256(seed_bytes).hexdigest() == corpus["seedSha256"], "PATCH_INPUT_SEED_BYTES_DIFFER")
+                library.parent.mkdir()
+                library.write_bytes(seed_bytes)
+                report.update(offlineMediaFixtureSeeded=True, semanticStageReached=True,
+                              patchInputFixtureSha256=PATCH_INPUT_FIXTURE_SHA256,
+                              originalPatchInputCorpusSha256=corpus["originalCorpusSha256"],
+                              originalPatchInputProofSha256=corpus["originalInputProofSha256"],
+                              originalPatchInputSourceCommit=corpus["originalSourceCommit"],
+                              originalPatchInputSourceTree=corpus["originalSourceTree"],
+                              patchInputSeedSha256=corpus["seedSha256"])
+                token = launch("patch-input-launch")
+                require(library.read_bytes() == seed_bytes, "PATCH_INPUT_LAUNCH_CHANGED_SEED")
+                verify_patch_inputs(scratch, profile, origin, token, cases, report)
+                retained_bytes = library.read_bytes()
+                retained_generation = generation_observation(profile)
+                shutdown()
+                token = launch("patch-input-restart")
+                require((profile / ".auth-token").read_bytes() == original_auth, "PATCH_INPUT_RESTART_REPLACED_AUTH")
+                for case in cases:
+                    verify_patch_input_read(origin, token, case)
+                    receipt = report["patchInputCases"][case["name"]].get("receipt")
+                    if receipt:
+                        require(retained_mutation_receipt(scratch, profile, receipt["operationId"], receipt["state"],
+                            receipt["beforeSha256"], receipt["afterSha256"], receipt["schemaVersion"]) == receipt,
+                            "PATCH_INPUT_RECEIPT_CHANGED_AFTER_RESTART_" + case["name"])
+                require(library.read_bytes() == retained_bytes and generation_observation(profile) == retained_generation,
+                        "PATCH_INPUT_RESTART_CHANGED_LIBRARY_OR_GENERATION")
+                report.update(status="PASS", nativePatchInputCasesQualified=True, mediaRetainedAfterLauncherRestart=True,
+                              mediaEffectJournalRetained=True, workspaceGenerationFenced=True, workspaceGenerationRetainedAfterRestart=True)
+                return
             if getattr(args, "retained_mutation_cases", False):
                 library = profile / ".media/library.json"
                 require(child is None and not library.parent.exists(), "RETAINED_MUTATION_SEED_PROFILE_NOT_FRESH")
@@ -811,15 +926,18 @@ def main() -> int:
     parser.add_argument("--large-record-case", action="store_true", help="Exercise a retained legal record larger than4MiB through actual native HTTP")
     parser.add_argument("--retained-mutation-cases", action="store_true",
                         help="Exercise retained record writes and signed HTTP 500 receipts")
+    parser.add_argument("--patch-input-cases", action="store_true",
+                        help="Replay the original authenticated HTTP input corpus, using the exact request bytes")
     args = parser.parse_args()
     require(not args.field_case or args.metadata_order_case == "baseline", "MEDIA_PATCH_CASE_SELECTION_CONFLICT")
     require(not args.large_library_case or not args.field_case and args.metadata_order_case == "baseline",
             "MEDIA_PATCH_CAPACITY_CASE_SELECTION_CONFLICT")
     require(not args.large_record_case or not args.large_library_case and not args.field_case
             and args.metadata_order_case == "baseline", "MEDIA_PATCH_LARGE_RECORD_CASE_SELECTION_CONFLICT")
-    require(not args.retained_mutation_cases or not args.large_record_case and not args.large_library_case
+    require(not (args.retained_mutation_cases or args.patch_input_cases) or not args.large_record_case and not args.large_library_case
             and not args.field_case and args.metadata_order_case == "baseline",
-            "RETAINED_MUTATION_CASE_SELECTION_CONFLICT")
+            "MEDIA_PATCH_CORPUS_CASE_SELECTION_CONFLICT")
+    require(not (args.retained_mutation_cases and args.patch_input_cases), "MEDIA_PATCH_CORPUS_CASE_SELECTION_CONFLICT")
     # Only this new retained-record workload needs a larger report/read bound.
     # Existing cases retain their original 2MiB response/report constraint.
     LIMIT = (8 if args.large_record_case else 2) * 1024**2

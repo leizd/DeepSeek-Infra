@@ -127,7 +127,8 @@ pub(super) fn validate_claim(
         };
     }
     let patch = intent.patch.as_ref().ok_or_else(invalid)?;
-    if patch.title.is_none() && patch.project_id.is_none() && patch.metadata.is_none() {
+    if patch.flat_values.is_some() && intent.max_outcome_schema_version != patch_wire::FLAT_VERSION
+    {
         return Err(invalid());
     }
     validate_patch_values(patch).map_err(|_| invalid())

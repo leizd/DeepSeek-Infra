@@ -109,7 +109,7 @@ func TestMediaRecoveryCancelsOnlyDurableUndispatchedAbsence(t *testing.T) {
 		t.Fatal("dispatched reservation lost", err)
 	}
 }
-func TestMediaPublicIngressKeepsHostPathDepthAndFieldPresenceChecks(t *testing.T) {
+func TestMediaPublicIngressKeepsHostPathAndFlatPatchFieldPresenceChecks(t *testing.T) {
 	c, err := store.OpenControl(store.OpenOptions{Path: t.TempDir(), Owner: "media-ingress"})
 	if err != nil {
 		t.Fatal(err)
@@ -131,7 +131,8 @@ func TestMediaPublicIngressKeepsHostPathDepthAndFieldPresenceChecks(t *testing.T
 		{"host", "/api/media/media_one", "untrusted.example", `{"title":"x"}`, 403, "forbidden"},
 		{"empty-id", "/api/media/", "", `{"title":"x"}`, 501, "GO_API_NOT_IMPLEMENTED"},
 		{"nested-path", "/api/media/media_one/child", "", `{"title":"x"}`, 501, "GO_API_NOT_IMPLEMENTED"},
-		{"depth", "/api/media/media_one", "", `{"metadata":` + strings.Repeat("[", 140) + `null` + strings.Repeat("]", 140) + `}`, 400, "invalid_payload"},
+		{"deep-valid-body", "/api/media/media_one", "", `{"metadata":` + strings.Repeat("[", 140) + `null` + strings.Repeat("]", 140) + `}`, 503, "MEDIA_WORKER_UNAVAILABLE"},
+		{"invalid-utf8", "/api/media/media_one", "", "{\"title\":\"\xff\"}", 500, "internal"},
 		{"present-null-fields", "/api/media/media_one", "", `{"projectId":null,"metadata":null}`, 503, "MEDIA_WORKER_UNAVAILABLE"},
 	} {
 		t.Run(test.name, func(t *testing.T) {

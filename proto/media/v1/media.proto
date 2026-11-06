@@ -43,6 +43,9 @@ message MediaPatch {
   MediaValue title = 1;
   MediaValue project_id = 2;
   MediaValue metadata = 3;
+  // The lossless input form is exclusive with fields 1 through 3. Its root
+  // object carries only supplied title, projectId and metadata members.
+  MediaFlatPatchRecord flat_values = 4;
 }
 
 // The v1 envelope retains its original name so stored PATCH receipts and their
@@ -424,9 +427,13 @@ message MediaFlatPatchNode {
     bool null_value = 1; // Must be true when selected.
     bool bool_value = 2;
     string text_value = 3;
-    string number_value = 4; // Finite JSON decimal, with original integer precision.
+    // Public results use a finite JSON decimal. A flat input also preserves
+    // the source NaN, Infinity and -Infinity tokens.
+    string number_value = 4;
     MediaFlatPatchObject object_value = 5;
     MediaFlatPatchArray array_value = 6;
+    // Input only. Little-endian UTF-16 units with an unpaired surrogate.
+    bytes text_utf16_le = 7;
   }
 }
 
@@ -437,6 +444,8 @@ message MediaFlatPatchObject {
 message MediaFlatPatchMember {
   string key = 1;
   uint32 child = 2;
+  // Input only, exclusive with key. The same canonical encoding as text_utf16_le.
+  bytes key_utf16_le = 3;
 }
 
 message MediaFlatPatchArray {

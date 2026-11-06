@@ -63,7 +63,7 @@
     },
     {
       "path": "go/internal/protocol/mediav1/media.pb.go",
-      "sha256": "f784048ba6658394e40985d7183b2d76221a1f46ed7a41571c83df022dd2df97"
+      "sha256": "660277df6b12dec63b5926281b9bafb21d03cc2838ab99e0d84c48cc70061bca"
     },
     {
       "path": "go/internal/protocol/mediav1/media_grpc.pb.go",
@@ -83,7 +83,7 @@
     },
     {
       "path": "proto/generated/descriptor.pb",
-      "sha256": "229eaddbedbc5adee58c1bb14165f571b18900a376ad57ea3cb7ab61dd9a57b4"
+      "sha256": "b89137a390927d42147d3fa20201285af118dd4b86a94695c6fc5226ed63fe78"
     }
   ],
   "schema_version": 1,
@@ -126,7 +126,7 @@
     },
     {
       "path": "proto/media/v1/media.proto",
-      "sha256": "c38ee93f37e4aacbcdc9718e82a311adbfc795b774eba177b0db4044c00fca6c"
+      "sha256": "3cf7e4b1a2a44036d271cfc10332928bcabb6823a307ba122b01ac4f0edb3c9e"
     },
     {
       "path": "proto/platform/v1/ocr.proto",

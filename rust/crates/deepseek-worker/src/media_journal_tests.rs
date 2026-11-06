@@ -1,6 +1,9 @@
 use super::*;
 use deepseek_federation::{create_control_signer_bundle, load_control_signer};
-use deepseek_protocol::generated::deepseek::media::v1::{MediaPatch, MediaPatchIntent};
+use deepseek_protocol::generated::deepseek::media::v1::{
+    MediaFlatPatchMember, MediaFlatPatchNode, MediaFlatPatchObject, MediaFlatPatchRecord,
+    MediaPatch, MediaPatchIntent, media_flat_patch_node::Kind as FlatKind,
+};
 use serde_json::{Value, json};
 use std::sync::OnceLock;
 
@@ -120,6 +123,102 @@ fn server_error_claim(mut claim: MediaPatchClaim) -> MediaPatchClaim {
     intent.max_outcome_schema_version = media_server_error::VERSION;
     claim.request_sha256 = sha(&intent.encode_to_vec());
     claim
+}
+
+fn flat_input_claim(mut claim: MediaPatchClaim, value: FlatKind, depth: usize) -> MediaPatchClaim {
+    let mut nodes = vec![MediaFlatPatchNode { kind: Some(value) }];
+    let mut wrap = |name: &str| {
+        let child = nodes.len() as u32;
+        nodes.push(MediaFlatPatchNode {
+            kind: Some(FlatKind::ObjectValue(MediaFlatPatchObject {
+                members: vec![MediaFlatPatchMember {
+                    key: name.into(),
+                    child,
+                    key_utf16_le: Vec::new(),
+                }],
+            })),
+        });
+    };
+    if depth != 0 {
+        wrap("last");
+        for _ in 0..depth {
+            wrap("next");
+        }
+    }
+    wrap("value");
+    wrap("metadata");
+    let intent = claim.intent.as_mut().unwrap();
+    intent.max_outcome_schema_version = patch_wire::FLAT_VERSION;
+    intent.patch = Some(MediaPatch {
+        flat_values: Some(MediaFlatPatchRecord { nodes }),
+        ..Default::default()
+    });
+    claim.request_sha256 = sha(&intent.encode_to_vec());
+    claim
+}
+
+#[test]
+fn flat_patch_input_publishes_exact_deep_numbers_and_retains_the_result() {
+    let (root, key, mut journal, claim) = fixture();
+    const WIDE: &str = "1234567890123456789012345678901234567890";
+    let claim = flat_input_claim(claim, FlatKind::NumberValue(WIDE.into()), 160);
+    let before = read_library(root.path()).unwrap();
+    let prepared = journal.prepare(&claim).unwrap();
+    assert_eq!(read_library(root.path()).unwrap(), before);
+    let applied = journal.publish(&claim, &prepared.digest, &key).unwrap();
+    assert_eq!(applied.schema_version, patch_wire::FLAT_VERSION);
+    assert_eq!(applied.state, MediaPatchEffectState::Applied as i32);
+    assert_eq!(applied.http_status, 200);
+    let after = read_library(root.path()).unwrap();
+    let nested = format!(
+        "{}{{\"last\":{WIDE}}}{}",
+        r#"{"next":"#.repeat(160),
+        "}".repeat(160)
+    );
+    assert!(
+        std::str::from_utf8(&after)
+            .unwrap()
+            .contains(nested.as_str())
+    );
+    assert_eq!(applied.after_sha256, sha(&after));
+    let (manifest, _) = journal.patched_record(&claim).unwrap();
+    assert_eq!(applied.patched, Some(manifest));
+}
+
+#[test]
+fn flat_patch_input_keeps_original_pre_and_post_write_error_phases() {
+    for (value, state) in [
+        (
+            FlatKind::TextUtf16Le(vec![0, 0xd8]),
+            MediaPatchEffectState::Refused,
+        ),
+        (
+            FlatKind::NumberValue("NaN".into()),
+            MediaPatchEffectState::Applied,
+        ),
+        (
+            FlatKind::NumberValue("1e400".into()),
+            MediaPatchEffectState::Applied,
+        ),
+    ] {
+        let (root, key, mut journal, claim) = fixture();
+        let claim = flat_input_claim(claim, value, 0);
+        let before = read_library(root.path()).unwrap();
+        let prepared = journal.prepare(&claim).unwrap();
+        let receipt = journal.publish(&claim, &prepared.digest, &key).unwrap();
+        let after = read_library(root.path()).unwrap();
+        assert!(media_server_error::valid_shape(&receipt));
+        assert_eq!(receipt.state, state as i32);
+        assert_eq!(receipt.before_sha256, sha(&before));
+        assert_eq!(receipt.signature.len(), 64);
+        if state == MediaPatchEffectState::Applied {
+            assert_ne!(before, after);
+            assert_eq!(receipt.after_sha256, sha(&after));
+        } else {
+            assert_eq!(before, after);
+            assert!(receipt.after_sha256.is_empty());
+        }
+    }
 }
 
 #[test]
@@ -614,6 +713,7 @@ pub(super) fn fixture() -> (
             metadata: Some(
                 crate::media_values::from_json(&json!({"added":[null,false,2]})).unwrap(),
             ),
+            flat_values: None,
         }),
         create: None,
         process: None,

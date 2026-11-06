@@ -51,6 +51,7 @@ impl MediaRecord {
                             Ok(MediaFlatPatchMember {
                                 key: key.utf8().map_err(|_| PublicRecordError::Unencodable)?,
                                 child,
+                                key_utf16_le: Vec::new(),
                             })
                         })
                         .collect::<Result<_, PublicRecordError>>()?;

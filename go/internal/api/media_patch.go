@@ -1,11 +1,9 @@
 package api
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"github.com/leizd/DeepSeek-Infra/go/internal/config"
 	mediamodel "github.com/leizd/DeepSeek-Infra/go/internal/media"
 	mediav1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/mediav1"
@@ -80,7 +78,7 @@ func writeMediaOutcome(w http.ResponseWriter, request *http.Request, outcome *me
 		writeJSON(w, request, http.MethodDelete, map[string]any{"ok": true, "deleted": outcome.DeletedCount})
 		return
 	}
-	value, err := mediamodel.ToJSON(&mediav1.MediaValue{Kind: &mediav1.MediaValue_ObjectValue{ObjectValue: outcome.Media}})
+	value, err := mediamodel.PatchResponseJSON(outcome.Media)
 	if err != nil {
 		mediaUnknown(w, outcome.OperationId)
 		return
@@ -117,7 +115,7 @@ func writeMediaPatchOutcome(w http.ResponseWriter, request *http.Request, client
 		mediaUnknown(w, outcome.OperationId)
 		return
 	}
-	value, err := mediamodel.ToJSON(&mediav1.MediaValue{Kind: &mediav1.MediaValue_ObjectValue{ObjectValue: record}})
+	value, err := mediamodel.PatchResponseJSON(record)
 	if err != nil {
 		mediaUnknown(w, outcome.OperationId)
 		return
@@ -222,57 +220,26 @@ func parseMediaPublicPatch(w http.ResponseWriter, r *http.Request) (*mediav1.Med
 		policyWriteError(w, 400, "invalid_payload", "Request body is empty")
 		return nil, false
 	}
-	if r.ContentLength > 1_000_000 {
+	if r.ContentLength > mediamodel.PublicPatchBodyLimit {
 		policyWriteError(w, 413, "upload_too_large", "Request body is too large")
 		return nil, false
 	}
-	body := http.MaxBytesReader(w, r.Body, 1_000_000)
-	decoder := json.NewDecoder(body)
-	decoder.UseNumber()
-	var payload json.RawMessage
-	if err := decoder.Decode(&payload); err != nil {
+	body := http.MaxBytesReader(w, r.Body, mediamodel.PublicPatchBodyLimit)
+	raw, err := io.ReadAll(body)
+	if err != nil {
 		policyWriteError(w, 400, "invalid_payload", "Invalid JSON body")
 		return nil, false
 	}
-	if decoder.Decode(new(any)) != io.EOF {
+	patch, err := mediamodel.ParsePublicPatch(raw)
+	switch err {
+	case nil:
+		return patch, true
+	case mediamodel.ErrPatchObject, mediamodel.ErrPatchFields:
+		policyWriteError(w, 400, "invalid_payload", err.Error())
+	case mediamodel.ErrPatchUTF8:
+		policyWriteError(w, 500, "internal", "Server error")
+	default:
 		policyWriteError(w, 400, "invalid_payload", "Invalid JSON body")
-		return nil, false
 	}
-	trimmed := bytes.TrimSpace(payload)
-	if len(trimmed) == 0 || trimmed[0] != '{' {
-		policyWriteError(w, 400, "invalid_payload", "Request body must be a JSON object")
-		return nil, false
-	}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(payload, &fields); err != nil {
-		policyWriteError(w, 400, "invalid_payload", "Invalid JSON body")
-		return nil, false
-	}
-	patch := &mediav1.MediaPatch{}
-	present := false
-	for _, field := range []string{"title", "projectId", "metadata"} {
-		value, exists := fields[field]
-		if !exists {
-			continue
-		}
-		present = true
-		typed, err := mediamodel.ParseJSON(value)
-		if err != nil {
-			policyWriteError(w, 400, "invalid_payload", "Invalid media patch")
-			return nil, false
-		}
-		switch field {
-		case "title":
-			patch.Title = typed
-		case "projectId":
-			patch.ProjectId = typed
-		case "metadata":
-			patch.Metadata = typed
-		}
-	}
-	if !present {
-		policyWriteError(w, 400, "invalid_payload", "Media patch did not include any supported fields")
-		return nil, false
-	}
-	return patch, true
+	return nil, false
 }

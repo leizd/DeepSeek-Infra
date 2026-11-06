@@ -193,6 +193,7 @@ jobs:
           set -o pipefail
           python scripts/verify_native_media_patch.py --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --out artifacts/rust-cloud/media-patch-process 2>&1 | tee artifacts/rust-cloud/media-patch-process.log
           python scripts/verify_native_media_patch.py --retained-mutation-cases --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --out artifacts/rust-cloud/media-patch-process/retained-writes 2>&1 | tee artifacts/rust-cloud/media-retained-writes.log
+          python scripts/verify_native_media_patch.py --patch-input-cases --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --out artifacts/rust-cloud/media-patch-process/input 2>&1 | tee artifacts/rust-cloud/media-patch-input.log
       - name: Preserve authenticated media patch process evidence
         if: always() && matrix.mode == 'checks'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

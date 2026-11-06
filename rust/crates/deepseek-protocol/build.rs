@@ -55,6 +55,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .enum_attribute(".deepseek.platform.v1.DocumentChunk.part", "#[derive(Eq)]")
         .enum_attribute(".deepseek.media.v1.MediaValue.kind", "#[derive(Eq)]")
         .enum_attribute(
+            ".deepseek.media.v1.MediaFlatPatchNode.kind",
+            "#[derive(Eq)]",
+        )
+        .enum_attribute(
             ".deepseek.media.v1.MediaCreateStageRequest.part",
             "#[derive(Eq)]",
         )

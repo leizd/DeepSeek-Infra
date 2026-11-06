@@ -2,9 +2,10 @@
 use super::{Document, MediaRecord, Node, Text, float};
 use crate::app_error::AppError;
 use deepseek_protocol::generated::deepseek::media::v1::{
-    MediaArray, MediaMember, MediaObject, MediaPatch, MediaValue, media_value::Kind,
+    MediaArray, MediaFlatPatchRecord, MediaMember, MediaObject, MediaPatch, MediaValue,
+    media_flat_patch_node::Kind as FlatKind, media_value::Kind,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 const LEGACY_VALUE_DEPTH: usize = 128;
 
@@ -20,14 +21,7 @@ fn invalid_patch() -> AppError {
 }
 
 pub fn validate_patch_values(patch: &MediaPatch) -> Result<(), AppError> {
-    let mut document = Document::empty_builder();
-    for value in [&patch.title, &patch.project_id, &patch.metadata]
-        .into_iter()
-        .flatten()
-    {
-        document.add_patch_value(value, 0)?;
-    }
-    Ok(())
+    Document::empty_builder().patch_values(patch).map(|_| ())
 }
 
 /// Check canonical keys and restore the original dictionary insertion order.
@@ -66,6 +60,123 @@ fn merge_fields(fields: &mut Vec<(Text, usize)>, replacements: Vec<(Text, usize)
 }
 
 impl Document {
+    fn patch_values(&mut self, patch: &MediaPatch) -> Result<Vec<(Text, usize)>, AppError> {
+        let nested =
+            patch.title.is_some() || patch.project_id.is_some() || patch.metadata.is_some();
+        if let Some(record) = patch.flat_values.as_ref() {
+            if nested {
+                return Err(invalid_patch());
+            }
+            return self.add_flat_patch_values(record);
+        }
+        if !nested {
+            return Err(invalid_patch());
+        }
+        [
+            ("title", patch.title.as_ref()),
+            ("projectId", patch.project_id.as_ref()),
+            ("metadata", patch.metadata.as_ref()),
+        ]
+        .into_iter()
+        .filter_map(|(name, value)| value.map(|value| (name, value)))
+        .map(|(name, value)| Ok((Text::from(name), self.add_patch_value(value, 0)?)))
+        .collect()
+    }
+
+    fn patch_number(value: &str, flat: bool) -> Result<Node, AppError> {
+        let text = value.trim();
+        if flat {
+            if text != value {
+                return Err(invalid_patch());
+            }
+            match text {
+                "NaN" => return Ok(Node::Float(f64::NAN)),
+                "Infinity" => return Ok(Node::Float(f64::INFINITY)),
+                "-Infinity" => return Ok(Node::Float(f64::NEG_INFINITY)),
+                _ => {}
+            }
+        }
+        let digits = text.strip_prefix('-').unwrap_or(text);
+        if !matches!(digits.as_bytes().first(), Some(b'0'..=b'9')) {
+            return Err(invalid_patch());
+        }
+        let mut decoded = Self::decode(value.as_bytes()).map_err(|_| invalid_patch())?;
+        match decoded.nodes.pop() {
+            Some(node @ (Node::Integer(_) | Node::Float(_))) => Ok(node),
+            _ => Err(invalid_patch()),
+        }
+    }
+
+    fn add_flat_patch_values(
+        &mut self,
+        record: &MediaFlatPatchRecord,
+    ) -> Result<Vec<(Text, usize)>, AppError> {
+        if record.nodes.is_empty() {
+            return Err(invalid_patch());
+        }
+        let start = self.nodes.len();
+        let mut referenced = vec![false; record.nodes.len()];
+        for (index, value) in record.nodes.iter().enumerate() {
+            let mut reference = |child: u32| {
+                let slot = (child as usize).checked_sub(1).ok_or_else(invalid_patch)?;
+                if slot >= index || referenced[slot] {
+                    return Err(invalid_patch());
+                }
+                referenced[slot] = true;
+                Ok(start + slot)
+            };
+            let node = match value.kind.as_ref().ok_or_else(invalid_patch)? {
+                FlatKind::NullValue(true) => Node::Null,
+                FlatKind::NullValue(false) => return Err(invalid_patch()),
+                FlatKind::BoolValue(value) => Node::Bool(*value),
+                FlatKind::TextValue(value) => Node::Text(Text::from(value.as_str())),
+                FlatKind::TextUtf16Le(value) => Node::Text(unpaired_patch_text(value)?),
+                FlatKind::NumberValue(value) => Self::patch_number(value, true)?,
+                FlatKind::ArrayValue(array) => Node::Array(
+                    array
+                        .children
+                        .iter()
+                        .copied()
+                        .map(reference)
+                        .collect::<Result<_, _>>()?,
+                ),
+                FlatKind::ObjectValue(object) => {
+                    let mut keys = HashSet::new();
+                    let mut fields = Vec::with_capacity(object.members.len());
+                    for member in &object.members {
+                        let key = if member.key_utf16_le.is_empty() {
+                            Text::from(member.key.as_str())
+                        } else if member.key.is_empty() {
+                            unpaired_patch_text(&member.key_utf16_le)?
+                        } else {
+                            return Err(invalid_patch());
+                        };
+                        if !keys.insert(key.clone()) {
+                            return Err(invalid_patch());
+                        }
+                        fields.push((key, reference(member.child)?));
+                    }
+                    Node::Object(fields)
+                }
+            };
+            self.add(node);
+        }
+        if referenced[..referenced.len() - 1].iter().any(|&used| !used) {
+            return Err(invalid_patch());
+        }
+        let Some(Node::Object(fields)) = self.nodes.last() else {
+            return Err(invalid_patch());
+        };
+        if fields.is_empty()
+            || fields.iter().any(|(key, _)| {
+                !key.equals("title") && !key.equals("projectId") && !key.equals("metadata")
+            })
+        {
+            return Err(invalid_patch());
+        }
+        Ok(fields.clone())
+    }
+
     fn add_patch_value(&mut self, value: &MediaValue, depth: usize) -> Result<usize, AppError> {
         if depth > LEGACY_VALUE_DEPTH {
             return Err(invalid_patch());
@@ -75,18 +186,7 @@ impl Document {
             Kind::NullValue(false) => return Err(invalid_patch()),
             Kind::BoolValue(value) => Node::Bool(*value),
             Kind::TextValue(value) => Node::Text(Text::from(value.as_str())),
-            Kind::NumberValue(value) => {
-                let text = value.trim();
-                let digits = text.strip_prefix('-').unwrap_or(text);
-                if !matches!(digits.as_bytes().first(), Some(b'0'..=b'9')) {
-                    return Err(invalid_patch());
-                }
-                let mut decoded = Self::decode(value.as_bytes()).map_err(|_| invalid_patch())?;
-                match decoded.nodes.pop() {
-                    Some(node @ (Node::Integer(_) | Node::Float(_))) => node,
-                    _ => return Err(invalid_patch()),
-                }
-            }
+            Kind::NumberValue(value) => Self::patch_number(value, false)?,
             Kind::ArrayValue(array) => Node::Array(
                 array
                     .values
@@ -148,20 +248,29 @@ impl Document {
     }
 }
 
+fn unpaired_patch_text(bytes: &[u8]) -> Result<Text, AppError> {
+    let pairs = bytes.chunks_exact(2);
+    if !pairs.remainder().is_empty() {
+        return Err(invalid_patch());
+    }
+    let units: Vec<_> = pairs
+        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        .collect();
+    if !char::decode_utf16(units.iter().copied()).any(|value| value.is_err()) {
+        return Err(invalid_patch());
+    }
+    Ok(Text(units))
+}
+
 impl MediaRecord {
     pub fn apply_patch(&self, patch: &MediaPatch, updated_at: &str) -> Result<Self, AppError> {
         let mut merged = self.0.clone();
         let mut replacements = Vec::new();
-        for (field, value) in [
-            ("title", patch.title.as_ref()),
-            ("projectId", patch.project_id.as_ref()),
-        ] {
-            if let Some(value) = value {
-                replacements.push((Text::from(field), merged.add_patch_value(value, 0)?));
+        for (field, update) in merged.patch_values(patch)? {
+            if !field.equals("metadata") {
+                replacements.push((field, update));
+                continue;
             }
-        }
-        if let Some(metadata) = patch.metadata.as_ref() {
-            let update = merged.add_patch_value(metadata, 0)?;
             if let Node::Object(replacements_map) = &merged.nodes[update] {
                 let metadata = merged
                     .field(merged.root, "metadata")
@@ -171,7 +280,7 @@ impl MediaRecord {
                 };
                 let mut fields = previous.clone();
                 merge_fields(&mut fields, replacements_map.clone());
-                replacements.push((Text::from("metadata"), merged.add(Node::Object(fields))));
+                replacements.push((field, merged.add(Node::Object(fields))));
             }
         }
         replacements.push((

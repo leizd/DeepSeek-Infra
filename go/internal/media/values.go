@@ -54,13 +54,23 @@ func RequestDigest(intent *mediav1.MediaPatchIntent) ([]byte, error) {
 	switch intent.Kind {
 	case mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_UNSPECIFIED:
 		p := intent.Patch
-		if intent.Create != nil || p == nil || len(p.ProtoReflect().GetUnknown()) != 0 || (p.Title == nil && p.ProjectId == nil && p.Metadata == nil) {
+		if intent.Create != nil || p == nil || len(p.ProtoReflect().GetUnknown()) != 0 {
 			return nil, ErrInvalid
 		}
-		for _, v := range []*mediav1.MediaValue{p.Title, p.ProjectId, p.Metadata} {
-			if v != nil {
-				if _, err := ToJSON(v); err != nil {
-					return nil, err
+		nested := p.Title != nil || p.ProjectId != nil || p.Metadata != nil
+		if p.FlatValues != nil {
+			if nested || intent.MaxOutcomeSchemaVersion != FlatPatchOutcomeVersion || validateFlatRecord(p.FlatValues, true) != nil {
+				return nil, ErrInvalid
+			}
+		} else {
+			if !nested {
+				return nil, ErrInvalid
+			}
+			for _, v := range []*mediav1.MediaValue{p.Title, p.ProjectId, p.Metadata} {
+				if v != nil {
+					if _, err := ToJSON(v); err != nil {
+						return nil, err
+					}
 				}
 			}
 		}
@@ -107,8 +117,8 @@ func ParseJSON(raw []byte) (*mediav1.MediaValue, error) {
 	return ParseJSONBounded(raw, 1_000_000)
 }
 
-// Creation retains its original 16,000,000-byte JSON bound. The PATCH parser
-// keeps its historical bound and all existing callers retain that behavior.
+// Creation retains its original 16,000,000-byte JSON bound. Legacy nested
+// callers of ParseJSON retain their 1,000,000-byte bound.
 func ParseJSONBounded(raw []byte, limit int) (*mediav1.MediaValue, error) {
 	if limit < 0 || limit > 16_000_000 || len(raw) > limit {
 		return nil, ErrInvalid
@@ -233,6 +243,68 @@ func fromJSON(v any, depth int) (*mediav1.MediaValue, error) {
 	return r, nil
 }
 func ToJSON(v *mediav1.MediaValue) (any, error) { return toJSON(v, 0) }
+
+// PatchResponseJSON uses the positions bound into the legacy and compact
+// results. Stored producers without ordinals retain canonical key order.
+func PatchResponseJSON(record *mediav1.MediaObject) (json.RawMessage, error) {
+	wire := &mediav1.MediaValue{Kind: &mediav1.MediaValue_ObjectValue{ObjectValue: record}}
+	value, err := ToJSON(wire)
+	if err != nil {
+		return nil, err
+	}
+	var result bytes.Buffer
+	if err := writeOrderedPatchValue(&result, value, wire); err != nil {
+		return nil, err
+	}
+	return result.Bytes(), nil
+}
+
+func writeOrderedPatchValue(result *bytes.Buffer, value any, wire *mediav1.MediaValue) error {
+	switch decoded := value.(type) {
+	case map[string]any:
+		members := wire.GetObjectValue().Members
+		if len(members) > 0 && members[0].SourceOrdinal != 0 {
+			ordered := make([]*mediav1.MediaMember, len(members))
+			for _, member := range members {
+				ordered[member.SourceOrdinal-1] = member
+			}
+			members = ordered
+		}
+		result.WriteByte('{')
+		for index, member := range members {
+			if index != 0 {
+				result.WriteByte(',')
+			}
+			key, _ := json.Marshal(member.Key)
+			result.Write(key)
+			result.WriteByte(':')
+			if err := writeOrderedPatchValue(result, decoded[member.Key], member.Value); err != nil {
+				return err
+			}
+		}
+		result.WriteByte('}')
+	case []any:
+		children := wire.GetArrayValue().Values
+		result.WriteByte('[')
+		for index, child := range decoded {
+			if index != 0 {
+				result.WriteByte(',')
+			}
+			if err := writeOrderedPatchValue(result, child, children[index]); err != nil {
+				return err
+			}
+		}
+		result.WriteByte(']')
+	default:
+		raw, err := json.Marshal(value)
+		if err != nil {
+			return err
+		}
+		result.Write(raw)
+	}
+	return nil
+}
+
 func toJSON(v *mediav1.MediaValue, depth int) (any, error) {
 	if v == nil || depth > 128 || len(v.ProtoReflect().GetUnknown()) != 0 {
 		return nil, ErrInvalid

@@ -439,10 +439,13 @@ func (x *MediaArray) GetValues() []*MediaValue {
 // Message presence retains the HTTP patch's absent versus explicit null
 // semantics. Only the three supported public fields cross this boundary.
 type MediaPatch struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Title         *MediaValue            `protobuf:"bytes,1,opt,name=title,proto3" json:"title,omitempty"`
-	ProjectId     *MediaValue            `protobuf:"bytes,2,opt,name=project_id,json=projectId,proto3" json:"project_id,omitempty"`
-	Metadata      *MediaValue            `protobuf:"bytes,3,opt,name=metadata,proto3" json:"metadata,omitempty"`
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	Title     *MediaValue            `protobuf:"bytes,1,opt,name=title,proto3" json:"title,omitempty"`
+	ProjectId *MediaValue            `protobuf:"bytes,2,opt,name=project_id,json=projectId,proto3" json:"project_id,omitempty"`
+	Metadata  *MediaValue            `protobuf:"bytes,3,opt,name=metadata,proto3" json:"metadata,omitempty"`
+	// The lossless input form is exclusive with fields 1 through 3. Its root
+	// object carries only supplied title, projectId and metadata members.
+	FlatValues    *MediaFlatPatchRecord `protobuf:"bytes,4,opt,name=flat_values,json=flatValues,proto3" json:"flat_values,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -494,6 +497,13 @@ func (x *MediaPatch) GetProjectId() *MediaValue {
 func (x *MediaPatch) GetMetadata() *MediaValue {
 	if x != nil {
 		return x.Metadata
+	}
+	return nil
+}
+
+func (x *MediaPatch) GetFlatValues() *MediaFlatPatchRecord {
+	if x != nil {
+		return x.FlatValues
 	}
 	return nil
 }
@@ -3159,6 +3169,7 @@ type MediaFlatPatchNode struct {
 	//	*MediaFlatPatchNode_NumberValue
 	//	*MediaFlatPatchNode_ObjectValue
 	//	*MediaFlatPatchNode_ArrayValue
+	//	*MediaFlatPatchNode_TextUtf16Le
 	Kind          isMediaFlatPatchNode_Kind `protobuf_oneof:"kind"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -3255,6 +3266,15 @@ func (x *MediaFlatPatchNode) GetArrayValue() *MediaFlatPatchArray {
 	return nil
 }
 
+func (x *MediaFlatPatchNode) GetTextUtf16Le() []byte {
+	if x != nil {
+		if x, ok := x.Kind.(*MediaFlatPatchNode_TextUtf16Le); ok {
+			return x.TextUtf16Le
+		}
+	}
+	return nil
+}
+
 type isMediaFlatPatchNode_Kind interface {
 	isMediaFlatPatchNode_Kind()
 }
@@ -3272,7 +3292,9 @@ type MediaFlatPatchNode_TextValue struct {
 }
 
 type MediaFlatPatchNode_NumberValue struct {
-	NumberValue string `protobuf:"bytes,4,opt,name=number_value,json=numberValue,proto3,oneof"` // Finite JSON decimal, with original integer precision.
+	// Public results use a finite JSON decimal. A flat input also preserves
+	// the source NaN, Infinity and -Infinity tokens.
+	NumberValue string `protobuf:"bytes,4,opt,name=number_value,json=numberValue,proto3,oneof"`
 }
 
 type MediaFlatPatchNode_ObjectValue struct {
@@ -3281,6 +3303,11 @@ type MediaFlatPatchNode_ObjectValue struct {
 
 type MediaFlatPatchNode_ArrayValue struct {
 	ArrayValue *MediaFlatPatchArray `protobuf:"bytes,6,opt,name=array_value,json=arrayValue,proto3,oneof"`
+}
+
+type MediaFlatPatchNode_TextUtf16Le struct {
+	// Input only. Little-endian UTF-16 units with an unpaired surrogate.
+	TextUtf16Le []byte `protobuf:"bytes,7,opt,name=text_utf16_le,json=textUtf16Le,proto3,oneof"`
 }
 
 func (*MediaFlatPatchNode_NullValue) isMediaFlatPatchNode_Kind() {}
@@ -3294,6 +3321,8 @@ func (*MediaFlatPatchNode_NumberValue) isMediaFlatPatchNode_Kind() {}
 func (*MediaFlatPatchNode_ObjectValue) isMediaFlatPatchNode_Kind() {}
 
 func (*MediaFlatPatchNode_ArrayValue) isMediaFlatPatchNode_Kind() {}
+
+func (*MediaFlatPatchNode_TextUtf16Le) isMediaFlatPatchNode_Kind() {}
 
 type MediaFlatPatchObject struct {
 	state         protoimpl.MessageState  `protogen:"open.v1"`
@@ -3340,9 +3369,11 @@ func (x *MediaFlatPatchObject) GetMembers() []*MediaFlatPatchMember {
 }
 
 type MediaFlatPatchMember struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Key           string                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
-	Child         uint32                 `protobuf:"varint,2,opt,name=child,proto3" json:"child,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Key   string                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
+	Child uint32                 `protobuf:"varint,2,opt,name=child,proto3" json:"child,omitempty"`
+	// Input only, exclusive with key. The same canonical encoding as text_utf16_le.
+	KeyUtf16Le    []byte `protobuf:"bytes,3,opt,name=key_utf16_le,json=keyUtf16Le,proto3" json:"key_utf16_le,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3389,6 +3420,13 @@ func (x *MediaFlatPatchMember) GetChild() uint32 {
 		return x.Child
 	}
 	return 0
+}
+
+func (x *MediaFlatPatchMember) GetKeyUtf16Le() []byte {
+	if x != nil {
+		return x.KeyUtf16Le
+	}
+	return nil
 }
 
 type MediaFlatPatchArray struct {
@@ -3461,13 +3499,15 @@ const file_media_v1_media_proto_rawDesc = "" +
 	"\amembers\x18\x01 \x03(\v2\x1e.deepseek.media.v1.MediaMemberR\amembers\"C\n" +
 	"\n" +
 	"MediaArray\x125\n" +
-	"\x06values\x18\x01 \x03(\v2\x1d.deepseek.media.v1.MediaValueR\x06values\"\xba\x01\n" +
+	"\x06values\x18\x01 \x03(\v2\x1d.deepseek.media.v1.MediaValueR\x06values\"\x84\x02\n" +
 	"\n" +
 	"MediaPatch\x123\n" +
 	"\x05title\x18\x01 \x01(\v2\x1d.deepseek.media.v1.MediaValueR\x05title\x12<\n" +
 	"\n" +
 	"project_id\x18\x02 \x01(\v2\x1d.deepseek.media.v1.MediaValueR\tprojectId\x129\n" +
-	"\bmetadata\x18\x03 \x01(\v2\x1d.deepseek.media.v1.MediaValueR\bmetadata\"\xa5\x03\n" +
+	"\bmetadata\x18\x03 \x01(\v2\x1d.deepseek.media.v1.MediaValueR\bmetadata\x12H\n" +
+	"\vflat_values\x18\x04 \x01(\v2'.deepseek.media.v1.MediaFlatPatchRecordR\n" +
+	"flatValues\"\xa5\x03\n" +
 	"\x10MediaPatchIntent\x12%\n" +
 	"\x0eschema_version\x18\x01 \x01(\rR\rschemaVersion\x12!\n" +
 	"\foperation_id\x18\x02 \x01(\tR\voperationId\x12\x19\n" +
@@ -3691,7 +3731,7 @@ const file_media_v1_media_proto_rawDesc = "" +
 	"\x05found\x18\x01 \x01(\bR\x05found\x12>\n" +
 	"\aoutcome\x18\x02 \x01(\v2$.deepseek.media.v1.MediaPatchOutcomeR\aoutcome\"S\n" +
 	"\x14MediaFlatPatchRecord\x12;\n" +
-	"\x05nodes\x18\x01 \x03(\v2%.deepseek.media.v1.MediaFlatPatchNodeR\x05nodes\"\xbd\x02\n" +
+	"\x05nodes\x18\x01 \x03(\v2%.deepseek.media.v1.MediaFlatPatchNodeR\x05nodes\"\xe3\x02\n" +
 	"\x12MediaFlatPatchNode\x12\x1f\n" +
 	"\n" +
 	"null_value\x18\x01 \x01(\bH\x00R\tnullValue\x12\x1f\n" +
@@ -3702,13 +3742,16 @@ const file_media_v1_media_proto_rawDesc = "" +
 	"\fnumber_value\x18\x04 \x01(\tH\x00R\vnumberValue\x12L\n" +
 	"\fobject_value\x18\x05 \x01(\v2'.deepseek.media.v1.MediaFlatPatchObjectH\x00R\vobjectValue\x12I\n" +
 	"\varray_value\x18\x06 \x01(\v2&.deepseek.media.v1.MediaFlatPatchArrayH\x00R\n" +
-	"arrayValueB\x06\n" +
+	"arrayValue\x12$\n" +
+	"\rtext_utf16_le\x18\a \x01(\fH\x00R\vtextUtf16LeB\x06\n" +
 	"\x04kind\"Y\n" +
 	"\x14MediaFlatPatchObject\x12A\n" +
-	"\amembers\x18\x01 \x03(\v2'.deepseek.media.v1.MediaFlatPatchMemberR\amembers\">\n" +
+	"\amembers\x18\x01 \x03(\v2'.deepseek.media.v1.MediaFlatPatchMemberR\amembers\"`\n" +
 	"\x14MediaFlatPatchMember\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05child\x18\x02 \x01(\rR\x05child\"1\n" +
+	"\x05child\x18\x02 \x01(\rR\x05child\x12 \n" +
+	"\fkey_utf16_le\x18\x03 \x01(\fR\n" +
+	"keyUtf16Le\"1\n" +
 	"\x13MediaFlatPatchArray\x12\x1a\n" +
 	"\bchildren\x18\x01 \x03(\rR\bchildren*\x99\x01\n" +
 	"\x11MediaMutationKind\x12#\n" +
@@ -3811,84 +3854,85 @@ var file_media_v1_media_proto_depIdxs = []int32{
 	2,  // 5: deepseek.media.v1.MediaPatch.title:type_name -> deepseek.media.v1.MediaValue
 	2,  // 6: deepseek.media.v1.MediaPatch.project_id:type_name -> deepseek.media.v1.MediaValue
 	2,  // 7: deepseek.media.v1.MediaPatch.metadata:type_name -> deepseek.media.v1.MediaValue
-	6,  // 8: deepseek.media.v1.MediaPatchIntent.patch:type_name -> deepseek.media.v1.MediaPatch
-	0,  // 9: deepseek.media.v1.MediaPatchIntent.kind:type_name -> deepseek.media.v1.MediaMutationKind
-	19, // 10: deepseek.media.v1.MediaPatchIntent.create:type_name -> deepseek.media.v1.MediaCreateManifest
-	8,  // 11: deepseek.media.v1.MediaPatchIntent.process:type_name -> deepseek.media.v1.MediaProcessOptions
-	7,  // 12: deepseek.media.v1.MediaPatchClaim.intent:type_name -> deepseek.media.v1.MediaPatchIntent
-	45, // 13: deepseek.media.v1.MediaPatchClaim.fence:type_name -> deepseek.common.v1.ActionFence
-	45, // 14: deepseek.media.v1.GetMediaPatchClaimRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	45, // 15: deepseek.media.v1.BeginMediaPatchDispatchRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	9,  // 16: deepseek.media.v1.MediaPatchDispatchPermit.claim:type_name -> deepseek.media.v1.MediaPatchClaim
-	45, // 17: deepseek.media.v1.MediaPatchOutcome.original_fence:type_name -> deepseek.common.v1.ActionFence
-	1,  // 18: deepseek.media.v1.MediaPatchOutcome.state:type_name -> deepseek.media.v1.MediaPatchEffectState
-	4,  // 19: deepseek.media.v1.MediaPatchOutcome.media:type_name -> deepseek.media.v1.MediaObject
-	22, // 20: deepseek.media.v1.MediaPatchOutcome.created:type_name -> deepseek.media.v1.MediaCreatedResult
-	18, // 21: deepseek.media.v1.MediaPatchOutcome.processed:type_name -> deepseek.media.v1.MediaProcessedResult
-	14, // 22: deepseek.media.v1.MediaPatchOutcome.patched:type_name -> deepseek.media.v1.MediaPatchedResult
-	45, // 23: deepseek.media.v1.MediaPatchedResult.original_fence:type_name -> deepseek.common.v1.ActionFence
-	9,  // 24: deepseek.media.v1.MediaPatchPreparation.claim:type_name -> deepseek.media.v1.MediaPatchClaim
-	45, // 25: deepseek.media.v1.ReadMediaPatchResultRequest.original_fence:type_name -> deepseek.common.v1.ActionFence
-	14, // 26: deepseek.media.v1.MediaPatchResultChunk.manifest:type_name -> deepseek.media.v1.MediaPatchedResult
-	45, // 27: deepseek.media.v1.MediaProcessedResult.original_fence:type_name -> deepseek.common.v1.ActionFence
-	4,  // 28: deepseek.media.v1.MediaCreatePayload.registration:type_name -> deepseek.media.v1.MediaObject
-	21, // 29: deepseek.media.v1.MediaCreatePayload.upload:type_name -> deepseek.media.v1.MediaUploadPayload
-	45, // 30: deepseek.media.v1.MediaCreatedResult.original_fence:type_name -> deepseek.common.v1.ActionFence
-	4,  // 31: deepseek.media.v1.MediaCreatePreparation.record:type_name -> deepseek.media.v1.MediaObject
-	24, // 32: deepseek.media.v1.MediaCreatePreparation.processing:type_name -> deepseek.media.v1.MediaProcessingPreparation
-	4,  // 33: deepseek.media.v1.MediaProcessingPreparation.processing_record:type_name -> deepseek.media.v1.MediaObject
-	5,  // 34: deepseek.media.v1.MediaProcessingPreparation.segments:type_name -> deepseek.media.v1.MediaArray
-	25, // 35: deepseek.media.v1.MediaProcessingPreparation.index_items:type_name -> deepseek.media.v1.MediaIndexItem
-	4,  // 36: deepseek.media.v1.MediaIndexItem.metadata:type_name -> deepseek.media.v1.MediaObject
-	23, // 37: deepseek.media.v1.MediaProcessPreparation.effects:type_name -> deepseek.media.v1.MediaCreatePreparation
-	27, // 38: deepseek.media.v1.MediaProcessPreparation.before_index_items:type_name -> deepseek.media.v1.MediaStoredIndexRow
-	5,  // 39: deepseek.media.v1.MediaProcessPreparation.result_segments:type_name -> deepseek.media.v1.MediaArray
-	25, // 40: deepseek.media.v1.MediaStoredIndexRow.record:type_name -> deepseek.media.v1.MediaIndexItem
-	28, // 41: deepseek.media.v1.MediaStoredIndexRow.vector:type_name -> deepseek.media.v1.MediaStoredVectorRow
-	45, // 42: deepseek.media.v1.MediaCreateStageRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	19, // 43: deepseek.media.v1.MediaCreateStageRequest.manifest:type_name -> deepseek.media.v1.MediaCreateManifest
-	19, // 44: deepseek.media.v1.MediaCreateStageResponse.manifest:type_name -> deepseek.media.v1.MediaCreateManifest
-	45, // 45: deepseek.media.v1.ReadMediaCreateResultRequest.original_fence:type_name -> deepseek.common.v1.ActionFence
-	4,  // 46: deepseek.media.v1.ReadMediaCreateResultResponse.media:type_name -> deepseek.media.v1.MediaObject
-	5,  // 47: deepseek.media.v1.ReadMediaCreateResultResponse.segments:type_name -> deepseek.media.v1.MediaArray
-	13, // 48: deepseek.media.v1.RecordMediaPatchOutcomeRequest.outcome:type_name -> deepseek.media.v1.MediaPatchOutcome
-	45, // 49: deepseek.media.v1.RecordMediaPatchOutcomeRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	45, // 50: deepseek.media.v1.ExecuteMediaPatchRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	45, // 51: deepseek.media.v1.ExecuteMediaDeleteRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	45, // 52: deepseek.media.v1.ExecuteMediaProcessRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	45, // 53: deepseek.media.v1.QueryMediaPatchRequest.original_fence:type_name -> deepseek.common.v1.ActionFence
-	13, // 54: deepseek.media.v1.QueryMediaPatchResponse.outcome:type_name -> deepseek.media.v1.MediaPatchOutcome
-	41, // 55: deepseek.media.v1.MediaFlatPatchRecord.nodes:type_name -> deepseek.media.v1.MediaFlatPatchNode
-	42, // 56: deepseek.media.v1.MediaFlatPatchNode.object_value:type_name -> deepseek.media.v1.MediaFlatPatchObject
-	44, // 57: deepseek.media.v1.MediaFlatPatchNode.array_value:type_name -> deepseek.media.v1.MediaFlatPatchArray
-	43, // 58: deepseek.media.v1.MediaFlatPatchObject.members:type_name -> deepseek.media.v1.MediaFlatPatchMember
-	10, // 59: deepseek.media.v1.MediaMutationControl.GetClaim:input_type -> deepseek.media.v1.GetMediaPatchClaimRequest
-	11, // 60: deepseek.media.v1.MediaMutationControl.BeginDispatch:input_type -> deepseek.media.v1.BeginMediaPatchDispatchRequest
-	33, // 61: deepseek.media.v1.MediaMutationControl.RecordOutcome:input_type -> deepseek.media.v1.RecordMediaPatchOutcomeRequest
-	35, // 62: deepseek.media.v1.MediaMutationWorker.ExecutePatch:input_type -> deepseek.media.v1.ExecuteMediaPatchRequest
-	36, // 63: deepseek.media.v1.MediaMutationWorker.ExecuteDelete:input_type -> deepseek.media.v1.ExecuteMediaDeleteRequest
-	35, // 64: deepseek.media.v1.MediaMutationWorker.ExecuteCreate:input_type -> deepseek.media.v1.ExecuteMediaPatchRequest
-	37, // 65: deepseek.media.v1.MediaMutationWorker.ExecuteProcess:input_type -> deepseek.media.v1.ExecuteMediaProcessRequest
-	38, // 66: deepseek.media.v1.MediaMutationWorker.QueryPatch:input_type -> deepseek.media.v1.QueryMediaPatchRequest
-	16, // 67: deepseek.media.v1.MediaMutationWorker.ReadPatchResult:input_type -> deepseek.media.v1.ReadMediaPatchResultRequest
-	29, // 68: deepseek.media.v1.MediaCreationPayloads.Stage:input_type -> deepseek.media.v1.MediaCreateStageRequest
-	31, // 69: deepseek.media.v1.MediaCreationPayloads.ReadResult:input_type -> deepseek.media.v1.ReadMediaCreateResultRequest
-	9,  // 70: deepseek.media.v1.MediaMutationControl.GetClaim:output_type -> deepseek.media.v1.MediaPatchClaim
-	12, // 71: deepseek.media.v1.MediaMutationControl.BeginDispatch:output_type -> deepseek.media.v1.MediaPatchDispatchPermit
-	34, // 72: deepseek.media.v1.MediaMutationControl.RecordOutcome:output_type -> deepseek.media.v1.RecordMediaPatchOutcomeResponse
-	13, // 73: deepseek.media.v1.MediaMutationWorker.ExecutePatch:output_type -> deepseek.media.v1.MediaPatchOutcome
-	13, // 74: deepseek.media.v1.MediaMutationWorker.ExecuteDelete:output_type -> deepseek.media.v1.MediaPatchOutcome
-	13, // 75: deepseek.media.v1.MediaMutationWorker.ExecuteCreate:output_type -> deepseek.media.v1.MediaPatchOutcome
-	13, // 76: deepseek.media.v1.MediaMutationWorker.ExecuteProcess:output_type -> deepseek.media.v1.MediaPatchOutcome
-	39, // 77: deepseek.media.v1.MediaMutationWorker.QueryPatch:output_type -> deepseek.media.v1.QueryMediaPatchResponse
-	17, // 78: deepseek.media.v1.MediaMutationWorker.ReadPatchResult:output_type -> deepseek.media.v1.MediaPatchResultChunk
-	30, // 79: deepseek.media.v1.MediaCreationPayloads.Stage:output_type -> deepseek.media.v1.MediaCreateStageResponse
-	32, // 80: deepseek.media.v1.MediaCreationPayloads.ReadResult:output_type -> deepseek.media.v1.ReadMediaCreateResultResponse
-	70, // [70:81] is the sub-list for method output_type
-	59, // [59:70] is the sub-list for method input_type
-	59, // [59:59] is the sub-list for extension type_name
-	59, // [59:59] is the sub-list for extension extendee
-	0,  // [0:59] is the sub-list for field type_name
+	40, // 8: deepseek.media.v1.MediaPatch.flat_values:type_name -> deepseek.media.v1.MediaFlatPatchRecord
+	6,  // 9: deepseek.media.v1.MediaPatchIntent.patch:type_name -> deepseek.media.v1.MediaPatch
+	0,  // 10: deepseek.media.v1.MediaPatchIntent.kind:type_name -> deepseek.media.v1.MediaMutationKind
+	19, // 11: deepseek.media.v1.MediaPatchIntent.create:type_name -> deepseek.media.v1.MediaCreateManifest
+	8,  // 12: deepseek.media.v1.MediaPatchIntent.process:type_name -> deepseek.media.v1.MediaProcessOptions
+	7,  // 13: deepseek.media.v1.MediaPatchClaim.intent:type_name -> deepseek.media.v1.MediaPatchIntent
+	45, // 14: deepseek.media.v1.MediaPatchClaim.fence:type_name -> deepseek.common.v1.ActionFence
+	45, // 15: deepseek.media.v1.GetMediaPatchClaimRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	45, // 16: deepseek.media.v1.BeginMediaPatchDispatchRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	9,  // 17: deepseek.media.v1.MediaPatchDispatchPermit.claim:type_name -> deepseek.media.v1.MediaPatchClaim
+	45, // 18: deepseek.media.v1.MediaPatchOutcome.original_fence:type_name -> deepseek.common.v1.ActionFence
+	1,  // 19: deepseek.media.v1.MediaPatchOutcome.state:type_name -> deepseek.media.v1.MediaPatchEffectState
+	4,  // 20: deepseek.media.v1.MediaPatchOutcome.media:type_name -> deepseek.media.v1.MediaObject
+	22, // 21: deepseek.media.v1.MediaPatchOutcome.created:type_name -> deepseek.media.v1.MediaCreatedResult
+	18, // 22: deepseek.media.v1.MediaPatchOutcome.processed:type_name -> deepseek.media.v1.MediaProcessedResult
+	14, // 23: deepseek.media.v1.MediaPatchOutcome.patched:type_name -> deepseek.media.v1.MediaPatchedResult
+	45, // 24: deepseek.media.v1.MediaPatchedResult.original_fence:type_name -> deepseek.common.v1.ActionFence
+	9,  // 25: deepseek.media.v1.MediaPatchPreparation.claim:type_name -> deepseek.media.v1.MediaPatchClaim
+	45, // 26: deepseek.media.v1.ReadMediaPatchResultRequest.original_fence:type_name -> deepseek.common.v1.ActionFence
+	14, // 27: deepseek.media.v1.MediaPatchResultChunk.manifest:type_name -> deepseek.media.v1.MediaPatchedResult
+	45, // 28: deepseek.media.v1.MediaProcessedResult.original_fence:type_name -> deepseek.common.v1.ActionFence
+	4,  // 29: deepseek.media.v1.MediaCreatePayload.registration:type_name -> deepseek.media.v1.MediaObject
+	21, // 30: deepseek.media.v1.MediaCreatePayload.upload:type_name -> deepseek.media.v1.MediaUploadPayload
+	45, // 31: deepseek.media.v1.MediaCreatedResult.original_fence:type_name -> deepseek.common.v1.ActionFence
+	4,  // 32: deepseek.media.v1.MediaCreatePreparation.record:type_name -> deepseek.media.v1.MediaObject
+	24, // 33: deepseek.media.v1.MediaCreatePreparation.processing:type_name -> deepseek.media.v1.MediaProcessingPreparation
+	4,  // 34: deepseek.media.v1.MediaProcessingPreparation.processing_record:type_name -> deepseek.media.v1.MediaObject
+	5,  // 35: deepseek.media.v1.MediaProcessingPreparation.segments:type_name -> deepseek.media.v1.MediaArray
+	25, // 36: deepseek.media.v1.MediaProcessingPreparation.index_items:type_name -> deepseek.media.v1.MediaIndexItem
+	4,  // 37: deepseek.media.v1.MediaIndexItem.metadata:type_name -> deepseek.media.v1.MediaObject
+	23, // 38: deepseek.media.v1.MediaProcessPreparation.effects:type_name -> deepseek.media.v1.MediaCreatePreparation
+	27, // 39: deepseek.media.v1.MediaProcessPreparation.before_index_items:type_name -> deepseek.media.v1.MediaStoredIndexRow
+	5,  // 40: deepseek.media.v1.MediaProcessPreparation.result_segments:type_name -> deepseek.media.v1.MediaArray
+	25, // 41: deepseek.media.v1.MediaStoredIndexRow.record:type_name -> deepseek.media.v1.MediaIndexItem
+	28, // 42: deepseek.media.v1.MediaStoredIndexRow.vector:type_name -> deepseek.media.v1.MediaStoredVectorRow
+	45, // 43: deepseek.media.v1.MediaCreateStageRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	19, // 44: deepseek.media.v1.MediaCreateStageRequest.manifest:type_name -> deepseek.media.v1.MediaCreateManifest
+	19, // 45: deepseek.media.v1.MediaCreateStageResponse.manifest:type_name -> deepseek.media.v1.MediaCreateManifest
+	45, // 46: deepseek.media.v1.ReadMediaCreateResultRequest.original_fence:type_name -> deepseek.common.v1.ActionFence
+	4,  // 47: deepseek.media.v1.ReadMediaCreateResultResponse.media:type_name -> deepseek.media.v1.MediaObject
+	5,  // 48: deepseek.media.v1.ReadMediaCreateResultResponse.segments:type_name -> deepseek.media.v1.MediaArray
+	13, // 49: deepseek.media.v1.RecordMediaPatchOutcomeRequest.outcome:type_name -> deepseek.media.v1.MediaPatchOutcome
+	45, // 50: deepseek.media.v1.RecordMediaPatchOutcomeRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	45, // 51: deepseek.media.v1.ExecuteMediaPatchRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	45, // 52: deepseek.media.v1.ExecuteMediaDeleteRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	45, // 53: deepseek.media.v1.ExecuteMediaProcessRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	45, // 54: deepseek.media.v1.QueryMediaPatchRequest.original_fence:type_name -> deepseek.common.v1.ActionFence
+	13, // 55: deepseek.media.v1.QueryMediaPatchResponse.outcome:type_name -> deepseek.media.v1.MediaPatchOutcome
+	41, // 56: deepseek.media.v1.MediaFlatPatchRecord.nodes:type_name -> deepseek.media.v1.MediaFlatPatchNode
+	42, // 57: deepseek.media.v1.MediaFlatPatchNode.object_value:type_name -> deepseek.media.v1.MediaFlatPatchObject
+	44, // 58: deepseek.media.v1.MediaFlatPatchNode.array_value:type_name -> deepseek.media.v1.MediaFlatPatchArray
+	43, // 59: deepseek.media.v1.MediaFlatPatchObject.members:type_name -> deepseek.media.v1.MediaFlatPatchMember
+	10, // 60: deepseek.media.v1.MediaMutationControl.GetClaim:input_type -> deepseek.media.v1.GetMediaPatchClaimRequest
+	11, // 61: deepseek.media.v1.MediaMutationControl.BeginDispatch:input_type -> deepseek.media.v1.BeginMediaPatchDispatchRequest
+	33, // 62: deepseek.media.v1.MediaMutationControl.RecordOutcome:input_type -> deepseek.media.v1.RecordMediaPatchOutcomeRequest
+	35, // 63: deepseek.media.v1.MediaMutationWorker.ExecutePatch:input_type -> deepseek.media.v1.ExecuteMediaPatchRequest
+	36, // 64: deepseek.media.v1.MediaMutationWorker.ExecuteDelete:input_type -> deepseek.media.v1.ExecuteMediaDeleteRequest
+	35, // 65: deepseek.media.v1.MediaMutationWorker.ExecuteCreate:input_type -> deepseek.media.v1.ExecuteMediaPatchRequest
+	37, // 66: deepseek.media.v1.MediaMutationWorker.ExecuteProcess:input_type -> deepseek.media.v1.ExecuteMediaProcessRequest
+	38, // 67: deepseek.media.v1.MediaMutationWorker.QueryPatch:input_type -> deepseek.media.v1.QueryMediaPatchRequest
+	16, // 68: deepseek.media.v1.MediaMutationWorker.ReadPatchResult:input_type -> deepseek.media.v1.ReadMediaPatchResultRequest
+	29, // 69: deepseek.media.v1.MediaCreationPayloads.Stage:input_type -> deepseek.media.v1.MediaCreateStageRequest
+	31, // 70: deepseek.media.v1.MediaCreationPayloads.ReadResult:input_type -> deepseek.media.v1.ReadMediaCreateResultRequest
+	9,  // 71: deepseek.media.v1.MediaMutationControl.GetClaim:output_type -> deepseek.media.v1.MediaPatchClaim
+	12, // 72: deepseek.media.v1.MediaMutationControl.BeginDispatch:output_type -> deepseek.media.v1.MediaPatchDispatchPermit
+	34, // 73: deepseek.media.v1.MediaMutationControl.RecordOutcome:output_type -> deepseek.media.v1.RecordMediaPatchOutcomeResponse
+	13, // 74: deepseek.media.v1.MediaMutationWorker.ExecutePatch:output_type -> deepseek.media.v1.MediaPatchOutcome
+	13, // 75: deepseek.media.v1.MediaMutationWorker.ExecuteDelete:output_type -> deepseek.media.v1.MediaPatchOutcome
+	13, // 76: deepseek.media.v1.MediaMutationWorker.ExecuteCreate:output_type -> deepseek.media.v1.MediaPatchOutcome
+	13, // 77: deepseek.media.v1.MediaMutationWorker.ExecuteProcess:output_type -> deepseek.media.v1.MediaPatchOutcome
+	39, // 78: deepseek.media.v1.MediaMutationWorker.QueryPatch:output_type -> deepseek.media.v1.QueryMediaPatchResponse
+	17, // 79: deepseek.media.v1.MediaMutationWorker.ReadPatchResult:output_type -> deepseek.media.v1.MediaPatchResultChunk
+	30, // 80: deepseek.media.v1.MediaCreationPayloads.Stage:output_type -> deepseek.media.v1.MediaCreateStageResponse
+	32, // 81: deepseek.media.v1.MediaCreationPayloads.ReadResult:output_type -> deepseek.media.v1.ReadMediaCreateResultResponse
+	71, // [71:82] is the sub-list for method output_type
+	60, // [60:71] is the sub-list for method input_type
+	60, // [60:60] is the sub-list for extension type_name
+	60, // [60:60] is the sub-list for extension extendee
+	0,  // [0:60] is the sub-list for field type_name
 }
 
 func init() { file_media_v1_media_proto_init() }
@@ -3916,6 +3960,7 @@ func file_media_v1_media_proto_init() {
 		(*MediaFlatPatchNode_NumberValue)(nil),
 		(*MediaFlatPatchNode_ObjectValue)(nil),
 		(*MediaFlatPatchNode_ArrayValue)(nil),
+		(*MediaFlatPatchNode_TextUtf16Le)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
