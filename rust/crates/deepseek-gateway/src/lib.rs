@@ -81,6 +81,7 @@ pub use skills_routes::ACTION_NOT_MIGRATED;
 pub mod static_files;
 pub mod title_route;
 pub mod tool_rounds;
+mod trace_routes;
 
 pub fn gateway_version() -> &'static str {
     // Root VERSION is the release the public routes already advertised.
@@ -213,6 +214,7 @@ fn create_routes() -> Router {
         .merge(rust_status_routes::router())
         .merge(fetch_url_route::router())
         .merge(auth_logout_route::router())
+        .merge(trace_routes::router())
         .merge(download_save_route::router())
         .merge(mcp_status_routes::router())
         .route("/api/*path", any(control_proxy::proxy_api_to_go))

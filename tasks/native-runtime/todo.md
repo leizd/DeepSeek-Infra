@@ -4122,3 +4122,21 @@ failure and fix are retained in the slice's prior-failure evidence.
 - [ ] Next: S0 ownership prerequisites for store-backed S1 routes
       (`backup-capacity/summary`, `backup-transfer-budget`, retention dry-runs)
       and the S2 catalog read path.
+
+
+## 2026-11-07 S1: native read-only trace routes
+
+- [x] Implement `GET /api/traces`, `GET /api/traces/{trace_id}` and
+      `GET /api/traces/{trace_id}/export.json` as read-only ports of the
+      observability store queries and export redaction; original method routing.
+- [x] Require authentication for `/trace/{trace_id}` (SPA page keeps serving the
+      shell; trace-existence 404 recorded as follow-up).
+- [x] Oracle test: real Python-written WAL store, byte-exact list/detail/export,
+      timestamp shape, 404/405/POST/OPTIONS/401 and unchanged workspace.
+- [x] Local rustfmt and production-runtime-inventory checks pass; no local Rust
+      compilation.
+- [ ] CLOUD_PENDING: push a branch stacked on the qualified S1a source and
+      dispatch `rust-cloud.yml`.
+- [ ] Follow-ups: native writer + cutover for `observability_trace_store`, the
+      `/trace/{trace_id}` trace-existence 404, and an immutable read path that
+      avoids SQLite WAL companions.

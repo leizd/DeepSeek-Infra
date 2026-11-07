@@ -15613,3 +15613,50 @@ probe-state bodies were measured against the real Python application before the
 test was written. No local Rust compilation.
 
 CLOUD_PENDING: push and dispatch `rust-cloud.yml` after the S1a run is collected.
+
+
+## 2026-11-07 S1 third slice: native read-only trace routes
+
+Parent `2a0f1ef9` (S1b backups capabilities). The three JSON trace routes now
+run on the Rust edge:
+
+- `rust/crates/deepseek-gateway/src/trace_routes.rs` is a read-only port of the
+  original `observability` store queries and `observability/export.py`
+  redaction: `GET /api/traces` (limit parsing with Python `int()` rules,
+  1..=1000 clamp, list order and `tracing` status), `GET /api/traces/{trace_id}`
+  (run + spans + summary, 404 `Trace not found`), and
+  `GET /api/traces/{trace_id}/export.json` (redacted trace + `_export`
+  `trace-export.v1` block and the original attachment filename). The Rust side
+  opens `.traces/traces.sqlite3` read-only, never creates the directory/schema,
+  and treats a missing store like an empty one. Redaction matches the original
+  key rules (`apiKey`/tokens/cookies/secrets, token-count exceptions), inline
+  secret regexes (Bearer, `sk-` keys, query/header tokens), character-based
+  clipping (1200 private-content / 2000 general) and the original span
+  offset/duration/token mapping.
+- Method routing reproduces the original: POST answers the `/api/{path:path}`
+  catch-all's flat 404, OPTIONS the global 204 with both allow lists, other
+  verbs FastAPI's 405 with `Allow: OPTIONS`; `/trace/{trace_id}` now requires
+  authentication (the page itself is served by the SPA fallback, with its
+  trace-existence 404 still recorded as a follow-up).
+- `rust/crates/deepseek-gateway/tests/trace_routes.rs` seeds the real WAL-mode
+  trace store through the Python writer (two traces: an older `a2a` run and a
+  newer `chat` run with sensitive metadata, a `sk-` key, a Bearer header, a
+  1500-character output and an error span), drops the WAL side files, then
+  compares list/detail/export bodies byte-for-byte (export timestamp normalised
+  and shape-checked), missing-trace 404s, POST 404, PUT 405 + `Allow: OPTIONS`,
+  OPTIONS access-control headers and the unauthenticated 401. It also asserts
+  the newest trace is first and that native reads change no workspace files
+  except the tolerated SQLite WAL companion files.
+
+Recorded narrowings: the route reads the Python-authoritative store (this is a
+read-only migration; `observability_trace_store` cutover still needs the native
+writer); `/trace/{trace_id}` keeps the SPA fallback instead of the original
+trace-existence check; SQLite may create `-shm`/`-wal` companions on a read-only
+WAL open.
+
+Local: `rustfmt --check` clean on the module, test, `auth.rs` and `lib.rs`; the
+production runtime inventory check passes. Every expected body used by the test
+was measured against the real Python application first. No local Rust
+compilation.
+
+CLOUD_PENDING: push after the S1a run is collected and dispatch `rust-cloud.yml`.
