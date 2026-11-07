@@ -53,6 +53,7 @@ pub mod file_source_route;
 pub mod file_text_route;
 pub mod local_clock;
 pub mod mcp_hub;
+mod mcp_status_routes;
 mod media_segment_routes;
 pub mod native_chat;
 pub mod observability;
@@ -204,6 +205,7 @@ fn create_routes() -> Router {
         .merge(scheduler_routes::router())
         .merge(edge_status_routes::router())
         .merge(rust_status_routes::router())
+        .merge(mcp_status_routes::router())
         .route("/api/*path", any(control_proxy::proxy_api_to_go))
         // Private control handlers must not fall through to either proxy or SPA.
         .route("/internal", any(|| async { StatusCode::NOT_FOUND }))

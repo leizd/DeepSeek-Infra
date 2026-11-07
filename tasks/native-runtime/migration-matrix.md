@@ -1,3 +1,36 @@
+<!-- native checkpoint 2026-11-07 native mcp status route -->
+
+Whole product Rust/Go migration remains ACTIVE / NOT_READY. All original server,
+desktop, Android, background, retained-function, unique-writer, recovery,
+zero-production-Python/server-TypeScript and original MCP requirements remain in
+scope.
+
+Base is the three-workflow-qualified commit `eec2853f653594289951790fb8b93b91f62a7fd0`
+(tree `094d9a047669b13922db019f37d07f4dd9ff23be`).
+
+The diagnostics status block for the MCP hub is now implemented natively:
+`GET /api/mcp` returns the original `mcp_status()` document from the same
+environment inputs (enabled, capability with unknown→full fallback, native
+tool-catalog tool count scoped to that profile and zero when disabled, expose
+flags, and the complete outbound client configuration with Python's integer/float
+parsing, clamps, ordered server list and per-server timeout overrides). The route
+sits ahead of the Go `/api/*` catch-all under the existing `/api/` auth layer;
+HEAD is an empty 200, other methods are 405 with `Allow: GET, HEAD`, and no store
+is created. A Rust integration test replays ten environment families against a
+fresh Python `mcp_status()` oracle and asserts the full body plus 401, query
+invariance, 405/HEAD and an empty workspace tree.
+
+Local: rustfmt clean; the ported algorithm matched the real oracle on every case;
+oracle runs created no files. Native compilation remains cloud-only, so this
+checkpoint claims no compiled result. Exact-source `rust-cloud.yml` (workspace
+tests, clippy, unchanged 80% coverage floor) is pending a pushed commit.
+
+Remaining status block: `/api/semantic-cache/status`. The ordered chain still
+requires request-bound OCR credential custody, processing process-kill and
+intermediate recovery, eval report engine, launcher/platform packages,
+zero-Python workloads, full 37-job CI, platform/provider acceptance and Evidence
+Assembly. **NOT_READY.**
+
 <!-- native checkpoint 2026-11-07 multipart process parity -->
 
 Whole product Rust/Go migration remains ACTIVE / NOT_READY. All original
@@ -36,7 +69,7 @@ The reviewed local snapshot is recorded in
 pushed, cloud pending). Exact-source Go race/95% floors, Rust 80%, Windows,
 real launcher HTTP process cases, recovery/process-kill, OCR credential
 custody, aggregate capacity/backup interactions, launchers/platforms,
-zero-Python workload and Evidence Assembly remain required. **NOT_READY.**
+zero-Python workload and Evidence Assembly remain required. Exact-source cloud qualification: Rust `42323068395` (checks+coverage success, 83.0374704956727%, 1822 tests), media development `42323075782` (media-go `-race` PASS, 115 tests incl. eight new multipart process subcases), Windows `42323082715` (windows-app PASS) are green at commit `eec2853f653594289951790fb8b93b91f62a7fd0`, tree `094d9a047669b13922db019f37d07f4dd9ff23be`. Full 37-job CI, original Go/Android-Go 95% floors, native launcher multipart process=true HTTP acceptance and all remaining chain items stay open. **NOT_READY.**
 
 <!-- native checkpoint 2026-11-05 retained media values -->
 

@@ -3756,3 +3756,49 @@ Reviewed local snapshot is recorded in
 `artifacts/native-20261107-multipart-process/manifest.json`. It is committed
 only in the isolated worktree: it has not been pushed and no cloud result is
 claimed.
+
+
+### 2026-11-07 exact-source cloud qualification (eec2853f)
+
+All three user-authorized workflows are green at commit `eec2853f653594289951790fb8b93b91f62a7fd0`, tree
+`094d9a047669b13922db019f37d07f4dd9ff23be`, branch `codex/native-media-multipart-process-20261107`:
+Rust cloud `42323068395` (checks success, coverage success: 1822 tests,
+101319/122016 = 83.0374704956727% against the unchanged 80% floor,
+sourceTreeDirty=false), media development `42323075782` (media-go PASS with
+`-race`, 115 required tests including all eight new multipart process
+subcases), Windows app `42323082715` (windows-app PASS: actual native launcher
+window/WebView2 workload, restart and retained native origin). Only report
+artifacts were downloaded; no caches, binaries, images or volumes.
+
+Not qualified by these runs: full 37-job CI, original Go/Android-Go 95%
+coverage floors, and actual native launcher multipart `process=true` HTTP
+acceptance (`native-media-create.yml` not dispatched). Request-bound OCR
+credential custody, processing process-kill/intermediate recovery, aggregate
+capacity/backup interactions, remaining ordered chain and full migration stay
+open. **NOT_READY**.
+
+Evidence: `artifacts/native-20261107-multipart-process/` review.md,
+cloud-evidence.json, ci-dispatch.json.
+
+
+## 2026-11-07 native `/api/mcp` status route — implemented, cloud pending
+
+Base `eec2853f653594289951790fb8b93b91f62a7fd0`; isolated worktree
+`D:/deepseek-worktrees/tip20261106`.
+
+- [x] Implement `GET /api/mcp` natively in the Rust gateway with the original
+      `mcp_status()` shape, environment precedence/clamps and native tool-catalog
+      counts; route merged ahead of the Go catch-all; auth/HEAD/405/no-write
+      semantics preserved.
+- [x] Add `tests/mcp_status_routes.rs`: ten oracle-parity case families via a real
+      Python `mcp_status()` subprocess under the identical environment, plus 401,
+      query invariance, 405/HEAD and empty-tree assertions.
+- [x] Local: rustfmt clean; ported algorithm cross-checked against the oracle for
+      all cases; oracle runs create no files.
+- [ ] CLOUD_PENDING: push and run `rust-cloud.yml` (workspace tests + clippy + 80%
+      coverage floor) at the exact commit; then collect reports.
+- [ ] Remaining status blocks after this slice: `/api/semantic-cache/status` (needs
+      the Python status function ported and a store-ownership decision).
+- [ ] Continue the ordered remaining chain: request-bound OCR credential custody,
+      processing process-kill/intermediate recovery, eval report engine, launcher
+      platform packages, zero-Python workloads, full CI/Evidence.

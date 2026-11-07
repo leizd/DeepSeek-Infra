@@ -15093,3 +15093,59 @@ Reviewed local snapshot is recorded in
 `artifacts/native-20261107-multipart-process/manifest.json`. It is committed
 only in the isolated worktree: it has not been pushed and no cloud result is
 claimed.
+
+
+### 2026-11-07 exact-source cloud qualification (eec2853f)
+
+All three user-authorized workflows are green at commit `eec2853f653594289951790fb8b93b91f62a7fd0`, tree
+`094d9a047669b13922db019f37d07f4dd9ff23be`, branch `codex/native-media-multipart-process-20261107`:
+Rust cloud `42323068395` (checks success, coverage success: 1822 tests,
+101319/122016 = 83.0374704956727% against the unchanged 80% floor,
+sourceTreeDirty=false), media development `42323075782` (media-go PASS with
+`-race`, 115 required tests including all eight new multipart process
+subcases), Windows app `42323082715` (windows-app PASS: actual native launcher
+window/WebView2 workload, restart and retained native origin). Only report
+artifacts were downloaded; no caches, binaries, images or volumes.
+
+Not qualified by these runs: full 37-job CI, original Go/Android-Go 95%
+coverage floors, and actual native launcher multipart `process=true` HTTP
+acceptance (`native-media-create.yml` not dispatched). Request-bound OCR
+credential custody, processing process-kill/intermediate recovery, aggregate
+capacity/backup interactions, remaining ordered chain and full migration stay
+open. **NOT_READY**.
+
+Evidence: `artifacts/native-20261107-multipart-process/` review.md,
+cloud-evidence.json, ci-dispatch.json.
+
+
+## 2026-11-07 native `/api/mcp` status route — local, cloud pending
+
+Base: the three-workflow-qualified commit `eec2853f653594289951790fb8b93b91f62a7fd0`
+(tree `094d9a04...`). This slice stays in the same isolated worktree.
+
+- `rust/crates/deepseek-gateway/src/mcp_status_routes.rs` implements `GET /api/mcp`
+  with the original `mcp_status()` shape, derived from the same environment knobs:
+  `MCP_ENABLED`, protocol `2025-06-18`, endpoint `/mcp`, the validated
+  `MCP_CAPABILITY` profile (unknown → `full`), `toolCount` from the native tool
+  catalog restricted to that profile (0 when disabled), both expose flags, and the
+  `MCP_CLIENT_*` family including Python integer/float parsing, clamping, the
+  ordered `MCP_CLIENT_SERVERS` list and per-server timeout overrides. The route is
+  merged ahead of the Go `/api/*` catch-all; the existing `/api/` auth layer
+  requires the token. HEAD returns 200 with an empty body, other methods 405 with
+  `Allow: GET, HEAD`, and nothing is written.
+- `rust/crates/deepseek-gateway/tests/mcp_status_routes.rs` compares the native body
+  with a fresh Python oracle (`deepseek_infra.infra.mcp.server.mcp_status`) under the
+  identical environment across ten case families: defaults, disabled hub,
+  coder/unknown capability, blank and `\x1c`-`\x1f` flags, expose flags off, client
+  overrides and clamps, invalid servers JSON, enabled-without-servers, and
+  underscored/`+` integers. It also asserts the 401 envelope, query-string
+  invariance, 405/HEAD semantics and an empty workspace tree.
+- Local: `rustfmt --check` clean on both new files and on the `lib.rs` addition; the
+  ported environment/precedence algorithm was cross-checked against the real
+  Python oracle for every case (all matched); oracle runs created no files.
+  Native compilation is cloud-only, so no local Rust result is claimed.
+
+CLOUD_PENDING: push this commit and dispatch `rust-cloud.yml`; the workflow runs the
+full workspace tests (including the new oracle integration test), clippy and the
+unchanged 80% coverage floor at the exact source. `/api/mcp` remains listed as
+pending in the ordered chain until that exact-source result is collected.
