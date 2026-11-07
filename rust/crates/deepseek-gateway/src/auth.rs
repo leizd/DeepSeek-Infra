@@ -162,6 +162,9 @@ fn requires_auth(path: &str) -> bool {
         || path == "/mcp"
         || path.starts_with("/a2a/")
         || path == "/a2a"
+        // The original standalone trace page calls `require_api_auth`; the SPA
+        // fallback serves its HTML but must not bypass that authentication.
+        || path.starts_with("/trace/")
 }
 
 fn browser_response(path: &str, mut response: Response) -> Response {

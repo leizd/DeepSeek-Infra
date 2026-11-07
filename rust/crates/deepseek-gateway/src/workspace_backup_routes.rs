@@ -148,8 +148,8 @@ fn backup_capabilities() -> serde_json::Value {
             "tavily-key",
         ],
         "limits": {
-            "maxPackageBytes": 2_000_000_000,
-            "maxExpandedBytes": 5_000_000_000,
+            "maxPackageBytes": 2_000_000_000_i64,
+            "maxExpandedBytes": 5_000_000_000_i64,
             "maxEntries": 10_000,
             "maxPathLength": 240,
         },
@@ -197,7 +197,10 @@ fn stateless_mcp_capabilities() -> serde_json::Value {
     let Ok(response) = request.send() else {
         return unavailable();
     };
-    let Ok(payload) = response.json::<serde_json::Value>() else {
+    let Ok(text) = response.text() else {
+        return unavailable();
+    };
+    let Ok(payload) = serde_json::from_str::<serde_json::Value>(&text) else {
         return unavailable();
     };
     let available = payload

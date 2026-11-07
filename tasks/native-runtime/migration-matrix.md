@@ -1,3 +1,54 @@
+<!-- native checkpoint 2026-11-07 S1a exact-source qualification -->
+
+Whole product Rust/Go migration remains ACTIVE / **NOT_READY**. The first S1
+read-only backup-control route is now exact-source cloud-qualified:
+`rust-cloud.yml` run [42357942244](https://github.com/leizd/DeepSeek-Infra/actions/runs/42357942244)
+at revision `e3aa9e22` (tree `fc54f077`) completed success for both `Rust checks`
+(rustfmt, clippy with `-D warnings`, full workspace tests and the native process
+verifications) and `Rust coverage` (PASS, 101912/122624 = 83.1093% lines over the
+unchanged 80% floor, `sourceTreeDirty: false`, 1837 tests). The new
+`backup_target_capabilities_match_the_s3_enabled_oracle` test is observed in the
+coverage log, so `GET /api/workspace/backup-target-capabilities` (native runtime
+target capability body, GET/HEAD, shared OPTIONS/405 fallbacks) is qualified at
+this commit. The earlier stale-inventory failure in run `42357826574` is retained
+as prior-failure evidence.
+
+Above this qualified source, S1b (`GET /api/workspace/backups/capabilities`,
+`2a0f1ef9`) and S1c (read-only `/api/traces*` routes, `8a2b4c76`) are pushed but
+still unqualified — their runs failed first on a missing `regex` dependency and
+then on a stale `Cargo.lock`, both fixed and redispatched. The remaining 71
+`/api/workspace/*` backup/DR/resilience routes, ownership inversion, platform
+packages, zero-Python workloads, full 37-job CI and Evidence Assembly stay open.
+**NOT_READY.**
+
+<!-- native checkpoint 2026-11-07 S1 native trace reads -->
+
+Whole product Rust/Go migration remains ACTIVE / NOT_READY.
+
+The three JSON trace routes are now served by the Rust edge as a read-only port
+of the Python-authoritative store: `GET /api/traces` (Python limit parsing and
+store clamp, newest-first list plus `tracing` status), `GET /api/traces/{trace_id}`
+(run + spans + summary, 404 `Trace not found`) and
+`GET /api/traces/{trace_id}/export.json` (redacted trace, `trace-export.v1`
+block, original attachment filename). Redaction ports the original key rules
+(sensitive exact keys, token-count exceptions, Bearer/`sk-`/query/header regexes,
+1200/2000 character clipping) and the span offset/duration/token mapping. The
+store is opened read-only; the directory/schema is never created. Method routing
+matches the original POST-404 / OPTIONS-204 / 405 fallbacks, and `/trace/{id}`
+now requires authentication while keeping the SPA shell.
+
+`tests/trace_routes.rs` seeds the real WAL-mode store through the Python writer
+(two traces incl. sensitive metadata, `sk-` key, Bearer header, long clipped
+output and an error span), then compares byte-exact list/detail/export bodies
+(normalising only the export timestamp), missing-trace 404s, POST/PUT/OPTIONS
+routing, the 401 and an unchanged workspace.
+
+Recorded narrowings: Python remains the authoritative trace writer until that
+store's cutover; `/trace/{id}` lacks the original trace-existence 404; read-only
+WAL opens may create `-shm`/`-wal` companions. Local rustfmt and inventory checks
+pass; exact-source `rust-cloud.yml` is pending a push. Full migration
+**NOT_READY**.
+
 <!-- native checkpoint 2026-11-07 S1 backups capabilities -->
 
 Whole product Rust/Go migration remains ACTIVE / NOT_READY.

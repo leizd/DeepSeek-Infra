@@ -15613,3 +15613,103 @@ probe-state bodies were measured against the real Python application before the
 test was written. No local Rust compilation.
 
 CLOUD_PENDING: push and dispatch `rust-cloud.yml` after the S1a run is collected.
+
+
+## 2026-11-07 S1 third slice: native read-only trace routes
+
+Parent `2a0f1ef9` (S1b backups capabilities). The three JSON trace routes now
+run on the Rust edge:
+
+- `rust/crates/deepseek-gateway/src/trace_routes.rs` is a read-only port of the
+  original `observability` store queries and `observability/export.py`
+  redaction: `GET /api/traces` (limit parsing with Python `int()` rules,
+  1..=1000 clamp, list order and `tracing` status), `GET /api/traces/{trace_id}`
+  (run + spans + summary, 404 `Trace not found`), and
+  `GET /api/traces/{trace_id}/export.json` (redacted trace + `_export`
+  `trace-export.v1` block and the original attachment filename). The Rust side
+  opens `.traces/traces.sqlite3` read-only, never creates the directory/schema,
+  and treats a missing store like an empty one. Redaction matches the original
+  key rules (`apiKey`/tokens/cookies/secrets, token-count exceptions), inline
+  secret regexes (Bearer, `sk-` keys, query/header tokens), character-based
+  clipping (1200 private-content / 2000 general) and the original span
+  offset/duration/token mapping.
+- Method routing reproduces the original: POST answers the `/api/{path:path}`
+  catch-all's flat 404, OPTIONS the global 204 with both allow lists, other
+  verbs FastAPI's 405 with `Allow: OPTIONS`; `/trace/{trace_id}` now requires
+  authentication (the page itself is served by the SPA fallback, with its
+  trace-existence 404 still recorded as a follow-up).
+- `rust/crates/deepseek-gateway/tests/trace_routes.rs` seeds the real WAL-mode
+  trace store through the Python writer (two traces: an older `a2a` run and a
+  newer `chat` run with sensitive metadata, a `sk-` key, a Bearer header, a
+  1500-character output and an error span), drops the WAL side files, then
+  compares list/detail/export bodies byte-for-byte (export timestamp normalised
+  and shape-checked), missing-trace 404s, POST 404, PUT 405 + `Allow: OPTIONS`,
+  OPTIONS access-control headers and the unauthenticated 401. It also asserts
+  the newest trace is first and that native reads change no workspace files
+  except the tolerated SQLite WAL companion files.
+
+Recorded narrowings: the route reads the Python-authoritative store (this is a
+read-only migration; `observability_trace_store` cutover still needs the native
+writer); `/trace/{trace_id}` keeps the SPA fallback instead of the original
+trace-existence check; SQLite may create `-shm`/`-wal` companions on a read-only
+WAL open.
+
+Local: `rustfmt --check` clean on the module, test, `auth.rs` and `lib.rs`; the
+production runtime inventory check passes. Every expected body used by the test
+was measured against the real Python application first. No local Rust
+compilation.
+
+CLOUD_PENDING: push after the S1a run is collected and dispatch `rust-cloud.yml`.
+
+
+### 2026-11-07 trace slice compile fixes and redispatch
+
+The first exact-source run `42362713997` for `f4419e7b` failed compilation in
+both jobs: `unresolved import regex` (the gateway crate did not depend on the
+workspace regex pin) and `no method json on reqwest::blocking::Response` (the
+gateway reqwest has no `json` feature). Fixed by adding
+`regex = { workspace = true }` to `deepseek-gateway` and parsing the external
+contributor probe with `response.text()` + `serde_json::from_str`; amended to
+`610624eda33880ebfb518d8b056d1b98ddd2d266` (tree `7dfff5a9`) and redispatched
+`rust-cloud` run `42363537198`. The failure/fix pair is retained in the trace
+slice's prior-failure evidence. **NOT_READY.**
+
+
+### 2026-11-07 trace slice: Cargo.lock fix and redispatch
+
+Run `42363537198` for `610624eda` (the first compile-fixed trace source) failed in
+both jobs at the very first cargo command: `the lock file rust/Cargo.lock needs to
+be updated but --locked was passed` — the new `regex` dependency of
+`deepseek-gateway` was not recorded. Refreshed the lock offline
+(`cargo metadata --offline`) and reduced the diff to exactly one added `regex`
+entry under the gateway package; `cargo metadata --locked --offline` now exits 0.
+Amended to `8a2b4c76a221f9fa897a4a823dd048c51e26b0a9` (tree `f24f715b`), pushed to
+`codex/native-workspace-traces-20261107`, and redispatched `rust-cloud` run
+`42458876560`. All three trace-run failures (`42362713997` compile errors,
+`42363537198` stale lock) and their fixes are retained in the slice's
+prior-failure evidence. **NOT_READY.**
+
+
+## 2026-11-07 S1a exact-source qualification (e3aa9e22)
+
+`rust-cloud.yml` run [42357942244](https://github.com/leizd/DeepSeek-Infra/actions/runs/42357942244)
+at exact revision `e3aa9e22bf5830e0f6c5e14992f7c5426ac6cd9c` (tree `fc54f077`,
+branch `codex/native-workspace-capabilities-20261107`) completed **success** for
+both jobs:
+
+- **Rust checks**: rustfmt, clippy (all targets/features, `-D warnings`), the full
+  workspace test suite and the repository's native process verifications.
+- **Rust coverage**: PASS, 101912/122624 = 83.1093% lines over the unchanged 80%
+  floor, `sourceTreeDirty: false`, **1837** tests.
+
+`test backup_target_capabilities_match_the_s3_enabled_oracle ... ok` is present in
+the coverage job log, proving the first S1 read-only control route
+(`GET /api/workspace/backup-target-capabilities`) was really exercised at this
+commit. Evidence is sealed in
+`artifacts/native-20261107-workspace-backup-capabilities/` (`cloud-evidence.json`,
+`received-reports/`, resealed review/manifest/local-validation/checkpoint,
+prior-failure-evidence for the stale-inventory run `42357826574`).
+
+Still **NOT_READY**: the S1b/S1c slices above this source are unqualified, and the
+remaining 71 `/api/workspace/*` routes, ownership inversion, platform packages,
+zero-Python workloads, full CI and Evidence Assembly stay open.

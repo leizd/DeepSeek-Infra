@@ -4122,3 +4122,62 @@ failure and fix are retained in the slice's prior-failure evidence.
 - [ ] Next: S0 ownership prerequisites for store-backed S1 routes
       (`backup-capacity/summary`, `backup-transfer-budget`, retention dry-runs)
       and the S2 catalog read path.
+
+
+## 2026-11-07 S1: native read-only trace routes
+
+- [x] Implement `GET /api/traces`, `GET /api/traces/{trace_id}` and
+      `GET /api/traces/{trace_id}/export.json` as read-only ports of the
+      observability store queries and export redaction; original method routing.
+- [x] Require authentication for `/trace/{trace_id}` (SPA page keeps serving the
+      shell; trace-existence 404 recorded as follow-up).
+- [x] Oracle test: real Python-written WAL store, byte-exact list/detail/export,
+      timestamp shape, 404/405/POST/OPTIONS/401 and unchanged workspace.
+- [x] Local rustfmt and production-runtime-inventory checks pass; no local Rust
+      compilation.
+- [ ] CLOUD_PENDING: push a branch stacked on the qualified S1a source and
+      dispatch `rust-cloud.yml`.
+- [ ] Follow-ups: native writer + cutover for `observability_trace_store`, the
+      `/trace/{trace_id}` trace-existence 404, and an immutable read path that
+      avoids SQLite WAL companions.
+
+
+### 2026-11-07 trace slice compile fixes and redispatch
+
+The first exact-source run `42362713997` for `f4419e7b` failed compilation in
+both jobs: `unresolved import regex` (the gateway crate did not depend on the
+workspace regex pin) and `no method json on reqwest::blocking::Response` (the
+gateway reqwest has no `json` feature). Fixed by adding
+`regex = { workspace = true }` to `deepseek-gateway` and parsing the external
+contributor probe with `response.text()` + `serde_json::from_str`; amended to
+`610624eda33880ebfb518d8b056d1b98ddd2d266` (tree `7dfff5a9`) and redispatched
+`rust-cloud` run `42363537198`. The failure/fix pair is retained in the trace
+slice's prior-failure evidence. **NOT_READY.**
+
+
+### 2026-11-07 trace slice: Cargo.lock fix and redispatch
+
+Run `42363537198` for `610624eda` (the first compile-fixed trace source) failed in
+both jobs at the very first cargo command: `the lock file rust/Cargo.lock needs to
+be updated but --locked was passed` — the new `regex` dependency of
+`deepseek-gateway` was not recorded. Refreshed the lock offline
+(`cargo metadata --offline`) and reduced the diff to exactly one added `regex`
+entry under the gateway package; `cargo metadata --locked --offline` now exits 0.
+Amended to `8a2b4c76a221f9fa897a4a823dd048c51e26b0a9` (tree `f24f715b`), pushed to
+`codex/native-workspace-traces-20261107`, and redispatched `rust-cloud` run
+`42458876560`. All three trace-run failures (`42362713997` compile errors,
+`42363537198` stale lock) and their fixes are retained in the slice's
+prior-failure evidence. **NOT_READY.**
+
+
+## 2026-11-07 S1a cloud-qualified
+
+- [x] `GET /api/workspace/backup-target-capabilities`: exact-source `rust-cloud`
+      run `42357942244` at `e3aa9e22` succeeded for checks and coverage
+      (83.1093% lines, 80% floor, 1837 tests, `sourceTreeDirty=false`), with the
+      new oracle test observed in the coverage log.
+- [x] Evidence sealed under `artifacts/native-20261107-workspace-backup-capabilities/`.
+- [ ] S1b (`backups/capabilities`, `2a0f1ef9`) and S1c (read-only trace routes,
+      `8a2b4c76`) are pushed but not yet cloud-qualified.
+- [ ] Remaining workspace backup/DR surface, ownership inversion, platform
+      packages, zero-Python workloads, full CI and Evidence Assembly stay open.
