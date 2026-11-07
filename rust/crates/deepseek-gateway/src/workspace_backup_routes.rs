@@ -25,10 +25,22 @@ use serde_json::json;
 use crate::route_support;
 
 pub fn router() -> Router {
-    Router::new().route("/api/workspace/backup-target-capabilities", any(dispatch))
+    Router::new()
+        .route(
+            "/api/workspace/backup-target-capabilities",
+            any(dispatch_target_capabilities),
+        )
+        .route(
+            "/api/workspace/backups/capabilities",
+            any(dispatch_backup_capabilities),
+        )
 }
 
-async fn dispatch(method: Method, _headers: HeaderMap, _body: Bytes) -> Response {
+async fn dispatch_target_capabilities(
+    method: Method,
+    _headers: HeaderMap,
+    _body: Bytes,
+) -> Response {
     if method == Method::GET {
         return Json(capabilities()).into_response();
     }
@@ -52,6 +64,156 @@ fn capabilities() -> serde_json::Value {
         "supportedKinds": ["filesystem", "s3"],
         "reservedKinds": ["webdav"],
     })
+}
+
+/// `GET /api/workspace/backups/capabilities`: the original capability body for
+/// the native runtime.
+///
+/// The Python body mixes constants with two capability probes: the optional
+/// backup-crypto helper (always available natively, because `backup-crypto` is
+/// part of the Rust runtime) and the external stateless-MCP contributor
+/// (probed over HTTP, exactly like the original 2-second request).
+async fn dispatch_backup_capabilities(
+    method: Method,
+    _headers: HeaderMap,
+    _body: Bytes,
+) -> Response {
+    if method == Method::GET || method == Method::HEAD {
+        let joined = tokio::task::spawn_blocking(backup_capabilities).await;
+        return match joined {
+            Ok(_) if method == Method::HEAD => StatusCode::OK.into_response(),
+            Ok(body) => Json(body).into_response(),
+            Err(_) if method == Method::HEAD => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+            Err(_) => route_support::app_error_response(route_support::unhandled_error()),
+        };
+    }
+    if method == Method::OPTIONS {
+        return route_support::options_response();
+    }
+    route_support::method_not_allowed()
+}
+
+fn backup_capabilities() -> serde_json::Value {
+    json!({
+        "ok": true,
+        "schemaVersion": "deepseek-workspace-backup.v1",
+        "purpose": "restorable-backup",
+        "encrypted": true,
+        "encryptedBackupAvailable": true,
+        "formats": ["age-v1"],
+        "protectionModes": ["none", "passphrase", "age-recipient"],
+        "integrityVerified": true,
+        "modes": ["full", "project"],
+        "restoreModes": ["merge", "project-copy", "replace-empty"],
+        "coveragePolicies": ["strict", "best-effort"],
+        "includedByDefault": [
+            "projects",
+            "project-files",
+            "artifacts",
+            "memory",
+            "media",
+            "custom-skills-and-packs",
+            "automations",
+            "reminders",
+        ],
+        "optionalHistory": ["agent-checkpoints", "a2a-tasks", "traces-and-run-history"],
+        "restoreProjection": {
+            "projects": {"granularity": "project"},
+            "project-files": {"granularity": "contributor"},
+            "artifacts": {"granularity": "contributor"},
+            "memory": {"granularity": "contributor"},
+            "media": {"granularity": "contributor"},
+            "custom-skills-and-packs": {"granularity": "contributor"},
+            "automations": {"granularity": "contributor"},
+            "reminders": {"granularity": "contributor"},
+            "agent-checkpoints": {"granularity": "contributor"},
+            "a2a-tasks": {"granularity": "contributor"},
+            "traces-and-run-history": {"granularity": "contributor"},
+            "frontend": {"granularity": "contributor"},
+            "stateless-mcp": {"granularity": "contributor"},
+        },
+        "externalContributors": [stateless_mcp_capabilities()],
+        "alwaysExcluded": [
+            ".auth-token",
+            ".env",
+            "active tasks",
+            "api-key",
+            "api_key",
+            "auth-token",
+            "bearer-token",
+            "credentials",
+            "credentials.json",
+            "rebuildable indexes",
+            "runtime locks",
+            "tavily-key",
+        ],
+        "limits": {
+            "maxPackageBytes": 2_000_000_000,
+            "maxExpandedBytes": 5_000_000_000,
+            "maxEntries": 10_000,
+            "maxPathLength": 240,
+        },
+    })
+}
+
+/// `StatelessMcpContributor.capabilities`: a 2-second probe of the configured
+/// external service; any failure is the original "service unavailable" shape.
+fn stateless_mcp_capabilities() -> serde_json::Value {
+    let unavailable = || {
+        json!({
+            "id": "stateless-mcp",
+            "available": false,
+            "schemaVersion": 1,
+            "reason": "service unavailable",
+        })
+    };
+    let base = std::env::var("STATELESS_MCP_BACKUP_URL")
+        .unwrap_or_default()
+        .trim()
+        .trim_end_matches('/')
+        .to_string();
+    if base.is_empty() {
+        return unavailable();
+    }
+    let client = match reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build()
+    {
+        Ok(client) => client,
+        Err(_) => return unavailable(),
+    };
+    let mut request = client
+        .get(format!("{base}/internal/backups/capabilities"))
+        .header(
+            reqwest::header::ACCEPT,
+            "application/json, application/x-ndjson",
+        );
+    if let Ok(token) = std::env::var("STATELESS_MCP_BACKUP_TOKEN") {
+        let token = token.trim().to_string();
+        if !token.is_empty() {
+            request = request.header(reqwest::header::AUTHORIZATION, format!("Bearer {token}"));
+        }
+    }
+    let Ok(response) = request.send() else {
+        return unavailable();
+    };
+    let Ok(payload) = response.json::<serde_json::Value>() else {
+        return unavailable();
+    };
+    let available = payload
+        .as_object()
+        .map(|object| {
+            object
+                .get("contributorId")
+                .and_then(serde_json::Value::as_str)
+                == Some("stateless-mcp")
+                && object
+                    .get("schemaVersion")
+                    .and_then(serde_json::Value::as_f64)
+                    == Some(1.0)
+        })
+        .unwrap_or(false);
+    json!({"id": "stateless-mcp", "available": available, "schemaVersion": 1})
 }
 
 #[cfg(test)]

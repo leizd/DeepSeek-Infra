@@ -684,11 +684,6 @@
       "file": "deepseek_infra/web/routes/workspace.py"
     },
     {
-      "method": "get",
-      "path": "/api/workspace/backups/capabilities",
-      "file": "deepseek_infra/web/routes/workspace.py"
-    },
-    {
       "method": "post",
       "path": "/api/workspace/backups",
       "file": "deepseek_infra/web/routes/workspace.py"

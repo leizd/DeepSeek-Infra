@@ -15560,3 +15560,56 @@ method behavior were measured against the real Python application with the stub
 module before the test was written. No local Rust compilation.
 
 CLOUD_PENDING: push and dispatch `rust-cloud.yml` at the exact source.
+
+
+### 2026-11-07 S1 slice: inventory snapshot fix and redispatch
+
+The first exact-source run `42357826574` for `afb6cddd` failed at the first
+substantive step in both jobs: `scripts/production_runtime_inventory.py --check`
+reported a stale snapshot, because migrating a route changes
+`release/production_runtime_inventory_v1.json` (`http_routes_only_on_python`
+must lose the migrated path). Regenerated the committed snapshot with
+`--write` (diff removes exactly the one migrated route) and amended the slice to
+`e3aa9e22` (tree `fc54f077`, parent `9a74dc56`); force-pushed the validation
+branch and redispatched as `rust-cloud` run `42357942244`. The stale-snapshot
+failure and fix are retained in the slice's prior-failure evidence.
+**NOT_READY.**
+
+
+## 2026-11-07 S1 second slice: native `GET /api/workspace/backups/capabilities`
+
+Parent `e3aa9e22` (S1a backup-target capabilities). The route returns the
+original restorable-backup capability body from the native runtime:
+
+- `rust/crates/deepseek-gateway/src/workspace_backup_routes.rs` now serves both
+  `/api/workspace/backup-target-capabilities` and
+  `/api/workspace/backups/capabilities`. The second body is the Python
+  capability description with native capability truths: encryption always
+  available (`backup-crypto` is part of the Rust runtime: `formats: ["age-v1"]`,
+  all three protection modes, no `reason` field), static schema/purpose/modes/
+  restoreModes/coveragePolicies/contributor/projection/limits constants, and the
+  external stateless-MCP contributor probed over HTTP exactly like the original
+  2-second request (`STATELESS_MCP_BACKUP_URL` + optional
+  `STATELESS_MCP_BACKUP_TOKEN`; contributorId/schemaVersion validation; any
+  failure becomes `{"available": false, "reason": "service unavailable"}`).
+- `rust/crates/deepseek-gateway/tests/workspace_backup_restore_capabilities.rs`
+  exercises both probe states against the Python oracle: no stateless-MCP
+  endpoint configured (both sides "service unavailable") and a real local HTTP
+  contributor endpoint configured for both sides (both sides report available),
+  with byte-exact body comparison, PUT/OPTIONS/unauthenticated routing, a
+  crypto-helper stub file so Python also advertises encryption, and an unchanged
+  workspace assertion.
+- Regenerated `release/production_runtime_inventory_v1.json`: the machine
+  inventory loses `/api/workspace/backups/capabilities` from
+  `http_routes_only_on_python`, and `scripts/production_runtime_inventory.py
+  --check` passes.
+
+Recorded narrowing: a Python deployment without the optional backup-crypto
+helper reports encryption unavailable; the native runtime always reports its
+real built-in crypto capability.
+
+Local: `rustfmt --check` clean on the module, the new test and `lib.rs`; both
+probe-state bodies were measured against the real Python application before the
+test was written. No local Rust compilation.
+
+CLOUD_PENDING: push and dispatch `rust-cloud.yml` after the S1a run is collected.

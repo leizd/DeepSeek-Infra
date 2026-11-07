@@ -4092,3 +4092,33 @@ Assembly are still open.
       `/api/workspace/retention/preview`,
       `/api/workspace/authority/retention/plan` (each needs its owning plane
       decided first; S1 plan section in workspace-backup-dr-migration-plan.md).
+
+
+### 2026-11-07 S1 slice: inventory snapshot fix and redispatch
+
+The first exact-source run `42357826574` for `afb6cddd` failed at the first
+substantive step in both jobs: `scripts/production_runtime_inventory.py --check`
+reported a stale snapshot, because migrating a route changes
+`release/production_runtime_inventory_v1.json` (`http_routes_only_on_python`
+must lose the migrated path). Regenerated the committed snapshot with
+`--write` (diff removes exactly the one migrated route) and amended the slice to
+`e3aa9e22` (tree `fc54f077`, parent `9a74dc56`); force-pushed the validation
+branch and redispatched as `rust-cloud` run `42357942244`. The stale-snapshot
+failure and fix are retained in the slice's prior-failure evidence.
+**NOT_READY.**
+
+
+## 2026-11-07 S1: native backups capabilities
+
+- [x] Implement `GET /api/workspace/backups/capabilities` with native capability
+      truths, static schema/limits/contributors, and the original external
+      stateless-MCP probe (2s timeout, token, shape validation).
+- [x] Oracle test in both probe states (unset/service-unavailable and real local
+      endpoint/available) plus routing/401/workspace assertions.
+- [x] Regenerate the machine inventory snapshot (route leaves
+      `http_routes_only_on_python`); `--check` passes.
+- [ ] CLOUD_PENDING: push a new branch stacked on the qualified S1a source and
+      dispatch `rust-cloud.yml`.
+- [ ] Next: S0 ownership prerequisites for store-backed S1 routes
+      (`backup-capacity/summary`, `backup-transfer-budget`, retention dry-runs)
+      and the S2 catalog read path.

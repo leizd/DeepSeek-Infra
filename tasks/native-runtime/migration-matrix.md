@@ -1,3 +1,20 @@
+<!-- native checkpoint 2026-11-07 S1 backups capabilities -->
+
+Whole product Rust/Go migration remains ACTIVE / NOT_READY.
+
+Native `GET /api/workspace/backups/capabilities` now returns the original
+restorable-backup capability body from the Rust runtime: built-in encryption
+(`age-v1`, all protection modes), the static schema/modes/contributors/
+projection/limits description, and the external stateless-MCP contributor probed
+over HTTP exactly like the original 2-second request (URL/token env, contributor
+id + schema validation, "service unavailable" fallback). A Python-oracle test
+covers both probe states against a real local contributor endpoint with
+byte-exact bodies, crypto-helper stub parity, method routing, 401 and an unchanged
+workspace. The committed machine inventory was regenerated and now shows one
+fewer route only on Python (`--check` passes). Parent is the S1a native
+backup-target capabilities source. Local rustfmt clean; exact-source
+`rust-cloud.yml` is pending a push. Full migration **NOT_READY**.
+
 <!-- native checkpoint 2026-11-07 S1 backup-target capabilities -->
 
 Whole product Rust/Go migration remains ACTIVE / NOT_READY.
