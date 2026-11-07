@@ -456,6 +456,19 @@ async fn fetch_url_route_matches_the_oracle_without_network_access() {
         })
         .collect();
     let expected = oracle(&root, &oracle_cases);
+    // Oversized bodies are checked before the native loop so the workspace
+    // baseline below includes every file the oracle's own startup creates.
+    let oversized = oracle(
+        &root,
+        &[OracleCase {
+            name: "oversized",
+            method: "POST",
+            body: Some(oversized_body.as_str()),
+            token: true,
+        }],
+    );
+    assert_eq!(oversized[0]["status"], json!(413));
+    let baseline = tree(&root);
 
     for (case, want) in all_cases.iter().zip(expected.iter()) {
         assert_eq!(want["name"].as_str(), Some(case.name), "oracle order");
@@ -509,18 +522,6 @@ async fn fetch_url_route_matches_the_oracle_without_network_access() {
         }
     }
 
-    // Oversized bodies are refused from the declared Content-Length exactly like
-    // the oracle, before any parsing.
-    let oversized = oracle(
-        &root,
-        &[OracleCase {
-            name: "oversized",
-            method: "POST",
-            body: Some(oversized_body.as_str()),
-            token: true,
-        }],
-    );
-    assert_eq!(oversized[0]["status"], json!(413));
     let (status, body, _, _, _, _) = fixture
         .request("POST", Some(oversized_body.as_bytes()), true)
         .await;
@@ -529,7 +530,7 @@ async fn fetch_url_route_matches_the_oracle_without_network_access() {
 
     assert_eq!(
         tree(&root),
-        vec![expected_cache],
-        "the probe created or removed files"
+        baseline,
+        "native fetch-url requests created files; seeded cache at {expected_cache}"
     );
 }

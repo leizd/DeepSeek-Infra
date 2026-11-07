@@ -419,6 +419,10 @@ async fn public_auth_refusals_match_the_oracle_without_creating_a_store() {
         !expected.local_ip.is_empty(),
         "oracle reported no LAN address"
     );
+    // The Python application initializes request-queue, semantic-cache, trace
+    // and workspace-fence stores under the shared root; that is the oracle's
+    // startup shape, not a side effect of the native requests below.
+    let baseline = tree(&root);
 
     for (case, want) in CASES.iter().zip(expected.results.iter()) {
         assert_eq!(want["name"].as_str(), Some(case.name), "oracle order");
@@ -464,9 +468,5 @@ async fn public_auth_refusals_match_the_oracle_without_creating_a_store() {
         );
     }
 
-    assert!(
-        tree(&root).is_empty(),
-        "auth probe created {}",
-        tree(&root).join(", ")
-    );
+    assert_eq!(tree(&root), baseline, "native auth requests created files");
 }

@@ -284,6 +284,9 @@ async fn auth_logout_matches_the_oracle_without_creating_a_store() {
     let fixture = Fixture::new();
     let root = fixture.root.path().to_path_buf();
     let expected = oracle(&root, CASES);
+    // The Python application initializes several stores under the shared root;
+    // that is the oracle's startup shape, not a native side effect.
+    let baseline = tree(fixture.root.path());
 
     for (case, want) in CASES.iter().zip(expected.iter()) {
         assert_eq!(want["name"].as_str(), Some(case.name), "oracle order");
@@ -320,5 +323,9 @@ async fn auth_logout_matches_the_oracle_without_creating_a_store() {
         }
     }
 
-    assert!(tree(fixture.root.path()).is_empty());
+    assert_eq!(
+        tree(fixture.root.path()),
+        baseline,
+        "native logout created files"
+    );
 }
