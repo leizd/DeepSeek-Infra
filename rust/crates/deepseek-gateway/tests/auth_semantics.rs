@@ -422,8 +422,15 @@ async fn public_auth_refusals_match_the_oracle_without_creating_a_store() {
 
     for (case, want) in CASES.iter().zip(expected.results.iter()) {
         assert_eq!(want["name"].as_str(), Some(case.name), "oracle order");
+        // `__LOCAL_IP__` is substituted by the oracle with its own detected LAN
+        // address; the native edge must accept the same address.
+        let host = if case.host == "__LOCAL_IP__" {
+            expected.local_ip.as_str()
+        } else {
+            case.host
+        };
         let (status, native_body, content_type) = fixture
-            .request(case.method, case.path, case.host, case.token)
+            .request(case.method, case.path, host, case.token)
             .await;
         let want_status = want["status"].as_u64().expect("oracle status") as u16;
         assert_eq!(
