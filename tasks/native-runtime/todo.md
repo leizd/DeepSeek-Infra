@@ -3990,3 +3990,23 @@ assertion; that failure and fix are recorded in
       (~100 routes), `/api/semantic-cache*`, `/api/share-target`, `/api/traces*`,
       `/api/compress-context`, `/api/edge/*`, `/api/mcp/external/tools`,
       `/api/rag/*` writes, `/share-target`.
+
+
+### 2026-11-07 workspace backup/DR migration plan v1
+
+Added `tasks/native-runtime/workspace-backup-dr-migration-plan.md`: the
+`/api/workspace/*` backup/DR/resilience surface (~100 of the 116 Python routes
+without an explicit native route in the 2026-11-07 audit) is decomposed into
+nine ordered slices: S0 prerequisites (Rust data-domain declarations +
+export/import/fencing/rollback tooling + Go control authority), S1 pure control
+reads, S2 catalog/index, S3 retention, S4 policies/targets (Go control), S5
+restores (Rust data + worker fencing), S6 disaster recovery, S7 resilience,
+S8 workspace artifacts/exports/provenance. Each slice lists its Python modules,
+durable stores, owner plane, oracle/refusal/fault verification and the rule
+that writes only land behind the ownership gate. The plan also tracks the
+already-migrated routes with remaining gaps (`/api/agent-runs/{run_id}/{action}`
+unknown action 404, `/api/automation` root GET/POST, `/api/media/{media_id}/process`
+forwarding, `/api/edge/*`, `/api/mcp/external/tools`, `/api/rag/*` writes,
+`/api/semantic-cache*`, `/api/traces*`, `/api/compress-context`, share target).
+The route-gap audit JSON is retained under `artifacts/` for later matrix
+updates. **NOT_READY** — this is planning, not implemented behavior.

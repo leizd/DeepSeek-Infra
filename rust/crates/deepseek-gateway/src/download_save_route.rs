@@ -135,7 +135,6 @@ fn output_failure() -> AppError {
 #[cfg(test)]
 mod tests {
     use super::{download_filename, unique_download_path};
-    use std::path::PathBuf;
 
     #[test]
     fn download_filename_keeps_the_disk_extension_and_cleans_the_client_name() {
