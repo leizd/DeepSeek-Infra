@@ -13,7 +13,15 @@ import (
 	"testing"
 
 	"github.com/leizd/DeepSeek-Infra/go/internal/config"
+	mediav1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/mediav1"
+	"github.com/leizd/DeepSeek-Infra/go/internal/store"
 )
+
+// mediaUploadCounter exposes the fixture's CREATE staging/execution counters to
+// the multipart public tests without publishing the peer's mutable state.
+type mediaUploadCounter interface {
+	mediaUploadCounts() (int, int, []string)
+}
 
 type mediaUploadTestPart struct {
 	name, filename, contentType, extra string
@@ -207,19 +215,40 @@ func TestMediaMultipartFormCodecs(t *testing.T) {
 }
 
 func TestMediaMultipartPublicTLS(t *testing.T) {
-	for _, name := range []string{"two-files", "single-title", "form-project", "oversized-file", "pdf", "audio", "video", "html", "xhtml", "partial-refusal", "empty-file", "mime-refused", "no-files", "missing-length", "process-unfinished", "unauthenticated", "worker-unavailable", "unknown", "signed-refusal", "result-unavailable"} {
+	for _, name := range []string{"two-files", "single-title", "form-project", "oversized-file", "pdf", "audio", "video", "html", "xhtml", "partial-refusal", "empty-file", "mime-refused", "no-files", "missing-length", "process", "process-failure", "process-unknown", "process-refused", "process-credential-refused", "process-long-correlation", "process-webpage-key", "unsafe-request-id", "unauthenticated", "worker-unavailable", "unknown", "signed-refusal", "result-unavailable"} {
 		t.Run(name, func(t *testing.T) {
 			mode := "upload"
-			if name == "unknown" {
+			switch name {
+			case "unknown":
 				mode = "unknown"
-			}
-			if name == "signed-refusal" {
+			case "signed-refusal":
 				mode = "upload-refused"
-			}
-			if name == "result-unavailable" {
+			case "result-unavailable":
 				mode = "upload-result-unavailable"
+			case "process":
+				mode = "upload-process"
+			case "process-failure":
+				mode = "upload-process-failure"
+			case "process-unknown":
+				mode = "upload-process-unknown"
+			case "process-refused":
+				mode = "upload-process-refused"
+			case "process-long-correlation", "process-webpage-key":
+				mode = "upload-process"
 			}
-			control, peer, _ := mediaCreateTLSFixture(t, mode)
+			var (
+				control     *store.Control
+				counters    mediaUploadCounter
+				processPeer *mediaProcessWirePeer
+			)
+			if strings.HasPrefix(mode, "upload-process") {
+				control, processPeer, _ = mediaProcessTLSFixture(t, mode)
+				counters = processPeer
+			} else {
+				var creation *mediaCreateWirePeer
+				control, creation, _ = mediaCreateTLSFixture(t, mode)
+				counters = creation
+			}
 			first := mediaUploadTestPart{name: "files", filename: "image.PNG", contentType: "image/png", data: []byte{0, 255, 1}}
 			parts := []mediaUploadTestPart{first, {name: "files", filename: "second.png", contentType: "image/png", data: []byte("different bytes")}}
 			status, calls := 200, 2
@@ -252,9 +281,32 @@ func TestMediaMultipartPublicTLS(t *testing.T) {
 				status, calls = 400, 0
 			case "missing-length":
 				status, calls = 400, 0
-			case "process-unfinished":
+			case "process":
 				parts = append(parts, mediaUploadTestPart{name: "process", data: []byte("true")})
-				status, calls = 503, 0
+			case "process-failure":
+				parts = append(parts, mediaUploadTestPart{name: "process", data: []byte("true")})
+				status = 422
+			case "process-unknown":
+				parts = append(parts, mediaUploadTestPart{name: "process", data: []byte("true")})
+				status = 503
+			case "process-refused":
+				parts = append(parts, mediaUploadTestPart{name: "process", data: []byte("true")})
+				status = 404
+			case "process-credential-refused":
+				parts = append(parts, mediaUploadTestPart{name: "process", data: []byte("true")},
+					mediaUploadTestPart{name: "ocrEnabled", data: []byte("true")},
+					mediaUploadTestPart{name: "apiKey", data: []byte("fixture caller override")})
+				status, calls = 501, 0
+			case "process-long-correlation":
+				parts = append(parts, mediaUploadTestPart{name: "process", data: []byte("true")})
+			case "process-webpage-key":
+				parts = []mediaUploadTestPart{{name: "files", filename: "page.HTML", contentType: "text/html", data: []byte("<h1>retained</h1>")},
+					{name: "process", data: []byte("true")}, {name: "ocrEnabled", data: []byte("true")},
+					{name: "apiKey", data: []byte("fixture unused override")}}
+				calls = 1
+			case "unsafe-request-id":
+				parts = []mediaUploadTestPart{first}
+				calls = 1
 			case "unauthenticated":
 				status, calls = 401, 0
 			case "worker-unavailable":
@@ -265,6 +317,14 @@ func TestMediaMultipartPublicTLS(t *testing.T) {
 			case "signed-refusal":
 				status, calls = 400, 1
 			}
+			// Every processed file adds one PROCESS execution beside its CREATE.
+			expectedStages, expectedExecutions := calls, calls
+			switch name {
+			case "process", "process-long-correlation":
+				expectedStages, expectedExecutions = 2, 4
+			case "process-failure", "process-unknown", "process-refused", "process-webpage-key":
+				expectedStages, expectedExecutions = 1, 2
+			}
 			r := mediaMultipartRequest(parts)
 			r.URL.RawQuery = "projectId=first&projectId=project-last"
 			expectedProject := "project-last"
@@ -273,6 +333,18 @@ func TestMediaMultipartPublicTLS(t *testing.T) {
 				expectedProject = "form-project"
 			}
 			r.Header.Set("Authorization", "Bearer "+strings.Repeat("m", 32))
+			correlationBase := ""
+			if strings.HasPrefix(name, "process") {
+				correlationBase = "tls.upload:process"
+				r.Header.Set("X-DeepSeek-Request-ID", correlationBase)
+			}
+			if name == "process-long-correlation" {
+				correlationBase = strings.Repeat("c", 64)
+				r.Header.Set("X-DeepSeek-Request-ID", correlationBase)
+			}
+			if name == "unsafe-request-id" {
+				r.Header.Set("X-DeepSeek-Request-ID", "unsafe \"identifier\"")
+			}
 			if name == "unauthenticated" {
 				r.Header.Del("Authorization")
 			}
@@ -288,34 +360,86 @@ func TestMediaMultipartPublicTLS(t *testing.T) {
 			if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
 				t.Fatal(err)
 			}
-			peer.mu.Lock()
-			stages, executions := peer.stageCalls, peer.executed
-			operations := append([]string(nil), peer.uploadOperations...)
-			peer.mu.Unlock()
-			if stages != calls || executions != calls {
-				t.Fatal("wrong number of original file operations", stages, executions, calls)
+			stages, executions, operations := counters.mediaUploadCounts()
+			if stages != expectedStages || executions != expectedExecutions {
+				t.Fatal("wrong number of original file operations", stages, executions, expectedStages, expectedExecutions)
 			}
 			if status == 200 {
 				items, ok := body["mediaItems"].([]any)
 				if !ok || len(items) != calls || len(operations) != calls {
 					t.Fatal("batch results or original operations missing", body)
 				}
-				for i, item := range items {
-					record := item.(map[string]any)
-					hash := sha256.Sum256(parts[i].data)
-					if record["dataSha256"] != hex.EncodeToString(hash[:]) || record["projectId"] != expectedProject {
-						t.Fatal("typed upload bytes or last query value changed", record)
+				if strings.HasPrefix(name, "process") {
+					// The processed response retains the worker final record rather
+					// than the intermediate CREATE result.
+					for _, item := range items {
+						record, _ := item.(map[string]any)
+						if record["title"] != "retained process result" || record["status"] != "ready" {
+							t.Fatal("processed upload did not return the original processing record", record)
+						}
+					}
+					if response.Header().Get("X-DeepSeek-Request-ID") != correlationBase {
+						t.Fatal("processed upload lost the request correlation identifier", response.Header())
+					}
+				} else {
+					for i, item := range items {
+						record := item.(map[string]any)
+						hash := sha256.Sum256(parts[i].data)
+						if record["dataSha256"] != hex.EncodeToString(hash[:]) || record["projectId"] != expectedProject {
+							t.Fatal("typed upload bytes or last query value changed", record)
+						}
+					}
+					if calls == 2 && operations[0] == operations[1] {
+						t.Fatal("different uploads reused one operation")
+					}
+					if name == "single-title" && items[0].(map[string]any)["title"] != "retained" {
+						t.Fatal("single upload lost the first title")
 					}
 				}
-				if calls == 2 && operations[0] == operations[1] {
-					t.Fatal("different uploads reused one operation")
+			}
+			if processPeer != nil {
+				processPeer.mu.Lock()
+				intents := append([]*mediav1.MediaPatchIntent(nil), processPeer.processIntents...)
+				processPeer.mu.Unlock()
+				switch name {
+				case "process", "process-long-correlation":
+					if len(intents) != 2 {
+						t.Fatal("every stored file must be processed exactly once", len(intents))
+					}
+					items := body["mediaItems"].([]any)
+					for i, intent := range intents {
+						if intent.Process == nil || intent.Process.Force || intent.Process.OcrEnabled == nil || *intent.Process.OcrEnabled {
+							t.Fatal("original process options changed", intent.Process)
+						}
+						suffix := fmt.Sprintf(".%d", i+1)
+						want := correlationBase
+						if len(want) > 64-len(suffix) {
+							want = want[:64-len(suffix)]
+						}
+						if intent.Process.CorrelationId != want+suffix {
+							t.Fatal("derived process correlation differs", intent.Process.CorrelationId)
+						}
+						if intent.MediaId != items[i].(map[string]any)["mediaId"] {
+							t.Fatal("processed file identity differs", intent.MediaId)
+						}
+					}
+				default:
+					if len(intents) != 1 {
+						t.Fatal("aborted upload processed more than the retained first file", len(intents))
+					}
 				}
-				if name == "single-title" && items[0].(map[string]any)["title"] != "retained" {
-					t.Fatal("single upload lost the first title")
+			}
+			if name == "process-credential-refused" && body["code"] != "MEDIA_OCR_CREDENTIAL_OVERRIDE_NOT_READY" {
+				t.Fatal("OCR credential override was silently ignored", body)
+			}
+			if name == "unsafe-request-id" {
+				retained := response.Header().Get("X-DeepSeek-Request-ID")
+				if len(retained) != 32 || strings.Trim(retained, "0123456789abcdef") != "" {
+					t.Fatal("unsafe request identifier was echoed instead of replaced", retained)
 				}
 			}
 			pending, err := control.PendingMediaPatch()
-			if err != nil || (pending != nil) != (name == "unknown") {
+			if err != nil || (pending != nil) != (name == "unknown" || name == "process-unknown") {
 				t.Fatal("terminal or uncertain upload lost its original admission state", pending, err)
 			}
 		})

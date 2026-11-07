@@ -27,7 +27,12 @@ import (
 // custody, index/segment effects and recovery need their independent workloads.
 type mediaProcessWirePeer struct {
 	*mediaCreateWirePeer
-	result *mediav1.ReadMediaCreateResultResponse
+	result         *mediav1.ReadMediaCreateResultResponse
+	processIntents []*mediav1.MediaPatchIntent
+}
+
+func (p *mediaProcessWirePeer) processingFailure() bool {
+	return p.mode == "processing-failure" || p.mode == "upload-process-failure"
 }
 
 func (p *mediaProcessWirePeer) ExecuteProcess(_ context.Context, r *mediav1.ExecuteMediaProcessRequest) (*mediav1.MediaPatchOutcome, error) {
@@ -35,15 +40,18 @@ func (p *mediaProcessWirePeer) ExecuteProcess(_ context.Context, r *mediav1.Exec
 	defer p.mu.Unlock()
 	p.executed++
 	claim, err := p.control.GetMediaPatchClaim(r.OperationId, r.Fence)
-	if err != nil || r.SchemaVersion != 1 || claim.Intent.Kind != mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_PROCESS || claim.Intent.Process == nil || claim.Intent.Create != nil || p.stageCalls != 0 {
+	stagedUpload := strings.HasPrefix(p.mode, "upload-process")
+	if err != nil || r.SchemaVersion != 1 || claim.Intent.Kind != mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_PROCESS || claim.Intent.Process == nil || claim.Intent.Create != nil ||
+		(stagedUpload && p.stageCalls < 1) || (!stagedUpload && p.stageCalls != 0) {
 		return nil, status.Error(codes.FailedPrecondition, "original standalone process claim required")
 	}
+	p.processIntents = append(p.processIntents, proto.Clone(claim.Intent).(*mediav1.MediaPatchIntent))
 	preparation := bytes.Repeat([]byte{7}, 32)
 	fields := map[string]any{"mediaId": claim.Intent.MediaId, "status": "ready", "title": "retained process result"}
 	if p.mode == "large" {
 		fields["metadata"] = map[string]any{"blob": strings.Repeat("x", 4*1024*1024+257)}
 	}
-	if p.mode == "processing-failure" {
+	if p.processingFailure() {
 		fields["status"] = "failed"
 	}
 	v, err := mediamodel.FromJSON(fields)
@@ -55,7 +63,7 @@ func (p *mediaProcessWirePeer) ExecuteProcess(_ context.Context, r *mediav1.Exec
 		return nil, err
 	}
 	p.result = &mediav1.ReadMediaCreateResultResponse{Media: v.GetObjectValue(), Segments: array.GetArrayValue(), Indexed: 1}
-	if p.mode == "processing-failure" {
+	if p.processingFailure() {
 		p.result.Segments = &mediav1.MediaArray{}
 		p.result.Indexed = 0
 	}
@@ -75,7 +83,7 @@ func (p *mediaProcessWirePeer) ExecuteProcess(_ context.Context, r *mediav1.Exec
 	outcome := &mediav1.MediaPatchOutcome{SchemaVersion: 1, OperationId: r.OperationId, OriginalFence: proto.Clone(r.Fence).(*commonv1.ActionFence), RequestSha256: claim.RequestSha256,
 		State: mediav1.MediaPatchEffectState_MEDIA_PATCH_EFFECT_STATE_APPLIED, HttpStatus: 200, BeforeSha256: bytes.Repeat([]byte{1}, 32), AfterSha256: bytes.Repeat([]byte{2}, 32), FleetId: claim.FleetId, Environment: claim.Environment, WriterFencingToken: claim.WriterFencingToken,
 		Processed: &mediav1.MediaProcessedResult{RecordSha256: recordHash[:], RecordBytes: uint64(len(record)), PreparationSha256: preparation, OriginalFence: proto.Clone(r.Fence).(*commonv1.ActionFence), SegmentsSha256: segmentsHash[:], SegmentsBytes: uint64(len(segments)), Indexed: p.result.Indexed}}
-	if p.mode == "refused" {
+	if p.mode == "refused" || p.mode == "upload-process-refused" {
 		outcome.State = mediav1.MediaPatchEffectState_MEDIA_PATCH_EFFECT_STATE_REFUSED
 		outcome.Processed = nil
 		outcome.AfterSha256 = nil
@@ -83,7 +91,7 @@ func (p *mediaProcessWirePeer) ExecuteProcess(_ context.Context, r *mediav1.Exec
 		outcome.ErrorCode = "not_found"
 		outcome.ErrorMessage = "Media not found"
 	}
-	if p.mode == "processing-failure" {
+	if p.processingFailure() {
 		outcome.HttpStatus = 422
 		outcome.ErrorCode = "invalid_payload"
 		outcome.ErrorMessage = "Could not extract text from this PDF"
@@ -96,7 +104,7 @@ func (p *mediaProcessWirePeer) ExecuteProcess(_ context.Context, r *mediav1.Exec
 	if _, err = p.control.BeginMediaPatchDispatch(&mediav1.BeginMediaPatchDispatchRequest{SchemaVersion: 1, OperationId: r.OperationId, Fence: r.Fence, ClaimToken: claim.ClaimToken, WriterFencingToken: claim.WriterFencingToken, PreparationSha256: planDigest[:]}); err != nil {
 		return nil, err
 	}
-	if p.mode == "unknown" {
+	if p.mode == "unknown" || p.mode == "upload-process-unknown" {
 		return nil, status.Error(codes.Unavailable, "isolated response loss without evidence")
 	}
 	if p.mode == "rebound-private-preparation" {
@@ -120,7 +128,17 @@ func (p *mediaProcessWirePeer) ExecuteProcess(_ context.Context, r *mediav1.Exec
 	return outcome, nil
 }
 
-func (p *mediaProcessWirePeer) ReadResult(_ context.Context, r *mediav1.ReadMediaCreateResultRequest) (*mediav1.ReadMediaCreateResultResponse, error) {
+func (p *mediaProcessWirePeer) ReadResult(ctx context.Context, r *mediav1.ReadMediaCreateResultRequest) (*mediav1.ReadMediaCreateResultResponse, error) {
+	// A multipart upload creates each file before processing it, so the shared
+	// creation-result RPC must still answer the original CREATE after the peer
+	// has retained both outcomes. Snapshot the retained shape under the peer's
+	// lock; gRPC completion is not a happens-before edge for the race detector.
+	p.mu.Lock()
+	retainedCreate := p.retained != nil && p.retained.Created != nil
+	p.mu.Unlock()
+	if retainedCreate && strings.HasPrefix(r.OperationId, "media-create-") {
+		return p.mediaCreateWirePeer.ReadResult(ctx, r)
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.readCalls++

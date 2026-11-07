@@ -88,7 +88,11 @@ func (p *mediaCreateWirePeer) ExecuteCreate(_ context.Context, r *mediav1.Execut
 		return nil, status.Error(codes.FailedPrecondition, "original claim required")
 	}
 	stagesValid := p.stageCalls == 1
-	if strings.HasPrefix(p.mode, "upload") {
+	if strings.HasPrefix(p.mode, "upload-process") {
+		// The original ingestion creates then processes each file, so PROCESS
+		// executions from earlier files interleave with this CREATE's staging.
+		stagesValid = p.stageCalls >= 1 && p.stageCalls <= p.executed
+	} else if strings.HasPrefix(p.mode, "upload") {
 		stagesValid = p.stageCalls == p.executed
 	}
 	if !stagesValid || len(p.staged) == 0 || claim.Intent.Create == nil {
@@ -189,6 +193,15 @@ func (p *mediaCreateWirePeer) ReadResult(_ context.Context, r *mediav1.ReadMedia
 		return &mediav1.ReadMediaCreateResultResponse{Media: &mediav1.MediaObject{}}, nil
 	}
 	return &mediav1.ReadMediaCreateResultResponse{Media: proto.Clone(p.record).(*mediav1.MediaObject)}, nil
+}
+
+// mediaUploadCounts reports the CREATE staging/execution counters used by the
+// multipart public tests. The peer keeps its own lock, so callers never read a
+// half-updated pair.
+func (p *mediaCreateWirePeer) mediaUploadCounts() (int, int, []string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.stageCalls, p.executed, append([]string(nil), p.uploadOperations...)
 }
 
 func mediaCreateTLSFixture(t *testing.T, mode string) (*store.Control, *mediaCreateWirePeer, *httptest.Server) {

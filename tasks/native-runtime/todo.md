@@ -3716,3 +3716,43 @@ No native/browser assertion, report requirement or original floor is removed.
 
 
 - [ ] Qualify metadata-only media recovery polling against94bcb486/run40495720177: preserve original10-second maximum-array HTTP200, active-lease exclusion, original signed recovery, corruption denial and original95/80/fullCI/platform floors. Runtime candidate is not yet qualified.
+
+
+## 2026-11-07 multipart process parity — implemented, cloud pending
+
+Source base `5548113da591238c34047fcf4a9f35197e99ed76` (tree `074eb417c1d679d385840609e5061982bae8a9d2`), isolated worktree
+`D:/deepseek-worktrees/tip20261106`; root checkout preserved.
+
+- [x] Replace the permanent `503 MEDIA_PROCESSING_NOT_READY` refusal with the
+      original `process`/`ocrEnabled` ingestion semantics over the existing
+      CREATE + PROCESS effects (form/query precedence, per-file ordering,
+      partial retained effects, request correlation derivation, processed
+      response record, success header).
+- [x] Share one `runMediaProcess`/`finishMediaProcessed` implementation between
+      `POST /api/media/{id}/process` and multipart ingestion; uncertain effects
+      remain `EFFECT_UNKNOWN` with the original operation identity.
+- [x] Fail closed on a caller-supplied OCR credential override for image/PDF
+      uploads before any file is stored; keep the original ignore behavior for
+      media that never invokes OCR.
+- [x] Local: gofmt + `go vet` + `go test ./internal/api ./internal/media
+      ./internal/worker` PASS; 207 Python media/verifier cases PASS; Ruff and
+      targeted mypy PASS.
+- [x] Extend `scripts/verify_native_media_upload.py` with four process=true
+      original-vs-native HTTP cases and stored-segment read-back.
+- [ ] CLOUD_PENDING: push the reviewed snapshot; run Rust cloud, media
+      development and Windows workflows plus the original Go/Android-Go 95%
+      coverage gates and bounded Go race suites on the exact source.
+- [ ] Implement the request-bound OCR credential custody transport (removes the
+      remaining `MEDIA_OCR_CREDENTIAL_OVERRIDE_NOT_READY` refusal).
+- [ ] Multipart processing process-kill and intermediate recovery phases.
+- [ ] Aggregate legal library capacity and backup/restore interactions for
+      processed uploads.
+- [ ] Remaining ordered chain: diagnostics status blocks, eval report engine,
+      launcher/desktop/Android packages, zero production Python/server
+      TypeScript, exact CI/Evidence, real provider/browser/device acceptance.
+
+
+Reviewed local snapshot is recorded in
+`artifacts/native-20261107-multipart-process/manifest.json`. It is committed
+only in the isolated worktree: it has not been pushed and no cloud result is
+claimed.

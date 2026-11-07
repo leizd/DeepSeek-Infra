@@ -15024,3 +15024,72 @@ server/desktop/Android/background functionality, retained MCP test execution,
 zero production Python/server TypeScript, CI/Evidence/platform/release remain
 required. Overall migration remains ACTIVE/NOT_READY; keep local native builds,
 caches and Docker validation in the cloud and retain the original dirty root.
+
+
+## 2026-11-07 multipart upload processing parity checkpoint
+
+Source base: branch `codex/native-media-patch-json-diagnostics-20261106`, tip
+`5548113da591238c34047fcf4a9f35197e99ed76`, tree `074eb417c1d679d385840609e5061982bae8a9d2` — the last exact-source snapshot with three green cloud
+workflows (Rust `42187574976`, media development `42187591554`, Windows
+`42187607273`). Root checkout `D:/deepseek` remains untouched (`b0316d098`, 184
+preserved dirty/untracked entries); this slice lives in the isolated worktree
+`D:/deepseek-worktrees/tip20261106`.
+
+Implemented the original multipart ingestion `process`/`ocrEnabled` options,
+which were previously a permanent `503 MEDIA_PROCESSING_NOT_READY` refusal:
+
+- `go/internal/api/media_upload.go` parses the original `process`,
+  `ocrEnabled` and `apiKey` form/query precedence, derives the request
+  correlation identifier (sanitized header, otherwise one system identifier;
+  `derive_ocr_correlation_id`-style truncation per stored file) and, after each
+  file's settled CREATE, executes the same explicit PROCESS operation used by
+  `POST /api/media/{id}/process`. Earlier files keep their applied effects when
+  a later file fails, matching the original ordered ingestion loop. The success
+  response returns the processed record and the original
+  `X-DeepSeek-Request-ID` header; an unusable header is replaced, never echoed.
+- `go/internal/api/media_process.go` now shares one `runMediaProcess` /
+  `finishMediaProcessed` implementation between the standalone route and the
+  upload loop. Uncertain effects still return `503 EFFECT_UNKNOWN` with the
+  original operation id and are never retried as a new operation.
+- A caller-supplied OCR credential override for image/PDF uploads is refused
+  before any file is stored (`501 MEDIA_OCR_CREDENTIAL_OVERRIDE_NOT_READY`);
+  webpage/audio/video ingestion never invokes OCR and keeps the original
+  ignore-the-key behavior. The request-bound credential custody transport that
+  would remove this refusal remains unimplemented.
+
+Local verification (win32 host, CGO_ENABLED=0):
+
+- `gofmt` clean on all five changed Go files (LF-normalized);
+  `go vet ./internal/api ./internal/media ./internal/worker` PASS.
+- `go test ./internal/api ./internal/media ./internal/worker -count=1` PASS
+  (full `internal/api` package 237s). New multipart subcases: process,
+  process-failure, process-unknown, process-refused,
+  process-credential-refused, process-long-correlation, process-webpage-key,
+  unsafe-request-id. The broader `./internal/store` package timed out at 603s
+  on this constrained host; it is not part of this change and cloud runs it.
+- 207 local Python media/verifier cases PASS, including the real original ASGI
+  route pinned for process=true (ready record, segmentCount, stored segments).
+  Ruff and targeted mypy PASS.
+- `scripts/verify_native_media_upload.py` replays four process=true cases
+  through both the real original ASGI route and the native public route,
+  compares exact records, stored media, source hashes and the segment read
+  model; the report no longer claims `multipartProcessFalseOnly`.
+
+CLOUD_PENDING: the new Go tests, real native launcher upload/process HTTP
+cases, Rust/Windows workflows and the original coverage floors must run on a
+pushed snapshot. No native compilation, Docker or provider workload ran
+locally. Full migration remains NOT_READY.
+
+Next: (1) push the reviewed snapshot and collect the three exact-source cloud
+workflows plus the original Go/Android coverage floors; (2) implement the
+request-bound OCR credential custody transport that removes the remaining 501;
+(3) multipart processing process-kill/intermediate recovery phases and the
+aggregate library capacity/backup interactions; (4) continue the ordered
+remaining chain (diagnostics status blocks, eval report engine, launcher
+platform packages, zero-Python workload, Evidence Assembly).
+
+
+Reviewed local snapshot is recorded in
+`artifacts/native-20261107-multipart-process/manifest.json`. It is committed
+only in the isolated worktree: it has not been pushed and no cloud result is
+claimed.

@@ -1,3 +1,43 @@
+<!-- native checkpoint 2026-11-07 multipart process parity -->
+
+Whole product Rust/Go migration remains ACTIVE / NOT_READY. All original
+server, desktop, Android, background, retained-function, unique-writer,
+recovery, zero-production-Python/server-TypeScript and original MCP
+requirements remain in scope.
+
+Exact-source base is branch `codex/native-media-patch-json-diagnostics-20261106`
+tip `5548113da591238c34047fcf4a9f35197e99ed76`, tree `074eb417c1d679d385840609e5061982bae8a9d2`, whose three cloud workflows are green (Rust
+`42187574976`, media development `42187591554`, Windows `42187607273`). The
+preserved root checkout is unchanged.
+
+This slice closes the permanent multipart `503 MEDIA_PROCESSING_NOT_READY`
+refusal. Multipart ingestion now runs the original `process`/`ocrEnabled`
+options over the existing Go-admitted CREATE followed by the same explicit
+PROCESS effect as `POST /api/media/{id}/process`: original query/form
+precedence, per-file ordering with retained earlier effects, one derived OCR
+correlation identifier per stored file, processed response record, original
+success correlation header, and `EFFECT_UNKNOWN` for uncertain effects. A
+caller-supplied OCR key override for image/PDF is refused before storage until
+request-bound native credential custody exists; webpage/audio/video keep the
+original ignore-the-key behavior.
+
+Local: gofmt clean, `go vet` PASS, full `go test ./internal/api
+./internal/media ./internal/worker` PASS (api 237s), 207 Python media/verifier
+cases PASS including the original ASGI process=true observation, Ruff and
+targeted mypy PASS. The new cloud verifier cases compare exact processed
+records, stored media, source hashes and segment read-back on both real routes.
+`./internal/store` full local run timed out at 603s on this constrained host
+and is not changed by this slice.
+
+No native compilation, Docker, provider or device workload ran locally and no
+cloud result is claimed.
+The reviewed local snapshot is recorded in
+`artifacts/native-20261107-multipart-process/manifest.json` (local only, not
+pushed, cloud pending). Exact-source Go race/95% floors, Rust 80%, Windows,
+real launcher HTTP process cases, recovery/process-kill, OCR credential
+custody, aggregate capacity/backup interactions, launchers/platforms,
+zero-Python workload and Evidence Assembly remain required. **NOT_READY.**
+
 <!-- native checkpoint 2026-11-05 retained media values -->
 
 Whole product migration remains ACTIVE / NOT_READY. All original server,

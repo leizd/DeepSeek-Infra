@@ -1,8 +1,9 @@
 """Cloud-only multipart HTTP workloads against an independent original ASGI app.
 
 The source parser and subprocess oracle are offline verification tools. They are
-never called by the native production request path. Processing/OCR remains a
-separate required capability; these workloads exercise process=false ingestion.
+never called by the native production request path. These workloads exercise both
+process=false ingestion and the original process=true/ocrEnabled ingestion options
+for media that do not need an external OCR engine.
 """
 from __future__ import annotations
 
@@ -34,8 +35,9 @@ try:
     path=library.media_dir()/"library.json"
     records=json.loads(path.read_bytes())["media"] if path.exists() else []
     hashes=[hashlib.sha256((library.media_dir()/record["path"]).read_bytes()).hexdigest() for record in records]
+    segments={record["mediaId"]:library.list_segments(record["mediaId"]) for record in records}
     print(json.dumps(dict(status=response.status_code,body=response.json(),storedMedia=records,sourceHashes=hashes,
-        requestId=response.headers.get("X-DeepSeek-Request-ID"))))
+        segments=segments,requestId=response.headers.get("X-DeepSeek-Request-ID"))))
 finally:
     client.close()
 '''
@@ -126,6 +128,13 @@ def cases() -> Any:
     yield "empty-file", [("empty.png", "image/png", b"")], [], "", 400, 0
     yield "unsupported-mime", [("data.pdf", "application/octet-stream", b"not inferred through explicit MIME")], [], "", 400, 0
     yield "partial-later-file-refusal", [mixed[0], ("second.bin", "application/octet-stream", b"refused")], [], "", 400, 1
+    process_image = [("processed-image.PNG", "image/png", b"\x00opaque image\xff")]
+    process_webpage = [("processed-page.HTML", "text/html", b"<html><body><h1>Processed</h1><p>retained text</p></body></html>")]
+    process_audio = [("processed-audio.mp3", "audio/mpeg", b"opaque audio")]
+    yield "process-image-caption", process_image, [field("process", "true")], "", 200, 1
+    yield "process-query-webpage", process_webpage, [], "?process=1&projectId=process-query", 200, 1
+    yield "process-audio-empty", process_audio, [field("process", "yes")], "", 200, 1
+    yield "process-two-files", process_webpage + process_audio, [field("process", "on")], "?projectId=process-project", 200, 2
     yield "no-files", [], [field("title", "empty")], "", 400, 0
     yield "maximum-media-file", [("maximum.png", "image/png", b"m" * (50 * 1024**2))], [], "", 200, 1
     names = [f"capacity-{i:02}.png" for i in range(20)]
@@ -217,12 +226,22 @@ def verify_cases(origin: str, token: str, profile: Path, mirror: Path, out: Path
             create.require(create.same_json(canonical_records(records), canonical_records(original_records)), "MEDIA_UPLOAD_PUBLIC_RECORD_DIFFERS_" + label)
             create.require(create.same_json(records, retained), "MEDIA_UPLOAD_PUBLIC_STORED_RECORD_DIFFERS_" + label)
             create.require(headers.get("x-deepseek-request-id") == create.REQUEST_ID, "MEDIA_UPLOAD_REQUEST_ID_DIFFERS")
+            if label.startswith("process-"):
+                for record in records:
+                    segment_status, native_segments, _ = create.exchange(origin, "/api/media/" + record["mediaId"] + "/segments", "GET", token)
+                    create.require(segment_status == 200 and isinstance(native_segments.get("segments"), list),
+                                   "MEDIA_UPLOAD_PROCESS_SEGMENTS_FAILED_" + label)
+                    create.require(create.same_json(native_segments["segments"], reference["segments"][record["mediaId"]]),
+                                   "MEDIA_UPLOAD_PROCESS_SEGMENTS_DIFFER_" + label)
         else:
             create.require(error_code(body) == error_code(reference["body"]), "MEDIA_UPLOAD_ERROR_CODE_DIFFERS_" + label)
         for record, digest in zip(retained, hashes, strict=True):
             observations.append((record["mediaId"], dict(ok=True, media=record), digest))
         row.update(status="PASS", nativeStoredRecords=len(retained), sourceHashes=hashes)
+    process_cases = sum(1 for row in report["multipartUploadCases"] if row["case"].startswith("process-"))
     report.update(actualMultipartIngestCasesQualified=True, actualMultipartIngestCaseCount=len(report["multipartUploadCases"]),
                   actualMultipartStoredRecords=len(observations), multipartMaximumRequestBytes=220_000_000,
-                  multipartMaximumFileBytes=50 * 1024**2, multipartMaximumFiles=20, multipartProcessFalseOnly=True)
+                  multipartMaximumFileBytes=50 * 1024**2, multipartMaximumFiles=20, multipartProcessFalseOnly=False,
+                  actualMultipartProcessCasesQualified=process_cases > 0, actualMultipartProcessCaseCount=process_cases,
+                  multipartProcessingReadBackQualified=process_cases > 0)
     return observations

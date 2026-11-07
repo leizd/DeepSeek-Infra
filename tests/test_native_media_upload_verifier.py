@@ -52,6 +52,27 @@ def test_multipart_independent_original_honors_non_utf8_form_charset(tmp_path):
     assert result["status"] == 200 and result["body"]["media"]["title"] == "caf\u00e9"
 
 
+def test_multipart_original_honors_process_and_returns_the_processed_record(tmp_path):
+    files = [("processed-page.HTML", "text/html", b"<html><body><h1>Processed</h1><p>retained text</p></body></html>")]
+    raw, mime = upload.multipart(files, [upload.field("process", "true")])
+    result = upload.original(tmp_path / "oracle", tmp_path / "oracle.log", raw, mime, "")
+    assert result["status"] == 200
+    record = result["body"]["media"]
+    assert record["status"] == "ready" and record["type"] == "webpage"
+    assert record["metadata"]["segmentCount"] == 1
+    assert result["storedMedia"] == [record]
+    segments = result["segments"][record["mediaId"]]
+    assert [segment["type"] for segment in segments] == ["webpage_text"]
+
+
+def test_multipart_process_cases_stay_in_the_shared_original_corpus():
+    requests = list(upload.wire_requests())
+    process = [row for row in requests if row[0].startswith("process-")]
+    assert {row[0] for row in process} == {"process-image-caption", "process-query-webpage", "process-audio-empty", "process-two-files"}
+    for label, _, _, _, status, stored, files in process:
+        assert status == 200 and stored == files, label
+
+
 def test_multipart_native_probe_remains_cloud_only(tmp_path, monkeypatch):
     monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
     with pytest.raises(upload.create.ProbeFailure, match="CLOUD_ONLY"):

@@ -2,10 +2,15 @@ package api
 
 import (
 	"bytes"
+	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -158,6 +163,54 @@ func mediaUploadTruthy(value string) bool {
 	return false
 }
 
+// mediaUploadMimeType retains the original lowercased MIME value without its
+// parameters. The same value selects the original processor family.
+func mediaUploadMimeType(contentType string) string {
+	return strings.ToLower(strings.TrimSpace(strings.SplitN(contentType, ";", 2)[0]))
+}
+
+// mediaUploadUsesOCR reports whether the original processors may invoke an OCR
+// engine for this uploaded MIME type. Webpage, audio and video ingestion never
+// call OCR even when the request enables it.
+func mediaUploadUsesOCR(contentType string) bool {
+	mimeType := mediaUploadMimeType(contentType)
+	return mimeType == "application/pdf" || strings.HasPrefix(mimeType, "image/")
+}
+
+// mediaUploadRequestID retains the original request correlation identifier: a
+// caller-supplied header only while it is log-safe and bounded, otherwise a
+// fresh system-generated value. An unusable header is never echoed back.
+func mediaUploadRequestID(r *http.Request) (string, bool) {
+	value := pythonTrim(r.Header.Get("X-DeepSeek-Request-ID"))
+	if len(value) > 64 || strings.IndexFunc(value, func(c rune) bool {
+		return !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.ContainsRune("-_.:", c))
+	}) >= 0 {
+		value = ""
+	}
+	if value != "" {
+		return value, true
+	}
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return "", false
+	}
+	return hex.EncodeToString(nonce[:]), true
+}
+
+// mediaUploadCorrelationID mirrors derive_ocr_correlation_id: a multi-file
+// upload derives one bounded identifier per stored media object, while a single
+// upload keeps the request identifier unchanged.
+func mediaUploadCorrelationID(base string, ordinal, total int) string {
+	if total <= 1 {
+		return base
+	}
+	suffix := "." + strconv.Itoa(ordinal)
+	if len(base) > 64-len(suffix) {
+		base = base[:64-len(suffix)]
+	}
+	return base + suffix
+}
+
 func mediaUpload(w http.ResponseWriter, r *http.Request, control *store.Control) {
 	fields, files, failure := readMediaMultipart(w, r)
 	if failure != nil {
@@ -172,8 +225,26 @@ func mediaUpload(w http.ResponseWriter, r *http.Request, control *store.Control)
 	for _, value := range fields["process"] {
 		process = process || mediaUploadTruthy(value)
 	}
-	if process {
-		policyWriteError(w, 503, "MEDIA_PROCESSING_NOT_READY", "Native media processing remains unqualified")
+	ocrEnabled := false
+	for _, value := range fields["ocrEnabled"] {
+		ocrEnabled = ocrEnabled || mediaUploadTruthy(value)
+	}
+	// A caller-supplied OCR credential changes the engine used for image/PDF
+	// extraction. It needs request-bound native custody before it can reach the
+	// worker, so refuse before any file is stored instead of dropping it or
+	// silently selecting a different engine. Webpage/audio/video ingestion never
+	// invokes OCR, so the original request ignores the value there.
+	if process && ocrEnabled && mediaUploadFirst(fields, "apiKey") != "" {
+		for _, file := range files {
+			if mediaUploadUsesOCR(file.contentType) {
+				policyWriteError(w, 501, "MEDIA_OCR_CREDENTIAL_OVERRIDE_NOT_READY", "Native media OCR credential override is unavailable")
+				return
+			}
+		}
+	}
+	requestID, requestIDOK := mediaUploadRequestID(r)
+	if !requestIDOK {
+		policyWriteError(w, 503, "MEDIA_ID_UNAVAILABLE", "Media request identity unavailable")
 		return
 	}
 	project := mediaUploadLast(r.URL.Query()["projectId"])
@@ -187,7 +258,7 @@ func mediaUpload(w http.ResponseWriter, r *http.Request, control *store.Control)
 		}
 	}()
 	var records []any
-	for _, file := range files {
+	for index, file := range files {
 		// Match the original ordered loop. A later media-specific refusal must
 		// retain every earlier successful file, rather than making the batch atomic.
 		if len(file.data) == 0 {
@@ -198,7 +269,7 @@ func mediaUpload(w http.ResponseWriter, r *http.Request, control *store.Control)
 			policyWriteError(w, 413, "upload_too_large", "Media upload exceeds the 50 MB limit")
 			return
 		}
-		mimeType := strings.ToLower(strings.TrimSpace(strings.SplitN(file.contentType, ";", 2)[0]))
+		mimeType := mediaUploadMimeType(file.contentType)
 		if mimeType != "application/pdf" && mimeType != "text/html" && mimeType != "application/xhtml+xml" &&
 			!strings.HasPrefix(mimeType, "image/") && !strings.HasPrefix(mimeType, "audio/") && !strings.HasPrefix(mimeType, "video/") {
 			policyWriteError(w, 400, "invalid_payload", "Unsupported media MIME type")
@@ -230,7 +301,34 @@ func mediaUpload(w http.ResponseWriter, r *http.Request, control *store.Control)
 		if !ok {
 			return
 		}
+		if process {
+			// The original ingestion processes each stored file immediately, in
+			// request order, so an earlier file's processing effect is retained
+			// when a later file fails.
+			record, _ := value.(map[string]any)
+			mediaID, _ := record["mediaId"].(string)
+			if mediaID == "" {
+				mediaUnknown(w, outcome.OperationId)
+				return
+			}
+			options := &mediav1.MediaProcessOptions{Force: false, OcrEnabled: &ocrEnabled,
+				CorrelationId: mediaUploadCorrelationID(requestID, index+1, len(files))}
+			processCtx, processCancel := context.WithTimeout(r.Context(), 30*time.Second)
+			processedOutcome, settled := runMediaProcess(w, processCtx, control, client, mediaID, options)
+			processCancel()
+			if !settled {
+				return
+			}
+			processed, _, _, processedOK := finishMediaProcessed(w, r, client, processedOutcome)
+			if !processedOK {
+				return
+			}
+			value = processed
+		}
 		records = append(records, value)
 	}
+	// The original success response echoes the request correlation identifier;
+	// error responses never acquire it.
+	w.Header().Set("X-DeepSeek-Request-ID", requestID)
 	writeJSON(w, r, http.MethodPost, map[string]any{"ok": true, "media": records[0], "mediaItems": records})
 }
