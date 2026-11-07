@@ -15240,7 +15240,7 @@ full-route auth ordering (route match before auth) is still middleware-first.
 
 ### 2026-11-07 public auth semantics slice (local; cloud pending)
 
-Reviewed local snapshot commit `69f380d2bf8b485d4908e501f14dcf24a5698232`, tree `0325abcf45beb154f48ecc528cd5e4cd07df0334`, parent `4394329d760eacf34656dc7d464f24e783c8565b`.
+Reviewed local snapshot commit `f366886cc03a4100385789101efc22153b14ab38`, tree `cbf5f87123ffd48157c45c0dc7a80cf941585eaa`, parent `4394329d760eacf34656dc7d464f24e783c8565b`.
 Public-route auth now matches the original contract: Host allow-list checked
 before the token on every `/api/*`, `/v1/*`, `/mcp` and `/a2a*` route, both
 refusals are the flat `{"error": ..., "code": ...}` documents, and
@@ -15255,3 +15255,43 @@ CLOUD_PENDING: push and dispatch `rust-cloud.yml` at the exact source. Recorded
 follow-ups: `/rag/*` sidecar auth ownership, unknown `/api/*` catch-all parity,
 route-vs-auth ordering, full 37-job CI/Go floors, launcher packages and
 zero-Python workloads. **NOT_READY.**
+
+
+## 2026-11-07 native `POST /api/fetch-url` — local, cloud pending
+
+Parent `f366886c` (public auth semantics slice). The route now runs on the native
+edge:
+
+- `rust/crates/deepseek-gateway/src/fetch_url_route.rs` wires the already
+  probe-verified `deepseek_policy::fetch_url` (SSRF check, DNS-pinned
+  connection, redirect revalidation, cache, HTML extraction) through
+  `fetch_provider`. It reproduces `read_json_body(request)` (declared
+  `Content-Length`, Python `int()` parsing and the `Invalid Content-Length`
+  refusal, 2,000,000-byte bound, empty-body and non-object errors), Python's
+  `str(payload.get("url") or "")` coercion, and `AppError.to_response()` /
+  unhandled-500 envelopes. Non-POST verbs match the original routing: GET and
+  HEAD answer the `/api/{path:path}` catch-all's flat 404, OPTIONS answers the
+  global 204 with both allow lists, and other verbs get FastAPI's 405 with
+  `Allow: OPTIONS`.
+- `rust/crates/deepseek-gateway/tests/fetch_url_route.rs` seeds the real
+  `fetch-url-<sha>.json` cache with the policy's own writer and compares native
+  responses with a fresh Python application under the same workspace root for
+  seventeen cases: cache-hit success envelope, loopback/localhost/`.local`/
+  metadata-IP 403s, ftp/credentials/bad-port/empty/numeric-URL 400s, non-object
+  and empty bodies, invalid JSON (status+code only; the Python JSON parser
+  message is recorded as a narrowing), GET 404, PUT 405 with `Allow: OPTIONS`,
+  OPTIONS 204 with both access-control allow lists, and unauthenticated POST
+  401. A 2,000,001-byte body is refused as 413 by both. The test also asserts
+  the only file under the root is the seeded cache entry.
+
+Local: `rustfmt --check` clean on both new files and the `lib.rs` addition; the
+seventeen oracle outcomes and the single-cache-file workspace were measured
+against the real Python application before writing the test. No local Rust
+compilation.
+
+CLOUD_PENDING: push and dispatch `rust-cloud.yml` at the exact source. Recorded
+narrowings/follow-ups: Python JSON syntax-error messages are not byte-ported
+(status/code are compared), real-network success for a public host is covered by
+the existing policy parity probe rather than this route test, and unauthenticated
+OPTIONS/PUT still hit the auth middleware before routing (the original global
+OPTIONS route and method matching run before auth).

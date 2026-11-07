@@ -1,6 +1,34 @@
+<!-- native checkpoint 2026-11-07 native fetch-url route -->
+
+Whole product Rust/Go migration remains ACTIVE / NOT_READY.
+
+`POST /api/fetch-url` is now served by the Rust edge. The route reproduces the
+original `read_json_body` contract (declared `Content-Length` with Python
+`int()` parsing and the `Invalid Content-Length` refusal, the 2,000,000-byte
+bound, empty-body and non-object errors), Python's `str(url or "")` coercion and
+the `AppError.to_response()` / unhandled-500 envelopes, then calls the already
+probe-verified `deepseek_policy::fetch_url` through `fetch_provider` (SSRF
+check, DNS-pinned connection, redirect revalidation, cache, readable-text
+extraction). Non-POST verbs mirror the original routing: GET/HEAD answer the
+`/api/{path:path}` catch-all's flat 404, OPTIONS answers the global 204 with both
+access-control allow lists, and other verbs get FastAPI's 405 with
+`Allow: OPTIONS`. A seventeen-case Python-oracle test seeds the real
+`fetch-url-<sha>.json` cache and runs offline under a shared workspace root,
+covering the cache-hit success envelope, all URL/body refusals, method
+semantics, the unauthenticated 401 and the 2,000,001-byte 413; it also asserts
+the root gains exactly the cache file. `rustfmt` is clean. Exact-source
+`rust-cloud.yml` is pending a pushed commit.
+
+Recorded narrowings: Python JSON syntax-error messages are not byte-ported
+(status/code compared), real-network success for a public host is covered by the
+existing policy parity probe, and unauthenticated OPTIONS/PUT still pass through
+the auth middleware before routing. Full 37-job CI, Go/Android-Go floors,
+launcher/platform packages, zero-Python workloads and Evidence Assembly remain
+open. **NOT_READY.**
+
 <!-- native checkpoint 2026-11-07 public auth semantics -->
 
-Public-route auth Host allow-list and flat refusals now match the original contract (`require_api_auth`): Host checked before the token on `/api/*`, `/v1/*`, `/mcp` and `/a2a*`; `allowed_auth_hosts` includes a ported `local_ip()` (UDP probe with the oracle's `is_lan_ip` rules and a 30-second cache; Windows `ipconfig` scan recorded as a narrowing). A twenty-case Python `TestClient` oracle test compares statuses, refusal bodies and content types; local model-vs-oracle crosscheck 20/20 PASS and rustfmt clean. Reviewed local snapshot commit `69f380d2bf8b485d4908e501f14dcf24a5698232`, tree `0325abcf45beb154f48ecc528cd5e4cd07df0334`, parent `4394329d760eacf34656dc7d464f24e783c8565b`; **CLOUD_PENDING** a pushed `rust-cloud.yml`. Follow-ups: `/rag/*` sidecar auth, unknown `/api/*` catch-all parity, route-vs-auth ordering. Full migration **NOT_READY.**
+Public-route auth Host allow-list and flat refusals now match the original contract (`require_api_auth`): Host checked before the token on `/api/*`, `/v1/*`, `/mcp` and `/a2a*`; `allowed_auth_hosts` includes a ported `local_ip()` (UDP probe with the oracle's `is_lan_ip` rules and a 30-second cache; Windows `ipconfig` scan recorded as a narrowing). A twenty-case Python `TestClient` oracle test compares statuses, refusal bodies and content types; local model-vs-oracle crosscheck 20/20 PASS and rustfmt clean. Reviewed local snapshot commit `f366886cc03a4100385789101efc22153b14ab38`, tree `cbf5f87123ffd48157c45c0dc7a80cf941585eaa`, parent `4394329d760eacf34656dc7d464f24e783c8565b`; **CLOUD_PENDING** a pushed `rust-cloud.yml`. Follow-ups: `/rag/*` sidecar auth, unknown `/api/*` catch-all parity, route-vs-auth ordering. Full migration **NOT_READY.**
 
 <!-- native checkpoint 2026-11-07 public auth host and refusal semantics -->
 

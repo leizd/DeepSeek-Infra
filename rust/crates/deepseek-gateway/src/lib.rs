@@ -48,6 +48,7 @@ pub mod data_routes;
 pub mod download_route;
 mod edge_status_routes;
 pub mod fetch_provider;
+mod fetch_url_route;
 pub mod file_reader_route;
 pub mod file_source_route;
 pub mod file_text_route;
@@ -205,6 +206,7 @@ fn create_routes() -> Router {
         .merge(scheduler_routes::router())
         .merge(edge_status_routes::router())
         .merge(rust_status_routes::router())
+        .merge(fetch_url_route::router())
         .merge(mcp_status_routes::router())
         .route("/api/*path", any(control_proxy::proxy_api_to_go))
         // Private control handlers must not fall through to either proxy or SPA.

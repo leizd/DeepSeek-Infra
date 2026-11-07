@@ -3874,7 +3874,7 @@ Evidence: `artifacts/native-20261107-mcp-status-route/cloud-evidence.json` and
 
 ### 2026-11-07 public auth semantics slice (local; cloud pending)
 
-Reviewed local snapshot commit `69f380d2bf8b485d4908e501f14dcf24a5698232`, tree `0325abcf45beb154f48ecc528cd5e4cd07df0334`, parent `4394329d760eacf34656dc7d464f24e783c8565b`.
+Reviewed local snapshot commit `f366886cc03a4100385789101efc22153b14ab38`, tree `cbf5f87123ffd48157c45c0dc7a80cf941585eaa`, parent `4394329d760eacf34656dc7d464f24e783c8565b`.
 Public-route auth now matches the original contract: Host allow-list checked
 before the token on every `/api/*`, `/v1/*`, `/mcp` and `/a2a*` route, both
 refusals are the flat `{"error": ..., "code": ...}` documents, and
@@ -3889,3 +3889,22 @@ CLOUD_PENDING: push and dispatch `rust-cloud.yml` at the exact source. Recorded
 follow-ups: `/rag/*` sidecar auth ownership, unknown `/api/*` catch-all parity,
 route-vs-auth ordering, full 37-job CI/Go floors, launcher packages and
 zero-Python workloads. **NOT_READY.**
+
+
+## 2026-11-07 native `POST /api/fetch-url` — implemented, cloud pending
+
+- [x] Serve `POST /api/fetch-url` from the native edge with the original
+      `read_json_body` contract, URL coercion, `AppError.to_response()`
+      envelope and unhandled-500 shape; non-POST verbs mirror the original
+      catch-all/global-OPTIONS/method-refusal responses.
+- [x] Reuse the probe-verified `deepseek_policy::fetch_url` and
+      `fetch_provider` wiring; no new SSRF/cache/extraction logic.
+- [x] Add `tests/fetch_url_route.rs`: seventeen Python-oracle comparisons over
+      a shared seeded cache root (success envelope, URL refusals, body errors,
+      method semantics, auth), oversized-body 413 and single-file workspace
+      assertion.
+- [x] Local: rustfmt clean; oracle outcomes and workspace file set measured
+      against the real application; no local Rust compilation.
+- [ ] CLOUD_PENDING: push and run `rust-cloud.yml` at the exact commit.
+- [ ] Follow-ups: port Python JSON syntax-error diagnostics, global OPTIONS/CORS
+      parity before auth, and real-network success evidence at the route level.
