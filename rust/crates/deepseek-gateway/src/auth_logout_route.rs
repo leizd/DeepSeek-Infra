@@ -6,11 +6,13 @@
 //! reaches the global 204, and the remaining verbs get FastAPI's 405.
 
 use axum::body::Bytes;
-use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
+use axum::http::{HeaderMap, HeaderValue, Method, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::any;
 use axum::{Json, Router};
 use serde_json::json;
+
+use crate::route_support;
 
 /// `expired_auth_cookie_header()` from the Python `http_utils`: the same
 /// attributes `SimpleCookie` renders for the cleared token.
@@ -25,12 +27,12 @@ async fn dispatch(method: Method, _headers: HeaderMap, _body: Bytes) -> Response
         return logout_response();
     }
     if method == Method::GET || method == Method::HEAD {
-        return route_not_found();
+        return route_support::route_not_found();
     }
     if method == Method::OPTIONS {
-        return options_response();
+        return route_support::options_response();
     }
-    method_not_allowed()
+    route_support::method_not_allowed()
 }
 
 fn logout_response() -> Response {
@@ -39,45 +41,6 @@ fn logout_response() -> Response {
         header::SET_COOKIE,
         HeaderValue::from_static(EXPIRED_AUTH_COOKIE),
     );
-    response
-}
-
-/// The original `/api/{path:path}` catch-all's GET answer.
-fn route_not_found() -> Response {
-    (
-        StatusCode::NOT_FOUND,
-        Json(json!({"error": "Not found", "code": "not_found"})),
-    )
-        .into_response()
-}
-
-/// The original global OPTIONS route: 204 with both fixed allow lists.
-fn options_response() -> Response {
-    let mut response = StatusCode::NO_CONTENT.into_response();
-    let headers = response.headers_mut();
-    headers.insert(
-        header::ACCESS_CONTROL_ALLOW_METHODS,
-        HeaderValue::from_static("GET, POST, PATCH, DELETE, OPTIONS"),
-    );
-    headers.insert(
-        header::ACCESS_CONTROL_ALLOW_HEADERS,
-        HeaderValue::from_static(
-            "Content-Type, Authorization, X-Backup-Filename, X-Workspace-Restore-Id",
-        ),
-    );
-    response
-}
-
-/// FastAPI's method refusal when only the global OPTIONS route matches.
-fn method_not_allowed() -> Response {
-    let mut response = (
-        StatusCode::METHOD_NOT_ALLOWED,
-        Json(json!({"detail": "Method Not Allowed"})),
-    )
-        .into_response();
-    response
-        .headers_mut()
-        .insert(header::ALLOW, HeaderValue::from_static("OPTIONS"));
     response
 }
 

@@ -1,3 +1,34 @@
+<!-- native checkpoint 2026-11-07 native download-save route -->
+
+Whole product Rust/Go migration remains ACTIVE / NOT_READY.
+
+`POST /api/download-save` now runs on the Rust edge: it resolves a generated
+file through the shared `deepseek_policy::generated_files` id rule, cleans the
+client name with the original rules (disk extension wins, doc-extension and
+`下载`/`点击下载` removal, 60-char safe base, `document` fallback), finds the
+next `name (2).ext` collision slot in `Path.home()/Downloads`, copies the bytes
+and returns the original `{"ok","filename","path","downloadUrl"}` envelope.
+Non-POST verbs keep the original catch-all / global-OPTIONS / FastAPI-405
+behavior. A new `route_support` module now owns the shared `read_json_body`
+contract, the `AppError.to_response()` / unhandled-500 envelopes and the three
+routing fallbacks; `fetch_url_route` and `auth_logout_route` were refactored
+onto it with no behavior change.
+
+`tests/download_save_route.rs` runs the oracle and the native edge in separate
+home directories under the same workspace root and compares fifteen cases
+(six saves including the `(2)` collision sequence, both id refusals, body
+errors, GET/PUT/OPTIONS routing, unauthenticated 401), every downloaded byte,
+the complete Downloads tree and the unchanged workspace.
+
+The previous combined source `6d7edf2d` (run `42343126498`) failed only the
+Rust-formatting step because `cargo fmt --check` reorders `mod` declarations and
+`auth_logout_route` was in the wrong group; this commit fixes the ordering,
+adds the two new modules in sorted positions, and keeps `lib.rs` and every new
+file `rustfmt --check` clean. The failure and fix are retained as prior-failure
+evidence. Exact-source `rust-cloud.yml` for this commit is pending a push.
+Full 37-job CI, Go/Android-Go floors, launcher/platform packages, zero-Python
+workloads and Evidence Assembly remain open. **NOT_READY.**
+
 <!-- native checkpoint 2026-11-07 native auth logout route -->
 
 Whole product Rust/Go migration remains ACTIVE / NOT_READY.

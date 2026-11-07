@@ -15354,3 +15354,60 @@ written. No local Rust compilation.
 CLOUD_PENDING: push and dispatch `rust-cloud.yml` at the exact source. Recorded
 routing follow-up: unauthenticated GET/PUT to this route still pass through the
 auth middleware before routing, like the other migrated routes.
+
+
+### 2026-11-07 combined gateway-routes qualification source
+
+The auth/fetch/logout slices share one linear reviewed source after a test-only
+fix: commit `6d7edf2d4008d70bd81ecca39374f369ffbf50d1` (branch `codex/native-gateway-routes-20261107`). The fix makes
+every oracle-driven route test snapshot the workspace *after* the Python
+`create_app()` oracle has initialized its request-queue / semantic-cache / trace
+/ workspace-fence stores, then asserts the native requests add no files. Earlier
+runs `42341457580` and `42341459922` failed on the previous empty-workspace
+assertion; that failure and fix are recorded in
+`artifacts/native-20261107-gateway-routes-combined/prior-failure-evidence.json`.
+`rust-cloud` run `42343126498` validates the combined source. **NOT_READY.**
+
+
+## 2026-11-07 native `POST /api/download-save` + shared route support — local, cloud pending
+
+Parent `6d7edf2d` (combined gateway-routes source). This slice adds a real
+top-level Python route and the shared plumbing the migrated routes now use:
+
+- `rust/crates/deepseek-gateway/src/download_save_route.rs` copies an
+  already-generated file from `.generated/` into the user's Downloads folder and
+  answers the original `{"ok","filename","path","downloadUrl"}` envelope.
+  Id resolution/traversal safety and the download URL are the shared
+  `deepseek_policy::generated_files` functions (also used by `GET /api/download`);
+  the module ports `_download_filename` (disk extension wins, doc-extension and
+  `下载`/`点击下载` cleanup, 60-char safe base), the `name (2).ext` collision
+  sequence and the `Path.home()/Downloads` lookup. Non-POST verbs mirror the
+  original catch-all / global-OPTIONS / FastAPI-405 behavior.
+- `rust/crates/deepseek-gateway/src/route_support.rs` now owns the shared
+  `read_json_body` contract (declared `Content-Length`, Python `int()` parsing,
+  bounds, UTF-8, JSON parse, object requirement), the `AppError.to_response()`
+  and unhandled-500 envelopes, and the flat-404 / global-OPTIONS / 405
+  fallbacks. `fetch_url_route` and `auth_logout_route` were refactored onto it
+  without behavior change.
+- `rust/crates/deepseek-gateway/tests/download_save_route.rs` seeds two real
+  generated files and runs the oracle and the native edge in separate home
+  directories under the same workspace root, comparing fifteen cases: six saves
+  including the collision sequence, both id refusals, body errors, GET/PUT/
+  OPTIONS routing and the unauthenticated 401. It compares every response body,
+  the exact downloaded bytes, the complete Downloads tree and that the native
+  requests add no workspace files.
+
+The previous combined run (`42343126498`, source `6d7edf2d`) failed only the
+Rust-formatting step: `cargo fmt --check` reorders `mod` declarations
+alphabetically and `auth_logout_route` had been inserted after `a2a_runner`
+instead of after `auth`. The formatting failure and fix are recorded as
+prior-failure evidence; this commit reorders the modules and adds the two new
+modules in the sorted positions, and `rustfmt --check` is clean on `lib.rs` and
+all new files.
+
+Local: all new/changed Rust files pass `rustfmt --check`; the fifteen oracle
+outcomes, filenames, collision sequence and workspace shapes were measured
+against the real Python application before the test was written. No local Rust
+compilation.
+
+CLOUD_PENDING: push and dispatch `rust-cloud.yml` at the exact source.

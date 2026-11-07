@@ -3958,3 +3958,35 @@ artifact directories. **NOT_READY.**
       `/api/compress-context`, `/api/download-save`, `/api/edge/reload`,
       `/api/edge/route-preview`, `/api/mcp/external/tools`, `/api/rag/*` write
       routes, `/share-target`, and the whole `/api/workspace/*` backup/DR surface.
+
+
+### 2026-11-07 combined gateway-routes qualification source
+
+The auth/fetch/logout slices share one linear reviewed source after a test-only
+fix: commit `6d7edf2d4008d70bd81ecca39374f369ffbf50d1` (branch `codex/native-gateway-routes-20261107`). The fix makes
+every oracle-driven route test snapshot the workspace *after* the Python
+`create_app()` oracle has initialized its request-queue / semantic-cache / trace
+/ workspace-fence stores, then asserts the native requests add no files. Earlier
+runs `42341457580` and `42341459922` failed on the previous empty-workspace
+assertion; that failure and fix are recorded in
+`artifacts/native-20261107-gateway-routes-combined/prior-failure-evidence.json`.
+`rust-cloud` run `42343126498` validates the combined source. **NOT_READY.**
+
+
+## 2026-11-07 native `POST /api/download-save` — implemented, cloud pending
+
+- [x] Serve `POST /api/download-save` from the edge with the original envelope,
+      filename cleanup, collision sequence and home/Downloads lookup.
+- [x] Extract `route_support` (read_json_body, error envelopes, flat 404,
+      global OPTIONS, 405) and refactor `fetch_url_route` / `auth_logout_route`
+      onto it without behavior change.
+- [x] Add `tests/download_save_route.rs`: fifteen Python-oracle comparisons in
+      separate home directories plus byte, Downloads-tree and workspace
+      assertions.
+- [x] Fix the previous combined source's Rust-formatting failure (module
+      declaration ordering) and keep `lib.rs` rustfmt-clean.
+- [ ] CLOUD_PENDING: push and run `rust-cloud.yml` at the exact commit.
+- [ ] Remaining Python-only routes: `/api/workspace/*` backup/DR surface
+      (~100 routes), `/api/semantic-cache*`, `/api/share-target`, `/api/traces*`,
+      `/api/compress-context`, `/api/edge/*`, `/api/mcp/external/tools`,
+      `/api/rag/*` writes, `/share-target`.
