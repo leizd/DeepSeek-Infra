@@ -15149,3 +15149,109 @@ CLOUD_PENDING: push this commit and dispatch `rust-cloud.yml`; the workflow runs
 full workspace tests (including the new oracle integration test), clippy and the
 unchanged 80% coverage floor at the exact source. `/api/mcp` remains listed as
 pending in the ordered chain until that exact-source result is collected.
+
+
+
+### 2026-11-07 native /api/mcp status route (local; cloud pending)
+
+Reviewed local snapshot commit `4394329d760eacf34656dc7d464f24e783c8565b`, tree `b4d799698efeb73fcafbf46325dcdac86e3f9650`, parent `eec2853f653594289951790fb8b93b91f62a7fd0`
+(the three-workflow-qualified multipart process commit). It implements
+`GET /api/mcp` in the Rust gateway with the original `mcp_status()` shape,
+environment precedence/clamps, native tool-catalog counts, ordered client
+servers and per-server timeouts, plus a ten-family Python-oracle integration
+test. Local: rustfmt clean; the ported algorithm matched the real oracle on
+10/10 families and every oracle run left the workspace empty; ruff/mypy pass on
+the committed cross-check tool. No local Rust compilation.
+
+CLOUD_PENDING: push this commit and dispatch `rust-cloud.yml`; workspace tests
+(including the new oracle integration test), clippy and the unchanged 80%
+coverage floor must run at the exact source. Remaining status block:
+`/api/semantic-cache/status`. Full migration remains **NOT_READY**.
+
+Evidence: `artifacts/native-20261107-mcp-status-route/`.
+
+
+### 2026-11-07 rust-cloud qualification of the native /api/mcp route (4394329d)
+
+`rust-cloud.yml` run `42331664556` completed **success** on branch
+`codex/native-mcp-status-route-20261107` at commit `4394329d760eacf34656dc7d464f24e783c8565b`, tree `b4d799698efeb73fcafbf46325dcdac86e3f9650`
+(event `workflow_dispatch`). Both jobs passed:
+
+- Rust checks: success (formatting, clippy, full workspace tests and every
+  actual native process verification, including the new oracle integration
+  test).
+- Rust coverage: success — 1825 Rust tests, `sourceTreeDirty=false`,
+  `101520/122241 = 83.0490588264167%` against the unchanged 80% floor.
+
+`test mcp_status_matches_the_oracle_without_creating_a_store ... ok` is present
+in both the checks-job and coverage-job logs, alongside the two new unit tests.
+Only report/log artifacts were downloaded (722 files); no compiler caches,
+binaries, images or volumes. The native `/api/mcp` status block is now
+exact-source qualified for the bounded Rust workflow.
+
+Not qualified by this run: full 37-job CI and the original Go/Android-Go 95%
+coverage floors, actual native launcher multipart `process=true` HTTP acceptance,
+public-route auth error-envelope parity, request-bound OCR credential custody,
+processing process-kill/intermediate recovery, the eval report engine, launcher
+packages, zero-Python workloads and Evidence Assembly. **NOT_READY.**
+
+Evidence: `artifacts/native-20261107-mcp-status-route/cloud-evidence.json` and
+`received-reports/rust-cloud/`.
+
+
+## 2026-11-07 public auth host and refusal semantics — local, cloud pending
+
+Base: committed slices on top of the three-workflow-qualified multipart snapshot;
+parent `4394329d` (native `/api/mcp`).
+
+- `rust/crates/deepseek-gateway/src/auth.rs` now implements the original
+  `require_api_auth` contract for every public route (`/api/*`, `/v1/*`, `/mcp`,
+  `/a2a*`): the caller's `Host` is checked against the oracle allow-list before
+  the token, both refusals are the flat `{"error": ..., "code": ...}` documents
+  (`unauthorized` / `forbidden`), and the previously special-cased inventory
+  host check is subsumed by the general rule.
+- `rust/crates/deepseek-gateway/src/openai_facade.rs` ports `local_ip()` (UDP
+  probe with the oracle's `is_lan_ip` rules and 30-second cache) and adds it to
+  `allowed_auth_hosts`, so LAN-address deployments stay reachable exactly as
+  before. Only the UDP half of the oracle's detection is ported; a Windows
+  `ipconfig` scan is not (multi-homed hosts may pick a different adapter —
+  recorded as a narrowing).
+- Missing `Host` headers are treated as internal: hyper rejects HTTP/1.1
+  requests without `Host` and HTTP/2 carries `:authority`, so only in-process
+  test requests lack it; this keeps the existing in-process route tests legal.
+- `tests/auth_semantics.rs` compares the native edge with a fresh Python
+  `TestClient` oracle under the identical environment for twenty cases: every
+  public family without a token, wrong-method ordering, `/mcp` `/a2a` `/v1`,
+  localhost/host-with-port/foreign host, foreign host with a valid token,
+  the oracle-detected LAN address, and valid-token successes (status only).
+  It also asserts JSON content types and an empty workspace tree.
+- Local: `rustfmt --check` clean on all changed Rust files; the model of the new
+  middleware matched the real oracle on all 20 cases (see
+  `tasks/native-runtime/auth_semantics_crosscheck.py`); ruff and mypy pass on
+  that tool. No local Rust compilation.
+
+CLOUD_PENDING: push and dispatch `rust-cloud.yml`; the workspace tests, clippy
+and 80% floor must run at the exact source. Remaining known divergences recorded
+for follow-up: offline `/rag/*` sidecar endpoints stay unauthenticated on the
+native edge (they lived on the sidecar in the original topology), unknown
+`/api/*` paths proxy to Go 501 instead of the original SPA/JSON catch-all, and
+full-route auth ordering (route match before auth) is still middleware-first.
+
+
+### 2026-11-07 public auth semantics slice (local; cloud pending)
+
+Reviewed local snapshot commit `69f380d2bf8b485d4908e501f14dcf24a5698232`, tree `0325abcf45beb154f48ecc528cd5e4cd07df0334`, parent `4394329d760eacf34656dc7d464f24e783c8565b`.
+Public-route auth now matches the original contract: Host allow-list checked
+before the token on every `/api/*`, `/v1/*`, `/mcp` and `/a2a*` route, both
+refusals are the flat `{"error": ..., "code": ...}` documents, and
+`allowed_auth_hosts` includes the machine's LAN address through a ported
+`local_ip()` (UDP probe, oracle `is_lan_ip` rules, 30-second cache; the Windows
+`ipconfig` scan is recorded as a narrowing). A new `tests/auth_semantics.rs`
+compares the edge with a fresh Python `TestClient` oracle for twenty cases;
+locally the model-vs-oracle crosscheck passed 20/20 and rustfmt is clean, while
+the updated route suites now assert the flat envelope.
+
+CLOUD_PENDING: push and dispatch `rust-cloud.yml` at the exact source. Recorded
+follow-ups: `/rag/*` sidecar auth ownership, unknown `/api/*` catch-all parity,
+route-vs-auth ordering, full 37-job CI/Go floors, launcher packages and
+zero-Python workloads. **NOT_READY.**

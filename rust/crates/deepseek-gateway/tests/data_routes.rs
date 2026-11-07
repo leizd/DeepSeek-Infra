@@ -204,7 +204,8 @@ async fn the_routes_require_production_auth() {
 
     let (status, body) = post_with_token("/api/reminders", json!({"action": "list"}), None).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "body: {body}");
-    assert_eq!(body["error"]["code"], "UNAUTHORIZED");
+    assert_eq!(body["error"], "Auth required");
+    assert_eq!(body["code"], "unauthorized");
 
     let (status, _) = post_with_token(
         "/api/reminders",

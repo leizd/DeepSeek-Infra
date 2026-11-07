@@ -228,5 +228,6 @@ async fn backup_runs_list_reads_the_scheduler_database_without_creating_one() {
 
     let (status, unauthenticated) = fixture.request("/api/workspace/backup-runs", false).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{unauthenticated}");
-    assert_eq!(unauthenticated["error"]["code"], "UNAUTHORIZED");
+    assert_eq!(unauthenticated["error"], "Auth required");
+    assert_eq!(unauthenticated["code"], "unauthorized");
 }

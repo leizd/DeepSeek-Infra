@@ -218,7 +218,7 @@ async fn federation_snapshot_matches_the_pure_builder_without_creating_a_store()
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(
         body,
-        json!({"error": {"code": "UNAUTHORIZED", "message": "Auth required"}})
+        json!({"error": "Auth required", "code": "unauthorized"})
     );
 
     let oracle_plan = json!({

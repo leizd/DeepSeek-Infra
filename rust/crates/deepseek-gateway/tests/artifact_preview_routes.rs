@@ -327,8 +327,9 @@ async fn artifact_preview_matches_the_oracle_without_creating_a_store() {
         .request("GET", "/api/workspace/artifacts/art-note/preview", false)
         .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{unauthenticated}");
-    assert_eq!(unauthenticated["error"]["code"], "UNAUTHORIZED");
-    assert_eq!(unauthenticated["error"]["message"], "Auth required");
+    assert_eq!(unauthenticated["error"], "Auth required");
+    assert_eq!(unauthenticated["code"], "unauthorized");
+    assert_eq!(unauthenticated["code"], "unauthorized");
 
     let (status, invalid_id, _, _) = fixture
         .request("GET", "/api/workspace/artifacts/no/preview", true)

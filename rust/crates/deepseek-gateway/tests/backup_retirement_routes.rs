@@ -342,7 +342,8 @@ async fn retirement_create_get_and_list_match_the_python_job_contract() {
         )
         .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{unauthenticated}");
-    assert_eq!(unauthenticated["error"]["code"], "UNAUTHORIZED");
+    assert_eq!(unauthenticated["error"], "Auth required");
+    assert_eq!(unauthenticated["code"], "unauthorized");
 }
 
 #[tokio::test]

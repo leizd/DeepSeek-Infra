@@ -1283,11 +1283,10 @@ mod tests {
 
         let api = get_response(app.clone(), "/api/policies").await;
         assert_eq!(api.status(), StatusCode::UNAUTHORIZED);
-        assert_eq!(
-            serde_json::from_str::<serde_json::Value>(&response_body(api).await).unwrap()["error"]
-                ["code"],
-            "UNAUTHORIZED"
-        );
+        let unauthorized =
+            serde_json::from_str::<serde_json::Value>(&response_body(api).await).unwrap();
+        assert_eq!(unauthorized["error"], "Auth required");
+        assert_eq!(unauthorized["code"], "unauthorized");
 
         let post = app
             .oneshot(

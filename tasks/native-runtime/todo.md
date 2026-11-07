@@ -3802,3 +3802,90 @@ Base `eec2853f653594289951790fb8b93b91f62a7fd0`; isolated worktree
 - [ ] Continue the ordered remaining chain: request-bound OCR credential custody,
       processing process-kill/intermediate recovery, eval report engine, launcher
       platform packages, zero-Python workloads, full CI/Evidence.
+
+
+
+### 2026-11-07 native /api/mcp status route (local; cloud pending)
+
+Reviewed local snapshot commit `4394329d760eacf34656dc7d464f24e783c8565b`, tree `b4d799698efeb73fcafbf46325dcdac86e3f9650`, parent `eec2853f653594289951790fb8b93b91f62a7fd0`
+(the three-workflow-qualified multipart process commit). It implements
+`GET /api/mcp` in the Rust gateway with the original `mcp_status()` shape,
+environment precedence/clamps, native tool-catalog counts, ordered client
+servers and per-server timeouts, plus a ten-family Python-oracle integration
+test. Local: rustfmt clean; the ported algorithm matched the real oracle on
+10/10 families and every oracle run left the workspace empty; ruff/mypy pass on
+the committed cross-check tool. No local Rust compilation.
+
+CLOUD_PENDING: push this commit and dispatch `rust-cloud.yml`; workspace tests
+(including the new oracle integration test), clippy and the unchanged 80%
+coverage floor must run at the exact source. Remaining status block:
+`/api/semantic-cache/status`. Full migration remains **NOT_READY**.
+
+Evidence: `artifacts/native-20261107-mcp-status-route/`.
+
+
+### 2026-11-07 rust-cloud qualification of the native /api/mcp route (4394329d)
+
+`rust-cloud.yml` run `42331664556` completed **success** on branch
+`codex/native-mcp-status-route-20261107` at commit `4394329d760eacf34656dc7d464f24e783c8565b`, tree `b4d799698efeb73fcafbf46325dcdac86e3f9650`
+(event `workflow_dispatch`). Both jobs passed:
+
+- Rust checks: success (formatting, clippy, full workspace tests and every
+  actual native process verification, including the new oracle integration
+  test).
+- Rust coverage: success — 1825 Rust tests, `sourceTreeDirty=false`,
+  `101520/122241 = 83.0490588264167%` against the unchanged 80% floor.
+
+`test mcp_status_matches_the_oracle_without_creating_a_store ... ok` is present
+in both the checks-job and coverage-job logs, alongside the two new unit tests.
+Only report/log artifacts were downloaded (722 files); no compiler caches,
+binaries, images or volumes. The native `/api/mcp` status block is now
+exact-source qualified for the bounded Rust workflow.
+
+Not qualified by this run: full 37-job CI and the original Go/Android-Go 95%
+coverage floors, actual native launcher multipart `process=true` HTTP acceptance,
+public-route auth error-envelope parity, request-bound OCR credential custody,
+processing process-kill/intermediate recovery, the eval report engine, launcher
+packages, zero-Python workloads and Evidence Assembly. **NOT_READY.**
+
+Evidence: `artifacts/native-20261107-mcp-status-route/cloud-evidence.json` and
+`received-reports/rust-cloud/`.
+
+
+## 2026-11-07 public auth host and refusal semantics — implemented, cloud pending
+
+- [x] Enforce the original Host allow-list before the token on every public
+      route; flat `Auth required` / `Host not allowed` refusal documents.
+- [x] Port `local_ip()` (UDP probe, oracle LAN rules, 30s cache) into
+      `allowed_auth_hosts`; document the Windows `ipconfig` narrowing.
+- [x] Replace the inventory-only host special case with the general rule; keep
+      the media/HOME empty-HEAD refusal.
+- [x] Update all native route tests from the old nested envelope to the flat
+      oracle document.
+- [x] Add `tests/auth_semantics.rs`: twenty-case Python `TestClient` oracle
+      comparison (all public families, wrong method, hosts, LAN address, token
+      successes) plus content-type and empty-tree assertions.
+- [x] Local: rustfmt clean; model-vs-oracle crosscheck 20/20 PASS; ruff/mypy on
+      the committed crosscheck tool pass.
+- [ ] CLOUD_PENDING: push and run `rust-cloud.yml` at the exact commit.
+- [ ] Follow-ups recorded: `/rag/*` sidecar auth ownership, unknown `/api/*`
+      catch-all parity, route-vs-auth ordering for wrong-method/unknown paths.
+
+
+### 2026-11-07 public auth semantics slice (local; cloud pending)
+
+Reviewed local snapshot commit `69f380d2bf8b485d4908e501f14dcf24a5698232`, tree `0325abcf45beb154f48ecc528cd5e4cd07df0334`, parent `4394329d760eacf34656dc7d464f24e783c8565b`.
+Public-route auth now matches the original contract: Host allow-list checked
+before the token on every `/api/*`, `/v1/*`, `/mcp` and `/a2a*` route, both
+refusals are the flat `{"error": ..., "code": ...}` documents, and
+`allowed_auth_hosts` includes the machine's LAN address through a ported
+`local_ip()` (UDP probe, oracle `is_lan_ip` rules, 30-second cache; the Windows
+`ipconfig` scan is recorded as a narrowing). A new `tests/auth_semantics.rs`
+compares the edge with a fresh Python `TestClient` oracle for twenty cases;
+locally the model-vs-oracle crosscheck passed 20/20 and rustfmt is clean, while
+the updated route suites now assert the flat envelope.
+
+CLOUD_PENDING: push and dispatch `rust-cloud.yml` at the exact source. Recorded
+follow-ups: `/rag/*` sidecar auth ownership, unknown `/api/*` catch-all parity,
+route-vs-auth ordering, full 37-job CI/Go floors, launcher packages and
+zero-Python workloads. **NOT_READY.**

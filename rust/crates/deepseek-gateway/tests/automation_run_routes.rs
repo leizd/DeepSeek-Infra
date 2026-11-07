@@ -393,8 +393,9 @@ async fn automation_runs_match_list_runs_and_do_not_create_a_missing_store() {
 
     let (status, unauthenticated) = fixture.request("GET", &runs, false).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{unauthenticated}");
-    assert_eq!(unauthenticated["error"]["code"], "UNAUTHORIZED");
-    assert_eq!(unauthenticated["error"]["message"], "Auth required");
+    assert_eq!(unauthenticated["error"], "Auth required");
+    assert_eq!(unauthenticated["code"], "unauthorized");
+    assert_eq!(unauthenticated["code"], "unauthorized");
     assert!(!fixture.automation_dir().exists());
 
     let (status, missing) = fixture.request("GET", &runs, true).await;
@@ -1173,8 +1174,9 @@ async fn post_run_refuses_illegal_requests_without_rewriting_the_store() {
 
     let (status, unauthenticated) = fixture.request("POST", missing, false).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{unauthenticated}");
-    assert_eq!(unauthenticated["error"]["code"], "UNAUTHORIZED");
-    assert_eq!(unauthenticated["error"]["message"], "Auth required");
+    assert_eq!(unauthenticated["error"], "Auth required");
+    assert_eq!(unauthenticated["code"], "unauthorized");
+    assert_eq!(unauthenticated["code"], "unauthorized");
     assert!(!fixture.automation_dir().exists());
 
     let (status, bad_id) = fixture

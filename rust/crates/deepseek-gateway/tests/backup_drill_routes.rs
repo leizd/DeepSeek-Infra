@@ -163,7 +163,8 @@ async fn recovery_drill_get_reads_an_existing_session_without_creating_one() {
         .request("GET", &format!("{DRILL}/restore_abc"), false)
         .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{unauthenticated}");
-    assert_eq!(unauthenticated["error"]["code"], "UNAUTHORIZED");
+    assert_eq!(unauthenticated["error"], "Auth required");
+    assert_eq!(unauthenticated["code"], "unauthorized");
     assert!(!staging.exists());
 
     for id in ["nope", "restore_", "restore_ab-c", "restore_ab_c"] {

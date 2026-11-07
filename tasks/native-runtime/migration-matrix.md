@@ -1,3 +1,39 @@
+<!-- native checkpoint 2026-11-07 public auth semantics -->
+
+Public-route auth Host allow-list and flat refusals now match the original contract (`require_api_auth`): Host checked before the token on `/api/*`, `/v1/*`, `/mcp` and `/a2a*`; `allowed_auth_hosts` includes a ported `local_ip()` (UDP probe with the oracle's `is_lan_ip` rules and a 30-second cache; Windows `ipconfig` scan recorded as a narrowing). A twenty-case Python `TestClient` oracle test compares statuses, refusal bodies and content types; local model-vs-oracle crosscheck 20/20 PASS and rustfmt clean. Reviewed local snapshot commit `69f380d2bf8b485d4908e501f14dcf24a5698232`, tree `0325abcf45beb154f48ecc528cd5e4cd07df0334`, parent `4394329d760eacf34656dc7d464f24e783c8565b`; **CLOUD_PENDING** a pushed `rust-cloud.yml`. Follow-ups: `/rag/*` sidecar auth, unknown `/api/*` catch-all parity, route-vs-auth ordering. Full migration **NOT_READY.**
+
+<!-- native checkpoint 2026-11-07 public auth host and refusal semantics -->
+
+Whole product Rust/Go migration remains ACTIVE / NOT_READY.
+
+Public-route authentication now matches the original contract: the caller's
+`Host` is validated against the oracle allow-list before the token on every
+`/api/*`, `/v1/*`, `/mcp` and `/a2a*` route, both refusals are the flat
+`{"error": ..., "code": ...}` documents, and `allowed_auth_hosts` includes the
+machine's LAN address via a ported `local_ip()` (UDP probe, oracle `is_lan_ip`
+rules, 30-second cache; the Windows `ipconfig` scan is recorded as a narrowing).
+Missing `Host` headers are treated as internal because real HTTP/1.1 and HTTP/2
+requests always carry one. A twenty-case Python `TestClient` oracle integration
+test compares statuses, refusal bodies and content types, including localhost,
+host-with-port, foreign hosts with and without a valid token, the oracle-detected
+LAN address, wrong-method ordering, `/mcp`/`/a2a`/`/v1` and valid-token success
+statuses; the local model-vs-oracle crosscheck passed all twenty cases and
+`rustfmt` is clean. Exact-source `rust-cloud.yml` is pending a pushed commit.
+
+Recorded divergences for follow-up: the `/rag/*` sidecar endpoints stay
+unauthenticated on the native edge, unknown `/api/*` paths proxy to Go 501
+instead of the original catch-all, and auth still runs before route matching for
+wrong-method/unknown paths (which the oracle's catch-all happens to mirror for
+`/api/*` but not for every method). Full 37-job CI, Go/Android-Go floors,
+launcher/platform packages, zero-Python workloads and Evidence Assembly remain
+open. **NOT_READY.**
+
+Exact-source rust-cloud qualification of the native `/api/mcp` status route: run `42331664556` success (checks + coverage) at commit `4394329d760eacf34656dc7d464f24e783c8565b`, tree `b4d799698efeb73fcafbf46325dcdac86e3f9650` — 1825 Rust tests, 101520/122241 = 83.0490588264167% against the unchanged 80% floor, `sourceTreeDirty=false`, and `mcp_status_matches_the_oracle_without_creating_a_store ... ok` in both job logs. Full 37-job CI, Go/Android-Go 95% floors, native launcher multipart process acceptance, auth error-envelope parity, OCR credential custody, processing recovery, eval engine, launcher packages, zero-Python workloads and Evidence Assembly remain open. **NOT_READY.**
+
+<!-- native checkpoint 2026-11-07 native mcp status route -->
+
+Native `GET /api/mcp` implements the original `mcp_status()` document in the Rust gateway (environment precedence, capability validation with unknown→full fallback, native tool-catalog counts, expose flags, ordered client servers, Python int/float parsing and clamps), ahead of the Go catch-all under the existing `/api/` auth, with HEAD 200 / 405 `Allow: GET, HEAD` and no workspace writes. A Rust integration test replays ten environment families against a fresh Python `mcp_status()` oracle and asserts the full body plus 401, query invariance and an empty tree. Reviewed local snapshot commit `4394329d760eacf34656dc7d464f24e783c8565b`, tree `b4d799698efeb73fcafbf46325dcdac86e3f9650`, parent `eec2853f653594289951790fb8b93b91f62a7fd0`: rustfmt clean, oracle cross-check 10/10 PASS, no local Rust compilation; **CLOUD_PENDING** a pushed `rust-cloud.yml` at the exact commit. Remaining status block `/api/semantic-cache/status`; the ordered chain otherwise unchanged. **NOT_READY.**
+
 <!-- native checkpoint 2026-11-07 native mcp status route -->
 
 Whole product Rust/Go migration remains ACTIVE / NOT_READY. All original server,

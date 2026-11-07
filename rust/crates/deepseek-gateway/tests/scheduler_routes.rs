@@ -375,8 +375,9 @@ async fn scheduler_matches_the_oracle_without_creating_a_store() {
 
     let (status, unauthenticated, _, _) = fixture.request("GET", "/api/scheduler", false).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{unauthenticated}");
-    assert_eq!(unauthenticated["error"]["code"], "UNAUTHORIZED");
-    assert_eq!(unauthenticated["error"]["message"], "Auth required");
+    assert_eq!(unauthenticated["error"], "Auth required");
+    assert_eq!(unauthenticated["code"], "unauthorized");
+    assert_eq!(unauthenticated["code"], "unauthorized");
     assert_eq!(
         tree(root),
         Vec::<String>::new(),

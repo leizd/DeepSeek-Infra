@@ -140,12 +140,61 @@ pub fn request_port(host_header: &str) -> u16 {
         .unwrap_or(80)
 }
 
-/// `allowed_auth_hosts`: the loopback names plus the configured ones.
+/// `local_ip()`: the machine's LAN address used by the auth allow-list.
 ///
-/// The oracle also adds the machine's LAN address (`local_ip()`), which is not ported; a
-/// deployment reached by LAN name therefore falls back to `http://127.0.0.1:{port}` for
-/// `localBaseUrl`. That value reaches the payload and the pptx download link, **not** the
-/// assembled upstream body.
+/// The oracle prefers a Windows `ipconfig` scan and falls back to the address a UDP
+/// socket to the public internet would use. Only the socket half is ported; on a
+/// multi-homed host the two can pick different adapters (recorded as a narrowing).
+/// The probe socket sends no packet and the result is cached for the oracle's 30
+/// seconds.
+pub fn local_ip() -> String {
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+    static CACHE: Mutex<Option<(Instant, String)>> = Mutex::new(None);
+    let mut guard = match CACHE.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    let now = Instant::now();
+    if let Some((cached_at, cached)) = guard.as_ref() {
+        if now.duration_since(*cached_at) < Duration::from_secs(30) {
+            return cached.clone();
+        }
+    }
+    let detected = detect_local_ip();
+    *guard = Some((now, detected.clone()));
+    detected
+}
+
+fn detect_local_ip() -> String {
+    let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") else {
+        return "127.0.0.1".to_string();
+    };
+    if socket.connect("8.8.8.8:80").is_err() {
+        return "127.0.0.1".to_string();
+    }
+    match socket.local_addr() {
+        Ok(std::net::SocketAddr::V4(address)) if is_lan_ip(address.ip()) => {
+            address.ip().to_string()
+        }
+        _ => "127.0.0.1".to_string(),
+    }
+}
+
+/// `is_lan_ip`: IPv4, not loopback/link-local/unspecified and not a network or
+/// broadcast last octet. The oracle applies exactly these rules to both the UDP
+/// candidate and each Windows `ipconfig` candidate.
+fn is_lan_ip(address: &std::net::Ipv4Addr) -> bool {
+    let last_octet = address.octets()[3];
+    !address.is_loopback()
+        && !address.is_link_local()
+        && !address.is_unspecified()
+        && last_octet != 0
+        && last_octet != 255
+}
+
+/// `allowed_auth_hosts`: the loopback names, the configured host, the machine's LAN
+/// address and `AUTH_ALLOWED_HOSTS`.
 pub fn allowed_auth_hosts() -> std::collections::HashSet<String> {
     let mut hosts: std::collections::HashSet<String> = ["localhost", "127.0.0.1", "::1"]
         .iter()
@@ -158,6 +207,7 @@ pub fn allowed_auth_hosts() -> std::collections::HashSet<String> {
     if !configured.is_empty() && configured != "0.0.0.0" {
         hosts.insert(configured);
     }
+    hosts.insert(local_ip());
     for host in std::env::var("AUTH_ALLOWED_HOSTS")
         .unwrap_or_default()
         .split(',')
@@ -228,6 +278,26 @@ fn sort_value(value: &Value) -> Value {
 
 #[cfg(test)]
 mod tests {
+    use super::is_lan_ip;
+
+    #[test]
+    fn lan_ip_detection_matches_the_oracle_rules() {
+        for lan in ["10.1.2.3", "192.168.1.20", "172.16.5.9", "8.8.8.8"] {
+            let address: std::net::Ipv4Addr = lan.parse().expect("lan ip");
+            assert!(is_lan_ip(&address), "{lan}");
+        }
+        for refused in [
+            "127.0.0.1",
+            "169.254.1.2",
+            "0.0.0.0",
+            "10.0.0.0",
+            "10.0.0.255",
+        ] {
+            let address: std::net::Ipv4Addr = refused.parse().expect("refused ip");
+            assert!(!is_lan_ip(&address), "{refused}");
+        }
+    }
+
     use super::*;
     use serde_json::json;
 

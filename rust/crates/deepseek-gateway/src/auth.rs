@@ -205,39 +205,22 @@ fn tokens_match(provided: &str, expected: &str) -> bool {
     !expected.is_empty() && diff == 0
 }
 
-fn backup_inventory_host_allowed(headers: &HeaderMap) -> bool {
-    let host = headers
+/// `require_allowed_host`: the Host header's host part must be in the oracle's
+/// allow-list. The proxy rewrites `Host` when it forwards to another runtime, so
+/// the edge has to make this decision itself.
+///
+/// A request without a `Host` header cannot occur over HTTP/1.1 (hyper rejects it)
+/// or HTTP/2 (`:authority`); in-process test requests are the only source, so that
+/// case is treated as internal rather than refused.
+fn public_host_allowed(headers: &HeaderMap) -> bool {
+    let Some(raw) = headers
         .get(header::HOST)
         .and_then(|value| value.to_str().ok())
-        .unwrap_or("")
-        .trim();
-    !host.is_empty()
-        && !host.contains('/')
-        && !host.contains('\\')
-        && crate::openai_facade::allowed_auth_hosts()
-            .contains(&crate::openai_facade::host_without_port(host))
-}
-
-/// The oracle's `require_api_auth` checks the original `Host` on every inventory route it
-/// serves — the collection **and** the item paths — so a foreign host is refused there for
-/// `PATCH`, `DELETE` and the per-policy sub-routes too, not only for the collection.
-///
-/// The edge has to make that decision itself. The proxy rewrites `Host` to the Go listener
-/// when it forwards, so a check made only by the Go side would inspect the wrong value and
-/// never refuse a foreign host.
-fn backup_inventory_route(path: &str) -> bool {
-    const PREFIXES: [&str; 3] = [
-        "/api/workspace/backup-policies",
-        "/api/workspace/backup-targets",
-        "/api/workspace/backup-mirrors",
-    ];
-    PREFIXES
-        .iter()
-        .any(|prefix| match path.strip_prefix(prefix) {
-            Some("") => true,
-            Some(rest) => rest.starts_with('/'),
-            None => false,
-        })
+    else {
+        return true;
+    };
+    let host = crate::openai_facade::host_without_port(raw);
+    !host.is_empty() && crate::openai_facade::allowed_auth_hosts().contains(&host)
 }
 
 pub async fn require_production_auth(
@@ -297,26 +280,17 @@ pub async fn require_production_auth(
         return next.run(request).await;
     }
     let expected = auth.token.as_str();
-    let provided = token_from_headers(request.headers());
-    if backup_inventory_route(request.uri().path()) {
-        if !backup_inventory_host_allowed(request.headers()) {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(json!({"error": "Host not allowed", "code": "forbidden"})),
-            )
-                .into_response();
-        }
-        if !tokens_match(&provided, expected) {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({"error": "Auth required", "code": "unauthorized"})),
-            )
-                .into_response();
-        }
-        return next.run(request).await;
+    // The original `require_api_auth` checks the caller's Host before the token,
+    // on every route it serves.
+    if !public_host_allowed(request.headers()) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"error": "Host not allowed", "code": "forbidden"})),
+        )
+            .into_response();
     }
+    let provided = token_from_headers(request.headers());
     if !tokens_match(&provided, expected) {
-        let path = request.uri().path();
         let media_read = matches!(*request.method(), Method::GET | Method::HEAD)
             && matches!(
                 request
@@ -333,12 +307,11 @@ pub async fn require_production_auth(
         if media_read && request.method() == Method::HEAD {
             return StatusCode::UNAUTHORIZED.into_response();
         }
-        let error = if media_read || path == "/api/skills" || path.starts_with("/api/skills/") {
-            json!({"error":"Auth required","code":"unauthorized"})
-        } else {
-            json!({"error": {"code": "UNAUTHORIZED", "message": "Auth required"}})
-        };
-        return (StatusCode::UNAUTHORIZED, Json(error)).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error": "Auth required", "code": "unauthorized"})),
+        )
+            .into_response();
     }
     next.run(request).await
 }
