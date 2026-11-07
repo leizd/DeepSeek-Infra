@@ -20,6 +20,7 @@ use deepseek_policy::request_messages::validate_request_messages;
 pub mod a2a_control;
 pub mod a2a_hub;
 pub mod a2a_runner;
+mod auth_logout_route;
 pub mod a2a_stream;
 mod agent_credential_client;
 mod agent_run_routes;
@@ -207,6 +208,7 @@ fn create_routes() -> Router {
         .merge(edge_status_routes::router())
         .merge(rust_status_routes::router())
         .merge(fetch_url_route::router())
+        .merge(auth_logout_route::router())
         .merge(mcp_status_routes::router())
         .route("/api/*path", any(control_proxy::proxy_api_to_go))
         // Private control handlers must not fall through to either proxy or SPA.

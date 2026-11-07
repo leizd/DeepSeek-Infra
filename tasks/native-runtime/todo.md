@@ -3874,7 +3874,7 @@ Evidence: `artifacts/native-20261107-mcp-status-route/cloud-evidence.json` and
 
 ### 2026-11-07 public auth semantics slice (local; cloud pending)
 
-Reviewed local snapshot commit `f366886cc03a4100385789101efc22153b14ab38`, tree `cbf5f87123ffd48157c45c0dc7a80cf941585eaa`, parent `4394329d760eacf34656dc7d464f24e783c8565b`.
+Reviewed local snapshot commit `2a4f84b149d6f2e5e6ec4e86188bf151e0b33cc8`, tree `c72ed31f7c89f601d0498969ca7b3acc54d5018f`, parent `4394329d760eacf34656dc7d464f24e783c8565b`.
 Public-route auth now matches the original contract: Host allow-list checked
 before the token on every `/api/*`, `/v1/*`, `/mcp` and `/a2a*` route, both
 refusals are the flat `{"error": ..., "code": ...}` documents, and
@@ -3908,3 +3908,53 @@ zero-Python workloads. **NOT_READY.**
 - [ ] CLOUD_PENDING: push and run `rust-cloud.yml` at the exact commit.
 - [ ] Follow-ups: port Python JSON syntax-error diagnostics, global OPTIONS/CORS
       parity before auth, and real-network success evidence at the route level.
+
+
+### 2026-11-07 native POST /api/fetch-url slice (local; cloud pending)
+
+Reviewed local snapshot commit `573f4166b21edfce78be273761e44dfb5322132f`, tree `6bf07a2b36f4bc0e9602a08f55811fd5ce0a88aa`, parent `2a4f84b149d6f2e5e6ec4e86188bf151e0b33cc8`.
+`POST /api/fetch-url` now runs on the Rust edge: original `read_json_body`
+contract (declared Content-Length with Python int parsing, 2,000,000-byte bound,
+empty-body/non-object errors), Python `str(url or "")` coercion,
+`AppError.to_response()`/unhandled-500 envelopes, and non-POST verb parity
+(GET/HEAD flat 404, OPTIONS global 204 with both allow lists, other verbs 405
+`Allow: OPTIONS`). URL handling reuses the probe-verified
+`deepseek_policy::fetch_url` through `fetch_provider`. A seventeen-case
+Python-oracle test seeds the real fetch cache and compares offline responses
+(success envelope, all URL/body refusals, method semantics, 401, 2,000,001-byte
+413) plus a single-cache-file workspace assertion. `rustfmt` clean; oracle
+statuses/bodies were measured against the real application; no local Rust
+compilation. CLOUD_PENDING: push and dispatch `rust-cloud.yml` at the exact
+source. Recorded follow-ups: Python JSON diagnostics, global OPTIONS/CORS before
+auth, real-network route evidence. **NOT_READY.**
+
+
+### 2026-11-07 auth/fetch slice test fix and redispatch
+
+The auth slice's first full run exposed a test-only bug: in
+`tests/auth_semantics.rs` the `__LOCAL_IP__` placeholder was substituted for the
+oracle request but sent literally as the `Host` header by the native request, so
+the native edge correctly refused it. The fix substitutes the oracle-detected LAN
+address for the native request too. The fixed commits are `2a4f84b1` (auth
+branch, tree `c72ed31f`) and `573f4166` (fetch branch, tree `6bf07a2b`), each
+dispatched again as `rust-cloud` runs `42341457580` and `42341459922`. Earlier
+failures (clippy in run `42339344029`; the placeholder failure in run
+`42340140916`) are retained as prior-failure evidence in the corresponding
+artifact directories. **NOT_READY.**
+
+
+## 2026-11-07 native `POST /api/auth/logout` — implemented, cloud pending
+
+- [x] Serve `POST /api/auth/logout` from the edge with the original body and the
+      exact expired `Set-Cookie` bytes; non-POST verbs mirror catch-all/global
+      OPTIONS/method-refusal responses.
+- [x] Add `tests/auth_logout_route.rs`: five Python-oracle comparisons plus an
+      empty-workspace assertion.
+- [x] Local: rustfmt clean; oracle outcomes and cookie bytes measured against
+      the real application; no local Rust compilation.
+- [ ] CLOUD_PENDING: push and run `rust-cloud.yml` at the exact commit.
+- [ ] Remaining top-level Python routes still unmigrated: `/api/semantic-cache`,
+      `/api/semantic-cache/status`, `/api/share-target`, `/api/traces*`,
+      `/api/compress-context`, `/api/download-save`, `/api/edge/reload`,
+      `/api/edge/route-preview`, `/api/mcp/external/tools`, `/api/rag/*` write
+      routes, `/share-target`, and the whole `/api/workspace/*` backup/DR surface.

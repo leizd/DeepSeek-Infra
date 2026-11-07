@@ -15240,7 +15240,7 @@ full-route auth ordering (route match before auth) is still middleware-first.
 
 ### 2026-11-07 public auth semantics slice (local; cloud pending)
 
-Reviewed local snapshot commit `f366886cc03a4100385789101efc22153b14ab38`, tree `cbf5f87123ffd48157c45c0dc7a80cf941585eaa`, parent `4394329d760eacf34656dc7d464f24e783c8565b`.
+Reviewed local snapshot commit `2a4f84b149d6f2e5e6ec4e86188bf151e0b33cc8`, tree `c72ed31f7c89f601d0498969ca7b3acc54d5018f`, parent `4394329d760eacf34656dc7d464f24e783c8565b`.
 Public-route auth now matches the original contract: Host allow-list checked
 before the token on every `/api/*`, `/v1/*`, `/mcp` and `/a2a*` route, both
 refusals are the flat `{"error": ..., "code": ...}` documents, and
@@ -15295,3 +15295,62 @@ narrowings/follow-ups: Python JSON syntax-error messages are not byte-ported
 the existing policy parity probe rather than this route test, and unauthenticated
 OPTIONS/PUT still hit the auth middleware before routing (the original global
 OPTIONS route and method matching run before auth).
+
+
+### 2026-11-07 native POST /api/fetch-url slice (local; cloud pending)
+
+Reviewed local snapshot commit `573f4166b21edfce78be273761e44dfb5322132f`, tree `6bf07a2b36f4bc0e9602a08f55811fd5ce0a88aa`, parent `2a4f84b149d6f2e5e6ec4e86188bf151e0b33cc8`.
+`POST /api/fetch-url` now runs on the Rust edge: original `read_json_body`
+contract (declared Content-Length with Python int parsing, 2,000,000-byte bound,
+empty-body/non-object errors), Python `str(url or "")` coercion,
+`AppError.to_response()`/unhandled-500 envelopes, and non-POST verb parity
+(GET/HEAD flat 404, OPTIONS global 204 with both allow lists, other verbs 405
+`Allow: OPTIONS`). URL handling reuses the probe-verified
+`deepseek_policy::fetch_url` through `fetch_provider`. A seventeen-case
+Python-oracle test seeds the real fetch cache and compares offline responses
+(success envelope, all URL/body refusals, method semantics, 401, 2,000,001-byte
+413) plus a single-cache-file workspace assertion. `rustfmt` clean; oracle
+statuses/bodies were measured against the real application; no local Rust
+compilation. CLOUD_PENDING: push and dispatch `rust-cloud.yml` at the exact
+source. Recorded follow-ups: Python JSON diagnostics, global OPTIONS/CORS before
+auth, real-network route evidence. **NOT_READY.**
+
+
+### 2026-11-07 auth/fetch slice test fix and redispatch
+
+The auth slice's first full run exposed a test-only bug: in
+`tests/auth_semantics.rs` the `__LOCAL_IP__` placeholder was substituted for the
+oracle request but sent literally as the `Host` header by the native request, so
+the native edge correctly refused it. The fix substitutes the oracle-detected LAN
+address for the native request too. The fixed commits are `2a4f84b1` (auth
+branch, tree `c72ed31f`) and `573f4166` (fetch branch, tree `6bf07a2b`), each
+dispatched again as `rust-cloud` runs `42341457580` and `42341459922`. Earlier
+failures (clippy in run `42339344029`; the placeholder failure in run
+`42340140916`) are retained as prior-failure evidence in the corresponding
+artifact directories. **NOT_READY.**
+
+
+## 2026-11-07 native `POST /api/auth/logout` — local, cloud pending
+
+Parent `573f4166` (native fetch-url). The route now runs on the Rust edge:
+
+- `rust/crates/deepseek-gateway/src/auth_logout_route.rs` returns the original
+  `{"ok": true}` and the Python `SimpleCookie`-rendered expired token
+  (`auth_token=""; HttpOnly; Max-Age=0; Path=/; SameSite=Strict`), and keeps the
+  original non-POST routing: GET/HEAD -> `/api/{path:path}` flat 404, OPTIONS ->
+  global 204 with both access-control allow lists, other verbs -> FastAPI 405
+  with `Allow: OPTIONS`. Authentication itself stays in the shared edge
+  middleware.
+- `rust/crates/deepseek-gateway/tests/auth_logout_route.rs` compares five cases
+  with a fresh Python application under the identical environment: logout with a
+  token (status, body and the exact `Set-Cookie` bytes), logout without a token
+  (flat 401), GET (flat 404), PUT (405 + `Allow: OPTIONS`) and OPTIONS (204 plus
+  `access-control-allow-methods`). It also asserts the workspace stays empty.
+
+Local: `rustfmt --check` clean; the five oracle outcomes and the exact cookie
+string were measured against the real Python application before the test was
+written. No local Rust compilation.
+
+CLOUD_PENDING: push and dispatch `rust-cloud.yml` at the exact source. Recorded
+routing follow-up: unauthenticated GET/PUT to this route still pass through the
+auth middleware before routing, like the other migrated routes.
