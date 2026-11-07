@@ -464,11 +464,6 @@
       "file": "deepseek_infra/web/routes/backup_governance.py"
     },
     {
-      "method": "get",
-      "path": "/api/workspace/backup-target-capabilities",
-      "file": "deepseek_infra/web/routes/backup_governance.py"
-    },
-    {
       "method": "post",
       "path": "/api/workspace/backup-targets/{target_id}/drain/cancel",
       "file": "deepseek_infra/web/routes/backup_governance.py"

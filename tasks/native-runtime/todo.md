@@ -4010,3 +4010,85 @@ forwarding, `/api/edge/*`, `/api/mcp/external/tools`, `/api/rag/*` writes,
 `/api/semantic-cache*`, `/api/traces*`, `/api/compress-context`, share target).
 The route-gap audit JSON is retained under `artifacts/` for later matrix
 updates. **NOT_READY** — this is planning, not implemented behavior.
+
+
+### 2026-11-07 download-save source: clippy fix and redispatch
+
+The exact-source run `42345158362` for `67c0f880` failed only the Rust lint
+step: unused `std::path::PathBuf` import in the download-save unit-test module
+(`-D warnings`). The test-execution step in the coverage job had already
+passed. Fixed in `9a74dc56` (tree `29b0c5d4`, parent `67c0f880`) by dropping the
+import; the fixed source is pushed to
+`codex/native-gateway-download-save-20261107` and redispatched as
+`rust-cloud` run `42346115402`. The failure, fix and cancelled-old-run status are
+retained in the slice's prior-failure evidence. **NOT_READY.**
+
+
+### 2026-11-07 route coverage refresh and cloud run E
+
+Refreshed audit on the current source: 209 Python app routes; 99 Rust route
+declarations; 103 Python routes without an explicit native route, of which 14
+are Go-served control/media families (`/api/workspace/backup-policies*`,
+`/api/workspace/backup-targets*`, `/api/media/*`), leaving 89 genuinely
+unmigrated native paths: 71 `/api/workspace/*` backup/DR/resilience routes
+(restores 19, resilience 16, backups 10, disaster-recovery 9, authority 5,
+catalog/retention/exports/artifacts/capacity/budget/rebalances/projects/
+target-capabilities 12), 7 `/api/traces*|/trace/*`, and 11 top-level routes
+(`/api/agent-runs/{run_id}/{action}`, `/api/automation`, `/api/compress-context`,
+`/api/edge/reload|route-preview`, `/api/mcp/external/tools`, `/api/rag/*` writes,
+`/api/semantic-cache*`, `/api/share-target`, `/share-target`).
+
+Cloud run `42346115402` at `9a74dc56` (the auth/fetch/logout/download-save
+combined source): the Rust coverage job is **success** (coverage evidence status
+PASS, 101877/122589 = 83.1045% lines over the 80% floor, `sourceTreeDirty:false`,
+tested revision `9a74dc56`); the checks job passed formatting, lint and the full
+workspace test step and is still running the repo's media process-verification
+steps (45-minute per-step timeout) at the time of this entry. No final run
+conclusion is claimed yet. **NOT_READY.**
+
+
+## 2026-11-07 cloud-qualified gateway route slices
+
+- [x] Auth/fetch-url/auth-logout/download-save route slices: exact-source
+      `rust-cloud` run `42346115402` at `9a74dc56557b474eeef2990a6d032c788ba588ee` succeeded for both checks and
+      coverage (83.1045% lines, 80% floor, `sourceTreeDirty=false`).
+- [x] Evidence sealed (`cloud-evidence.json`, `received-reports/`,
+      `cloud-qualification.json` in the inherited slice artifact dirs).
+- [ ] Next: `/api/workspace/*` backup/DR plan S0 (Rust data-domain declarations +
+      export/import/fencing/rollback tooling + Go control authority) and S1
+      read-only control routes.
+- [ ] Remaining 89 unmigrated native paths listed in the continuation checkpoint;
+      highest-value next candidates are `/api/traces*`, `/api/automation` root,
+      and the S1 read-only backup capability/capacity/budget routes.
+- [ ] Full 37-job CI, Go/Android-Go 95% floors, platform packages, zero-Python
+      workloads, provider/fault matrices and Evidence Assembly remain open.
+
+
+## 2026-11-07 final phase status for this goal run
+
+`tasks/native-runtime/HANDOFF.md` now records the complete handoff state:
+qualified source `9a74dc56` (run `42346115402`, checks+coverage success,
+83.1045% lines), the four cloud-qualified native-edge route slices, branch/
+worktree layout, sealed evidence locations, the 89 remaining unmigrated native
+paths, the S0-S8 backup/DR plan, the ownership-inversion execution steps, the
+platform/zero-Python gates, the full-CI/fault/provider verification requirements,
+and the next concrete slices. The whole-objective assessment is **ACTIVE /
+NOT_READY** and will not be marked complete: the 37-job CI, platform packages,
+zero-Python workloads, backup/restore/DR/resilience surface and Evidence
+Assembly are still open.
+
+
+## 2026-11-07 S1: native backup-target capabilities
+
+- [x] Implement `GET /api/workspace/backup-target-capabilities` on the native
+      edge with the original body shape and method routing; no store access.
+- [x] Add oracle test with a stub-S3-SDK Python environment (byte-exact body),
+      method routing, 401 and workspace-unchanged assertions.
+- [x] Local rustfmt clean; measured against the real Python application.
+- [ ] CLOUD_PENDING: push and run `rust-cloud.yml` at the exact source.
+- [ ] Next S1 candidates: `/api/workspace/backups/capabilities`,
+      `/api/workspace/backup-capacity/summary`,
+      `/api/workspace/backup-transfer-budget`,
+      `/api/workspace/retention/preview`,
+      `/api/workspace/authority/retention/plan` (each needs its owning plane
+      decided first; S1 plan section in workspace-backup-dr-migration-plan.md).

@@ -1,3 +1,51 @@
+<!-- native checkpoint 2026-11-07 S1 backup-target capabilities -->
+
+Whole product Rust/Go migration remains ACTIVE / NOT_READY.
+
+The first S1 read-only control route is implemented: native
+`GET /api/workspace/backup-target-capabilities` answers the original capability
+body from the native runtime's real target support (`s3TargetAvailable: true`,
+`webdavTargetAvailable: false`, `supportedKinds: ["filesystem","s3"]`,
+`reservedKinds: ["webdav"]`) with GET/HEAD and the shared OPTIONS/405 fallbacks.
+An oracle test gives the Python subprocess a stub `boto3` module so both sides
+advertise S3, then compares the byte-exact body, PUT 405 + `Allow: OPTIONS`,
+OPTIONS 204 + allow list, unauthenticated 401 and an unchanged workspace; HEAD
+is native-only because the Python TestClient path reaches the static catch-all.
+The route reads no durable store, so it precedes the S0 ownership declarations.
+Parent is the cloud-qualified source `9a74dc56`; exact-source `rust-cloud.yml`
+for this commit is pending a push. Full migration **NOT_READY**: the rest of the
+89 unmigrated native paths, the backup/restore/DR/resilience surface, ownership
+inversion, platform packages, zero-Python workloads, full CI and Evidence
+Assembly remain open.
+
+<!-- native checkpoint 2026-11-07 exact-source cloud qualification -->
+
+Whole product Rust/Go migration remains ACTIVE / **NOT_READY**. The first
+exact-source cloud qualification of the migrated native-edge route slices is now
+sealed: `rust-cloud.yml` run [42346115402](https://github.com/leizd/DeepSeek-Infra/actions/runs/42346115402) at revision `9a74dc56557b474eeef2990a6d032c788ba588ee` (tree
+`29b0c5d4ae5eb15dea446ffa51f829730c520b08`) completed **success** for `Rust checks` (formatting, clippy with
+`-D warnings`, complete workspace tests and the repository's native process
+verifications) and `Rust coverage` (status PASS, 101877/122589 = 83.1045% lines
+over the unchanged 80% floor, `sourceTreeDirty: false`). That source contains and
+therefore re-qualifies four slices: public auth host/refusal semantics,
+`POST /api/fetch-url`, `POST /api/auth/logout`, and `POST /api/download-save`
+with the shared `route_support` module. Evidence is sealed under
+`artifacts/native-20261107-download-save-route/` and the per-slice
+`cloud-qualification.json` files.
+
+Route coverage is unchanged in scope: 209 Python app routes, 99 Rust route
+declarations, 103 Python routes without an explicit native route (14 of them
+Go-served control/media families), leaving 89 genuinely unmigrated native paths:
+71 `/api/workspace/*` backup/DR/resilience routes, 7 `/api/traces*|/trace/*`, and
+11 top-level routes. The backup/DR workstream plan (S0-S8) is in
+`workspace-backup-dr-migration-plan.md`.
+
+Still open before any completion claim: the full 37-job CI and Evidence Assembly,
+Go/Android-Go 95% coverage floors, desktop/Android/launcher packaging, zero-Python
+clean-environment workloads, provider/persistence/fault matrices, the entire
+backup/restore/DR/resilience surface, and removal of the Python production chain.
+**NOT_READY.**
+
 <!-- native checkpoint 2026-11-07 native download-save route -->
 
 Whole product Rust/Go migration remains ACTIVE / NOT_READY.

@@ -72,6 +72,7 @@ mod rust_status_routes;
 mod scheduler_routes;
 pub mod search_provider;
 mod skills_routes;
+mod workspace_backup_routes;
 mod workspace_home_routes;
 /// The Skill actions the oracle serves and this edge does not, kept reachable so the route test can
 /// assert that the action it pins as "refused by name" is still on this list — otherwise
@@ -192,6 +193,7 @@ fn create_routes() -> Router {
         // the store's authoritative writer is Rust, not Go.
         .merge(data_routes::router())
         .merge(project_routes::router())
+        .merge(workspace_backup_routes::router())
         .merge(workspace_home_routes::router())
         .merge(skills_routes::router())
         .merge(backup_mirror_routes::router())

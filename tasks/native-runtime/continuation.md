@@ -15431,3 +15431,132 @@ forwarding, `/api/edge/*`, `/api/mcp/external/tools`, `/api/rag/*` writes,
 `/api/semantic-cache*`, `/api/traces*`, `/api/compress-context`, share target).
 The route-gap audit JSON is retained under `artifacts/` for later matrix
 updates. **NOT_READY** — this is planning, not implemented behavior.
+
+
+### 2026-11-07 download-save source: clippy fix and redispatch
+
+The exact-source run `42345158362` for `67c0f880` failed only the Rust lint
+step: unused `std::path::PathBuf` import in the download-save unit-test module
+(`-D warnings`). The test-execution step in the coverage job had already
+passed. Fixed in `9a74dc56` (tree `29b0c5d4`, parent `67c0f880`) by dropping the
+import; the fixed source is pushed to
+`codex/native-gateway-download-save-20261107` and redispatched as
+`rust-cloud` run `42346115402`. The failure, fix and cancelled-old-run status are
+retained in the slice's prior-failure evidence. **NOT_READY.**
+
+
+### 2026-11-07 route coverage refresh and cloud run E
+
+Refreshed audit on the current source: 209 Python app routes; 99 Rust route
+declarations; 103 Python routes without an explicit native route, of which 14
+are Go-served control/media families (`/api/workspace/backup-policies*`,
+`/api/workspace/backup-targets*`, `/api/media/*`), leaving 89 genuinely
+unmigrated native paths: 71 `/api/workspace/*` backup/DR/resilience routes
+(restores 19, resilience 16, backups 10, disaster-recovery 9, authority 5,
+catalog/retention/exports/artifacts/capacity/budget/rebalances/projects/
+target-capabilities 12), 7 `/api/traces*|/trace/*`, and 11 top-level routes
+(`/api/agent-runs/{run_id}/{action}`, `/api/automation`, `/api/compress-context`,
+`/api/edge/reload|route-preview`, `/api/mcp/external/tools`, `/api/rag/*` writes,
+`/api/semantic-cache*`, `/api/share-target`, `/share-target`).
+
+Cloud run `42346115402` at `9a74dc56` (the auth/fetch/logout/download-save
+combined source): the Rust coverage job is **success** (coverage evidence status
+PASS, 101877/122589 = 83.1045% lines over the 80% floor, `sourceTreeDirty:false`,
+tested revision `9a74dc56`); the checks job passed formatting, lint and the full
+workspace test step and is still running the repo's media process-verification
+steps (45-minute per-step timeout) at the time of this entry. No final run
+conclusion is claimed yet. **NOT_READY.**
+
+
+## 2026-11-07 exact-source cloud qualification for the migrated gateway routes
+
+`rust-cloud.yml` run [42346115402](https://github.com/leizd/DeepSeek-Infra/actions/runs/42346115402) at exact revision `9a74dc56557b474eeef2990a6d032c788ba588ee` (tree
+`29b0c5d4ae5eb15dea446ffa51f829730c520b08`, branch `codex/native-gateway-download-save-20261107`) completed **success** for both jobs:
+
+- **Rust checks**: Rust formatting, clippy for all targets/features with
+  `-D warnings`, the complete workspace test suite (including
+  `tests/auth_semantics.rs`, `tests/fetch_url_route.rs`,
+  `tests/auth_logout_route.rs`, `tests/download_save_route.rs` and the shared
+  `route_support` coverage), and the repository's native process verifications.
+- **Rust coverage**: status PASS, 101877/122589 = 83.1045% lines against the
+  unchanged 80% floor, `sourceTreeDirty: false`,
+  `testedRevision: 9a74dc56557b474eeef2990a6d032c788ba588ee`.
+
+This one source contains and therefore re-qualifies four migrated route slices:
+the public auth host/refusal semantics (`POST /api/fetch-url`, `/api/auth/logout`
+included), the native `POST /api/fetch-url` route, the native
+`POST /api/auth/login`-adjacent logout route, and the native
+`POST /api/download-save` route plus the shared `route_support` read_json_body /
+error-envelope / routing-fallback module. Evidence is sealed under
+`artifacts/native-20261107-download-save-route/` (`cloud-evidence.json`,
+`received-reports/`, resealed review/manifest/local-validation/checkpoint) and
+`cloud-qualification.json` files in the auth/fetch/logout/combined artifact
+directories.
+
+Current native-edge route coverage (refreshed audit, not a completion claim):
+209 Python app routes; 99 Rust route declarations; 103 Python routes without an
+explicit native route, of which 14 are Go-served control/media families
+(`/api/workspace/backup-policies*`, `/api/workspace/backup-targets*`,
+`/api/media/*`), leaving **89 genuinely unmigrated native paths**: 71
+`/api/workspace/*` backup/DR/resilience routes (restores 19, resilience 16,
+backups 10, disaster-recovery 9, authority 5, catalog/retention/exports/
+artifacts/capacity/budget/rebalances/projects/target-capabilities 12), 7
+`/api/traces*|/trace/*`, and 11 top-level routes (`/api/agent-runs/{run_id}/{action}`,
+`/api/automation`, `/api/compress-context`, `/api/edge/reload|route-preview`,
+`/api/mcp/external/tools`, `/api/rag/*` writes, `/api/semantic-cache*`,
+`/api/share-target`, `/share-target`). The `/api/workspace/*` workstream is
+decomposed in `workspace-backup-dr-migration-plan.md` (S0 prerequisites through
+S8).
+
+The migration as a whole remains **ACTIVE / NOT_READY**: the 37-job full CI,
+Go/Android-Go 95% coverage floors, desktop/Android/launcher packaging,
+zero-Python clean-environment workloads, provider/persistence/fault evidence,
+the full backup/restore/DR surface and Evidence Assembly are still open.
+
+
+## 2026-11-07 final phase status for this goal run
+
+`tasks/native-runtime/HANDOFF.md` now records the complete handoff state:
+qualified source `9a74dc56` (run `42346115402`, checks+coverage success,
+83.1045% lines), the four cloud-qualified native-edge route slices, branch/
+worktree layout, sealed evidence locations, the 89 remaining unmigrated native
+paths, the S0-S8 backup/DR plan, the ownership-inversion execution steps, the
+platform/zero-Python gates, the full-CI/fault/provider verification requirements,
+and the next concrete slices. The whole-objective assessment is **ACTIVE /
+NOT_READY** and will not be marked complete: the 37-job CI, platform packages,
+zero-Python workloads, backup/restore/DR/resilience surface and Evidence
+Assembly are still open.
+
+
+## 2026-11-07 S1 first slice: native `GET /api/workspace/backup-target-capabilities`
+
+Parent `9a74dc56` (the cloud-qualified gateway sources). This is the first
+implemented route of the workspace backup/DR migration plan's S1 read-only
+control group; it reads no durable store and writes nothing, so it does not wait
+for S0 ownership declarations.
+
+- `rust/crates/deepseek-gateway/src/workspace_backup_routes.rs` answers the
+  original capability body from the native runtime's actual target support:
+  `s3TargetAvailable: true` (the native runtime ships a real S3 client in
+  `deepseek-storage`/`object_store`, unlike Python's optional `boto3` import),
+  `webdavTargetAvailable: false`, `supportedKinds: ["filesystem", "s3"]`,
+  `reservedKinds: ["webdav"]`. GET/HEAD are served by the route; OPTIONS and
+  non-matching verbs use the shared global-OPTIONS / FastAPI-405 fallbacks.
+- `rust/crates/deepseek-gateway/tests/workspace_backup_capabilities.rs` pins the
+  byte-exact oracle body by giving the Python subprocess a stub `boto3` module on
+  `PYTHONPATH` — the deployment shape where Python also advertises S3 — then
+  compares GET body, PUT (405 + `Allow: OPTIONS`), OPTIONS (204 + allow list)
+  and unauthenticated GET (401), plus a workspace-unchanged assertion. HEAD is
+  checked natively only, because the TestClient route path reaches the static
+  catch-all in this fixture.
+
+Recorded narrowing: when a Python deployment lacks the optional S3 SDK its
+original route reports `s3TargetAvailable: false`; the native runtime reports its
+actual support (`true`). The JSON schema is unchanged and the test pins the
+S3-enabled contract byte-for-byte.
+
+Local: `rustfmt --check` clean on the new files and `lib.rs`; the oracle body and
+method behavior were measured against the real Python application with the stub
+module before the test was written. No local Rust compilation.
+
+CLOUD_PENDING: push and dispatch `rust-cloud.yml` at the exact source.
