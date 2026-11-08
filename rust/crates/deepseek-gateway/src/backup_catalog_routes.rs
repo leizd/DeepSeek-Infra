@@ -600,10 +600,11 @@ fn backup_file_candidates(root: &Path, record: &Value) -> Vec<PathBuf> {
             .collect();
     }
     let mut candidates = Vec::new();
-    let digest = python_str_or_empty(python_or(
+    // `record.get("objectDigest") or record.get("ciphertextSha256") or ""`.
+    let digest = python_str_or_empty(Some(python_or(
         record.get("objectDigest"),
         record.get("ciphertextSha256"),
-    ));
+    )));
     if digest.chars().count() == 64 {
         candidates.push(object_path(root, &digest));
     }
