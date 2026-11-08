@@ -891,19 +891,16 @@ fn parse_time(bytes: &[u8]) -> Result<(u32, u32, u32, Option<i64>), ()> {
     if !rest.is_empty() {
         return Err(());
     }
-    if offset_hours > 23 || offset_minutes > 59 || offset_seconds > 59 {
+    // CPython parses the offset digits as plain arithmetic — `+00:60` is
+    // `+01:00` and `+00:99` is `+01:39` — and only rejects an offset whose
+    // magnitude reaches 24 hours.
+    let total = i64::from(offset_hours) * 3_600
+        + i64::from(offset_minutes) * 60
+        + i64::from(offset_seconds);
+    if total >= 86_400 {
         return Err(());
     }
-    Ok((
-        hour,
-        minute,
-        second,
-        Some(
-            sign * (i64::from(offset_hours) * 3_600
-                + i64::from(offset_minutes) * 60
-                + i64::from(offset_seconds)),
-        ),
-    ))
+    Ok((hour, minute, second, Some(sign * total)))
 }
 
 fn parse_digits(bytes: &[u8]) -> Result<u32, ()> {
@@ -1073,12 +1070,30 @@ mod tests {
         assert_eq!(parse_python_iso("2026-10-04T00:00:00+00:00 "), Err(()));
         assert_eq!(parse_python_iso("2026-10-04T00:00:00+00:00junk"), Err(()));
         assert_eq!(parse_python_iso("2026-10-04T00:00:00+24:00"), Err(()));
-        // `fromisoformat` discounts a +00:60 offset into +01:00; this port keeps
-        // the same arithmetic instead of rejecting it.
+        // `fromisoformat` treats the offset digits as arithmetic: `+00:60` is
+        // `+01:00` and `+00:00:60` is `+00:01`. Only a magnitude reaching 24
+        // hours is refused.
         assert_eq!(
             parse_python_iso("2026-10-04T00:00:00+00:60"),
             Ok(Some(base - 3_600))
         );
+        assert_eq!(
+            parse_python_iso("2026-10-04T00:00:00+00:00:60"),
+            Ok(Some(base - 60))
+        );
+        assert_eq!(
+            parse_python_iso("2026-10-04T00:00:00+00:99"),
+            Ok(Some(base - 3_600 - 39 * 60))
+        );
+        assert_eq!(
+            parse_python_iso("2026-10-04T00:00:00-00:60"),
+            Ok(Some(base + 3_600))
+        );
+        assert_eq!(
+            parse_python_iso("2026-10-04T00:00:00+23:59"),
+            Ok(Some(base - 86_340))
+        );
+        assert_eq!(parse_python_iso("2026-10-04T00:00:00+23:60"), Err(()));
     }
 
     #[test]
