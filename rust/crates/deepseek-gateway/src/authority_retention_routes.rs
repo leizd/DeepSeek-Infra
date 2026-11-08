@@ -79,7 +79,7 @@ async fn policy_response(
 }
 
 fn policy_body() -> Result<Value, AppError> {
-    Ok(normalize_retention_policy(&stored_policy()?)?)
+    normalize_retention_policy(&stored_policy()?)
 }
 
 fn policy_path() -> PathBuf {
