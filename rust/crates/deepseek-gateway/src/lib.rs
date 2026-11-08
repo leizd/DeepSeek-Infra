@@ -27,6 +27,7 @@ mod artifact_preview_routes;
 pub mod assembly_env;
 mod auth;
 mod auth_logout_route;
+mod authority_retention_routes;
 mod automation_definition_routes;
 mod automation_run_routes;
 mod automation_template_routes;
@@ -202,6 +203,7 @@ fn create_routes() -> Router {
         .merge(backup_retirement_routes::router())
         .merge(backup_run_routes::router())
         .merge(backup_catalog_routes::router())
+        .merge(authority_retention_routes::router())
         .merge(backup_replication_routes::router())
         .merge(backup_drill_routes::router())
         .merge(automation_template_routes::router())

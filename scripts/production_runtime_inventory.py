@@ -31,6 +31,9 @@ PARAM_RE = re.compile(r"\{([A-Za-z0-9_]+)\}")
 NATIVE_METHOD_LIMITS: dict[str, frozenset[str]] = {
     "/api/media": frozenset({"get", "head"}),
     "/api/media/:media_id": frozenset({"get", "head"}),
+    # The native edge serves only the read; `POST` is the policy mutation, which
+    # is forwarded to the Go control plane and is not ported.
+    "/api/workspace/authority/retention/policy": frozenset({"get"}),
 }
 
 # Live production entry points. ``marker`` is a source string that proves the

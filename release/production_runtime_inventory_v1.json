@@ -484,11 +484,6 @@
       "file": "deepseek_infra/web/routes/backup_governance.py"
     },
     {
-      "method": "get",
-      "path": "/api/workspace/authority/retention/policy",
-      "file": "deepseek_infra/web/routes/backup_governance.py"
-    },
-    {
       "method": "post",
       "path": "/api/workspace/authority/retention/policy",
       "file": "deepseek_infra/web/routes/backup_governance.py"
