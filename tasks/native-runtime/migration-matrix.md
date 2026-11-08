@@ -49,6 +49,62 @@ WAL opens may create `-shm`/`-wal` companions. Local rustfmt and inventory check
 pass; exact-source `rust-cloud.yml` is pending a push. Full migration
 **NOT_READY**.
 
+<!-- native checkpoint 2026-11-08 S1c trace routes cloud-qualified -->
+
+Whole product Rust/Go migration remains ACTIVE / **NOT_READY**. The read-only
+trace slice is exact-source cloud-qualified: `rust-cloud.yml` run
+[42459534356](https://github.com/leizd/DeepSeek-Infra/actions/runs/42459534356)
+at revision `aed5d99f24800e7963038362cb7ea84dca5254d5` completed **success** for
+both `Rust checks` and `Rust coverage` (102647/123408 = 83.1769% lines over the
+unchanged 80% floor, 1844 tests, `sourceTreeDirty: false`, `workflow_dispatch` on
+`codex/native-workspace-traces-20261107`, no failed step). That source contains
+and therefore re-qualifies S1a (`e3aa9e22`), S1b (`2a0f1ef9`) and the earlier
+download-save slice. Evidence is sealed under
+`artifacts/native-20261107-trace-routes/`. The two earlier failures on the same
+slice — a missing `regex` dependency in the lock file and then two clippy errors
+(`redundant closure`, out-of-range `i32` literal) — are retained as
+prior-failure evidence.
+
+Above this qualified source, S2a (`GET /api/workspace/backup-catalog` for the
+local `managed-local` catalog) is implemented locally and awaits its own
+exact-source run. Full migration **NOT_READY**.
+
+<!-- native checkpoint 2026-11-08 S2a backup catalog read -->
+
+Whole product Rust/Go migration remains ACTIVE / NOT_READY.
+
+Native `GET /api/workspace/backup-catalog` now serves the local filesystem
+catalog (`targetId` absent, empty or `managed-local`): the governance fold of the
+append-only chain (`catalog_state`), the chain recomputation over
+`sort_keys=True` compact JSON (`_entry_hash`), the stable descending
+`state_sorted` order, the `find_orphans_and_missing` scan (object-set-v1
+commitment members validated by `deepseek_storage::object_inventory_digest`,
+legacy `objectPath`/`backups/<filename>` candidates, `Path.glob` dot semantics)
+and `backup_health` (`scrub-failed`, `unlock-verification-missing`,
+`unlock-verification-overdue` with the 30-day window and worst-status fold). A
+`policyId` filter narrows `backups` only; the health block always folds the whole
+catalog, matching the original. An unregistered `targetId` keeps the original 404.
+
+`tests/backup_catalog_routes.rs` seeds the real catalog through the Python
+writers (legacy receipt, object-set receipt, a broken object-set receipt, a
+trashed and a deleted backup, pin/scrub/unlock/unlock-overdue/trash/delete
+events, object files, an orphan package and `receipts/bk-legacy.json`) and then
+compares 12 measured cases byte-for-byte — status, body, `Allow` and
+`Access-Control-Allow-Methods` — normalising only `health.evaluatedAt`. A second
+test proves the read-only contract in both directions: an unused workspace keeps
+no `.backups` directory while the original oracle root does get one and answers
+the same body, and a third test proves a registered target is refused by name
+without touching the control database.
+
+Recorded narrowings: a *registered* target (filesystem marker target or S3
+catalog store) answers `503 NATIVE_BACKUP_CATALOG_TARGET_STORE_UNMIGRATED`
+because those stores are not declared Rust data domains yet, so pin/unpin,
+retention, capacity/QoS, authority retention, DR and resilience routes stay open.
+Python remains the authoritative catalog writer until its cutover. Local rustfmt,
+`cargo metadata --locked --offline`, the Python catalog tests and
+`scripts/production_runtime_inventory.py --check` pass; exact-source
+`rust-cloud.yml` is pending a push. Full migration **NOT_READY**.
+
 <!-- native checkpoint 2026-11-07 S1 backups capabilities -->
 
 Whole product Rust/Go migration remains ACTIVE / NOT_READY.

@@ -14,6 +14,10 @@ deepseek-mcp = { path = "../deepseek-mcp" }
 deepseek-policy = { path = "../deepseek-policy" }
 deepseek-rag = { path = "../deepseek-rag" }
 deepseek-protocol = { path = "../deepseek-protocol" }
+# The backup catalog validates the frozen `object-set-v1` commitment with the same
+# implementation the storage plane writes; a second copy would be a second thing to
+# get wrong. Only the lightweight, feature-free part of the crate is used here.
+deepseek-storage = { path = "../deepseek-storage" }
 tonic = { workspace = true, features = ["tls"] }
 serde = { workspace = true }
 serde_json = { workspace = true }

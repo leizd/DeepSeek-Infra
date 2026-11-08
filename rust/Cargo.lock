@@ -690,6 +690,7 @@ dependencies = [
  "deepseek-policy",
  "deepseek-protocol",
  "deepseek-rag",
+ "deepseek-storage",
  "futures-core",
  "futures-util",
  "percent-encoding",

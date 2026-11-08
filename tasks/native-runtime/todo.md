@@ -4177,7 +4177,46 @@ prior-failure evidence. **NOT_READY.**
       (83.1093% lines, 80% floor, 1837 tests, `sourceTreeDirty=false`), with the
       new oracle test observed in the coverage log.
 - [x] Evidence sealed under `artifacts/native-20261107-workspace-backup-capabilities/`.
-- [ ] S1b (`backups/capabilities`, `2a0f1ef9`) and S1c (read-only trace routes,
-      `8a2b4c76`) are pushed but not yet cloud-qualified.
+- [x] S1c (read-only `/api/traces`, `/api/traces/{trace_id}`,
+      `/api/traces/{trace_id}/export.json`, `aed5d99f2`) is exact-source
+      cloud-qualified: `rust-cloud` run `42459534356` succeeded for both
+      `Rust checks` and `Rust coverage` (102647/123408 = 83.1769% lines over the
+      unchanged 80% floor, 1844 tests, `sourceTreeDirty=false`, no failed step).
+      Evidence sealed under `artifacts/native-20261107-trace-routes/`.
+- [ ] S1b (`GET /api/workspace/backups/capabilities`, `2a0f1ef9`) is pushed but
+      not yet cloud-qualified; its first run failed on a missing `regex`
+      dependency and then on a stale `Cargo.lock`, both fixed above it.
+- [ ] S2a (`GET /api/workspace/backup-catalog`, local `managed-local` catalog)
+      is implemented locally with a byte-parity oracle test and awaits its own
+      exact-source `rust-cloud` run. Registered-target catalogs (filesystem
+      markers, S3 catalog store) still answer
+      `NATIVE_BACKUP_CATALOG_TARGET_STORE_UNMIGRATED` and stay open.
 - [ ] Remaining workspace backup/DR surface, ownership inversion, platform
       packages, zero-Python workloads, full CI and Evidence Assembly stay open.
+
+## 2026-11-08 S2a backup catalog read
+
+- [x] `GET /api/workspace/backup-catalog` served natively for `managed-local`:
+      fold (`catalog_state`), chain recomputation (`_entry_hash` over
+      `sort_keys=True` compact JSON), `state_sorted` stability,
+      `find_orphans_and_missing` (`object-set-v1` commitment validation via
+      `deepseek_storage::object_inventory_digest`, legacy object/package
+      candidates, `Path.glob` dotfile semantics) and `backup_health`
+      (`scrub-failed` / `unlock-verification-missing` / `-overdue`, 30-day
+      window, worst-status fold).
+- [x] Read-only contract proven both ways: the original `resolve_target` creates
+      `<root>/.backups`, the native route never does; the equal empty-catalog
+      bodies are compared against a fresh oracle root that *was* created.
+- [x] Method routing matches the original: POST catch-all 404, other verbs 405
+      with `Allow: OPTIONS`, OPTIONS 204, missing token 401.
+- [x] The control store is read through `sqlite?immutable=1` when the writer's
+      `-wal`/`-shm` are absent, so a registered-target lookup cannot leave side
+      files in Python's `.backup-control/`; the schema is never created.
+- [x] `scripts/production_runtime_inventory.py --check` passes after `--write`
+      removed exactly this route from `http_routes_only_on_python`.
+- [ ] Registered-target catalogs (filesystem marker targets and the S3 catalog
+      store) remain unimplemented behind a named 503; they need the S0 ownership
+      declaration plus cutover evidence before they can be served.
+- [ ] Cloud qualification at the exact commit is still pending, so S2a is
+      **NOT_READY**.
+

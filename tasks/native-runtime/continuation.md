@@ -1,3 +1,50 @@
+<!-- native checkpoint 2026-11-08 S2a backup catalog local read -->
+
+Whole product Rust/Go migration remains ACTIVE / **NOT_READY**.
+
+Active worktree: `D:\deepseek-worktrees\tip20261106`, branch to be
+`codex/native-backup-catalog-20261108`, HEAD `aed5d99f24800e7963038362cb7ea84dca5254d5`
+(tree `1e41f724c82a962f0b714aeb5ca3a57f66d2ee4e`). That HEAD is the exact source
+of the qualified trace slice: `rust-cloud.yml` run
+[42459534356](https://github.com/leizd/DeepSeek-Infra/actions/runs/42459534356)
+succeeded for both `Rust checks` and `Rust coverage` (102647/123408 = 83.1769%
+lines, 80% floor, 1844 tests, `sourceTreeDirty: false`, no failed step); evidence
+is sealed under `artifacts/native-20261107-trace-routes/` including the downloaded
+`rust-cloud-checks-*` and `rust-cloud-coverage-*` report directories.
+
+Completed this round: `GET /api/workspace/backup-catalog` for the local
+`managed-local` catalog, implemented in
+`rust/crates/deepseek-gateway/src/backup_catalog_routes.rs` and mounted after the
+backup-run router. The port covers the governance fold, the chain recomputation
+(`deepseek_policy::python_json::dumps_compact` reproduces Python's
+`sort_keys=True` compact JSON), the stable `state_sorted` order, the
+orphan/missing scan (including the frozen `object-set-v1` commitment through
+`deepseek_storage::object_inventory_digest`) and `backup_health` with the 30-day
+unlock window. Unhandled Python failure modes are preserved as unhandled 500s: a
+truthy non-mapping payload (`AttributeError`), a timezone-naive unlock timestamp
+(`TypeError`) and a receipt without `backupId` (`KeyError`).
+
+Verification this round: `tests/backup_catalog_routes.rs` seeds the real catalog
+through the Python writers and compares 12 measured cases byte-for-byte
+(normalising only `health.evaluatedAt`) against the same workspace root, plus two
+further tests that prove the read-only contract (an unused workspace keeps no
+`.backups` while the oracle root gets one and returns the same body) and that a
+registered target is refused by name without writing the control store. Local
+`rustfmt --check`, `cargo metadata --locked --offline`, `tests/test_backup_catalog.py`
+(10 tests) and `scripts/production_runtime_inventory.py --check` pass; `--write`
+removed exactly this one route from `http_routes_only_on_python`.
+
+Remaining capability: registered-target catalogs (filesystem marker targets and
+the S3 catalog store) answer `503 NATIVE_BACKUP_CATALOG_TARGET_STORE_UNMIGRATED`
+until their stores are declared Rust data domains with cutover evidence. Pin /
+unpin, retention preview/apply, capacity/QoS, authority retention, DR,
+resilience, policies/targets, restores, exports and the full platform/CI/Evidence
+Assembly matrix remain open. Local pass is not release evidence: S2a still needs
+its own exact-source cloud run.
+
+Next executable task: push `codex/native-backup-catalog-20261108` and dispatch
+`rust-cloud.yml` at the resulting commit, download only the report artifacts, and
+seal them into `artifacts/native-20261107-backup-catalog/`.
 <!-- native checkpoint 2026-11-06 media PATCH response order and JSON errors -->
 
 Whole product migration remains ACTIVE / NOT_READY. Exact source d7d342395

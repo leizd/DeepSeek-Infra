@@ -30,6 +30,7 @@ mod auth_logout_route;
 mod automation_definition_routes;
 mod automation_run_routes;
 mod automation_template_routes;
+mod backup_catalog_routes;
 mod backup_drill_routes;
 pub mod backup_mirror_routes;
 mod backup_replication_routes;
@@ -200,6 +201,7 @@ fn create_routes() -> Router {
         .merge(backup_mirror_routes::router())
         .merge(backup_retirement_routes::router())
         .merge(backup_run_routes::router())
+        .merge(backup_catalog_routes::router())
         .merge(backup_replication_routes::router())
         .merge(backup_drill_routes::router())
         .merge(automation_template_routes::router())

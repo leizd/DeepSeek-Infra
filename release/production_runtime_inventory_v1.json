@@ -404,11 +404,6 @@
       "file": "deepseek_infra/web/routes/backup_governance.py"
     },
     {
-      "method": "get",
-      "path": "/api/workspace/backup-catalog",
-      "file": "deepseek_infra/web/routes/backup_governance.py"
-    },
-    {
       "method": "post",
       "path": "/api/workspace/backup-catalog/{backup_id}/pin",
       "file": "deepseek_infra/web/routes/backup_governance.py"
