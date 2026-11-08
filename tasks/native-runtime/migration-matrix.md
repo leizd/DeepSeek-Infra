@@ -69,6 +69,27 @@ Above this qualified source, S2a (`GET /api/workspace/backup-catalog` for the
 local `managed-local` catalog) is implemented locally and awaits its own
 exact-source run. Full migration **NOT_READY**.
 
+<!-- native checkpoint 2026-11-08 S2a backup catalog cloud-qualified -->
+
+Whole product Rust/Go migration remains ACTIVE / **NOT_READY**. The local backup
+catalog read is now exact-source cloud-qualified: `rust-cloud.yml` run
+[42470893162](https://github.com/leizd/DeepSeek-Infra/actions/runs/42470893162)
+at revision `075617aec3df0cc199e33118c801bf9f4b0fc3da` (tree `efcfa83e`)
+completed **success** for both `Rust checks` and `Rust coverage`
+(103459/124310 = 83.2266% lines over the unchanged 80% floor, 1852 tests,
+`sourceTreeDirty: false`, no failed step). The cloud coverage log shows the new
+module's five unit tests and all three integration oracle tests passing,
+including `backup_catalog_matches_the_oracle_and_creates_nothing`, which spawns
+the real Python application. Evidence is sealed under
+`artifacts/native-20261107-backup-catalog/`.
+
+Two earlier failures on this slice are retained as prior-failure evidence, both
+caught by the cloud run rather than by local checks: `E0308` at
+`backup_catalog_routes.rs:603` (a coalesced `&Value` passed where
+`Option<&Value>` was expected, run `42468564738`) and a wrong `+00:60` offset
+expectation that disagreed with CPython's arithmetic offset normalization
+(run `42469205202`).
+
 <!-- native checkpoint 2026-11-08 S2a backup catalog read -->
 
 Whole product Rust/Go migration remains ACTIVE / NOT_READY.

@@ -4186,11 +4186,14 @@ prior-failure evidence. **NOT_READY.**
 - [ ] S1b (`GET /api/workspace/backups/capabilities`, `2a0f1ef9`) is pushed but
       not yet cloud-qualified; its first run failed on a missing `regex`
       dependency and then on a stale `Cargo.lock`, both fixed above it.
-- [ ] S2a (`GET /api/workspace/backup-catalog`, local `managed-local` catalog)
-      is implemented locally with a byte-parity oracle test and awaits its own
-      exact-source `rust-cloud` run. Registered-target catalogs (filesystem
-      markers, S3 catalog store) still answer
-      `NATIVE_BACKUP_CATALOG_TARGET_STORE_UNMIGRATED` and stay open.
+- [x] S2a (`GET /api/workspace/backup-catalog`, local `managed-local` catalog) is
+      exact-source cloud-qualified: `rust-cloud` run `42470893162` at `075617a`
+      succeeded for checks and coverage (103459/124310 = 83.2266% lines, 80%
+      floor, 1852 tests, `sourceTreeDirty=false`), with all five new unit tests
+      and all three integration oracle tests observed in the coverage log.
+      Evidence sealed under `artifacts/native-20261107-backup-catalog/`.
+- [ ] Registered-target catalogs (filesystem markers, S3 catalog store) still
+      answer `NATIVE_BACKUP_CATALOG_TARGET_STORE_UNMIGRATED` and stay open.
 - [ ] Remaining workspace backup/DR surface, ownership inversion, platform
       packages, zero-Python workloads, full CI and Evidence Assembly stay open.
 
@@ -4217,6 +4220,12 @@ prior-failure evidence. **NOT_READY.**
 - [ ] Registered-target catalogs (filesystem marker targets and the S3 catalog
       store) remain unimplemented behind a named 503; they need the S0 ownership
       declaration plus cutover evidence before they can be served.
-- [ ] Cloud qualification at the exact commit is still pending, so S2a is
-      **NOT_READY**.
+- [x] Exact-source cloud qualification: `rust-cloud` run `42470893162` at
+      `075617a` (tree `efcfa83e`) succeeded for `Rust checks` and `Rust
+      coverage` with `sourceTreeDirty: false`; the coverage log shows the five
+      module unit tests and the three integration oracle tests passing.
+- [x] Two cloud-caught defects fixed and retained as prior-failure evidence:
+      an `Option<&Value>` mismatch at `backup_catalog_routes.rs:603` (run
+      `42468564738`) and a `+00:60` offset expectation that disagreed with
+      CPython's arithmetic offset normalization (run `42469205202`).
 

@@ -1,3 +1,40 @@
+<!-- native checkpoint 2026-11-08 S2a backup catalog cloud-qualified -->
+
+Whole product Rust/Go migration remains ACTIVE / **NOT_READY**.
+
+S2a (`GET /api/workspace/backup-catalog` for the local `managed-local` catalog)
+is exact-source cloud-qualified. `rust-cloud.yml` run
+[42470893162](https://github.com/leizd/DeepSeek-Infra/actions/runs/42470893162)
+at revision `075617aec3df0cc199e33118c801bf9f4b0fc3da` (tree `efcfa83e`,
+branch `codex/native-backup-catalog-20261108`) completed **success** for both
+`Rust checks` and `Rust coverage`: 103459/124310 = 83.2266% lines over the
+unchanged 80% floor, 1852 tests, `sourceTreeDirty: false`, no failed step. The
+coverage log shows the module's five unit tests and all three integration oracle
+tests passing, including the case that spawns the real Python application and
+compares bodies byte-for-byte. Evidence is sealed under
+`artifacts/native-20261107-backup-catalog/` (manifest, oracle reference, the
+downloaded `rust-cloud-*` report directories and both failure logs).
+
+Two defects were caught only by the cloud run and are retained as prior-failure
+evidence: `E0308` at `backup_catalog_routes.rs:603`, where a coalesced `&Value`
+was passed to a helper expecting `Option<&Value>` (run `42468564738`), and a
+`+00:60` offset expectation that disagreed with CPython's arithmetic offset
+normalization (run `42469205202`). Both are fixed in `075617a`.
+
+Remaining capability for this route: a *registered* target (filesystem marker
+target or S3 catalog store) still answers `503
+NATIVE_BACKUP_CATALOG_TARGET_STORE_UNMIGRATED`, because those stores are not
+declared Rust data domains yet; it also means pin/unpin, retention, capacity/QoS,
+authority retention, DR, resilience, policies/targets, restores and exports stay
+open. Recorded narrowing: CPython's compact ISO forms (`YYYYMMDD`, `HHMMSS`) and
+ISO week dates are not parsed by the native timestamp reader.
+
+Next executable task: implement S2b `GET /api/workspace/authority/retention/policy`
+(already analysed and prototyped, staged in the worktree stash) on top of
+`075617a`, then obtain the same exact-source qualification. The whole migration
+remains **NOT_READY**: ownership inversion, platform packages, zero-Python
+workloads, the full 37-job CI and Evidence Assembly are still outstanding.
+
 <!-- native checkpoint 2026-11-08 S2a backup catalog local read -->
 
 Whole product Rust/Go migration remains ACTIVE / **NOT_READY**.
