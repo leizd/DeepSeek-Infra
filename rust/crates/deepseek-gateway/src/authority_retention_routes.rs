@@ -164,19 +164,17 @@ fn normalize_retention_policy(payload: &Value) -> Result<Value, AppError> {
                     "keepMutationClasses must be a list of strings",
                 ));
             };
-            let mut cleaned: Vec<String> = items
-                .iter()
-                .map(|item| python_strip(&value_str(item)).to_string())
-                .filter(|item| !item.is_empty())
-                .collect();
-            cleaned.sort();
-            cleaned.dedup();
-            cleaned
+            clean_keep_classes(items)
         }
-        None => DEFAULT_KEEP_MUTATION_CLASSES
-            .iter()
-            .map(|name| name.to_string())
-            .collect(),
+        // `keepMutationClasses = data.get(..., list(DEFAULT_KEEP_MUTATION_CLASSES))`
+        // then `sorted({str(item).strip() ...})`, so the default answer is the
+        // *sorted* list rather than the source declaration order.
+        None => clean_keep_classes(
+            &DEFAULT_KEEP_MUTATION_CLASSES
+                .iter()
+                .map(|name| Value::String((*name).to_string()))
+                .collect::<Vec<_>>(),
+        ),
     };
 
     let mut body = Map::new();
@@ -189,6 +187,19 @@ fn normalize_retention_policy(payload: &Value) -> Result<Value, AppError> {
     body.insert("keepMutationClasses".to_string(), json!(keep_classes));
     body.insert("checkpointInterval".to_string(), json!(checkpoint_interval));
     Ok(Value::Object(body))
+}
+
+/// `sorted({str(item).strip() for item in keep_classes if str(item).strip()})`
+/// shared by the stored-list branch and the default branch.
+fn clean_keep_classes(items: &[Value]) -> Vec<String> {
+    let mut cleaned: Vec<String> = items
+        .iter()
+        .map(|item| python_strip(&value_str(item)).to_string())
+        .filter(|item| !item.is_empty())
+        .collect();
+    cleaned.sort();
+    cleaned.dedup();
+    cleaned
 }
 
 /// `data.get(key, default)` then the original's `isinstance(value, int)` check:
@@ -258,6 +269,9 @@ mod tests {
     use serde_json::json;
 
     fn defaults() -> serde_json::Value {
+        // `sorted({...})` of the declared defaults: the source order is
+        // authority-bootstrap, target-change, security-event,
+        // formal-truth-failure, but the answer is alphabetical.
         json!({
             "retentionPolicyVersion": 1,
             "minimumGenerations": 100,
@@ -419,9 +433,10 @@ mod tests {
             "keepMutationClasses": [true, [["x"]], {"k": "v"}],
         }))
         .unwrap();
+        // `str([["x"]])` renders the single-element list as `[['x']]`, not `['x']`.
         assert_eq!(
             normalized["keepMutationClasses"],
-            json!(["True", "['x']", "{'k': 'v'}"])
+            json!(["True", "[['x']]", "{'k': 'v'}"])
         );
     }
 
