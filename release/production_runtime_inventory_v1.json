@@ -475,11 +475,6 @@
     },
     {
       "method": "get",
-      "path": "/api/workspace/backup-transfer-budget",
-      "file": "deepseek_infra/web/routes/backup_governance.py"
-    },
-    {
-      "method": "get",
       "path": "/api/workspace/authority/history-snapshot",
       "file": "deepseek_infra/web/routes/backup_governance.py"
     },

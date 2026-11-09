@@ -84,6 +84,7 @@ pub mod static_files;
 pub mod title_route;
 pub mod tool_rounds;
 mod trace_routes;
+mod transfer_budget_routes;
 
 pub fn gateway_version() -> &'static str {
     // Root VERSION is the release the public routes already advertised.
@@ -204,6 +205,7 @@ fn create_routes() -> Router {
         .merge(backup_run_routes::router())
         .merge(backup_catalog_routes::router())
         .merge(authority_retention_routes::router())
+        .merge(transfer_budget_routes::router())
         .merge(backup_replication_routes::router())
         .merge(backup_drill_routes::router())
         .merge(automation_template_routes::router())
