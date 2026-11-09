@@ -4220,3 +4220,41 @@ prior-failure evidence. **NOT_READY.**
 - [ ] Cloud qualification at the exact commit is still pending, so S2a is
       **NOT_READY**.
 
+## 2026-11-09 S0 store ownership declared, gated and reversible
+
+- [x] Fifteen workspace backup/restore/DR/resilience stores declared
+      `python -> rust` at 4.9.4 with `durable_store: rust_data` in
+      `release/native_runtime_ownership_v1.json`, each with a measured
+      `storePath`, `writerEntryPoints` and `cutoverGate`. Contract: 52 -> 67
+      domains, 16 -> 31 `rust_data` stores.
+- [x] `RUST_DATA_DOMAINS` in `deepseek_infra/infra/native_runtime/authority.py`
+      lists the same fifteen, so contract/gate drift is a test failure.
+- [x] `scripts/native_store_writer_gate.py` gated 81 declared write entry points
+      with `assert_python_writer_allowed("<store>")`; idempotent, and `--check`
+      is the CI form.
+- [x] The gate is proven both ways: inert under the default runtime mode, and
+      raising `PythonWriterMechanicallyDeniedError` under `python_disabled`.
+- [x] The gate tool refuses functions named in frozen-AST compatibility tests, so
+      `backup_replication_store` is gated at its `_atomic_write` choke point
+      instead of at nine frozen job/phase functions that
+      `tests/test_native_runtime_*.py` compares by full `ast.dump` equality.
+- [x] `scripts/native_workspace_store_cutover.py` provides
+      `export`/`verify`/`snapshot`/`import`/`rollback` over explicit paths:
+      content-addressed per-entry inventory, store-level `entryDigest`,
+      manifest-covering `exportDigest`, named operation lock, import that refuses
+      a non-empty destination, and verified-snapshot rollback.
+- [x] `tests/test_native_workspace_store_cutover.py` (10 tests) drives real stores
+      through the round trip: the catalog JSONL via
+      `backup_catalog.append_receipt`, retention policies via
+      `backup_retention.put_retention_policy`, and a WAL-mode SQLite database
+      built from `resilience_capacity_history._SCHEMA` and queried after import.
+      It also covers the tamper, changed-source, non-empty-destination and
+      rollback refusals.
+- [ ] **Open S0 item:** the Go control authority path — `control-authority-v1`
+      checkpoint with `DEEPSEEKD_CONTROL_AUTHORITY` promoted per domain, plus
+      takeover/lease rules and export/import evidence. This still blocks the
+      writer-shaped routes (`backup-capacity/summary`,
+      `authority/history-snapshot`, retention apply, pin/unpin, restores).
+- [ ] Pre-existing failure, not caused by S0 and reproduced on a clean tree:
+      `tests/test_backup_456_coverage_booster.py::test_rebalance_policy_replicas_with_draining_and_diversity`
+      asserts `jobsCreated >= 1` and gets 0.

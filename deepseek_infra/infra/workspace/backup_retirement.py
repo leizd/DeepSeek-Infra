@@ -24,6 +24,7 @@ from deepseek_infra.infra.workspace import (
     backup_dr_ledger,
     backup_publish,
 )
+from deepseek_infra.infra.native_runtime.authority import assert_python_writer_allowed
 
 RETIREMENT_DIR = config.ROOT / ".backup-retirements"
 RETIREMENT_DB = RETIREMENT_DIR / "retirements.sqlite3"
@@ -106,6 +107,7 @@ def create_copy_retirement_job(
     reason: str | None = None,
 ) -> dict[str, Any]:
     """Create a durable CopyRetirementJob in requested phase."""
+    assert_python_writer_allowed("backup_retirement_store")
     job_id = f"retire_{secrets.token_hex(8)}"
     now = _utc_iso()
     with _connect() as conn:
@@ -191,6 +193,7 @@ def _update_job_phase(
     bytes_reclaimed: int | None = None,
     sim_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    assert_python_writer_allowed("backup_retirement_store")
     now = _utc_iso()
     with _connect() as conn:
         updates = ["phase = ?", "updated_at = ?"]
@@ -211,6 +214,7 @@ def _update_job_phase(
 
 def cancel_copy_retirement_job(job_id: str, *, reason: str = "operator-cancelled") -> dict[str, Any]:
     """Cancel a pending copy retirement job."""
+    assert_python_writer_allowed("backup_retirement_store")
     job = get_copy_retirement_job(job_id)
     if not job:
         raise AppError(f"Retirement job {job_id} not found", code=ErrorCode.NOT_FOUND, status=404)
@@ -380,6 +384,7 @@ def retirement_marker_valid(
 
 
 def _write_retirement_marker(target: Any, marker: dict[str, Any], *, receipt_bytes: bytes, commit: dict[str, Any]) -> None:
+    assert_python_writer_allowed("backup_retirement_store")
     key = retirement_marker_key(str(marker["policyId"]), str(marker["backupId"]))
     content = (json.dumps(marker, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
     existing: dict[str, Any] | None = None
@@ -897,6 +902,7 @@ def execute_copy_retirement_job(
     instance_id: str = "retirement-worker",
 ) -> dict[str, Any]:
     """Drive a CopyRetirementJob through its safety checks and GC execution."""
+    assert_python_writer_allowed("backup_retirement_store")
     job = get_copy_retirement_job(job_id)
     if not job:
         raise AppError(f"Retirement job {job_id} not found", code=ErrorCode.NOT_FOUND, status=404)

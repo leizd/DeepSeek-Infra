@@ -270,7 +270,22 @@
     "federated_transfer_journal",
     "dr_orchestration",
     "health_readiness",
-    "media_library_store"
+    "media_library_store",
+    "backup_catalog_store",
+    "backup_index_store",
+    "backup_spool_store",
+    "backup_dr_ledger_store",
+    "restore_staging_store",
+    "backup_replication_store",
+    "backup_retirement_store",
+    "backup_drain_store",
+    "backup_run_plan_store",
+    "backup_component_cache_store",
+    "backup_write_continuity_store",
+    "backup_retention_store",
+    "authority_retention_store",
+    "resilience_scheduler_store",
+    "resilience_capacity_store"
   ],
   "ownership_domains_current_owner_rust": [
     "public_http_listener",

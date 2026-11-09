@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from typing import Any, Iterator
 
 from deepseek_infra.core import config
+from deepseek_infra.infra.native_runtime.authority import assert_python_writer_allowed
 
 SCHEDULER_SERVICE_DIR = config.ROOT / ".resilience-scheduler"
 SCHEDULER_SERVICE_DB = SCHEDULER_SERVICE_DIR / "service.sqlite3"
@@ -338,6 +339,7 @@ def reserve_scheduled_actions(
     scheduled_at: datetime | None = None,
 ) -> None:
     """Create fair-service reservations without charging persistent share."""
+    assert_python_writer_allowed("resilience_scheduler_store")
     if not schedule_id:
         raise ValueError("scheduleId is required")
     timestamp = _utc_iso(scheduled_at)
@@ -354,6 +356,7 @@ def record_scheduled_actions(
     schedule_id: str = "manual",
 ) -> None:
     """Reserve admitted actions. Persistent fair share is charged only on consume."""
+    assert_python_writer_allowed("resilience_scheduler_store")
     timestamp = _utc_iso(scheduled_at)
     with _connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
@@ -379,6 +382,7 @@ def _append_settlement_event(
     telemetry: dict[str, Any],
     timestamp: str,
 ) -> None:
+    assert_python_writer_allowed("resilience_scheduler_store")
     effect_handle = telemetry.get("effectHandle")
     conn.execute(
         """
@@ -417,6 +421,7 @@ def _begin_effect_settlement(
     consumed_at: datetime | None = None,
 ) -> dict[str, Any] | None:
     """Durably enter CONSUMING with a fenced terminal-effect binding."""
+    assert_python_writer_allowed("resilience_scheduler_store")
     if str(telemetry.get("actionId") or "") != action_id:
         raise RuntimeError("terminal telemetry Action binding mismatch")
     timestamp = _utc_iso(consumed_at)
@@ -486,6 +491,7 @@ def _finish_effect_settlement(
     *,
     consumed_at: datetime | None = None,
 ) -> dict[str, Any]:
+    assert_python_writer_allowed("resilience_scheduler_store")
     timestamp = _utc_iso(consumed_at)
     byte_count = max(0, int(telemetry.get("actualBytesTransferred") or 0))
     duration_ms = max(0.0, float(telemetry.get("actualDurationMs") or 0.0))
@@ -634,6 +640,7 @@ def release_action_reservation(
     released_at: datetime | None = None,
 ) -> dict[str, Any] | None:
     """Release an unused reservation so it cannot consume persistent fair share."""
+    assert_python_writer_allowed("resilience_scheduler_store")
     normalized = str(reason or "UNEXECUTED").upper()
     if normalized not in RELEASE_REASONS:
         normalized = "UNEXECUTED"
@@ -710,6 +717,7 @@ def _record_schedule_snapshot(
 
 def record_schedule_snapshot(schedule: dict[str, Any], *, scheduled_at: datetime | None = None) -> None:
     """Persist the exact latest wave/unschedulable operator projection."""
+    assert_python_writer_allowed("resilience_scheduler_store")
     schedule_id, rendered_schedule = _render_schedule(schedule)
     with _connect() as conn:
         _record_schedule_snapshot(
@@ -727,6 +735,7 @@ def record_schedule_result(
     scheduled_at: datetime | None = None,
 ) -> None:
     """Persist a schedule projection and reserve — not consume — fair service."""
+    assert_python_writer_allowed("resilience_scheduler_store")
     schedule_id, rendered_schedule = _render_schedule(schedule)
     timestamp = _utc_iso(scheduled_at)
     with _connect() as conn:

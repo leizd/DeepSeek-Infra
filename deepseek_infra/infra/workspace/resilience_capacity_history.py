@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from typing import Any, Iterator
 
 from deepseek_infra.core import config
+from deepseek_infra.infra.native_runtime.authority import assert_python_writer_allowed
 
 CAPACITY_HISTORY_DIR = config.ROOT / ".resilience-capacity"
 CAPACITY_HISTORY_DB = CAPACITY_HISTORY_DIR / "capacity.sqlite3"
@@ -62,6 +63,7 @@ def _digest(payload: Any) -> str:
 
 
 def _ensure_schema(conn: sqlite3.Connection) -> None:
+    assert_python_writer_allowed("resilience_capacity_store")
     columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(resilience_capacity_observations)").fetchall()}
     for name, definition in _MIGRATION_COLUMNS.items():
         if name not in columns:
@@ -142,6 +144,7 @@ def record_capacity_observation(
     capacity_revision: str | None = None,
     provenance: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    assert_python_writer_allowed("resilience_capacity_store")
     tid = str(target_id or "").strip()
     if not tid:
         raise ValueError("targetId is required")

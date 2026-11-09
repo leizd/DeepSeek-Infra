@@ -1,3 +1,62 @@
+<!-- native checkpoint 2026-11-09 S0 store ownership declared and gated -->
+
+Whole product Rust/Go migration remains ACTIVE / **NOT_READY**.
+
+The S0 prerequisite is now mostly real rather than a plan. Two of its four parts
+are complete and proven; the Go control authority part is not.
+
+**1. Declared.** Fifteen workspace backup/restore/DR/resilience stores are
+`python -> rust` at 4.9.4 with `durable_store: rust_data` in
+`release/native_runtime_ownership_v1.json`. Every field a cutover needs was
+measured from the module itself, not assumed: `storePath` (the actual
+dot-directory, plus a second directory for the two stores that own two),
+`writerEntryPoints` and `cutoverGate`. `RUST_DATA_DOMAINS` lists the same fifteen,
+so a drift between the contract and the mechanical gate is now a test failure
+rather than a latent bug. The contract went from 52 to 67 domains and from 16 to 31
+`rust_data` stores.
+
+**2. Gated.** `scripts/native_store_writer_gate.py` installed
+`assert_python_writer_allowed("<store>")` at 81 declared write entry points. Two
+properties make that gate trustworthy rather than decorative: it is inert in the
+default runtime mode and raises `PythonWriterMechanicallyDeniedError` under
+`python_disabled` (both measured), and it is idempotent, so `--check` in CI fails
+the moment a declared writer loses its guard.
+
+The gate tool refuses to touch a function named in any frozen-AST compatibility
+test. Those tests (`tests/test_native_runtime_*.py`) compare whole `ast.dump`
+bodies against the frozen 4.8.0 commit, so inserting a statement breaks a
+legitimate frozen-contract check — nine `backup_replication` job/phase functions
+were in that set. `backup_replication_store` is therefore gated at `_atomic_write`,
+the single choke point every job, hold and cursor file passes through, and the
+constraint is encoded in the tool so a future declaration cannot silently pick a
+frozen name.
+
+**3. Movable and reversible.** `scripts/native_workspace_store_cutover.py`
+implements `export`/`verify`/`snapshot`/`import`/`rollback` on explicit paths: a
+content-addressed per-entry inventory, a store-level `entryDigest`, an
+`exportDigest` covering the manifest itself, a named lock file fencing the whole
+operation, an import that refuses a non-empty destination (a transfer of authority,
+never a merge) and a rollback that restores a verified snapshot.
+`tests/test_native_workspace_store_cutover.py` drives real stores through it — the
+catalog JSONL via `backup_catalog.append_receipt`, retention policies via
+`backup_retention.put_retention_policy`, and a WAL-mode SQLite database built from
+`resilience_capacity_history._SCHEMA` and queried again after import — and covers
+the tamper, changed-source, non-empty-destination and rollback refusals.
+
+**4. Not done.** The Go control authority path: policies and targets still need a
+`control-authority-v1` checkpoint with `DEEPSEEKD_CONTROL_AUTHORITY` promoted per
+domain, takeover/lease rules and export/import evidence. That is the next
+executable S0 item and it is what still blocks porting the writer-shaped routes
+(`backup-capacity/summary`, `authority/history-snapshot`, retention apply,
+pin/unpin, restores).
+
+Two test facts worth carrying forward. `tests/test_backup_456_coverage_booster.py`
+::`test_rebalance_policy_replicas_with_draining_and_diversity` fails on a clean
+tree at this commit — it is a pre-existing failure, verified by stashing all S0
+work and reproducing it. And `tests/test_backup_480_real_two_fleet_four_minio_e2e.py`
+errors locally only because it tries to build the native backup helper and this
+host has no linker; Rust builds belong to the cloud gate.
+
 <!-- native checkpoint 2026-11-08 S2a backup catalog local read -->
 
 Whole product Rust/Go migration remains ACTIVE / **NOT_READY**.

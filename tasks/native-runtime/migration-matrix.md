@@ -1,3 +1,40 @@
+<!-- native checkpoint 2026-11-09 S0 store ownership declared, gated and reversible -->
+
+Whole product Rust/Go migration remains ACTIVE / **NOT_READY**.
+
+S0 advanced from a plan to working state, in three parts.
+
+**Declared.** Fifteen workspace backup/restore/DR/resilience stores are now
+`python -> rust` at 4.9.4 with `durable_store: rust_data` in
+`release/native_runtime_ownership_v1.json`, each with a measured `storePath`,
+`writerEntryPoints` and `cutoverGate`. The contract grew 52 -> 67 domains and
+16 -> 31 `rust_data` stores. `RUST_DATA_DOMAINS` lists the same fifteen, so
+contract/gate drift is a test failure.
+
+**Gated.** `scripts/native_store_writer_gate.py` installed
+`assert_python_writer_allowed("<store>")` at 81 declared write entry points; the
+gate is inert in the default mode and raises
+`PythonWriterMechanicallyDeniedError` under `python_disabled`, and `--check` is
+idempotent. The tool refuses frozen-AST functions, so `backup_replication_store`
+is gated at its `_atomic_write` choke point rather than at nine frozen job/phase
+functions that `tests/test_native_runtime_*.py` compares by full `ast.dump`
+equality.
+
+**Movable and reversible.** `scripts/native_workspace_store_cutover.py` provides
+`export`/`verify`/`snapshot`/`import`/`rollback` over explicit paths with a
+content-addressed inventory, a store-level `entryDigest`, a manifest-covering
+`exportDigest`, a named operation lock, an import that refuses a non-empty
+destination, and a verified-snapshot rollback.
+`tests/test_native_workspace_store_cutover.py` exercises real stores (catalog
+JSONL, retention policy files, a WAL-mode SQLite database) plus the tamper,
+changed-source, non-empty-destination and rollback refusals.
+
+**Still open in S0:** the Go control authority path — a `control-authority-v1`
+checkpoint with `DEEPSEEKD_CONTROL_AUTHORITY` promoted per domain, takeover/lease
+rules and export/import evidence. That is what blocks porting the writer-shaped
+routes (`backup-capacity/summary`, `authority/history-snapshot`, retention apply,
+pin/unpin, restores).
+
 <!-- native checkpoint 2026-11-07 S1a exact-source qualification -->
 
 Whole product Rust/Go migration remains ACTIVE / **NOT_READY**. The first S1

@@ -90,6 +90,34 @@ RUST_DATA_DOMAINS = frozenset(
         "observability_trace_store",
         "generated_files_store",
         "media_library_store",
+        # The S0 prerequisite declarations: the workspace backup, restore, DR and
+        # resilience stores. Each is declared in
+        # `release/native_runtime_ownership_v1.json` as python -> rust at 4.9.4 with
+        # its `storePath` and `writerEntryPoints`, so the S0 cutover tooling and the
+        # ported Rust store readers share one machine-readable description.
+        #
+        # These are declared now and gated now, before any of them is ported. That
+        # order is deliberate: the declarations are what make the later ports
+        # mechanical, and a store that is already gated cannot be lost to a stray
+        # Python writer during the transition. Today they are inert in production
+        # because the gate only fires under `PYTHON_DISABLED`; the reason for
+        # declaring them early is to start from the ownership contract rather than
+        # from the port.
+        "backup_catalog_store",
+        "backup_index_store",
+        "backup_spool_store",
+        "backup_dr_ledger_store",
+        "restore_staging_store",
+        "backup_replication_store",
+        "backup_retirement_store",
+        "backup_drain_store",
+        "backup_run_plan_store",
+        "backup_component_cache_store",
+        "backup_write_continuity_store",
+        "backup_retention_store",
+        "authority_retention_store",
+        "resilience_scheduler_store",
+        "resilience_capacity_store",
     }
 )
 

@@ -21,6 +21,7 @@ from typing import Any
 from deepseek_infra.core import config
 from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.infra.workspace import backup_object_set, backup_unattended
+from deepseek_infra.infra.native_runtime.authority import assert_python_writer_allowed
 
 SPOOL_DIR = config.ROOT / ".backup-spool"
 SPOOL_SCHEMA_VERSION = 3
@@ -125,6 +126,7 @@ def store_verified_package(
     run_plan_digest: str | None = None,
 ) -> dict[str, Any]:
     """Copy a verified Age package into the durable spool for the schedule slot."""
+    assert_python_writer_allowed("backup_spool_store")
     from deepseek_infra.infra.workspace.backup_target_store import commit_slot_digest
 
     digest = slot_digest or commit_slot_digest(schedule_slot)
@@ -425,6 +427,7 @@ def write_multipart_state(
     *,
     target_id: str | None = None,
 ) -> None:
+    assert_python_writer_allowed("backup_spool_store")
     _atomic_write_json(_multipart_state_path(policy_id, slot_digest, target_id), state)
 
 
@@ -465,16 +468,19 @@ def write_component_multipart_state(
     *,
     target_id: str | None = None,
 ) -> None:
+    assert_python_writer_allowed("backup_spool_store")
     _atomic_write_json(_component_multipart_state_path(policy_id, slot_digest, ciphertext_digest, target_id), state)
 
 
 def clear_slot(policy_id: str, slot_digest: str) -> None:
+    assert_python_writer_allowed("backup_spool_store")
     dest = _slot_dir(policy_id, slot_digest)
     if dest.is_dir():
         shutil.rmtree(dest, ignore_errors=True)
 
 
 def cleanup_expired(*, ttl_seconds: int = DEFAULT_TTL_SECONDS, force_oldest: bool = False) -> dict[str, int]:
+    assert_python_writer_allowed("backup_spool_store")
     removed = 0
     freed = 0
     if not SPOOL_DIR.is_dir():

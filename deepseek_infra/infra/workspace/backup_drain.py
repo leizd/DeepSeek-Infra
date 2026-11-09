@@ -35,6 +35,7 @@ from deepseek_infra.infra.workspace import (
     backup_writer_lease,
 )
 from deepseek_infra.infra.workspace.backup_target_store import commit_slot_digest
+from deepseek_infra.infra.native_runtime.authority import assert_python_writer_allowed
 
 DRAIN_DIR = config.ROOT / ".backup-drains"
 DRAIN_DB = DRAIN_DIR / "drains.sqlite3"
@@ -112,6 +113,7 @@ def start_target_drain(
     Topology mutation and lifecycle intent are committed atomically in the
     control authority first; the DrainJob row is a rebuildable projection.
     """
+    assert_python_writer_allowed("backup_drain_store")
     del force  # reserved for operator override paths
     target_info = backup_targets.get_target(target_id)
     if not target_info:
@@ -157,6 +159,7 @@ initiate_target_drain = start_target_drain
 
 def reconcile_drain_projections(*, limit: int = 50) -> dict[str, int]:
     """Recreate missing DrainJob rows from durable lifecycle intents / topology."""
+    assert_python_writer_allowed("backup_drain_store")
     recreated = 0
     fenced = 0
     intents = backup_control.list_lifecycle_intents(kind="drain", limit=max(1, min(int(limit), 200)))
@@ -228,6 +231,7 @@ def reconcile_drain_projections(*, limit: int = 50) -> dict[str, int]:
 
 def cancel_target_drain(target_id: str, *, reason: str = "operator-cancelled") -> dict[str, Any]:
     """Cancel a target drain job and return the target to active status."""
+    assert_python_writer_allowed("backup_drain_store")
     backup_targets.activate_target(target_id)
     for intent in backup_control.list_lifecycle_intents(kind="drain", target_id=target_id, limit=20):
         if str(intent.get("phase") or "") not in {"completed", "cancelled", "fenced"}:
@@ -301,6 +305,7 @@ def _update_drain_state(
     bytes_remaining: int = 0,
     error: str | None = None,
 ) -> dict[str, Any]:
+    assert_python_writer_allowed("backup_drain_store")
     now = _utc_iso()
     with _connect() as conn:
         conn.execute(

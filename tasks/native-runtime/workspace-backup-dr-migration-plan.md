@@ -43,15 +43,45 @@ unless they are read-only and disjoint.
 
 ### S0 — prerequisites (no HTTP route)
 
-1. Declare the backup/DR/restore stores in `release/native_runtime_ownership_v1.json`
-   as Rust data domains, with explicit cutover steps.
-2. Extend the data-cutover tooling to export/import `.backup-*`, `.restore-*`,
-   `.projects/` stores with integrity hashes, fencing and restore/rollback
-   verification on isolated copies.
-3. Confirm the Go control authority path for policies/targets (`control-authority-v1`
-   checkpoint + `DEEPSEEKD_CONTROL_AUTHORITY`) and its takeover/lease rules.
-4. Evidence: cutover probe scripts + dry-run reports on exported fixtures; no
-   production data touched.
+1. **DONE — the stores are declared.** Fifteen workspace backup/restore/DR and
+   resilience stores are now `python -> rust` at 4.9.4 in
+   `release/native_runtime_ownership_v1.json` with `durable_store: rust_data`.
+   Each carries the fields a cutover actually needs, all measured from the modules
+   rather than guessed: `storePath` (the real dot-directory, with a second
+   directory where the store owns two), `writerEntryPoints` (the functions that can
+   write it) and `cutoverGate` (the ordering constraint that makes the transfer
+   safe). `RUST_DATA_DOMAINS` in `deepseek_infra/infra/native_runtime/authority.py`
+   lists the same fifteen, so the contract and the mechanical gate cannot drift.
+2. **DONE — the writers are gated, and the gate is proven.** 81 declared write
+   entry points now call `assert_python_writer_allowed("<store>")`, installed by
+   `scripts/native_store_writer_gate.py` (idempotent; `--check` is the CI form).
+   The gate is inert under the default runtime mode and raises
+   `PythonWriterMechanicallyDeniedError` under `python_disabled`, both verified.
+   The tool refuses to gate a function listed in any frozen-AST compatibility
+   test, because those tests compare full `ast.dump` bodies against the 4.8.0
+   commit — `backup_replication_store` is therefore gated at its `_atomic_write`
+   choke point instead of at nine frozen job/phase functions.
+3. **DONE — the state can move and the move can be undone.**
+   `scripts/native_workspace_store_cutover.py` implements `export`, `verify`,
+   `snapshot`, `import` and `rollback` over an explicit path, with a
+   content-addressed inventory (path, kind, size, SHA-256 per entry), a
+   store-level `entryDigest`, and an `exportDigest` that covers the manifest
+   itself. Import refuses a non-empty destination, so the operation is a transfer
+   of authority rather than a merge; rollback restores a verified snapshot. A
+   named lock file fences the whole operation. All of it is offline and takes
+   explicit paths — nothing here reads a production store.
+4. **NOT DONE — the Go control authority path.** Policies and targets still need
+   the `control-authority-v1` checkpoint plus `DEEPSEEKD_CONTROL_AUTHORITY` promoted
+   per domain, with takeover/lease rules and export/import evidence. Recorded in
+   `continuation.md` as the next S0 item.
+5. Evidence so far: `tests/test_native_workspace_store_cutover.py` (10 tests) drives
+   real stores — the catalog JSONL through `backup_catalog.append_receipt`, the
+   retention policy files through `backup_retention.put_retention_policy`, and a
+   WAL-mode SQLite database built with `resilience_capacity_history._SCHEMA` and
+   queried again after import — through the full round trip, plus the tamper,
+   changed-source, non-empty-destination and rollback refusals. No production data
+   was touched. Cloud qualification of the exact commit is recorded in the slice
+   artifact directory.
 
 ### S1 — pure control reads (parity-testable with current ownership)
 

@@ -25,6 +25,7 @@ from typing import Any
 from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.infra.workspace import backup_object_set
 from deepseek_infra.infra.workspace import backup_writer_lease
+from deepseek_infra.infra.native_runtime.authority import assert_python_writer_allowed
 
 CATALOG_SCHEMA_VERSION = 1
 CATALOG_V2_SCHEMA_VERSION = 2
@@ -148,6 +149,7 @@ def _assert_writer_ownership(writer: backup_writer_lease.TargetWriterLease | Non
 
 
 def append_receipt(root: Path, receipt: dict[str, Any], *, writer: backup_writer_lease.TargetWriterLease | None = None, precondition: CatalogPrecondition | None = None) -> dict[str, Any]:
+    assert_python_writer_allowed("backup_catalog_store")
     is_object_set = str(receipt.get("storageProtocol") or "") == backup_object_set.OBJECT_SET_V1
     if not receipt.get("backupId") or (not is_object_set and not receipt.get("filename")):
         raise AppError("Backup receipt is incomplete", code=ErrorCode.INVALID_PAYLOAD)
@@ -157,26 +159,32 @@ def append_receipt(root: Path, receipt: dict[str, Any], *, writer: backup_writer
 
 
 def pin_backup(root: Path, backup_id: str, pinned: bool, *, writer: backup_writer_lease.TargetWriterLease | None = None, precondition: CatalogPrecondition | None = None) -> dict[str, Any]:
+    assert_python_writer_allowed("backup_catalog_store")
     return _append_entry(root, "pin", {"backupId": backup_id, "pinned": bool(pinned)}, writer=writer, precondition=precondition)
 
 
 def record_scrub(root: Path, backup_id: str, *, ok: bool, detail: str = "", writer: backup_writer_lease.TargetWriterLease | None = None, precondition: CatalogPrecondition | None = None) -> dict[str, Any]:
+    assert_python_writer_allowed("backup_catalog_store")
     return _append_entry(root, "scrub", {"backupId": backup_id, "ok": bool(ok), "detail": detail[:200], "scrubbedAt": _utc_iso()}, writer=writer, precondition=precondition)
 
 
 def record_unlock_verification(root: Path, backup_id: str, *, writer: backup_writer_lease.TargetWriterLease | None = None, precondition: CatalogPrecondition | None = None) -> dict[str, Any]:
+    assert_python_writer_allowed("backup_catalog_store")
     return _append_entry(root, "unlock-verified", {"backupId": backup_id, "userUnlockVerifiedAt": _utc_iso()}, writer=writer, precondition=precondition)
 
 
 def record_trash(root: Path, backup_id: str, *, retention_run_id: str, at: str | None = None, writer: backup_writer_lease.TargetWriterLease | None = None, precondition: CatalogPrecondition | None = None) -> dict[str, Any]:
+    assert_python_writer_allowed("backup_catalog_store")
     return _append_entry(root, "trash", {"backupId": backup_id, "retentionRunId": retention_run_id, "trashedAt": at or _utc_iso()}, writer=writer, precondition=precondition)
 
 
 def record_restore_from_trash(root: Path, backup_id: str, *, at: str | None = None, writer: backup_writer_lease.TargetWriterLease | None = None, precondition: CatalogPrecondition | None = None) -> dict[str, Any]:
+    assert_python_writer_allowed("backup_catalog_store")
     return _append_entry(root, "restore-trash", {"backupId": backup_id, "restoredAt": at or _utc_iso()}, writer=writer, precondition=precondition)
 
 
 def record_delete(root: Path, backup_id: str, *, retention_run_id: str, at: str | None = None, writer: backup_writer_lease.TargetWriterLease | None = None, precondition: CatalogPrecondition | None = None) -> dict[str, Any]:
+    assert_python_writer_allowed("backup_catalog_store")
     return _append_entry(root, "delete", {"backupId": backup_id, "retentionRunId": retention_run_id, "deletedAt": at or _utc_iso()}, writer=writer, precondition=precondition)
 
 
@@ -252,6 +260,7 @@ def rebuild_catalog_from_receipts(root: Path, *, writer: backup_writer_lease.Tar
     appended last in ``createdAt`` order. Forked entries that cannot extend
     the chain from genesis are reported as skipped.
     """
+    assert_python_writer_allowed("backup_catalog_store")
     _assert_writer_ownership(writer)
     candidates: dict[str, dict[str, Any]] = {}
     try:

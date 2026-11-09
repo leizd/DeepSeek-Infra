@@ -481,6 +481,315 @@
       "target_owner": "rust",
       "cutover": "4.9.4",
       "durable_store": "rust_data"
+    },
+    {
+      "id": "backup_catalog_store",
+      "plane": "data",
+      "current_owner": "python",
+      "target_owner": "rust",
+      "cutover": "4.9.4",
+      "durable_store": "rust_data",
+      "storePath": {
+        "primary": ".backup-catalog",
+        "secondary": ".backups"
+      },
+      "writerEntryPoints": [
+        "backup_catalog.append_receipt",
+        "backup_catalog.pin_backup",
+        "backup_catalog.record_scrub",
+        "backup_catalog.record_unlock_verification",
+        "backup_catalog.record_trash",
+        "backup_catalog.record_restore_from_trash",
+        "backup_catalog.record_delete",
+        "backup_catalog.rebuild_catalog_from_receipts"
+      ],
+      "cutoverGate": "append-only JSONL writer for .backups/catalog/catalog-v1.jsonl; every mutation funnels through _append_entry, so one fence at that function denies every writer path",
+      "gatedBy": "writerEntryPoints"
+    },
+    {
+      "id": "backup_index_store",
+      "plane": "data",
+      "current_owner": "python",
+      "target_owner": "rust",
+      "cutover": "4.9.4",
+      "durable_store": "rust_data",
+      "storePath": {
+        "primary": ".backup-index"
+      },
+      "writerEntryPoints": [
+        "backup_incremental.commit_snapshot_index",
+        "backup_incremental.record_committed_snapshot",
+        "backup_incremental.record_snapshot_chunks",
+        "backup_incremental.garbage_collect_chunk_maps",
+        "backup_incremental.maintain_snapshot_index"
+      ],
+      "cutoverGate": "SQLite snapshot/chunk index; writes are scoped by _open_index_db",
+      "gatedBy": "writerEntryPoints"
+    },
+    {
+      "id": "backup_spool_store",
+      "plane": "data",
+      "current_owner": "python",
+      "target_owner": "rust",
+      "cutover": "4.9.4",
+      "durable_store": "rust_data",
+      "storePath": {
+        "primary": ".backup-spool"
+      },
+      "writerEntryPoints": [
+        "backup_spool.store_verified_package",
+        "backup_spool.write_multipart_state",
+        "backup_spool.write_component_multipart_state",
+        "backup_spool.clear_slot",
+        "backup_spool.cleanup_expired"
+      ],
+      "cutoverGate": "spooled ciphertext plus in-flight multipart state; multipart state is resumable, so a fence must refuse a resumed upload rather than silently restart it",
+      "gatedBy": "writerEntryPoints"
+    },
+    {
+      "id": "backup_dr_ledger_store",
+      "plane": "data",
+      "current_owner": "python",
+      "target_owner": "rust",
+      "cutover": "4.9.4",
+      "durable_store": "rust_data",
+      "storePath": {
+        "primary": ".backup-dr"
+      },
+      "writerEntryPoints": [
+        "backup_dr_ledger.record_recovery_point",
+        "backup_dr_ledger.record_scrub_evidence",
+        "backup_dr_ledger.record_drill_evidence",
+        "backup_dr_ledger.record_target_evidence",
+        "backup_dr_ledger.record_stage_sample",
+        "backup_dr_ledger.record_audit_evidence",
+        "backup_dr_ledger.upsert_audit_job",
+        "backup_dr_ledger.record_logical_recovery_copy",
+        "backup_dr_ledger.update_recovery_copy_state",
+        "backup_dr_ledger.mark_logical_recovery_point_retired"
+      ],
+      "cutoverGate": "SQLite DR evidence ledger: recovery points, recovery-lineage copies and the audit/drill/scrub evidence that backs dr-readiness-proof-v1",
+      "gatedBy": "writerEntryPoints"
+    },
+    {
+      "id": "restore_staging_store",
+      "plane": "data",
+      "current_owner": "python",
+      "target_owner": "rust",
+      "cutover": "4.9.4",
+      "durable_store": "rust_data",
+      "storePath": {
+        "primary": ".restore-staging"
+      },
+      "writerEntryPoints": [
+        "backups.create_session",
+        "backups.put_session_secret",
+        "backups.generate_recovery_identity",
+        "backups.put_frontend_state",
+        "backups.finalize_session",
+        "backups.prepare_restore",
+        "backups.commit_restore",
+        "backups.complete_restore",
+        "backups.abort_restore",
+        "backups.delete_restore",
+        "backups.cleanup_restores",
+        "backups.recover_interrupted_restores"
+      ],
+      "cutoverGate": "live restore sessions including the in-flight session secret; a rollback must not resurrect a superseded session, and complete/abort are the only terminal transitions",
+      "gatedBy": "writerEntryPoints"
+    },
+    {
+      "id": "backup_replication_store",
+      "plane": "data",
+      "current_owner": "python",
+      "target_owner": "rust",
+      "cutover": "4.9.4",
+      "durable_store": "rust_data",
+      "storePath": {
+        "primary": ".backup-replication",
+        "secondary": ".backup-rebalance"
+      },
+      "writerEntryPoints": [
+        "backup_replication._atomic_write",
+        "backup_replication._save_cursors"
+      ],
+      "cutoverGate": "replica/repair/rebalance jobs plus source holds and the maintenance cursor; holds gate destructive operations on the source target, so a lost hold must fail closed",
+      "gatedBy": "chokePoint",
+      "gateNote": "The declared job/phase functions are frozen-4.8.0 reference functions that tests/test_native_runtime_*.py compares by full AST equality, so the gate cannot be a new leading statement there. `_atomic_write` is the single durable-write choke point every job, hold and cursor file passes through, and it is not in any frozen set."
+    },
+    {
+      "id": "backup_retirement_store",
+      "plane": "data",
+      "current_owner": "python",
+      "target_owner": "rust",
+      "cutover": "4.9.4",
+      "durable_store": "rust_data",
+      "storePath": {
+        "primary": ".backup-retirements"
+      },
+      "writerEntryPoints": [
+        "backup_retirement.create_copy_retirement_job",
+        "backup_retirement._update_job_phase",
+        "backup_retirement.cancel_copy_retirement_job",
+        "backup_retirement._write_retirement_marker",
+        "backup_retirement.execute_copy_retirement_job"
+      ],
+      "cutoverGate": "payload retirement jobs and their on-object retirement markers; the marker is the durable proof a payload may be reclaimed, so it must be written before any delete",
+      "gatedBy": "writerEntryPoints"
+    },
+    {
+      "id": "backup_drain_store",
+      "plane": "data",
+      "current_owner": "python",
+      "target_owner": "rust",
+      "cutover": "4.9.4",
+      "durable_store": "rust_data",
+      "storePath": {
+        "primary": ".backup-drains"
+      },
+      "writerEntryPoints": [
+        "backup_drain.start_target_drain",
+        "backup_drain.cancel_target_drain",
+        "backup_drain._update_drain_state",
+        "backup_drain.reconcile_drain_projections"
+      ],
+      "cutoverGate": "target drain jobs; a drain is the ordering primitive that makes target retirement safe",
+      "gatedBy": "writerEntryPoints"
+    },
+    {
+      "id": "backup_run_plan_store",
+      "plane": "data",
+      "current_owner": "python",
+      "target_owner": "rust",
+      "cutover": "4.9.4",
+      "durable_store": "rust_data",
+      "storePath": {
+        "primary": ".backup-run-plans"
+      },
+      "writerEntryPoints": [
+        "backup_run_plan.freeze_run_plan",
+        "backup_run_plan.transition_run_plan_target",
+        "backup_run_plan.clear_run_plan"
+      ],
+      "cutoverGate": "frozen run plans: once frozen the plan digest is the contract a run executes against, so import must preserve digests byte-for-byte",
+      "gatedBy": "writerEntryPoints"
+    },
+    {
+      "id": "backup_component_cache_store",
+      "plane": "data",
+      "current_owner": "python",
+      "target_owner": "rust",
+      "cutover": "4.9.4",
+      "durable_store": "rust_data",
+      "storePath": {
+        "primary": ".backup-component-cache"
+      },
+      "writerEntryPoints": [
+        "backup_component_cache.pin",
+        "backup_component_cache.unpin",
+        "backup_component_cache.reconcile_pins"
+      ],
+      "cutoverGate": "pinned component cache entries; unpinning an entry that a live run depends on is destructive",
+      "gatedBy": "writerEntryPoints"
+    },
+    {
+      "id": "backup_write_continuity_store",
+      "plane": "data",
+      "current_owner": "python",
+      "target_owner": "rust",
+      "cutover": "4.9.4",
+      "durable_store": "rust_data",
+      "storePath": {
+        "primary": ".backup-continuity"
+      },
+      "writerEntryPoints": [
+        "backup_write_continuity.save_write_continuity_state",
+        "backup_write_continuity.record_target_liveness",
+        "backup_write_continuity.execute_failover_transition",
+        "backup_write_continuity.execute_failback_transition",
+        "backup_write_continuity.promote_primary_target"
+      ],
+      "cutoverGate": "target write-continuity state and the failover/failback ledger; two owners promoting different primaries is exactly the split brain this store records against",
+      "gatedBy": "writerEntryPoints"
+    },
+    {
+      "id": "backup_retention_store",
+      "plane": "data",
+      "current_owner": "python",
+      "target_owner": "rust",
+      "cutover": "4.9.4",
+      "durable_store": "rust_data",
+      "storePath": {
+        "primary": ".backup-retention"
+      },
+      "writerEntryPoints": [
+        "backup_retention.put_retention_policy",
+        "backup_retention.apply_retention",
+        "backup_retention.finalize_retention",
+        "backup_retention.restore_from_trash",
+        "backup_retention._trash_journal_write",
+        "backup_retention._recover_trash_journals"
+      ],
+      "cutoverGate": "retention policies plus the trash journal; trash moves are journaled so an interrupted run can be recovered, which a read-only or second writer cannot reconstruct",
+      "gatedBy": "writerEntryPoints"
+    },
+    {
+      "id": "authority_retention_store",
+      "plane": "data",
+      "current_owner": "python",
+      "target_owner": "rust",
+      "cutover": "4.9.4",
+      "durable_store": "rust_data",
+      "storePath": {
+        "primary": ".backup-authority-retention"
+      },
+      "writerEntryPoints": [
+        "authority_retention.put_authority_retention_policy",
+        "authority_retention.build_authority_retention_checkpoint",
+        "authority_retention.execute_compaction"
+      ],
+      "cutoverGate": "authority retention policy plus compaction checkpoints/jobs; a compaction that loses the checkpoint cannot be verified against the frozen AuthorityCheckpoint v1 contract",
+      "gatedBy": "writerEntryPoints"
+    },
+    {
+      "id": "resilience_scheduler_store",
+      "plane": "data",
+      "current_owner": "python",
+      "target_owner": "rust",
+      "cutover": "4.9.4",
+      "durable_store": "rust_data",
+      "storePath": {
+        "primary": ".resilience-scheduler"
+      },
+      "writerEntryPoints": [
+        "resilience_scheduler_service.record_scheduled_actions",
+        "resilience_scheduler_service._append_settlement_event",
+        "resilience_scheduler_service._begin_effect_settlement",
+        "resilience_scheduler_service._finish_effect_settlement",
+        "resilience_scheduler_service.reserve_scheduled_actions",
+        "resilience_scheduler_service.release_action_reservation",
+        "resilience_scheduler_service.record_schedule_snapshot",
+        "resilience_scheduler_service.record_schedule_result"
+      ],
+      "cutoverGate": "scheduler service/reservation/settlement tables; the settlement journal is how an unknown effect stays EFFECT_UNKNOWN instead of being retried into a duplicate",
+      "gatedBy": "writerEntryPoints"
+    },
+    {
+      "id": "resilience_capacity_store",
+      "plane": "data",
+      "current_owner": "python",
+      "target_owner": "rust",
+      "cutover": "4.9.4",
+      "durable_store": "rust_data",
+      "storePath": {
+        "primary": ".resilience-capacity"
+      },
+      "writerEntryPoints": [
+        "resilience_capacity_history.record_capacity_observation",
+        "resilience_capacity_history._ensure_schema"
+      ],
+      "cutoverGate": "capacity observation history used by the forecast; observations are append-only samples",
+      "gatedBy": "writerEntryPoints"
     }
   ]
 }

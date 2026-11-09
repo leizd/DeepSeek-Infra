@@ -16,6 +16,7 @@ from typing import Any
 
 from deepseek_infra.core import config
 from deepseek_infra.core.errors import AppError, ErrorCode
+from deepseek_infra.infra.native_runtime.authority import assert_python_writer_allowed
 
 RUN_PLAN_DIR = config.ROOT / ".backup-run-plans"
 RUN_PLAN_SCHEMA_VERSION = 3
@@ -102,6 +103,7 @@ def freeze_run_plan(
 
     Once frozen, retries never re-select the parent, snapshot kind, or backupId.
     """
+    assert_python_writer_allowed("backup_run_plan_store")
     existing = read_run_plan(str(policy.get("policyId") or ""), slot_digest)
     if existing is not None:
         return existing
@@ -161,6 +163,7 @@ def transition_run_plan_target(
     reason: str,
 ) -> dict[str, Any]:
     """Transition write target of an existing run plan while preserving backupId, objectSet and encryption."""
+    assert_python_writer_allowed("backup_run_plan_store")
     plan = read_run_plan(policy_id, slot_digest)
     if plan is None:
         raise AppError("backup run plan is unavailable", code=ErrorCode.NOT_FOUND, status=404)
@@ -235,6 +238,7 @@ def read_run_plan(policy_id: str, slot_digest: str) -> dict[str, Any] | None:
 
 
 def clear_run_plan(policy_id: str, slot_digest: str) -> None:
+    assert_python_writer_allowed("backup_run_plan_store")
     path = plan_path(policy_id, slot_digest)
     path.unlink(missing_ok=True)
     parent = path.parent
