@@ -31,7 +31,7 @@ use axum::http::{Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::any;
 use axum::{Json, Router};
-use deepseek_policy::app_error::{AppError, codes};
+use deepseek_policy::app_error::AppError;
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use serde_json::{Map, Value, json};
 
