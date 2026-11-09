@@ -195,6 +195,8 @@ from fastapi.testclient import TestClient
 from deepseek_infra.infra.workspace import backup_control
 from deepseek_infra.web.server import create_app
 
+data = json.load(sys.stdin)
+
 # id, class, estimated, transferred, lease offset (seconds)
 ROWS = [
     ("t-p0",      0,       1000,        100,  3600),
