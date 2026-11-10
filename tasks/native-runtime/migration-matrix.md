@@ -1,3 +1,50 @@
+<!-- native checkpoint 2026-11-10 full ci.yml runs green except a pre-existing Go floor -->
+
+Whole product Rust/Go migration remains ACTIVE / **NOT_READY**.
+
+The full 37-job `ci.yml` was dispatched against this branch for the first time in
+this workstream and it exposed four real defects that the bounded `rust-cloud.yml`
+workflow could not see. All four are fixed and the corresponding jobs are green.
+
+**Discovering the gap mattered more than the individual fixes.** `ci.yml`'s `rust`
+and `rust-coverage` jobs installed `requirements.txt` and `requirements-ocr.txt`
+but not `requirements-dev.txt`, and `httpx2` — required by starlette's
+`TestClient` — lives only in `requirements-dev.txt`. Every Rust test that spawns
+the real Python application therefore failed with "requires the httpx2 package",
+and it did so *regardless of the change under test*. `rust-cloud.yml` already
+installed the dev requirements, which is exactly why the bounded workflow stayed
+green while the full gate could never pass. The two jobs disagreed about their own
+toolchain.
+
+The other three: two macOS source-pipeline tests pin a `native-windows-cloud.yml`
+step's SHA-256 and commit `0965937fb` changed that step (two corpus cases,
+`@(1,3,3,4,7,12)` -> `@(1,3,3,4,9,12)`) without updating the pin;
+`proc_state` read `/proc/<pid>/stat` with `read_text` while `process_identity` had
+been switched to `read_bytes` for byte safety, so six `identity` cases exercised a
+nonexistent pid instead of their stub; and the S0 cutover tool imported `fcntl`
+and `msvcrt` statically behind a platform branch, which `mypy` rejects on the
+branch it is not running.
+
+**Final run `42756315885` at `b05f2ad7`: 34 of 37 jobs succeed**, including
+`rust`, `rust-coverage`, `docs` and all three `test (3.10/3.11/3.12)` jobs — the
+six that this slice fixed. The three remaining failures are one cause and two
+consequences:
+
+- `native-go`: Go statement coverage **94.625934%** (16974/17938) against the
+  95.0% floor. This is unchanged from the measurement taken *before* this slice.
+  The coverage script lists only `./internal/...` and `./pkg/...`, so the new
+  `cmd/` packages cannot affect it. Diffing the profile against the last fully
+  green run (`41826868421`, 95.030198%) puts the drop in the six earlier media
+  commits: `media_patch_result.go` 100% -> 82.76%, `values.go` 98.67% -> 96.38%
+  with 50 statements added, `media_upload.go` 92.68% -> 91.67% with 45 added — 453
+  statements newly covered but 553 added.
+- `evidence-assembly` and `rc-readiness` fail because they require every upstream
+  evidence gate, so they inherit the `native-go` failure.
+
+Closing that last gap is the next task: either add the missing media-branch tests
+or record a justified floor change, and in both cases with the profile diff
+preserved. Nothing in this slice lowered it.
+
 <!-- native checkpoint 2026-11-10 executable ownership-transfer tooling -->
 
 Whole product Rust/Go migration remains ACTIVE / **NOT_READY**.

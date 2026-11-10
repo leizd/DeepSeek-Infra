@@ -1,3 +1,53 @@
+<!-- native checkpoint 2026-11-10 ci.yml remediated: 34/37 jobs green -->
+
+Whole product Rust/Go migration remains ACTIVE / **NOT_READY**.
+
+Branch `codex/native-s0-store-ownership-20261109`, head `b05f2ad7`, run
+[42756315885](https://github.com/leizd/DeepSeek-Infra/actions/runs/42756315885):
+**34 of 37 `ci.yml` jobs succeed**, including `rust`, `rust-coverage`, `docs` and
+all three `test (3.10/3.11/3.12)` jobs.
+
+Running the full gate for the first time in this workstream was worth more than
+the S0 slice itself, because it found a defect that made the gate unpassable for
+*any* change: `ci.yml`'s `rust` and `rust-coverage` jobs installed
+`requirements.txt` + `requirements-ocr.txt` but not `requirements-dev.txt`, while
+`httpx2` (needed by starlette's `TestClient`, which every Python-oracle-backed
+Rust test uses) lives only in `requirements-dev.txt`. `rust-cloud.yml` did install
+the dev requirements, so the bounded workflow was green and the full one could not
+be. Both job definitions now agree.
+
+Four defects were fixed in total: that missing oracle dependency in two jobs; two
+macOS tests whose pinned SHA-256 for a `native-windows-cloud.yml` step was never
+updated after commit `0965937fb` legitimately changed the step; `proc_state`
+reading `/proc/<pid>/stat` with `read_text` while `process_identity` uses
+`read_bytes` (so six `identity` cases tested a nonexistent pid instead of their
+stub); and the S0 cutover tool's static `fcntl`/`msvcrt` imports that `mypy`
+rejects on the branch it is not running.
+
+**The three remaining failures are one cause and two consequences.**
+`native-go` measures Go statement coverage at **94.625934%** (16974/17938) against
+the 95.0% floor — the identical number measured before this slice. The coverage
+script lists only `./internal/...` and `./pkg/...`, so new `cmd/` packages cannot
+move it. Diffing the profile against the last fully green run (`41826868421`,
+95.030198%) attributes the drop to the six earlier media commits:
+`media_patch_result.go` 100% -> 82.76%, `values.go` 98.67% -> 96.38% (+50
+statements), `media_upload.go` 92.68% -> 91.67% (+45) — 453 statements newly
+covered but 553 added. `evidence-assembly` and `rc-readiness` require every
+upstream evidence gate and inherit that failure.
+
+**Next executable task.** Close the Go coverage gap honestly: add tests for the
+uncovered media branches (`media_patch_result.go`'s error paths are the largest
+single drop and the cheapest to cover), re-measure with the same script and floor,
+and keep the before/after profile diff as the evidence. Do not lower the floor and
+do not attribute the gap to this slice — the number predates it and the diff shows
+exactly where it went.
+
+**Still not done.** The ownership contract still records
+`current_production_authority: python`. Promoting a real control domain still
+requires a genuinely stopped-and-fenced Python source, and the tooling built here
+runs on copies with a generated signer. Platform packages, zero-Python workloads
+and Evidence Assembly remain outstanding.
+
 <!-- native checkpoint 2026-11-10 executable ownership-transfer tooling -->
 
 Whole product Rust/Go migration remains ACTIVE / **NOT_READY**.
