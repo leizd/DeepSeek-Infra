@@ -165,10 +165,42 @@ SHA-256 in `control_promotion_artifacts` in the cutover transaction. Schema v10
 refuses to label an existing v9 unsigned promotion history as signed, and
 schema-0 rollback refuses retained promotion history. A replay must present
 the exact signed bytes already journaled. An isolated Go-store test confirms
-those bytes survive restart and writer fencing advances; it does not verify
-Python-owned policy or target data import. These are local safety
-checks; an isolated export/import and ownership-transfer recovery procedure
-still needs evidence. See `docs/GO_PUBLIC_API.md`.
+those bytes survive restart and writer fencing advances.
+
+The isolated export/import and ownership-transfer recovery procedure now has an
+executable form. Two offline commands complete the operator side that previously
+existed only in prose:
+
+- `go run ./cmd/control-domain-promotion` signs the canonical
+  `control-domain-promotion-v1` artifact. It reads an explicit transition
+  request, the live cutover record and the installed authority checkpoint; it
+  refuses a request that disagrees with the record, refuses any target state
+  other than `go_authoritative`, and refuses to sign an internally inconsistent
+  checkpoint. The promotion private key is supplied by file through
+  `DEEPSEEK_PROMOTION_PRIVATE_KEY_FILE` (absolute path, base64url seed or key),
+  never as a flag, so it cannot drift into shell history or CI logs. The command
+  never opens the Go store and never claims authority, so running it cannot change
+  ownership by itself.
+- `go run ./cmd/control-transfer-verify` runs the whole handover on isolated
+  copies and reports each step: open a fresh Go store, attest the copied Python
+  source, claim the checkpoint, enter `dual_evaluate`, import the attested
+  inventory, sign and apply the promotion, confirm
+  `IsGoAuthoritative(domain)`, then roll back to `shadow` *without* presenting any
+  promotion artifact and confirm Go is no longer authoritative. It requires an
+  absolute empty scratch directory outside the repository, refuses a changed
+  source, and never touches a live store. Its test suite drives both `policy` and
+  `target` through every step against the real Python-sourced fixtures.
+
+Two facts that shaped those tools are worth recording. The rollback direction in
+the frozen state machine is `go_authoritative -> shadow`, not back to
+`dual_evaluate`, and it is deliberately unauthenticated so ownership is always
+recoverable. And the authoritative hop must carry the *import's* transfer ID:
+the store binds a promotion to the attested import that produced the records and
+refuses any other ID as unproven provenance.
+
+What those commands still do not prove is production: they run on copies, with a
+per-run generated signer, and they do not exercise a live Python service, a real
+provider or a public listener. See `docs/GO_PUBLIC_API.md`.
 
 For the source side of that transfer, the offline `python -m
 scripts.native_control_handoff` command accepts explicit `--source-db`,

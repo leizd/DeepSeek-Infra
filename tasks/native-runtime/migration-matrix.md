@@ -1,3 +1,46 @@
+<!-- native checkpoint 2026-11-10 executable ownership-transfer tooling -->
+
+Whole product Rust/Go migration remains ACTIVE / **NOT_READY**.
+
+The runbook's own admission — "an isolated export/import and ownership-transfer
+recovery procedure still needs evidence" — is now answered by executable tooling
+rather than prose. Two offline commands complete the operator side that previously
+existed only inside tests:
+
+- `go/cmd/control-domain-promotion` signs the canonical
+  `control-domain-promotion-v1` artifact. The promotion private key is read from
+  `DEEPSEEK_PROMOTION_PRIVATE_KEY_FILE` (absolute path, base64url), never a flag.
+  It refuses a request that disagrees with the live cutover record, any target
+  other than `go_authoritative`, and any internally inconsistent authority
+  checkpoint; it never opens the store and cannot change ownership.
+- `go/cmd/control-transfer-verify` runs the whole handover on isolated copies and
+  reports ten steps: open a fresh Go store, attest the copied Python source, claim
+  the checkpoint, enter `dual_evaluate`, import the attested inventory, sign and
+  apply the promotion, confirm `IsGoAuthoritative`, then roll back to `shadow`
+  **without any promotion artifact** and confirm Go is no longer authoritative.
+
+Three contract facts surfaced while making it work, and each was a real trap:
+
+- the frozen lifecycle reverses `go_authoritative -> shadow`, not back to
+  `dual_evaluate`; that reversal is deliberately unauthenticated, which is what
+  makes ownership always recoverable;
+- the authoritative hop must carry the *import's* transfer ID, because the store
+  binds a promotion to the attested import that produced the records and refuses
+  any other ID as unproven provenance;
+- the claimed checkpoint has to be the one the export was taken under, so a
+  verifier cannot synthesise it.
+
+Both `policy` and `target` complete the full sequence, evidenced by real binary
+runs against the Python-sourced fixtures. Local Go gates: `go vet ./...` PASS,
+both new command directories gofmt-clean, `./cmd/...` and `./internal/api/` PASS,
+and `./internal/store/` passes except one pre-existing Windows-only temp-dir
+cleanup race reproduced on a clean tree.
+
+What this does **not** prove: production. The runs use copies, a per-run
+generated signer and no live Python service, provider or public listener, and the
+slice has no exact-commit cloud qualification yet. The ownership contract still
+says `current_production_authority: python`.
+
 <!-- native checkpoint 2026-11-09 S0 store ownership declared, gated and reversible -->
 
 Whole product Rust/Go migration remains ACTIVE / **NOT_READY**.
