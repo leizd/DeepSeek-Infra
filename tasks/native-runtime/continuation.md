@@ -56,6 +56,24 @@ is still kept — the coverage is now honest on any platform instead of only on 
 — but it demonstrates that a plausible-looking target can be worth nothing against
 this number.
 
+**The remainder is fault-injection coverage, and that is now measured rather
+than asserted.** Every remaining uncovered block was classified by its source
+shape: 262 statements are literal `return err` / `_ = db.Close()` lines, which only
+execute when an I/O or sqlite call fails. The other 654 look input-reachable, but
+the largest clusters sit inside refusal paths that already have subtests —
+`control_sqlite_fault_test.go` alone covers parent-is-a-file,
+database-path-is-a-directory, empty-file resume, incomplete marker set, closed
+connection, inactive schema, missing domain table, unexpected migration, invalid
+writer metadata, metadata row missing, foreign metadata, multiple metadata rows,
+malformed metadata schema, `user_version` mismatch and migration-count mismatch.
+
+So the floor is **not** blocked by untested features. It is blocked by the absence
+of a fault harness. The honest options are to build one (an injectable sqlite
+driver or a filesystem that fails on demand) and cover the 262 branch statements it
+exposes, or to record a justified floor decision with this classification as the
+evidence. Silently lowering the floor, or counting unrelated statements, is not one
+of them.
+
 **Why the remaining 20 are a different kind of work.** They are single error
 returns scattered across `internal/store/control.go` (93 missing at 92.60%):
 corrupt-record guards, `db.Close()` error branches and snapshot failure paths. Each
