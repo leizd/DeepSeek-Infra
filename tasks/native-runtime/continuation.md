@@ -1,3 +1,60 @@
+<!-- native checkpoint 2026-11-10 Go coverage narrowed, floor not yet reached -->
+
+Whole product Rust/Go migration remains ACTIVE / **NOT_READY**.
+
+**State: 33 of 37 `ci.yml` jobs pass.** The failures are Go coverage, an
+external-artifact 404 in `native-protocol`, and the two gates that inherit Go
+coverage. `rust`, `rust-coverage`, `docs` and all three `test (3.10/3.11/3.12)`
+jobs — the six this workstream fixed — are green.
+
+**Go coverage was 94.625934% (16974/17938) at the start of this work and is
+94.893522% (17022/17938) now. The floor is 95.0%, which needs 17042, so 20
+statements remain.** That is reported plainly rather than as progress: the floor
+is still missed.
+
+What was added (24 tests) and why each target was chosen from the profile rather
+than guessed:
+
+- `internal/media/server_error.go` had **no tests at all** at 3.70%. It is the one
+  signed result whose entire payload is a fixed 500 refusal, so a mistake there
+  either hides a real refusal or forges a success. Now 88.9%.
+- `internal/worker/media_patch_result.go` 82.76% -> 98.3%: `ReadFlatMediaPatchResult`
+  was entirely uncovered; its wrong-version, non-applied, unsecured-client and
+  interrupted-stream refusals are now pinned.
+- `internal/media/flat_patch_input.go` 90.16% -> 94.8%: the JSON escape decoder that
+  reproduces the original Python key ordering.
+- `internal/api/media_patch.go`: the public patch input gate and the outcome writer,
+  including the rule that a UTF-8 violation is a 500 with a generic message while a
+  JSON syntax error is a 400 carrying the parser diagnostic.
+
+**Why the remaining 20 are a different kind of work.** They are single error
+returns scattered across `internal/store/control.go` (93 missing at 92.60%):
+corrupt-record guards, `db.Close()` error branches and snapshot failure paths. Each
+needs a deliberately tampered store or an injected failure rather than a shaped
+input, which is a larger piece than the response-shaping tests above — and it is
+where the next slice should start.
+
+**Four fixture facts that cost real iterations and should not be re-learned:**
+
+1. A `MediaPatchIntent` of the patch kind is rejected by `RequestDigest` unless it
+   carries a `Patch` body, and the server-error schema version is legal only for the
+   delete kind.
+2. A flat record is a node table whose last node is the root object and whose
+   members reference earlier nodes, so a scalar must precede the object pointing at
+   it.
+3. `patchWireText(raw, decoded)` returns `(decoded, nil, nil)` when the units are
+   well formed and `("", units, nil)` for an unpaired surrogate — it never rebuilds
+   the string from the raw bytes.
+4. The outcome schema versions are not consecutive (`Compact` 2, `ServerError` 3,
+   `Flat` 4), so tests must use the named constants; a guessed version silently
+   takes the wrong branch and still answers 200.
+
+**Also worth recording:** `internal/protocol`'s job failed fetching an external
+pinned artifact with a 404 — infrastructure, not code — and the local
+`check_go_coverage.py` gate cannot run to completion on this host because a
+`managed_profile` test needs symlink privileges Windows withholds, so CI remains the
+only authority for the number.
+
 <!-- native checkpoint 2026-11-10 ci.yml remediated: 34/37 jobs green -->
 
 Whole product Rust/Go migration remains ACTIVE / **NOT_READY**.
