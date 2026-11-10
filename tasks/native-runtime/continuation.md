@@ -38,6 +38,24 @@ than guessed:
   including the rule that a UTF-8 violation is a 500 with a generic message while a
   JSON syntax error is a 400 carrying the parser diagnostic.
 
+**Five attempts at the floor, and an honest stop.** Each was chosen from the
+coverage profile rather than guessed, and each moved the count:
+
+| commit | suite added | covered |
+| --- | --- | --- |
+| `b6312156` | server-error outcomes, flat patch results | 16974 -> 17006 |
+| `cf728984` | flat patch escape decoder | 17006 -> 17015 |
+| `360f1323` | public patch input gate | 17015 -> 17017 |
+| `5bb55242` | media outcome response writer | 17017 -> 17022 |
+| `b68bcd1c` | managed-profile custody validators | 17022 -> 17022 |
+
+The last one is worth recording as a negative result: it raises
+`internal/launch/managed_profile.go` from 89.7% to 93.2% and moves the aggregate by
+**zero**, because the Linux-only tests already cover those branches in CI. The suite
+is still kept — the coverage is now honest on any platform instead of only on Linux
+— but it demonstrates that a plausible-looking target can be worth nothing against
+this number.
+
 **Why the remaining 20 are a different kind of work.** They are single error
 returns scattered across `internal/store/control.go` (93 missing at 92.60%):
 corrupt-record guards, `db.Close()` error branches and snapshot failure paths. Each
