@@ -2,18 +2,21 @@
 
 Whole product Rust/Go migration remains ACTIVE / **NOT_READY**.
 
-**State: 32 of 37 `ci.yml` jobs pass, 4 fail, 1 skipped** (run `42769006545`). An
-earlier note in this file said 33 because several jobs were still in progress when
-it was written; the settled tally is corrected here. `rust`, `rust-coverage`,
+**State: 33 of 37 `ci.yml` jobs pass, 3 fail, 1 skipped** (run `42771997916` at
+`d226539b`). Two earlier notes in this file were written from a run that had not
+settled: the first said 33 when several jobs were still in progress, the second
+said 32 after a transient 404. The settled, reproduced figure is 33. `rust`, `rust-coverage`,
 `docs` and all three `test (3.10/3.11/3.12)` jobs — the six this workstream fixed
 — are green. The four failures are Go coverage, a transient 404, and the two gates
 that inherit Go coverage.
 
-`native-protocol` failed fetching the checksum-pinned
-`protoc-gen-grpc-java` 1.84.0 artifact from `repo.maven.apache.org` with a 404. It
-is infrastructure, not code: the identical job passed on runs `42760704962`,
-`42763526111` and `42766424743` at an earlier commit on this branch, and the URL
-answers HTTP 200 today. A re-dispatch should clear it.
+`native-protocol` failed once fetching the checksum-pinned
+`protoc-gen-grpc-java` 1.84.0 artifact from `repo.maven.apache.org` with a 404, and
+**passed on the re-dispatch**, which confirms that was a transient upstream failure
+rather than a defect. Three remaining failures are one cause and two consequences:
+`native-go` measures Go statement coverage at 94.893522% (17022/17938) against the
+95.0% floor, and `evidence-assembly` plus `rc-readiness` require every upstream
+evidence gate so they inherit it.
 
 **Go coverage was 94.625934% (16974/17938) at the start of this work and is
 94.893522% (17022/17938) now. The floor is 95.0%, which needs 17042, so 20
