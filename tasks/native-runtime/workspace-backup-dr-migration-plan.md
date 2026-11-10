@@ -1,5 +1,10 @@
 # Workspace backup / DR / resilience HTTP surface — migration plan v1
 
+<!-- docs-language-switcher:start -->
+[中文](../../README.md) / [English](../../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 Status: **planning only. NOT_READY.** No route in this surface has been
 qualified on the native edge beyond the families already listed in
 `migration-matrix.md` (backup mirror, replication, retirement, run, drill,

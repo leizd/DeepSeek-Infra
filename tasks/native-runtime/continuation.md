@@ -1,3 +1,76 @@
+<!-- native checkpoint 2026-11-10 executable ownership-transfer tooling -->
+
+Whole product Rust/Go migration remains ACTIVE / **NOT_READY**.
+
+The S0 Go authority item moved from "documented but unreachable" to "executable
+and reversible". The runbook itself said "an isolated export/import and
+ownership-transfer recovery procedure still needs evidence"; that sentence now
+describes history rather than the plan.
+
+**What was missing.** The Go cutover state machine, the promotion verifier
+(`verifyPromotionArtifact`), the attested Python inventory import and the handback
+all existed and all were tested in isolation. But `SignPromotionArtifact` and
+`PromotionArtifactForTransition` were referenced only from `_test.go` files, so no
+operator could ever mint the artifact a promotion requires. The gate was real and
+unreachable at the same time.
+
+**What was added.**
+
+- `go/cmd/control-domain-promotion` — signs the canonical
+  `control-domain-promotion-v1` artifact. Inputs are an explicit transition
+  request, the live cutover record and the installed authority checkpoint. It
+  refuses a request that disagrees with the record on revision/epoch/fencing
+  token/domain, any target other than `go_authoritative`, an internally
+  inconsistent checkpoint, unknown fields, trailing content, and a relative or
+  unusable key path. The key comes only from
+  `DEEPSEEK_PROMOTION_PRIVATE_KEY_FILE` as an absolute path to a base64url seed or
+  private key — never a flag value. It never opens the store and never claims
+  authority.
+- `go/cmd/control-transfer-verify` — runs the whole handover on isolated copies and
+  reports ten steps: open a fresh Go store, attest the copied Python source, claim
+  the checkpoint, read the head, enter `dual_evaluate`, import the attested
+  inventory, observe the dual state, sign the promotion, verify
+  `IsGoAuthoritative`, then roll back to `shadow` with **no promotion artifact** and
+  verify Go is no longer authoritative. Guards: absolute empty scratch outside the
+  repository, a changed source refused by the store's own attestation, and a
+  per-run generated signer.
+
+**Three contract facts found the hard way** (each is now encoded, not just noted):
+
+1. The frozen lifecycle reverses `go_authoritative -> shadow`, not back to
+   `dual_evaluate`. That reversal is deliberately unauthenticated — it is what
+   makes ownership always recoverable — so a rollback probe must target `shadow`.
+2. The authoritative hop must carry the *import's* transfer ID. The store binds a
+   promotion to the attested import that produced the records; any other ID is
+   refused as `INVENTORY_PROMOTION_UNPROVEN`.
+3. The claimed checkpoint must be the one the export was taken under (same
+   generation, same digest, same source schema version). A synthesised checkpoint
+   fails inside `installedInventoryCheckpointTx`, so the verifier requires the real
+   document instead of inventing one.
+
+**Evidence.** Both `policy` and `target` complete the full sequence, run with the
+built binaries against the Python-sourced fixtures under
+`go/internal/store/testdata`; the per-step JSON reports and both binaries are in
+`D:/deepseek-worktree-evidence/native-20261110-promotion-signer/`. Local gates:
+`go vet ./...` PASS, both new command directories gofmt-clean, `./cmd/...` and
+`./internal/api/` PASS, `./internal/store/` PASS except one pre-existing
+Windows-only temp-dir cleanup race that reproduces with every change stashed.
+`ruff check .` and `scripts/check_release_version.py` still PASS.
+
+**Not proven.** Production. The verifier runs on copies with a generated signer,
+against no live Python service, no real provider and no public listener. The
+ownership contract still records `current_production_authority: python`, and the
+exact-commit cloud qualification for this slice is dispatched but not yet green at
+the time of writing. The full 37-job `ci.yml`, Evidence Assembly, platform
+packages and zero-Python workloads remain outstanding.
+
+**Next executable task.** Turn the tooling into an ownership-contract revision:
+promote one real control domain (policy first) through the same sequence against a
+genuine stopped-and-fenced Python source, capture the export/import/promotion
+evidence bundle, and only then flip that domain's `current_owner` to `go` in
+`release/native_runtime_ownership_v1.json`. Until that bundle exists the contract
+must not move.
+
 <!-- native checkpoint 2026-11-09 S0 store ownership declared and gated -->
 
 Whole product Rust/Go migration remains ACTIVE / **NOT_READY**.

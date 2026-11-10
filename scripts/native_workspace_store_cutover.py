@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import hashlib
+import importlib
 import json
 import os
 import shutil
@@ -137,20 +138,20 @@ def _fence(store_root: Path, *, enabled: bool) -> Iterator[None]:
     lock.parent.mkdir(parents=True, exist_ok=True)
     descriptor = os.open(lock, os.O_CREAT | os.O_RDWR, 0o600)
     try:
-        if os.name == "posix":
-            import fcntl
-
-            try:
-                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)  # type: ignore[attr-defined]
-            except OSError as exc:
-                raise CutoverError(f"another process holds the cutover fence: {lock}") from exc
-        else:
-            import msvcrt
-
-            try:
-                msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
-            except OSError as exc:
-                raise CutoverError(f"another process holds the cutover fence: {lock}") from exc
+        # Both binding modules are platform-specific and neither is typed on the
+        # other platform, so they are imported dynamically with the branch already
+        # selected at runtime. Static imports here would fail mypy on one of them.
+        module_name, attribute = ("fcntl", "flock") if os.name == "posix" else ("msvcrt", "locking")
+        binding = importlib.import_module(module_name)
+        flags = getattr(binding, "LOCK_EX", 0) | getattr(binding, "LOCK_NB", 0)
+        try:
+            if os.name == "posix":
+                binding.flock(descriptor, flags)
+            else:
+                # msvcrt takes an explicit byte count; fcntl locks the whole file.
+                binding.locking(descriptor, getattr(binding, "LK_NBLCK", 0), 1)
+        except OSError as exc:
+            raise CutoverError(f"another process holds the cutover fence: {lock}") from exc
         yield
     finally:
         os.close(descriptor)

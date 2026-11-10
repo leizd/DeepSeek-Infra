@@ -1,5 +1,10 @@
 # Handoff — native runtime migration state (2026-11-07)
 
+<!-- docs-language-switcher:start -->
+[中文](../../README.md) / [English](../../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 **Overall status: ACTIVE / NOT_READY.** The 5.0 native Rust+Go runtime objective
 is not complete; this document records exactly what is qualified, where the
 evidence is, and what remains. Do not treat any route slice below as completion

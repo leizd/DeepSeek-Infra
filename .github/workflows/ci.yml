@@ -1303,7 +1303,11 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install offline compatibility oracle dependencies
-        run: python -m pip install -r requirements.txt -r requirements-ocr.txt
+        # The Rust gateway tests spawn the real Python application through
+        # starlette's TestClient, which needs httpx2. That pin lives in
+        # requirements-dev.txt, so this job must install it too; without it every
+        # oracle-backed test fails with "requires the httpx2 package".
+        run: python -m pip install -r requirements.txt -r requirements-dev.txt -r requirements-ocr.txt
       - uses: dtolnay/rust-toolchain@1.85.0
         with:
           components: rustfmt, clippy
