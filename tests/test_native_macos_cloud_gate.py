@@ -23,7 +23,7 @@ def test_optional_macos_probe_preserves_the_complete_original_windows_job() -> N
     assert len(added) == 1
     # Bind the approved additional gate separately; preserve the original job's frozen hash.
     extra = json.dumps(added[0], sort_keys=True, separators=(",", ":")).encode()
-    assert hashlib.sha256(extra).hexdigest() == "b4e6005cfacbcd09c3d8c3e60a9e62b5f98620f0d8fc66a91fdeed8972ba3c25"  # pragma: allowlist secret
+    assert hashlib.sha256(extra).hexdigest() == "4a949dbf57f9f0eec197b2d7a4b0a570642d37009e3fe9853f1281fd7c3596f9"  # pragma: allowlist secret
     prebuild = [step for step in windows_job["steps"]
                 if step.get("name") == "Build Windows media test binaries for all retained caller graphs"]
     assert len(prebuild) == 1
