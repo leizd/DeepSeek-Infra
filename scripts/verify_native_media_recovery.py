@@ -201,11 +201,14 @@ def original_creation_fixture(profile: Path, diagnostic: Path, media: list[dict[
 
 def proc_state(pid: int) -> str | None:
     try:
-        raw = Path(f"/proc/{pid}/stat").read_text()
+        # Read bytes for the same reason process_identity does: a comm field can
+        # contain arbitrary bytes, and a text decode raises UnicodeDecodeError on
+        # a legal-but-undecodable name instead of answering the process state.
+        raw = Path(f"/proc/{pid}/stat").read_bytes()
     except (FileNotFoundError, ProcessLookupError):
         # procfs may return ESRCH when the task exits between open and read.
         return None
-    return raw[raw.rfind(")") + 2:].split()[0]
+    return raw[raw.rfind(b")") + 2:].split()[0].decode("ascii")
 
 
 def trace_command(binary: Path, library: Path, root: Path, log: Path, *, delay_seconds: int = 20) -> list[str]:

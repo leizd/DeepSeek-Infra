@@ -1650,7 +1650,10 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install offline compatibility oracle dependencies
-        run: python -m pip install -r requirements.txt -r requirements-ocr.txt
+        # Same reason as the `rust` job: the gateway tests spawn the real Python
+        # application through starlette's TestClient, and httpx2 lives in
+        # requirements-dev.txt.
+        run: python -m pip install -r requirements.txt -r requirements-dev.txt -r requirements-ocr.txt
       - uses: dtolnay/rust-toolchain@1.85.0
         with:
           components: llvm-tools-preview
