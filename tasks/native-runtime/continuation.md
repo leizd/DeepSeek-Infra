@@ -2,10 +2,18 @@
 
 Whole product Rust/Go migration remains ACTIVE / **NOT_READY**.
 
-**State: 33 of 37 `ci.yml` jobs pass.** The failures are Go coverage, an
-external-artifact 404 in `native-protocol`, and the two gates that inherit Go
-coverage. `rust`, `rust-coverage`, `docs` and all three `test (3.10/3.11/3.12)`
-jobs — the six this workstream fixed — are green.
+**State: 32 of 37 `ci.yml` jobs pass, 4 fail, 1 skipped** (run `42769006545`). An
+earlier note in this file said 33 because several jobs were still in progress when
+it was written; the settled tally is corrected here. `rust`, `rust-coverage`,
+`docs` and all three `test (3.10/3.11/3.12)` jobs — the six this workstream fixed
+— are green. The four failures are Go coverage, a transient 404, and the two gates
+that inherit Go coverage.
+
+`native-protocol` failed fetching the checksum-pinned
+`protoc-gen-grpc-java` 1.84.0 artifact from `repo.maven.apache.org` with a 404. It
+is infrastructure, not code: the identical job passed on runs `42760704962`,
+`42763526111` and `42766424743` at an earlier commit on this branch, and the URL
+answers HTTP 200 today. A re-dispatch should clear it.
 
 **Go coverage was 94.625934% (16974/17938) at the start of this work and is
 94.893522% (17022/17938) now. The floor is 95.0%, which needs 17042, so 20
