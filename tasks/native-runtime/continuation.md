@@ -1,3 +1,36 @@
+<!-- native checkpoint 2026-11-11 green reproduced at the evidence commit -->
+
+Whole product Rust/Go migration remains ACTIVE / **NOT_READY**.
+
+The fully green state reproduces: `ci.yml` run
+[42962854437](https://github.com/leizd/DeepSeek-Infra/actions/runs/42962854437) at
+`9f18b772` — the commit that carries the gate evidence — is **37/37 success, zero
+failures, zero skips**. So 37/37 is not a one-off on an earlier revision; it holds
+at the revision where the evidence lives.
+
+**Where the four requested items actually stand.** Reported item by item rather than
+as one verdict, because two of them are done and two are not:
+
+| item | state |
+| --- | --- |
+| `production_artifact_zero_python` | **PASS** — the default native image, started from a fresh volume, where a container-side check proved no `python`/`python3`/`node`/`nodejs` on `PATH`; 18 skills, 4 packs, 4 golden cases, signed origin retained across restart with the fencing token advancing 1 -> 2, both negative cases detected |
+| workload-measured zero invariants | **0 of 7** — each needs positive `samples` and `workload_operations`; a CI pass cannot produce them and the validator refuses a vacuous zero |
+| provider and fault evidence | **not produced** — `native_two_fleet_four_minio`, `go_controller_sigkill`, `rust_worker_sigkill`, `rust_receiver_sigkill` all outstanding |
+| control-domain promotion | **not done** — `current_production_authority` is still `python` |
+
+The last three are not unfinished code. They need a live Python service that can be
+genuinely stopped and fenced, real S3/MinIO providers, and process-kill injection
+against running processes. None of that can be manufactured on this host, and this
+workstream will not mark them complete by writing a file that asserts them.
+
+What *is* real now, and did not exist before this workstream: the default native
+image is a packaged artifact with no Python on `PATH`, verified from inside the
+running container rather than inferred; three release gates carry exact-head,
+hash-verified evidence with the artifacts copied into `release/native-runtime-evidence-5.0/`
+so any reviewer can re-derive the digests; and the transition tooling
+(`control-domain-promotion`, `control-transfer-verify`) has already driven a full
+promotion and rollback on isolated copies with the real Python-sourced fixtures.
+
 <!-- native checkpoint 2026-11-11 three release gates now have hash-verified evidence -->
 
 Whole product Rust/Go migration remains ACTIVE / **NOT_READY**, but three of the
