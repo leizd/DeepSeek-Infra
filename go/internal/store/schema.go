@@ -228,10 +228,10 @@ var transitions = map[string]map[string][]string{
 	},
 	"target": {
 		"":         {"ACTIVE"},
-		"ACTIVE":   {"DRAINING", "DISABLED", TombstoneState},
-		"DRAINING": {"DRAINED", TombstoneState},
-		"DRAINED":  {TombstoneState},
-		"DISABLED": {TombstoneState},
+		"ACTIVE":   {"ACTIVE", "DRAINING", "DISABLED", TombstoneState},
+		"DRAINING": {"ACTIVE", "DRAINED", TombstoneState},
+		"DRAINED":  {"ACTIVE", TombstoneState},
+		"DISABLED": {"ACTIVE", TombstoneState},
 	},
 	"scheduler_run": {
 		"":       {"queued"},

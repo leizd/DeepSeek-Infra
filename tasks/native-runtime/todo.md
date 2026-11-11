@@ -3727,3 +3727,9 @@ No native/browser assertion, report requirement or original floor is removed.
   internal monotonic history and Rust-owned provider effects, unknown-outcome
   recovery and explicit ownership handback. Do not treat a tombstone-only slice as
   lifecycle completion.
+
+- [ ] Qualify native target activation and the shared target metadata transaction
+  against its original public document/generation/body semantics, actual TCP
+  concurrency, original-result replay after later mutation/deletion and restart,
+  SQLite interruptions, receipt bindings and writer-expiry rollback. Retain every
+  prior deletion regression and original full coverage/Evidence/platform gate.
