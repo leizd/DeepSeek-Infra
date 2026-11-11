@@ -1,3 +1,50 @@
+<!-- native checkpoint 2026-11-11 full ci.yml green: 37/37, Go coverage 95.01% -->
+
+Whole product Rust/Go migration remains ACTIVE / **NOT_READY**, but the complete
+verification gate now passes for the first time in this workstream.
+
+`ci.yml` run
+[42786170148](https://github.com/leizd/DeepSeek-Infra/actions/runs/42786170148) at
+`7c0713cc` (tree `abb4739a`, branch
+`codex/native-s0-store-ownership-20261109`) completed **success: 37 jobs, 0
+failures, 0 skipped**. The local tree hashes to the same value, so the green run
+tested exactly this content.
+
+Go statement coverage is **95.010592% (17043/17938)** against the 95.0% floor.
+
+**How the last 21 statements were closed: a fault-injection harness, not more
+shaped-input tests.** The classification recorded earlier said the remainder was the
+`return err` arms of the migration ladder rather than untested features, and that
+turned out to be exactly right. Each rung begins by verifying the schema it migrates
+*from*, so setting the store's `schema` field to a version the database is not
+actually at makes that verification fail and runs the rung's error arm. That field
+is the ladder's own dispatch key and the migration suites already write it directly,
+so the harness needed no new seam.
+
+Two facts made it work, and both cost a wrong first attempt:
+
+1. **A sample of start versions is not enough.** Four starts covered only 3 of the
+10 arms, because each run failed on the *first* mismatched precondition and never
+reached the later rungs. Every version from 1 to `CurrentSchema-1` has to be
+exercised separately.
+2. **`CurrentSchema` has no rung.** A rung named after a version carries a store
+*from* that version to the next, so `migrateToV20Tx` moves SchemaV19 to
+CurrentSchema (20). Including version 20 in the sweep fails the "must be reached"
+assertion for the right reason.
+
+Also worth keeping: a migrated store **cannot** be replayed from zero. The first
+attempt at these tests tried to rewind and re-run the whole ladder, which fails on
+`table policies already exists` because every rung runs DDL against its predecessor's
+objects. The tests now cover the ladder's own responsibilities — refusal boundaries,
+per-version dispatch, and the closing schema verification — instead of pretending it
+can be replayed.
+
+**Coverage ledger for this workstream:** 16974 -> 17043 statements (+69), through
+five shaped-input suites and finally the fault harness. The four defects found by the
+first full `ci.yml` run (missing `httpx2` in two Rust jobs, two stale pinned hashes,
+a `read_text`/`read_bytes` mismatch in the procfs readers, and static platform
+imports that broke `mypy`) remain fixed.
+
 <!-- native checkpoint 2026-11-10 Go coverage narrowed, floor not yet reached -->
 
 Whole product Rust/Go migration remains ACTIVE / **NOT_READY**.
