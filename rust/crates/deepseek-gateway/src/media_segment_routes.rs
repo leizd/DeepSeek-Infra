@@ -12,7 +12,6 @@
 //! their native write paths are implemented. These readers never create stores.
 
 use std::collections::BTreeMap;
-use std::path::Path;
 
 use axum::body::Bytes;
 use axum::extract::{OriginalUri, Path as AxumPath, Query};
@@ -21,30 +20,14 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::any;
 use axum::{Json, Router};
 use deepseek_policy::app_error::{AppError, codes};
-use deepseek_policy::core_utils::{python_float_opt, python_int_opt, python_truthy, text_or_empty};
-use deepseek_policy::entropy::SystemEntropy;
-use deepseek_policy::media_records::retained::MediaRecord;
+use deepseek_policy::media_records::{retained::MediaRecord, write_segment_response};
 #[cfg(test)]
 use deepseek_policy::media_schema::normalize_media_record;
-use deepseek_policy::media_schema::{
-    MAX_SEGMENT_TEXT_CHARS, declared_media_type, media_status, normalize_media_path,
-    python_truthy_opt,
-};
+use deepseek_policy::media_schema::{declared_media_type, media_status};
 #[cfg(test)]
 use deepseek_policy::python_json::value_str;
-use deepseek_policy::workspace_schema::{
-    new_id, redact_sensitive_text, validate_project_id, validate_workspace_id,
-};
-use serde_json::{Map, Value, json};
-
-const SEGMENT_TYPES: [&str; 6] = [
-    "ocr_text",
-    "caption",
-    "transcript",
-    "frame",
-    "page_text",
-    "webpage_text",
-];
+use deepseek_policy::workspace_schema::{validate_project_id, validate_workspace_id};
+use serde_json::{Value, json};
 
 #[path = "media_read_spool.rs"]
 pub(crate) mod media_read_spool;
@@ -99,7 +82,7 @@ async fn dispatch(
 }
 
 async fn segments_response(method: Method, media_id: String) -> Response {
-    read_response(method, move || read_segments(&media_id).map(Json)).await
+    read_response(method, move || read_segments(&media_id)).await
 }
 
 async fn read_response<T: IntoResponse + Send + 'static>(
@@ -159,47 +142,14 @@ fn read_media_item(media_id: &str) -> Result<media_read_spool::CompletedJson, Ap
     media_read_spool::CompletedJson::item(&lookup_media_item(media_id)?)
 }
 
-fn read_segments(media_id: &str) -> Result<Value, AppError> {
+fn read_segments(media_id: &str) -> Result<media_read_spool::CompletedJson, AppError> {
     let safe_id = validate_workspace_id(media_id, "media id")?;
     // The original route calls library.get_media before reading any segments.
     lookup_media_item(&safe_id)?;
-    Ok(json!({"ok": true, "segments": load_segments(&safe_id)?}))
-}
-
-fn load_segments(safe_id: &str) -> Result<Vec<Value>, AppError> {
-    let Some(value) = read_optional_json(&segments_path(safe_id))? else {
-        return Ok(Vec::new());
-    };
-    let Some(items) = value.get("segments").and_then(Value::as_array) else {
-        return Ok(Vec::new());
-    };
-    let mut segments = Vec::new();
-    for (index, item) in items.iter().enumerate() {
-        if !item.is_object() {
-            continue;
-        }
-        if let Some(segment) = normalize_segment(item, safe_id, index)? {
-            segments.push(segment);
-        }
-    }
-    Ok(segments)
-}
-
-/// `exists` then read. A missing path, `OSError` (including a directory), and
-/// invalid JSON are the oracle's empty default. Invalid UTF-8 is not caught.
-fn read_optional_json(path: &Path) -> Result<Option<Value>, AppError> {
-    if !path.exists() {
-        return Ok(None);
-    }
-    let bytes = match std::fs::read(path) {
-        Ok(bytes) => bytes,
-        Err(_) => return Ok(None),
-    };
-    let text = std::str::from_utf8(&bytes).map_err(|_| server_error())?;
-    match serde_json::from_str(text) {
-        Ok(value) => Ok(Some(value)),
-        Err(_) => Ok(None),
-    }
+    media_read_spool::CompletedJson::build(|output| {
+        let source = std::fs::File::open(segments_path(&safe_id)).ok();
+        write_segment_response(source, &safe_id, output)
+    })
 }
 
 fn library_path() -> std::path::PathBuf {
@@ -213,126 +163,6 @@ fn segments_path(media_id: &str) -> std::path::PathBuf {
         .join(".media")
         .join("segments")
         .join(format!("{media_id}.json"))
-}
-
-/// The raise points of `normalize_media_record`, in order. The public record
-/// is discarded by the route, so only acceptance is reproduced.
-/// `Ok(None)` is the oracle's `except AppError: continue`. `Err` is an
-/// uncaught `ValueError`/`TypeError` from `int()`, which fails the request.
-fn normalize_segment(
-    value: &Value,
-    media_id: &str,
-    fallback_index: usize,
-) -> Result<Option<Value>, AppError> {
-    let segment_type = str_or_default(value.get("type"), "page_text");
-    let segment_type = segment_type.trim().to_lowercase();
-    if !SEGMENT_TYPES.contains(&segment_type.as_str()) {
-        return Ok(None);
-    }
-    let raw_id = text_or_empty(value.get("segmentId"));
-    let raw_id = raw_id.trim();
-    let segment_id = if raw_id.is_empty() {
-        new_id("seg", &SystemEntropy).map_err(|_| server_error())?
-    } else {
-        match validate_workspace_id(raw_id, "segment id") {
-            Ok(segment_id) => segment_id,
-            Err(_) => return Ok(None),
-        }
-    };
-    let text: String = redact_sensitive_text(&text_or_empty(value.get("text")))
-        .chars()
-        .take(MAX_SEGMENT_TEXT_CHARS)
-        .collect();
-    let index = match value.get("index") {
-        None | Some(Value::Null) => i64::try_from(fallback_index).unwrap_or(i64::MAX),
-        Some(raw) => python_int_opt(Some(raw)).ok_or_else(server_error)?,
-    };
-    let mut segment = Map::new();
-    segment.insert("segmentId".to_string(), json!(segment_id));
-    segment.insert("mediaId".to_string(), json!(media_id));
-    segment.insert("type".to_string(), json!(segment_type));
-    segment.insert("text".to_string(), json!(text));
-    segment.insert(
-        "confidence".to_string(),
-        json!(normalize_confidence(value.get("confidence"))),
-    );
-    segment.insert("index".to_string(), json!(index));
-    if let Some(page) = value.get("page").filter(|page| !page.is_null()) {
-        segment.insert("page".to_string(), json!(required_page(page)?));
-    }
-    let time_range = normalize_time_range(value.get("timeRange"));
-    if !time_range.is_empty() {
-        segment.insert("timeRange".to_string(), json!(time_range));
-    }
-    match normalize_media_path(value.get("framePath")) {
-        Ok(path) if !path.is_empty() => {
-            segment.insert("framePath".to_string(), json!(path));
-        }
-        Ok(_) => {}
-        Err(_) => return Ok(None),
-    }
-    if let Some(citation) = value
-        .get("citation")
-        .filter(|citation| citation.is_object())
-    {
-        segment.insert(
-            "citation".to_string(),
-            deepseek_policy::workspace_schema::normalize_source_ref(citation),
-        );
-    }
-    Ok(Some(Value::Object(segment)))
-}
-
-fn normalize_confidence(value: Option<&Value>) -> f64 {
-    match value {
-        None | Some(Value::Null) => 1.0,
-        Some(Value::String(text)) if text.is_empty() => 1.0,
-        Some(other) => match python_float_opt(other) {
-            Some(number) if number.is_finite() => round_digits(number.clamp(0.0, 1.0), 4),
-            _ => 1.0,
-        },
-    }
-}
-
-fn normalize_time_range(value: Option<&Value>) -> Vec<f64> {
-    let Some(Value::Array(items)) = value else {
-        return Vec::new();
-    };
-    if items.len() < 2 {
-        return Vec::new();
-    }
-    let (Some(start), Some(end)) = (python_float_opt(&items[0]), python_float_opt(&items[1]))
-    else {
-        return Vec::new();
-    };
-    if !start.is_finite() || !end.is_finite() {
-        return Vec::new();
-    }
-    let start = start.max(0.0);
-    let end = end.max(start);
-    vec![round_digits(start, 3), round_digits(end, 3)]
-}
-
-fn required_page(value: &Value) -> Result<i64, AppError> {
-    let parsed = if python_truthy(value) {
-        python_int_opt(Some(value)).ok_or_else(server_error)?
-    } else {
-        1
-    };
-    Ok(parsed.max(1))
-}
-
-fn round_digits(value: f64, digits: i32) -> f64 {
-    let factor = 10f64.powi(digits);
-    (value * factor).round() / factor
-}
-
-fn str_or_default(value: Option<&Value>, default: &str) -> String {
-    if python_truthy_opt(value) {
-        text_or_empty(value)
-    } else {
-        default.to_string()
-    }
 }
 
 /// `library.list_media()` with no filters: normalise each row, skip `AppError`,

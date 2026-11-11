@@ -34,6 +34,9 @@ mod retained_records;
 #[path = "media_retained_schema.rs"]
 mod retained_schema;
 pub use retained_records::RetainedRecords;
+#[path = "media_retained_segments.rs"]
+mod retained_segments;
+pub use retained_segments::write_segment_response;
 
 const BUFFER: usize = 64 * 1024;
 
@@ -319,10 +322,17 @@ impl Records {
         &self,
         mut visit: impl FnMut(&[u8]) -> Result<(), VisitError<E>>,
     ) -> Result<(), VisitError<E>> {
+        self.visit_indexed_bytes(|_, bytes| visit(bytes))
+    }
+
+    fn visit_indexed_bytes<E>(
+        &self,
+        mut visit: impl FnMut(i64, &[u8]) -> Result<(), VisitError<E>>,
+    ) -> Result<(), VisitError<E>> {
         let storage = |_: rusqlite::Error| VisitError::Storage(invalid());
         let mut statement = self
             .connection
-            .prepare("SELECT record_offset,record_bytes,digest,durable_unicode FROM records ORDER BY record_index")
+            .prepare("SELECT record_offset,record_bytes,digest,durable_unicode,record_index FROM records ORDER BY record_index")
             .map_err(storage)?;
         let mut rows = statement.query([]).map_err(storage)?;
         while let Some(row) = rows.next().map_err(storage)? {
@@ -330,7 +340,7 @@ impl Records {
             let bytes = self
                 .read_record_bytes(&record)
                 .map_err(VisitError::Storage)?;
-            visit(&bytes)?;
+            visit(row.get(4).map_err(storage)?, &bytes)?;
         }
         Ok(())
     }

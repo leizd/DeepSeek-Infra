@@ -17,7 +17,7 @@ enum Frame {
 impl<R: Read> Input<R> {
     fn decoded_string(&mut self) -> Result<String, Error> {
         let mut bytes = Vec::new();
-        self.string_with(false, |part| {
+        self.string_with(false, &[], |part| {
             bytes.extend_from_slice(part);
             Ok(())
         })?;

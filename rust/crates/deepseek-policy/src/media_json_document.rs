@@ -151,17 +151,7 @@ impl<R: Read> Read for Input<R> {
     }
 }
 
-#[derive(Clone, Copy, PartialEq)]
-enum Key {
-    Media,
-    Publication,
-    Field(&'static str),
-    Other,
-}
-
-const KEYS: [&str; 13] = [
-    "media",
-    "nativePublication",
+const MEDIA_FIELDS: [&str; 11] = [
     "mediaId",
     "projectId",
     "type",
@@ -174,23 +164,53 @@ const KEYS: [&str; 13] = [
     "updatedAt",
     "metadata",
 ];
+const SEGMENT_FIELDS: [&str; 9] = [
+    "segmentId",
+    "type",
+    "text",
+    "confidence",
+    "index",
+    "page",
+    "timeRange",
+    "framePath",
+    "citation",
+];
+
+struct Collection {
+    root_keys: &'static [&'static str],
+    fields: &'static [&'static str],
+    retain_ordinals: bool,
+}
+
+const MEDIA: Collection = Collection {
+    root_keys: &["media", "nativePublication"],
+    fields: &MEDIA_FIELDS,
+    retain_ordinals: false,
+};
+const SEGMENTS: Collection = Collection {
+    root_keys: &["segments"],
+    fields: &SEGMENT_FIELDS,
+    retain_ordinals: true,
+};
 
 struct KeyMatch {
+    names: &'static [&'static str],
     length: usize,
-    candidates: u16,
+    candidates: u32,
 }
 impl KeyMatch {
-    fn new() -> Self {
+    fn new(names: &'static [&'static str]) -> Self {
         Self {
+            names,
             length: 0,
-            candidates: (1 << KEYS.len()) - 1,
+            candidates: (1 << names.len()) - 1,
         }
     }
     fn character(&mut self, value: u32) {
         if self.candidates == 0 {
             return;
         }
-        for (index, name) in KEYS.iter().enumerate() {
+        for (index, name) in self.names.iter().enumerate() {
             if name
                 .as_bytes()
                 .get(self.length)
@@ -201,17 +221,13 @@ impl KeyMatch {
         }
         self.length += 1;
     }
-    fn result(self) -> Key {
-        for (index, name) in KEYS.iter().enumerate() {
+    fn result(self) -> Option<&'static str> {
+        for (index, name) in self.names.iter().enumerate() {
             if self.candidates & (1 << index) != 0 && self.length == name.len() {
-                return match index {
-                    0 => Key::Media,
-                    1 => Key::Publication,
-                    _ => Key::Field(name),
-                };
+                return Some(*name);
             }
         }
-        Key::Other
+        None
     }
 }
 
@@ -230,17 +246,22 @@ impl<R: Read> Input<R> {
         Ok(value)
     }
 
-    fn string(&mut self) -> Result<Key, Error> {
-        self.string_with(true, |_| Ok(()))
+    fn string(&mut self) -> Result<(), Error> {
+        self.key(&[]).map(|_| ())
+    }
+
+    fn key(&mut self, names: &'static [&'static str]) -> Result<Option<&'static str>, Error> {
+        self.string_with(true, names, |_| Ok(()))
     }
 
     fn string_with(
         &mut self,
         discarded: bool,
+        names: &'static [&'static str],
         mut accept: impl FnMut(&[u8]) -> Result<(), Error>,
-    ) -> Result<Key, Error> {
+    ) -> Result<Option<&'static str>, Error> {
         self.expect(b'"')?;
-        let mut key = KeyMatch::new();
+        let mut key = KeyMatch::new(names);
         loop {
             let scalar = match self.next_byte()? {
                 Some(b'"') => return Ok(key.result()),
@@ -444,12 +465,12 @@ pub(super) fn decode_raw_record(bytes: &[u8]) -> Result<Value, Error> {
 struct Parser<R> {
     input: Input<R>,
     records: RawRecords,
+    collection: Collection,
     capture_publication: bool,
     publication: Option<Value>,
 }
 impl<R: Read> Parser<R> {
-    /// The original normalizer reads exactly these 11 fields. Unknown values are
-    /// fully validated and discarded before materialization, including surrogates.
+    /// Unknown fields are validated and discarded before materialization.
     fn record(&mut self) -> Result<(), Error> {
         self.input.expect(b'{')?;
         if self.input.capture.is_some() {
@@ -463,10 +484,10 @@ impl<R: Read> Parser<R> {
         } else {
             loop {
                 self.input.space()?;
-                let key = self.input.string()?;
+                let key = self.input.key(self.collection.fields)?;
                 self.input.space()?;
                 self.input.expect(b':')?;
-                if let Key::Field(name) = key {
+                if let Some(name) = key {
                     if retained {
                         self.input.capture_bytes(b",")?;
                     }
@@ -500,7 +521,7 @@ impl<R: Read> Parser<R> {
             .ok_or_else(|| Error::Storage(super::invalid()))?;
         self.records.finish_capture(capture).map_err(Error::Storage)
     }
-    fn media(&mut self) -> Result<(), Error> {
+    fn records(&mut self) -> Result<(), Error> {
         self.records.clear().map_err(Error::Storage)?;
         if self.input.space()? != Some(b'[') {
             return self.input.skip();
@@ -515,6 +536,9 @@ impl<R: Read> Parser<R> {
                 self.record()?;
             } else {
                 self.input.skip()?;
+                if self.collection.retain_ordinals {
+                    self.records.skip_ordinal().map_err(Error::Storage)?;
+                }
             }
             match self.input.space()? {
                 Some(b']') => {
@@ -538,12 +562,12 @@ impl<R: Read> Parser<R> {
             } else {
                 loop {
                     self.input.space()?;
-                    let key = self.input.string()?;
+                    let key = self.input.key(self.collection.root_keys)?;
                     self.input.space()?;
                     self.input.expect(b':')?;
                     match key {
-                        Key::Media => self.media()?,
-                        Key::Publication if self.capture_publication => {
+                        Some("media" | "segments") => self.records()?,
+                        Some("nativePublication") if self.capture_publication => {
                             self.publication = Some(self.input.value(false)?)
                         }
                         _ => self.input.skip()?,
@@ -575,7 +599,7 @@ pub(super) fn read(
     records: RawRecords,
     capture_publication: bool,
 ) -> Result<(RawRecords, Option<Value>), Error> {
-    read_mode(reader, records, capture_publication)
+    read_mode(reader, records, capture_publication, MEDIA)
 }
 
 pub(super) fn read_value(
@@ -583,13 +607,18 @@ pub(super) fn read_value(
     records: RawRecords,
     capture_publication: bool,
 ) -> Result<(RawRecords, Option<Value>), Error> {
-    read_mode(reader, records, capture_publication)
+    read_mode(reader, records, capture_publication, MEDIA)
+}
+
+pub(super) fn read_segments(reader: impl Read, records: RawRecords) -> Result<RawRecords, Error> {
+    read_mode(reader, records, false, SEGMENTS).map(|(records, _)| records)
 }
 
 fn read_mode(
     reader: impl Read,
     records: RawRecords,
     capture_publication: bool,
+    collection: Collection,
 ) -> Result<(RawRecords, Option<Value>), Error> {
     let state = Rc::new(RefCell::new(InputState::default()));
     let source = Probe {
@@ -603,6 +632,7 @@ fn read_mode(
             capture_value: false,
         },
         records,
+        collection,
         capture_publication,
         publication: None,
     };

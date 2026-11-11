@@ -1,3 +1,30 @@
+<!-- native checkpoint 2026-11-11 retained media segment reader -->
+
+Whole product migration remains ACTIVE / NOT_READY. Source 5548113da5 has
+both standalone Rust jobs, 115 scoped Go race tests and Windows verification
+passed. Its original/native malformed JSON runs each issued 73 TCP requests,
+and all ten lossless PATCH cases passed with signed results and restart.
+Complete CI and controlled Android for that exact source are now running.
+
+The original authenticated segment oracle has 24 cases and 48 requests on
+individual and preseeded batch profiles. It retains arbitrary integer/page
+values, source-array fallback positions, duplicate winners, nonfinite clamp
+semantics, ties-to-even rounding and text redaction before strict encoding.
+
+The segment route now completes document validation before normalization.
+It spools known fields, preserves original array positions, then normalizes
+one record at a time through the retained value model. Completed response
+bytes stay private until source reads and strict encoding succeed. Source
+I/O or malformed JSON has the original empty fallback; invalid UTF-8 and
+non-encodable selected output retain their server errors. The new native
+socket mode uses an offline batch seed and two launcher generations, checks
+GET/HEAD and auth denials, and hashes every retained source file.
+
+The segment production code still requires exact-source Rust, coverage,
+Windows and authenticated native HTTP evidence. Original release floors,
+full server/desktop/Android/background scope, provider/OCR, authority and
+recovery and the original MCP test engine requirement remain required.
+
 <!-- native checkpoint 2026-11-06 media PATCH response order and JSON errors -->
 
 Whole product migration remains ACTIVE / NOT_READY. Exact source d7d342395

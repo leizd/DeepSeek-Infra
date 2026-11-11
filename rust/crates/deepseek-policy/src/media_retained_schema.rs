@@ -7,7 +7,7 @@ pub(super) fn normalize(input: &Document) -> Result<MediaRecord, AppError> {
     normalize_with_clock(input, media_schema::utc_now_z)
 }
 
-fn field_text(input: &Document, name: &str) -> Text {
+pub(super) fn field_text(input: &Document, name: &str) -> Text {
     input
         .field(input.root, name)
         .filter(|id| input.truthy(*id))
@@ -62,7 +62,7 @@ fn title_text(text: Text) -> Text {
     }
 }
 
-fn path_text(text: Text) -> Result<Text, AppError> {
+pub(super) fn path_text(text: Text) -> Result<Text, AppError> {
     let mut text = text.trimmed();
     for unit in &mut text.0 {
         if *unit == 92 {
@@ -198,6 +198,10 @@ pub(super) fn normalize_with_clock(
 enum Kind {
     Metadata,
     Source,
+}
+
+pub(super) fn source_ref(input: &Document, root: usize, output: &mut Document) -> usize {
+    normalize_mapping(input, Some(root), output, Kind::Source)
 }
 
 impl Kind {

@@ -100,6 +100,11 @@ impl RawRecords {
         self.inner.clear()
     }
 
+    pub(super) fn skip_ordinal(&mut self) -> Result<(), Status> {
+        self.inner.next = self.inner.next.checked_add(1).ok_or_else(invalid)?;
+        Ok(())
+    }
+
     /// There is deliberately no raw emission, append, replacement or retention API.
     pub fn visit_source<E>(
         &self,
@@ -118,10 +123,17 @@ impl RawRecords {
         &self,
         mut visit: impl FnMut(super::retained::Document) -> Result<(), E>,
     ) -> Result<(), VisitError<E>> {
-        self.inner.visit_bytes(|bytes| {
+        self.visit_indexed_retained(|_, document| visit(document))
+    }
+
+    pub(super) fn visit_indexed_retained<E>(
+        &self,
+        mut visit: impl FnMut(i64, super::retained::Document) -> Result<(), E>,
+    ) -> Result<(), VisitError<E>> {
+        self.inner.visit_indexed_bytes(|index, bytes| {
             let value = super::retained::Document::decode(bytes)
                 .map_err(|_| VisitError::Storage(invalid()))?;
-            visit(value).map_err(VisitError::Visitor)
+            visit(index, value).map_err(VisitError::Visitor)
         })
     }
 

@@ -6,6 +6,7 @@ stopped. This probe does not qualify media writes, migration or a media GUI.
 from __future__ import annotations
 
 import argparse
+import base64
 from collections.abc import Callable, Iterator
 from contextlib import closing, contextmanager
 import hashlib
@@ -29,6 +30,8 @@ from native_json_comparison import exact_json_values_equal, json_values_equal, l
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "tests/fixtures/native_media_library_read_v1.json"
+SEGMENT_FIXTURE = ROOT / "tests/fixtures/native_retained_media_segments_v1.json"
+SEGMENT_FIXTURE_SHA256 = "5c31b1d41b32781e4f9d40f0430673a434c4c3e18994881aec1d0465aa7ee0fc"
 LIMIT = 2 * 1024**2
 ORACLE = r'''
 import json, sys
@@ -52,6 +55,29 @@ for case in json.load(sys.stdin):
             "body": {"error": str(error), "code": error.code.value}})
 print(json.dumps(results))
 '''
+SEGMENT_HTTP_ORACLE = r'''
+import json, sys
+from pathlib import Path
+from deepseek_infra.core.config import settings
+from tests.test_web_media_routes import _running_server, _request, _auth_headers
+
+assert sys.version_info[:2] == (3, 12) and settings.auth.enabled
+profile = Path(sys.argv[1]).resolve()
+assert settings.root == profile
+def snapshot():
+    return {str(p.relative_to(profile)): p.read_bytes() for p in (profile / ".media").rglob("*") if p.is_file()}
+cases = json.load(sys.stdin)
+before = snapshot()
+with _running_server() as server:
+    for case in cases:
+        status, raw, _ = _request(server, "GET", case["uri"], headers=_auth_headers())
+        assert status == case["status"] and json.loads(raw) == json.loads(case["bodyJson"]), (case["name"], status, raw)
+        status, raw, _ = _request(server, "GET", case["uri"])
+        assert status == 401 and json.loads(raw) == {"error": "Auth required", "code": "unauthorized"}
+        assert snapshot() == before
+print(json.dumps({"status": "PASS", "actualOriginalTCP": True, "cases": len(cases), "requests": 2 * len(cases),
+                  "python": ".".join(map(str, sys.version_info[:3]))}))
+'''
 
 
 class ProbeFailure(RuntimeError):
@@ -73,6 +99,47 @@ def media_snapshot(profile: Path) -> dict[str, str] | None:
         result[path.relative_to(directory).as_posix()] = (
             hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else "directory")
     return result
+
+
+def seed_segment_fixture(profile: Path, fixture: dict[str, Any]) -> dict[str, str]:
+    directory = profile / ".media"
+    require(not directory.exists(), "SEGMENT_FIXTURE_PROFILE_ALREADY_CONTAINS_MEDIA")
+    (directory / "segments").mkdir(parents=True)
+    library = base64.b64decode(fixture["libraryBase64"], validate=True)
+    require(hashlib.sha256(library).hexdigest() == fixture["librarySha256"], "SEGMENT_FIXTURE_LIBRARY_DIGEST_DIFFERS")
+    (directory / "library.json").write_bytes(library)
+    for case in fixture["cases"]:
+        media_id = case["mediaId"]
+        require(isinstance(media_id, str) and len(media_id) <= 128 and media_id.startswith("media_segments_")
+                and media_id.removeprefix("media_segments_").isdigit(), "SEGMENT_FIXTURE_MEDIA_ID_INVALID")
+        require(case["uri"] == "/api/media/" + media_id + "/segments", "SEGMENT_FIXTURE_URI_DIFFERS")
+        if case["rawBase64"] is not None:
+            raw = base64.b64decode(case["rawBase64"], validate=True)
+            require(hashlib.sha256(raw).hexdigest() == case["rawSha256"], "SEGMENT_FIXTURE_RECORD_DIGEST_DIFFERS")
+            (directory / "segments" / (media_id + ".json")).write_bytes(raw)
+    snapshot = media_snapshot(profile)
+    if snapshot is None or len(snapshot) != 25:
+        raise ProbeFailure("SEGMENT_FIXTURE_FILE_COUNT_DIFFERS")
+    return snapshot
+
+
+def original_segment_http(profile: Path, fixture: dict[str, Any], out: Path) -> dict[str, Any]:
+    before = seed_segment_fixture(profile, fixture)
+    environment = {key: value for key, value in os.environ.items() if key in {
+        "PATH", "HOME", "LANG", "LC_ALL", "TZ", "TMPDIR", "SYSTEMROOT", "WINDIR", "TEMP", "TMP"}}
+    environment.update(DEEPSEEK_INFRA_ROOT=str(profile), DEEPSEEK_RUNTIME_MODE="python_authoritative",
+                       AUTH_DISABLED="0", PYTHONDONTWRITEBYTECODE="1", PYTHONUTF8="1")
+    result = subprocess.run([sys.executable, "-B", "-c", SEGMENT_HTTP_ORACLE, str(profile)], cwd=ROOT,
+        env=environment, input=json.dumps(fixture["cases"]).encode(), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        timeout=120, check=False)
+    require(len(result.stdout) <= LIMIT and len(result.stderr) <= LIMIT, "ORIGINAL_SEGMENT_ORACLE_OUTPUT_EXCEEDED_BOUND")
+    (out / "original-segment-http.log").write_bytes(result.stderr)
+    require(result.returncode == 0, "ORIGINAL_SEGMENT_HTTP_REPLAY_FAILED")
+    observed = json.loads(result.stdout.splitlines()[-1])
+    require(observed["status"] == "PASS" and observed["actualOriginalTCP"] and observed["cases"] == 24
+            and observed["requests"] == 48 and observed["python"].startswith("3.12."), "ORIGINAL_SEGMENT_HTTP_REPORT_DIFFERS")
+    require(media_snapshot(profile) == before, "ORIGINAL_SEGMENT_HTTP_CHANGED_SOURCE")
+    return observed
 
 
 def oracle(profile: Path, cases: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -436,6 +503,50 @@ def run_corpus(args: argparse.Namespace, report: dict[str, Any], finish_previous
             initial_writer = writer(profile)
             shutdown()
             token_bytes = (profile / ".auth-token").read_bytes()
+            if getattr(args, "retained_segments", False):
+                raw_segments = SEGMENT_FIXTURE.read_bytes()
+                require(hashlib.sha256(raw_segments).hexdigest() == SEGMENT_FIXTURE_SHA256,
+                        "RETAINED_SEGMENT_FIXTURE_CHANGED")
+                segments = json.loads(raw_segments)
+                require(segments["schemaVersion"] == 1 and segments["actualOriginalTCP"]
+                        and segments["authEnabled"] and len(segments["cases"]) == 24 and segments["requests"] == 48,
+                        "RETAINED_SEGMENT_FIXTURE_CONTRACT_DIFFERS")
+                original_tree = subprocess.check_output(
+                    ["git", "rev-parse", "HEAD:deepseek_infra"], cwd=ROOT, text=True).strip()
+                require(original_tree == segments["originalPythonPackageTree"], "ORIGINAL_SEGMENT_PYTHON_PACKAGE_CHANGED")
+                report["originalRetainedSegmentHTTP"] = original_segment_http(scratch / "segment-oracle", segments, args.out)
+                segment_snapshot = seed_segment_fixture(profile, segments)
+                report.update(offlineMediaFixtureSeeded=True, segmentFixtureSha256=SEGMENT_FIXTURE_SHA256,
+                              originalSegmentBatchSha256=segments["originalBatchOracleSha256"],
+                              originalSegmentSourceCommit=segments["originalSourceCommit"],
+                              originalSegmentSourceTree=segments["originalSourceTree"])
+                generations = [initial_writer]
+                for label in ("segments-launch", "segments-restart"):
+                    token, roles = launch(label)
+                    require((profile / ".auth-token").read_bytes() == token_bytes, "SEGMENT_RESTART_REPLACED_AUTH")
+                    observed = writer(profile)
+                    require(observed[0] == generations[-1][0] + 1 and observed[1] != generations[-1][1],
+                            "SEGMENT_RESTART_DID_NOT_ADVANCE_WRITER_FENCE")
+                    generations.append(observed)
+                    require(media_snapshot(profile) == segment_snapshot, "SEGMENT_START_CHANGED_SOURCE")
+                    for case in segments["cases"]:
+                        for method in ("GET", "HEAD"):
+                            status, denied = request(origin, case["uri"], method, None)
+                            require(status == 401, "SEGMENT_READ_AUTH_REFUSAL_DIFFERS_" + case["name"])
+                            if method == "GET":
+                                require(json_values_equal(denied, {"error": "Auth required", "code": "unauthorized"}),
+                                        "SEGMENT_READ_AUTH_ERROR_BODY_DIFFERS_" + case["name"])
+                    report[label] = {"processes": roles, "reads": check_reads(
+                        origin, token, segments["cases"], segments["cases"], profile, exact_numbers=True)}
+                    shutdown()
+                    require(media_snapshot(profile) == segment_snapshot, "SEGMENT_SHUTDOWN_CHANGED_SOURCE")
+                report.update(status="PASS", controlledRetainedSegmentReadsQualified=True,
+                              segmentCases=24, segmentGETResponsesChecked=48, segmentHEADResponsesChecked=48,
+                              segmentUnauthorizedResponsesChecked=96, retainedSegmentLaunchCount=2,
+                              mediaStoreUnchangedAcrossReadsAndRestarts=True, defaultAuthRetainedAcrossRestarts=True,
+                              unauthenticatedReadsDenied=True, ownedNativeChildrenStopped=True,
+                              writerFencingTokens=[row[0] for row in generations], retainedMediaSnapshot=segment_snapshot)
+                return
             directory = profile / ".media"
             require(not directory.exists(), "EMPTY_READS_CREATED_MEDIA_DIRECTORY")
             directory.mkdir()
@@ -614,19 +725,21 @@ def main() -> int:
     parser.add_argument("--edge", type=Path, required=True)
     parser.add_argument("--go-cache", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--retained-segments", action="store_true", help="Replay original retained segment reads and restart")
     args = parser.parse_args()
     args.out = args.out.resolve()
     args.out.mkdir(parents=True, exist_ok=True)
     report: dict[str, Any] = {"kind": "native-media-library-read-process-v1", "status": "FAIL",
         "sourceCommit": os.environ.get("GITHUB_SHA"), "runId": os.environ.get("GITHUB_RUN_ID"),
         "event": os.environ.get("GITHUB_EVENT_NAME"), "controlledAuthenticatedMediaReadsQualified": False,
+        "controlledRetainedSegmentReadsQualified": False, "retainedSegmentsOnly": args.retained_segments,
         "offlineMediaFixtureSeeded": False, "mediaWritesOrProcessingQualified": False,
         "mediaMigrationQualified": False, "mediaGUIQualified": False,
         "fullMigrationQualified": False, "readiness": "NOT_READY"}
     try:
         run(args, report)
     except Exception as error:
-        report.update(status="FAIL", controlledAuthenticatedMediaReadsQualified=False,
+        report.update(status="FAIL", controlledAuthenticatedMediaReadsQualified=False, controlledRetainedSegmentReadsQualified=False,
             failureCode=str(error) if isinstance(error, (ProbeFailure, bootstrap.ProbeFailure)) else type(error).__name__)
     (args.out / "result.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({key: report.get(key) for key in ("status", "sourceCommit", "failureCode")}))
