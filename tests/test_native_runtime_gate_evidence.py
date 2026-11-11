@@ -67,8 +67,8 @@ def test_gate_evidence_stays_partial_and_never_becomes_a_release_claim() -> None
     assert evidence["fullMigrationQualified"] is False
 
     outstanding = evidence["notYetPassing"]
-    assert outstanding["count"] == 5
-    assert len(outstanding["gates"]) == 5
+    assert outstanding["count"] == 4
+    assert len(outstanding["gates"]) == 4
     # A measured zero invariant needs positive samples and workload operations, so
     # none can be claimed from a CI pass alone. This pins that none are.
     assert outstanding["zeroInvariantsMeasured"] == 0
@@ -76,7 +76,7 @@ def test_gate_evidence_stays_partial_and_never_becomes_a_release_claim() -> None
 
 
 def test_the_release_assessment_remains_fail_closed() -> None:
-    """Ten green gates must not move the release assessment."""
+    """Eleven green gates must not move the release assessment."""
     assessment = json.loads(ASSESSMENT.read_text(encoding="utf-8"))
     assert assessment["status"] == "NOT_READY"
     assert assessment["blockers"]
@@ -99,6 +99,7 @@ def test_the_passing_gates_are_the_documented_ones() -> None:
         "public_http_sse_mcp_a2a_parity",
         "frozen_wire_parity",
         "coverage",
+        "security",
     }
 
 
@@ -118,3 +119,23 @@ def test_zero_python_gate_rests_on_the_image_not_the_source_zip() -> None:
     assert positive["status"] == "PASS"
     assert positive["PythonAndNodeRuntimeExecutablesAbsent"] is True
     assert report["status"] == "PASS"
+
+
+def test_every_outstanding_gate_states_its_concrete_reason() -> None:
+    """An outstanding gate must say what is missing, not just that it is missing.
+
+    Without this, "not done" decays into a vague claim that nobody can act on. Each
+    entry here names a verifiable gap: no fuzz harness exists, the performance report
+    self-declares it is informational only, and neither authority gate has been
+    promoted against a stopped-and-fenced Python source.
+    """
+    outstanding = _evidence()["notYetPassing"]
+    detail = outstanding["perGateDetail"]
+    assert set(detail) == set(outstanding["gates"])
+    assert "informationalOnly" in detail["performance"]
+    assert "no fuzz target" in detail["fuzz"]
+    for gate in ("go_control_authority", "rust_data_authority"):
+        # Either spelling is fine; what matters is that the reason names the
+        # specific missing prerequisite rather than restating "not done".
+        reason = detail[gate].replace("-", " ")
+        assert "stopped and fenced" in reason

@@ -112,23 +112,38 @@
         "path": "release/native-runtime-evidence-5.0/rust-coverage-v4.8.0.json",
         "sha256": "619af7066c072492434fb15f46ebe40b4eb5efc1cb210714f5ddef88cb510def"
       }
+    },
+    "security": {
+      "status": "PASS",
+      "exact_head": "9f18b7721c90bad52c746151d10923e1ffb428b9",
+      "detail": "The security job passed at this revision and runs real scanners: npm audit --audit-level=high for frontend and stateless-mcp, pip-audit over all four requirement sets, bandit -r deepseek_infra --severity-level high, and detect-secrets scan --baseline .secrets.baseline. Each fails the job on a finding, so a green job is the result.",
+      "artifact": {
+        "path": "release/native-runtime-evidence-5.0/evidence-manifest-7c0713cc.json",
+        "sha256": "b3350096eafad5c4301a2ee95dde09ae98e7f9e4aacab81ee7e44785e7849409"
+      },
+      "provenanceCaveat": "this job uploads no artifact of its own, so the evidence is the job conclusion plus the upstream evidence assembly that requires it. Stated plainly."
     }
   },
   "notYetPassing": {
-    "count": 5,
+    "count": 4,
     "gates": [
       "go_control_authority",
       "rust_data_authority",
-      "security",
       "fuzz",
       "performance"
     ],
     "zeroInvariantsMeasured": 0,
     "zeroInvariantsRequired": 7,
-    "reason": "These need live workload measurements (real provider operations, process-kill matrices, and zero-Python operation counts with positive samples and workload_operations). A CI pass cannot populate them, and the validator refuses a vacuous zero."
+    "reason": "These need live workload measurements (real provider operations, process-kill matrices, and zero-Python operation counts with positive samples and workload_operations). A CI pass cannot populate them, and the validator refuses a vacuous zero.",
+    "perGateDetail": {
+      "performance": "the rust-sidecar-performance report is status PASS but declares informationalOnly true and absoluteLatencyMergeGate false, so it does not qualify; a measured absolute-latency merge gate is still required. Its artifact is kept here so the claim is checkable.",
+      "fuzz": "no fuzz target or harness exists in the tree, so nothing can be claimed.",
+      "go_control_authority": "the cutover state machine, promotion signing and isolated transfer/rollback tooling all exist and are tested, but no production control domain has been promoted against a genuinely stopped-and-fenced Python source.",
+      "rust_data_authority": "the Rust data stores are declared and mechanically gated, but no store has been cut over against a live Python writer that was stopped and fenced."
+    }
   },
   "readiness": "NOT_READY",
   "fullMigrationQualified": false,
-  "gatesPassing": 10,
+  "gatesPassing": 11,
   "gatesRequired": 15
 }
