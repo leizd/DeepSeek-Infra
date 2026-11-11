@@ -1,0 +1,421 @@
+{
+  "schemaVersion": 2,
+  "version": "4.8.0",
+  "testedRevision": "7c0713ccb09484587ca0a3c15dde3847a2af5186",
+  "sourceTreeDirty": false,
+  "artifacts": [
+    {
+      "path": "docs/evidence/headless-mcp-bridge.json",
+      "sha256": "13e89b03d24ad38c35f7907b886c430c7a70309d0c988fd28ae17ecad16d6d78",
+      "bytes": 2776,
+      "status": "PASS",
+      "producer": "release-readiness",
+      "tier": "candidate"
+    },
+    {
+      "path": "docs/evidence/a2a-external-peer.json",
+      "sha256": "6ef8e34470d71fa9eb2f74adf7671e98d9d022272c54fad5683f4cd0d244ec2b",
+      "bytes": 3681,
+      "status": "PASS",
+      "producer": "release-readiness",
+      "tier": "candidate"
+    },
+    {
+      "path": "docs/evidence/ga-v4.8.0.json",
+      "sha256": "e5e95cef3a11b17cabcb282fbd8017ab1a4fafa3a063ae5ac38c9ca7ef6fc027",
+      "bytes": 3338,
+      "status": "PASS",
+      "producer": "release-readiness",
+      "tier": "candidate"
+    },
+    {
+      "path": "docs/evidence/workspace-v4.8.0.json",
+      "sha256": "14e3fc12757171a585bc6aa583f4bb4cfc797ba86f6bcb320887c599793c0d2d",
+      "bytes": 2452,
+      "status": "PASS",
+      "producer": "release-readiness",
+      "tier": "candidate"
+    },
+    {
+      "path": "docs/evidence/edge-router-v4.8.0.json",
+      "sha256": "4534d87ba1153c0e2b6e25823564791239b770ce68672debe7e946e478c20607",
+      "bytes": 5382,
+      "status": "PASS",
+      "producer": "release-readiness",
+      "tier": "candidate"
+    },
+    {
+      "path": "docs/evidence/media-v4.8.0.json",
+      "sha256": "c9befc971eb46377fb6632edfc7ec3331e15352e3ee3390790339a620c2a9fc3",
+      "bytes": 2786,
+      "status": "PASS",
+      "producer": "release-readiness",
+      "tier": "candidate"
+    },
+    {
+      "path": "docs/evidence/browser-v4.8.0.json",
+      "sha256": "f4bcd988e81cc617a45329ecbcb2778b83918c1571ed6725abab7b630f952f22",
+      "bytes": 2531,
+      "status": "PASS",
+      "producer": "release-readiness",
+      "tier": "candidate"
+    },
+    {
+      "path": "docs/evidence/automation-v4.8.0.json",
+      "sha256": "ab0219db436824df651776a958f5b9ab2cbb3356deaefa987c74bdbf2b890f0c",
+      "bytes": 2909,
+      "status": "PASS",
+      "producer": "release-readiness",
+      "tier": "candidate"
+    },
+    {
+      "path": "docs/evidence/skills-v4.8.0.json",
+      "sha256": "4d71e6aa2f9be615a673318435ac0adc4981fabb4c3b9be7dea99907d9beb955",
+      "bytes": 2506,
+      "status": "PASS",
+      "producer": "release-readiness",
+      "tier": "candidate"
+    },
+    {
+      "path": "docs/evidence/skills-ui-v4.8.0.json",
+      "sha256": "e4544d7925f6437e54f8c1c3beb2fcbcc0801422b4cdb7d045cd84ce30c01f13",
+      "bytes": 1704,
+      "status": "PASS",
+      "producer": "release-readiness",
+      "tier": "candidate"
+    },
+    {
+      "path": "docs/evidence/skill-builder-v4.8.0.json",
+      "sha256": "3152cd5574e731bcd66d044305dd7ec30836cdc25a7e6a0633948c373f5d8e7b",
+      "bytes": 1644,
+      "status": "PASS",
+      "producer": "release-readiness",
+      "tier": "candidate"
+    },
+    {
+      "path": "docs/evidence/skill-packs-v4.8.0.json",
+      "sha256": "124d6147ca2842b5c154bde4a5e0e9079d9c6ad6cbcacd416edebe2fca7a7ebe",
+      "bytes": 2291,
+      "status": "PASS",
+      "producer": "release-readiness",
+      "tier": "candidate"
+    },
+    {
+      "path": "docs/evidence/skill-eval-dashboard-v4.8.0.json",
+      "sha256": "790c843d65bd973c421b3d2d12c5840772dceb9670613cae8135b97b4531322b",
+      "bytes": 2101,
+      "status": "PASS",
+      "producer": "release-readiness",
+      "tier": "candidate"
+    },
+    {
+      "path": "docs/evidence/skill-versioning-v4.8.0.json",
+      "sha256": "ca3ab6433b4649a9ce56e7fd52710c3ad2c07c45ee397065d0ee6289fe80a0a5",
+      "bytes": 6727,
+      "status": "PASS",
+      "producer": "release-readiness",
+      "tier": "candidate"
+    },
+    {
+      "path": "docs/evidence/skill-analytics-v4.8.0.json",
+      "sha256": "56563456aaacffd2a77028e92ea6eeca88fc3620a61f32e72e3d4b08d0f348de",
+      "bytes": 10880,
+      "status": "PASS",
+      "producer": "release-readiness",
+      "tier": "candidate"
+    },
+    {
+      "path": "docs/evidence/skill-security-v4.8.0.json",
+      "sha256": "d302bc92c417fddb06882a68db7337778d2975c68fdcd6474ad7676a7f860c77",
+      "bytes": 15875,
+      "status": "PASS",
+      "producer": "release-readiness",
+      "tier": "candidate"
+    },
+    {
+      "path": "docs/evidence/skill-catalog-v4.8.0.json",
+      "sha256": "fd367405336c82e7f9d80b6366d848b4843b281e62e656d8ff4efe48e8c9aa98",
+      "bytes": 16759,
+      "status": "PASS",
+      "producer": "release-readiness",
+      "tier": "candidate"
+    },
+    {
+      "path": "docs/evidence/context-taint-v4.8.0.json",
+      "sha256": "ffd8901e2312d801526466b7d9d1f192d5c594575b368814d6bb769c6e55d48c",
+      "bytes": 5890,
+      "status": "PASS",
+      "producer": "release-readiness",
+      "tier": "candidate"
+    },
+    {
+      "path": "docs/evidence/semantic-cache-onnx-v4.8.0.json",
+      "sha256": "53514c3271c4260e6818db70285ea43b5f55e4297be53cccb58d7423457aafc0",
+      "bytes": 1257,
+      "status": "PASS",
+      "producer": "release-readiness",
+      "tier": "candidate"
+    },
+    {
+      "path": "docs/evidence/upgrade-rollback-v4.8.0.json",
+      "sha256": "c5fd29ce030eb1829e899550ea175939c4ad5e5b6b8f5a0f7bbf13d94a9342ed",
+      "bytes": 1497,
+      "status": "PASS",
+      "producer": "release-readiness",
+      "tier": "candidate"
+    },
+    {
+      "path": "docs/evidence/protocol-contract-v4.8.0.json",
+      "sha256": "a6c2a644a7804ed5b1e89819b0730004b15c030fdcf1fcb7ea68146a0c3ece5e",
+      "bytes": 1541,
+      "status": "PASS",
+      "producer": "release-readiness",
+      "tier": "candidate"
+    },
+    {
+      "path": "docs/evidence/frontend-bundle-v4.8.0.json",
+      "sha256": "b7b0798cfaab6224f8cdc26d72ed48cf61d5bf1cd3657589b9b16891183f6781",
+      "bytes": 5170,
+      "status": "PASS",
+      "producer": "frontend",
+      "tier": "candidate"
+    },
+    {
+      "path": "docs/evidence/frontend-browser-v4.8.0.json",
+      "sha256": "eaac6a44cf418f4cbc4eac36aca802c6bbef8b8a951b4beef9580362924e7dfc",
+      "bytes": 6654,
+      "status": "PASS",
+      "producer": "frontend-browser",
+      "tier": "candidate"
+    },
+    {
+      "path": "evals/reports/latest.json",
+      "sha256": "52e738f2bb7d9eabed7307eeb8b904d22eb48aa460e0b88c4a8dce37a02901e1",
+      "bytes": 4021,
+      "status": "PASS",
+      "producer": "eval",
+      "tier": "candidate"
+    },
+    {
+      "path": "evals/reports/agent-latest.json",
+      "sha256": "63e948353a9a08f5dfd6c0236219278c35576e6c4776ff4fdde23d6ac2d30529",
+      "bytes": 8589,
+      "status": "PASS",
+      "producer": "eval",
+      "tier": "candidate"
+    },
+    {
+      "path": "evals/reports/baseline-compare-latest.json",
+      "sha256": "3cb1e605b08c2c2fbf0a3f5f7e8c9353ed80f0b521bc8e21e01c4e129be7dce7",
+      "bytes": 2488,
+      "status": "PASS",
+      "producer": "eval",
+      "tier": "candidate"
+    },
+    {
+      "path": "evals/reports/security-latest.json",
+      "sha256": "dc6c05ecded2b1b2275808787d83dadf24744a2bf496ed56d87a7e123fdceebc",
+      "bytes": 8352,
+      "status": "PASS",
+      "producer": "eval",
+      "tier": "candidate"
+    },
+    {
+      "path": "evals/reports/skills-v4.8.0.json",
+      "sha256": "c682b6a7cb0a27e3d7d34884d38a221b82722401e7d55e6622feddac31790593",
+      "bytes": 26609,
+      "status": "PASS",
+      "producer": "eval",
+      "tier": "candidate"
+    },
+    {
+      "path": "evals/reports/media-v4.8.0.json",
+      "sha256": "5a1e8c22392b22ef0e91e449d629c8e6daae237db65d61bee818e390b643243c",
+      "bytes": 1800,
+      "status": "PASS",
+      "producer": "eval",
+      "tier": "candidate"
+    },
+    {
+      "path": "evals/reports/browser-v4.8.0.json",
+      "sha256": "5b8b03d791d665ae90392f2e54cc472a3bb1683a3b619d35ea3e1bf6535ae699",
+      "bytes": 1953,
+      "status": "PASS",
+      "producer": "eval",
+      "tier": "candidate"
+    },
+    {
+      "path": "evals/reports/automation-v4.8.0.json",
+      "sha256": "94979fdd9dc23bd02b087d9886a00c907e57e0bd44088daa7d36d39433f616cc",
+      "bytes": 3077,
+      "status": "PASS",
+      "producer": "eval",
+      "tier": "candidate"
+    },
+    {
+      "path": "docs/evidence/rust-sidecar-image-v4.8.0.json",
+      "sha256": "a36d99e9e9e44adc88dccb08efc3511422fdd6870dafe01d03071125de2676a4",
+      "bytes": 1045,
+      "status": "PASS",
+      "producer": "rust-docker",
+      "tier": "exact-merge"
+    },
+    {
+      "path": "docs/evidence/hybrid-runtime-e2e-v4.8.0.json",
+      "sha256": "bd743b54c3daae68b4c4f9619c90d29295c2182e383156f8e78c42c14ec23892",
+      "bytes": 2800,
+      "status": "PASS",
+      "producer": "hybrid-runtime-e2e",
+      "tier": "exact-merge"
+    },
+    {
+      "path": "docs/evidence/gateway-request-parity-v4.8.0.json",
+      "sha256": "afbc61f9d0394c8b6912ab00f72b872fede780b78233bf9f3c53092e87c1c01f",
+      "bytes": 42868,
+      "status": "PASS",
+      "producer": "gateway-request-parity",
+      "tier": "exact-merge"
+    },
+    {
+      "path": "docs/evidence/mcp-protocol-parity-v4.8.0.json",
+      "sha256": "6e1c7300dab600670ed322e5904f7a031eae6893b932607e01b565c61f08a2e1",
+      "bytes": 67057,
+      "status": "PASS",
+      "producer": "mcp-protocol-parity",
+      "tier": "exact-merge"
+    },
+    {
+      "path": "docs/evidence/rag-parity-v4.8.0.json",
+      "sha256": "9855b8607d01b7041e107639bbefa575cfc07f0f8cd92133310f8bae32b217bb",
+      "bytes": 17629,
+      "status": "PASS",
+      "producer": "rag-parity",
+      "tier": "exact-merge"
+    },
+    {
+      "path": "docs/evidence/rag-document-preparation-parity-v4.8.0.json",
+      "sha256": "d1a6bc2ecfd5214baf0b76b4b092d2ec6371e9ee7431222893d9cdc54c09a58e",
+      "bytes": 90215,
+      "status": "PASS",
+      "producer": "rag-document-preparation-parity",
+      "tier": "exact-merge"
+    },
+    {
+      "path": "docs/evidence/rag-vector-binary-parity-v4.8.0.json",
+      "sha256": "edb6557280853ed5ca9cffda102d3d05e4ebb8d1c6fef2cd6f0703ec83aa264c",
+      "bytes": 37156,
+      "status": "PASS",
+      "producer": "rag-vector-binary-parity",
+      "tier": "exact-merge"
+    },
+    {
+      "path": "docs/evidence/rust-coverage-v4.8.0.json",
+      "sha256": "a5815c7521414a3ae8ab664c4b9b9ac51a2e0055566341baeaa1e0435aa9c628",
+      "bytes": 3136,
+      "status": "PASS",
+      "producer": "rust-coverage",
+      "tier": "exact-merge"
+    },
+    {
+      "path": "docs/evidence/rust-sidecar-performance-v4.8.0.json",
+      "sha256": "63bd184a730a5d38b347014c0120eec7245c0deb6e5fbd8e33263049b32f094e",
+      "bytes": 152541,
+      "status": "PASS",
+      "producer": "rust-sidecar-performance",
+      "tier": "exact-merge"
+    },
+    {
+      "path": "docs/evidence/packed-delta-s3-v4.8.0.json",
+      "sha256": "ade827c0edf8a23685388f8f8ce90d505d0b4b81483d899cdf7309b5435437a2",
+      "bytes": 2617,
+      "status": "PASS",
+      "producer": "packed-delta-s3-e2e",
+      "tier": "exact-merge"
+    },
+    {
+      "path": "docs/evidence/object-set-s3-v4.8.0.json",
+      "sha256": "9cb57de406e9ca49df49d956070dda105f3ba8afdaf416ce186beccbcb44bca6",
+      "bytes": 7593,
+      "status": "PASS",
+      "producer": "object-set-s3-e2e",
+      "tier": "exact-merge"
+    },
+    {
+      "path": "docs/evidence/recovery-faults-v4.8.0.json",
+      "sha256": "dae660512f84d31f299eaea03a44e45f7efe0a9793a4c49b6c0d9f9b5d5a4270",
+      "bytes": 3135,
+      "status": "PASS",
+      "producer": "recovery-fault-evidence",
+      "tier": "exact-merge"
+    },
+    {
+      "path": "docs/evidence/replica-healing-s3-v4.8.0.json",
+      "sha256": "16ee228bb4779fb6d3aa1307c5085f2f31a12e20728d48d41961af947d89b45c",
+      "bytes": 3817,
+      "status": "PASS",
+      "producer": "replica-healing-s3-e2e",
+      "tier": "exact-merge"
+    },
+    {
+      "path": "docs/evidence/storage-control-plane-minio-v4.8.0.json",
+      "sha256": "416cbe3cc1095df03df32ee7ebfb8243e0372b6770a37602da89229ba9970044",
+      "bytes": 55324,
+      "status": "PASS",
+      "producer": "storage-control-plane-minio-e2e",
+      "tier": "exact-merge"
+    },
+    {
+      "path": "docs/evidence/storage-control-plane-autonomous-proof-v4.8.0.json",
+      "sha256": "255059fe974890c89af42d073be3d20d2463ba85f789f2f9193fcc5b9c555ad0",
+      "bytes": 222368,
+      "status": "PASS",
+      "producer": "storage-control-plane-minio-e2e",
+      "tier": "exact-merge"
+    },
+    {
+      "path": "docs/evidence/storage-control-plane-predictive-proof-v4.8.0.json",
+      "sha256": "e774031a11bbe6a79a26281e4be55208b9eee941bf1ac8eba9eecc84501309a7",
+      "bytes": 1406261,
+      "status": "PASS",
+      "producer": "storage-control-plane-minio-e2e",
+      "tier": "exact-merge"
+    },
+    {
+      "path": "docs/evidence/federation-trust-proof-v4.8.0.json",
+      "sha256": "2dbabc0bc696a0691890124c180fec6ef2840b8c8288d8fc5ac4f8cffcd298d3",
+      "bytes": 507270,
+      "status": "PASS",
+      "producer": "storage-control-plane-minio-e2e",
+      "tier": "exact-merge"
+    },
+    {
+      "path": "docs/evidence/federated-replica-proof-v4.8.0.json",
+      "sha256": "321d2d12c0755b689c47949319279a3feffda959e30a9c7bf6a885b8e035572b",
+      "bytes": 4261459,
+      "status": "PASS",
+      "producer": "storage-control-plane-minio-e2e",
+      "tier": "exact-merge"
+    },
+    {
+      "path": "docs/evidence/federated-dr-proof-v4.8.0.json",
+      "sha256": "2e12905f8c2c57a49384b3282517ef8a1b26a22fb45b455525523dd73e68d697",
+      "bytes": 660568,
+      "status": "PASS",
+      "producer": "storage-control-plane-minio-e2e",
+      "tier": "exact-merge"
+    }
+  ],
+  "sourceContext": {
+    "schemaVersion": 2,
+    "version": "4.8.0",
+    "testedRevision": "7c0713ccb09484587ca0a3c15dde3847a2af5186",
+    "sourceTreeDirty": false,
+    "capturedAt": "2026-11-10T08:53:43Z",
+    "generator": "scripts/capture_evidence_context.py",
+    "repository": "leizd/DeepSeek-Infra",
+    "workflowRunId": "42786170148",
+    "workflowAttempt": 1,
+    "eventName": "workflow_dispatch",
+    "ref": "refs/heads/codex/native-s0-store-ownership-20261109"
+  }
+}
