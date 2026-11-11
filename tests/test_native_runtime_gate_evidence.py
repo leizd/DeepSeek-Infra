@@ -46,10 +46,10 @@ def test_gate_evidence_artifacts_still_hash_to_their_recorded_digests() -> None:
 def test_gate_evidence_is_exact_head_bound_and_clean() -> None:
     evidence = _evidence()
     provenance = evidence["provenance"]
-    assert provenance["exact_head"] == "7c0713ccb09484587ca0a3c15dde3847a2af5186"
-    assert provenance["source_tree"] == "abb4739a752c65f8fec0c6b242bc4cc0dd4d7c1e"
+    assert provenance["exact_head"] == "9f18b7721c90bad52c746151d10923e1ffb428b9"
+    assert provenance["source_tree"] == "f2ef2311710a7fc631e8568903671b1a74f04937"
     assert provenance["source_tree_dirty"] is False
-    assert provenance["workflow_run"] == 42786170148
+    assert provenance["workflow_run"] == 42962854437
     assert provenance["jobs"]["total"] == 37
     assert provenance["jobs"]["success"] == 37
     assert provenance["jobs"]["failure"] == 0
@@ -67,8 +67,8 @@ def test_gate_evidence_stays_partial_and_never_becomes_a_release_claim() -> None
     assert evidence["fullMigrationQualified"] is False
 
     outstanding = evidence["notYetPassing"]
-    assert outstanding["count"] == 12
-    assert len(outstanding["gates"]) == 12
+    assert outstanding["count"] == 5
+    assert len(outstanding["gates"]) == 5
     # A measured zero invariant needs positive samples and workload operations, so
     # none can be claimed from a CI pass alone. This pins that none are.
     assert outstanding["zeroInvariantsMeasured"] == 0
@@ -76,7 +76,7 @@ def test_gate_evidence_stays_partial_and_never_becomes_a_release_claim() -> None
 
 
 def test_the_release_assessment_remains_fail_closed() -> None:
-    """Three green gates must not move the release assessment."""
+    """Ten green gates must not move the release assessment."""
     assessment = json.loads(ASSESSMENT.read_text(encoding="utf-8"))
     assert assessment["status"] == "NOT_READY"
     assert assessment["blockers"]
@@ -86,12 +86,19 @@ def test_the_release_assessment_remains_fail_closed() -> None:
     assert assessment["gates"] == {}
 
 
-def test_the_three_passing_gates_are_the_documented_ones() -> None:
+def test_the_passing_gates_are_the_documented_ones() -> None:
     gates = set(_evidence()["gates"])
     assert gates == {
         "exact_head_ci",
         "evidence_assembly",
         "production_artifact_zero_python",
+        "native_two_fleet_four_minio",
+        "go_controller_sigkill",
+        "rust_worker_sigkill",
+        "rust_receiver_sigkill",
+        "public_http_sse_mcp_a2a_parity",
+        "frozen_wire_parity",
+        "coverage",
     }
 
 

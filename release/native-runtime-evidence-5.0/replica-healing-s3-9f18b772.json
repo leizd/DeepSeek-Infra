@@ -1,0 +1,100 @@
+{
+  "ok": true,
+  "status": "PASS",
+  "title": "Replica Healing and Write Continuity Contract Suite",
+  "checks": {
+    "durableRepairJobStateMachine": "PASS",
+    "inPlaceCommittedCopyHealingContract": "PASS",
+    "boundedStreamingAndCorruptReplacement": "PASS",
+    "targetSideDurableProtectionLeases": "PASS",
+    "twoPhaseRemoteAuditWithGlobalCommitChainValidation": "PASS",
+    "deterministicWritePlacementAndForcedFullFailover": "PASS",
+    "verifiedWriteContinuityAndGovernedFailback": "PASS",
+    "explicitPrimaryPromotionWithCAS": "PASS"
+  },
+  "checkProvenance": {
+    "durableRepairJobStateMachine": "durable-repair-state-machine",
+    "inPlaceCommittedCopyHealingContract": "in-place-committed-healing",
+    "boundedStreamingAndCorruptReplacement": "bounded-streaming-and-corrupt-replacement",
+    "targetSideDurableProtectionLeases": "target-side-protection-leases",
+    "twoPhaseRemoteAuditWithGlobalCommitChainValidation": "two-phase-remote-audit",
+    "deterministicWritePlacementAndForcedFullFailover": "deterministic-write-failover",
+    "verifiedWriteContinuityAndGovernedFailback": "verified-write-continuity-and-governed-failback",
+    "explicitPrimaryPromotionWithCAS": "explicit-primary-promotion-cas"
+  },
+  "scenarios": {
+    "durable-repair-state-machine": {
+      "nodeIds": [
+        "tests/test_backup_454_replica_healing_contract.py::test_replica_repair_job_durability_and_resumption"
+      ],
+      "exitCode": 0
+    },
+    "in-place-committed-healing": {
+      "nodeIds": [
+        "tests/test_backup_454_replica_healing_contract.py::test_in_place_committed_copy_healing_contract"
+      ],
+      "exitCode": 0
+    },
+    "bounded-streaming-and-corrupt-replacement": {
+      "nodeIds": [
+        "tests/test_backup_454_replica_healing_contract.py::test_bounded_streaming_and_remote_corruption_replacement"
+      ],
+      "exitCode": 0
+    },
+    "target-side-protection-leases": {
+      "nodeIds": [
+        "tests/test_backup_454_replica_healing_contract.py::test_target_side_durable_protection_lease_preserves_source"
+      ],
+      "exitCode": 0
+    },
+    "two-phase-remote-audit": {
+      "nodeIds": [
+        "tests/test_backup_454_replica_healing_contract.py::test_two_phase_dr_remote_audit_chain_validation"
+      ],
+      "exitCode": 0
+    },
+    "deterministic-write-failover": {
+      "nodeIds": [
+        "tests/test_backup_454_replica_healing_contract.py::test_deterministic_write_failover_and_force_full"
+      ],
+      "exitCode": 0
+    },
+    "verified-write-continuity-and-governed-failback": {
+      "nodeIds": [
+        "tests/test_backup_455_verified_write_continuity_contract.py::test_governed_failback_lifecycle"
+      ],
+      "exitCode": 0
+    },
+    "explicit-primary-promotion-cas": {
+      "nodeIds": [
+        "tests/test_backup_455_verified_write_continuity_contract.py::test_promote_primary_target_cas_endpoint"
+      ],
+      "exitCode": 0
+    }
+  },
+  "version": "4.8.0",
+  "testedRevision": "9f18b7721c90bad52c746151d10923e1ffb428b9",
+  "sourceRevision": "9f18b7721c90bad52c746151d10923e1ffb428b9",
+  "sourceTreeDirty": false,
+  "releaseRevision": null,
+  "ciRevision": "9f18b7721c90bad52c746151d10923e1ffb428b9",
+  "sourceContext": {
+    "schemaVersion": 2,
+    "version": "4.8.0",
+    "testedRevision": "9f18b7721c90bad52c746151d10923e1ffb428b9",
+    "sourceTreeDirty": false,
+    "capturedAt": "2026-11-11T05:00:43Z",
+    "generator": "scripts/capture_evidence_context.py",
+    "repository": "leizd/DeepSeek-Infra",
+    "workflowRunId": "42962854437",
+    "workflowAttempt": 1,
+    "eventName": "workflow_dispatch",
+    "ref": "refs/heads/codex/native-s0-store-ownership-20261109"
+  },
+  "generatedAt": "2026-11-11T05:02:43Z",
+  "environment": {
+    "os": "Linux-7.0.0-1019-azure-x86_64-with-glibc2.43",
+    "python": "3.12.16",
+    "ci": true
+  }
+}
