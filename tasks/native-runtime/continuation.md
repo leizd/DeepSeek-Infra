@@ -1,3 +1,45 @@
+<!-- native checkpoint 2026-11-11 eleven of fifteen gates have evidence -->
+
+Whole product Rust/Go migration remains ACTIVE / **NOT_READY**.
+
+**I was wrong last turn about the provider and fault gates, and this corrects it.**
+I reported `native_two_fleet_four_minio` and the three SIGKILL gates as unproduced.
+They were already in the green run — a five-MinIO harness with 240 passing checks and
+the three parity reports — I simply had not looked at the artifacts. Looking changed
+the count from 3 of 15 gates to **11 of 15**.
+
+| gate | evidence now recorded |
+| --- | --- |
+| `native_two_fleet_four_minio` | 240 checks all PASS across endpoints A–E; signed federation trust/replica/DR proofs uploaded |
+| `go_controller_sigkill` | control-DB crash recovery + wave SIGKILL takeover at a strictly higher epoch, no duplicated effect, settles exactly once |
+| `rust_worker_sigkill` | fresh worker took over the expired action, entered reconciling before mutating, found the existing effect, no second repair job |
+| `rust_receiver_sigkill` | receiver killed mid-transfer, transfer resumed without duplicating the commit |
+| `public_http_sse_mcp_a2a_parity` | gateway-request and MCP-protocol parity both PASS |
+| `frozen_wire_parity` | objectSetV1, receiptV4, commitV4, fastCdcV3, controlAuthorityV1, authorityCheckpointV1, drReadinessProofV1, evidenceProofV2, randomizedAge all unchanged |
+| `coverage` | Rust 83.2749% (floor 80), Go 95.010592% (floor 95), Python 95.59% (floor 95) |
+| `security` | real scanners: npm audit, pip-audit, bandit, detect-secrets |
+| `exact_head_ci`, `evidence_assembly`, `production_artifact_zero_python` | as previously recorded |
+
+**The four that remain, each with its concrete gap** — a test now enforces that this
+detail exists, so "not done" cannot decay into a vague claim:
+
+- `performance`: the report says PASS but declares `informationalOnly: true` and
+  `absoluteLatencyMergeGate: false`. It does **not** qualify; a measured
+  absolute-latency merge gate is still needed. Its artifact is kept so the claim is
+  checkable rather than asserted.
+- `fuzz`: no fuzz target or harness exists anywhere in the tree.
+- `go_control_authority` / `rust_data_authority`: the cutover state machine,
+  promotion signing, mechanical writer gates and isolated transfer/rollback proofs
+  all exist and are tested, but no domain has been promoted against a genuinely
+  stopped-and-fenced Python source.
+
+The seven workload-measured zero invariants remain at zero of seven, and the
+assessment stays `NOT_READY` with empty `measurements` and `gates`.
+
+Provenance moved to run 42962854437 at `9f18b772` (tree `f2ef2311`), 37/37; all
+eleven artifacts are copied into `release/native-runtime-evidence-5.0/` and their
+digests re-derive from the committed blobs.
+
 <!-- native checkpoint 2026-11-11 green reproduced at the evidence commit -->
 
 Whole product Rust/Go migration remains ACTIVE / **NOT_READY**.
