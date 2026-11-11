@@ -1,3 +1,53 @@
+<!-- native checkpoint 2026-11-11 three release gates now have hash-verified evidence -->
+
+Whole product Rust/Go migration remains ACTIVE / **NOT_READY**, but three of the
+fifteen 5.0 release gates now rest on real, exact-head, hash-verified evidence
+rather than on a claim. They are recorded in
+`release/native_runtime_gate_evidence_v1.json`, with the artifacts copied into
+`release/native-runtime-evidence-5.0/` so any reviewer can re-derive their digests.
+
+| gate | evidence |
+| --- | --- |
+| `exact_head_ci` | run 42786170148, 37/37 jobs, zero failures, zero skips |
+| `evidence_assembly` | the 50-artifact bundle whose manifest records that revision with `sourceTreeDirty: false` |
+| `production_artifact_zero_python` | the default native image, started from a fresh volume, where a container-side check proved no `python`/`python3`/`node`/`nodejs` exists on `PATH` |
+
+**The distinction this evidence exists to keep straight.** The zero-Python gate is
+satisfied by the **image**, not by the release zip. The zip built in the same run is
+a 4294-entry source tree containing **1029 Python files**; it is a source
+distribution and does not satisfy the gate. The evidence file states this in a named
+field (`whyThisIsTheRealClaim`) rather than only in prose, and a test asserts the
+gate points at the image report.
+
+What the image run actually proved, beyond the absence check: the same container
+served the React entry and its scripts, retained a signed origin across a restart
+with the writer fence advancing 1 -> 2, kept 18 bundled skills / 4 packs / 4 golden
+cases, had all four required native roles present (`deepseek-gateway`,
+`deepseek-launch`, `deepseek-worker`, `deepseekd`), and both negative cases (legacy
+worker directory, missing bundle) detected their expected failure.
+
+**Why the assessment still says NOT_READY.** `DELIVERED` requires all fifteen gates
+*and* seven workload-measured zero invariants, and the validator refuses a vacuous
+zero — every invariant needs a positive `samples` and `workload_operations` count. A
+CI pass cannot produce those, so `measurements` and `gates` in
+`release/native_runtime_5_0_evidence_v1.json` stay empty on purpose.
+`tests/test_native_runtime_gate_evidence.py` (6 tests) re-derives every artifact
+digest and asserts both files keep those statuses, so a later change cannot quietly
+promote three green gates into a release claim.
+
+**Still outstanding, in dependency order:**
+
+1. Six workload-measured zero invariants (the seventh, `crossLanguageCgoAllocations`,
+   is structural and already enforced by the zero-Python source gate).
+2. Twelve gates: the parity set, control/data authority, the three-MinIO and
+   two-Fleet/four-MinIO topologies, the three SIGKILL matrices, security, coverage,
+   fuzz and performance.
+3. Domain promotion against a genuinely stopped-and-fenced Python source, after
+   which `current_production_authority` can leave `python`.
+
+Items 1 and 2 need live workloads and real providers; none of them can be closed by
+another CI pass.
+
 <!-- native checkpoint 2026-11-11 ci.yml 37/37 green, artifacts hash-verified -->
 
 Whole product Rust/Go migration remains ACTIVE / **NOT_READY**.
