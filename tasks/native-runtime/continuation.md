@@ -1,3 +1,20 @@
+<!-- native checkpoint 2026-11-11 public JSON error prefix regression -->
+
+The ef61a868 scoped Go race run 42945273971 completed all 123 expected tests:
+122 passed and the new empty-container/decimal syntax test failed. Its expected
+string omitted the public "Invalid JSON: " wrapper from the unchanged original
+HTTP helper. The actual Go error retained that wrapper and matched the Python
+3.12 decoder position. This follow-up corrects only that test expectation; the
+original 36-case actual-TCP fixture and its pinned original helper are unchanged.
+Both new malformed requests retain explicit public error equality assertions.
+No production code, protocol, workflow, inventory or coverage floor is changed.
+
+The ef61a868 Rust lint step passed; complete workspace/runtime/coverage,
+Windows, complete CI/Evidence and Android are separate source-specific runs.
+Their eventual results do not qualify this follow-up revision. Keep all five
+precise handles and the original Go failed log/report. Full migration remains
+ACTIVE / NOT_READY with every original product, recovery and MCP requirement.
+
 <!-- native checkpoint 2026-11-11 full CI repair -->
 
 The complete 5548113d CI run 42939689927 failed: default Go coverage was

@@ -46,8 +46,8 @@ func TestFlatPatchInputRetainsEscapesAndScalarKinds(t *testing.T) {
 }
 
 func TestFlatPatchSyntaxRetainsDiagnosticsAfterEmptyContainersAndDecimals(t *testing.T) {
-	// Original Python 3.12 JSONDecodeError observed for each complete request.
-	const expected = "Expecting property name enclosed in double quotes: line 1 column 28 (char 27)"
+	// Original public wrapper plus the observed Python 3.12 JSONDecodeError.
+	const expected = "Invalid JSON: Expecting property name enclosed in double quotes: line 1 column 28 (char 27)"
 	for _, raw := range []string{`{"metadata":{},"title":1.5,}`, `{"metadata":[],"title":1e2,}`} {
 		patch, err := ParsePublicPatch([]byte(raw))
 		if patch != nil || err == nil || err.Error() != expected {
