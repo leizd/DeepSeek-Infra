@@ -17,6 +17,55 @@ func flatObject(members ...*mediav1.MediaFlatPatchMember) *mediav1.MediaFlatPatc
 	}}
 }
 
+func TestFlatPatchWireRejectsNoncanonicalEncodingAndInvalidScalarNodes(t *testing.T) {
+	empty := &mediav1.MediaFlatPatchRecord{Nodes: []*mediav1.MediaFlatPatchNode{flatObject()}}
+	canonical, err := (proto.MarshalOptions{Deterministic: true}).Marshal(empty)
+	if err != nil || len(canonical) < 2 || canonical[1] >= 128 {
+		t.Fatal("invalid fixture", err)
+	}
+	// Both protobufs decode, but the overlong length has a different byte identity.
+	overlong := append([]byte{canonical[0], canonical[1] | 0x80, 0}, canonical[2:]...)
+	for _, raw := range [][]byte{{0x0a, 0x80}, overlong} {
+		if result, err := FlatPatchJSON(raw); result != nil || err != ErrInvalid {
+			t.Fatal("malformed or noncanonical wire returned public JSON", err)
+		}
+	}
+	unknownArray := &mediav1.MediaFlatPatchArray{}
+	unknownArray.ProtoReflect().SetUnknown([]byte{0x78, 1})
+	unknownObject := &mediav1.MediaFlatPatchObject{}
+	unknownObject.ProtoReflect().SetUnknown([]byte{0x78, 1})
+	for name, node := range map[string]*mediav1.MediaFlatPatchNode{
+		"false-null":                    {Kind: &mediav1.MediaFlatPatchNode_NullValue{NullValue: false}},
+		"invalid-utf8":                  {Kind: &mediav1.MediaFlatPatchNode_TextValue{TextValue: string([]byte{0xff})}},
+		"nil-array":                     {Kind: &mediav1.MediaFlatPatchNode_ArrayValue{}},
+		"unknown-array":                 {Kind: &mediav1.MediaFlatPatchNode_ArrayValue{ArrayValue: unknownArray}},
+		"array-cycle":                   {Kind: &mediav1.MediaFlatPatchNode_ArrayValue{ArrayValue: &mediav1.MediaFlatPatchArray{Children: []uint32{1}}}},
+		"nil-object":                    {Kind: &mediav1.MediaFlatPatchNode_ObjectValue{}},
+		"unknown-object":                {Kind: &mediav1.MediaFlatPatchNode_ObjectValue{ObjectValue: unknownObject}},
+		"odd-utf16":                     {Kind: &mediav1.MediaFlatPatchNode_TextUtf16Le{TextUtf16Le: []byte{0, 0xd8, 0}}},
+		"canonical-utf16-must-use-text": {Kind: &mediav1.MediaFlatPatchNode_TextUtf16Le{TextUtf16Le: []byte{'a', 0}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			record := &mediav1.MediaFlatPatchRecord{Nodes: []*mediav1.MediaFlatPatchNode{node, flatObject(&mediav1.MediaFlatPatchMember{Key: "metadata", Child: 1})}}
+			if _, err := RequestDigest(flatInputIntent(&mediav1.MediaPatch{FlatValues: record})); err != ErrInvalid {
+				t.Fatal("malformed typed input was admitted", err)
+			}
+			if result, err := flatPatchJSON(record); result != nil || err != ErrInvalid {
+				t.Fatal("malformed typed result returned JSON", err)
+			}
+		})
+	}
+	for _, record := range []*mediav1.MediaFlatPatchRecord{
+		empty,
+		{Nodes: []*mediav1.MediaFlatPatchNode{flatObject(), flatObject(&mediav1.MediaFlatPatchMember{Key: "unsupported", Child: 1})}},
+		{Nodes: []*mediav1.MediaFlatPatchNode{flatObject(), flatObject(&mediav1.MediaFlatPatchMember{KeyUtf16Le: []byte{0, 0xd8}, Child: 1})}},
+	} {
+		if _, err := RequestDigest(flatInputIntent(&mediav1.MediaPatch{FlatValues: record})); err != ErrInvalid {
+			t.Fatal("unsupported public input key was admitted", err)
+		}
+	}
+}
+
 func TestFlatPatchPreservesDeepObjectsOrderAndExactNumbers(t *testing.T) {
 	const decimal = "1234567890123456789012345678901234567890"
 	const text = "中文<&\n"

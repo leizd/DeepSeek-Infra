@@ -29,6 +29,33 @@ func flatInputIntent(patch *mediav1.MediaPatch) *mediav1.MediaPatchIntent {
 		MediaId: "media_input", Patch: patch, MaxOutcomeSchemaVersion: FlatPatchOutcomeVersion}
 }
 
+func TestFlatPatchInputRetainsEscapesAndScalarKinds(t *testing.T) {
+	patch, err := ParsePublicPatch([]byte(`{"metadata":[null,true,false,"😀\u0061\b\f\n\r\t\"\/\\"]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RequestDigest(flatInputIntent(patch)); err != nil {
+		t.Fatal("legal scalar array could not be admitted", err)
+	}
+	actual, err := flatPatchJSON(patch.FlatValues)
+	text, _ := json.Marshal("😀a\b\f\n\r\t\"/\\")
+	want := `{"metadata":[null,true,false,` + string(text) + `]}`
+	if err != nil || string(actual) != want {
+		t.Fatalf("scalar kinds or escapes changed: %s, %v", actual, err)
+	}
+}
+
+func TestFlatPatchSyntaxRetainsDiagnosticsAfterEmptyContainersAndDecimals(t *testing.T) {
+	// Original Python 3.12 JSONDecodeError observed for each complete request.
+	const expected = "Expecting property name enclosed in double quotes: line 1 column 28 (char 27)"
+	for _, raw := range []string{`{"metadata":{},"title":1.5,}`, `{"metadata":[],"title":1e2,}`} {
+		patch, err := ParsePublicPatch([]byte(raw))
+		if patch != nil || err == nil || err.Error() != expected {
+			t.Fatalf("malformed request diagnostic changed: %q, %v", raw, err)
+		}
+	}
+}
+
 func TestFlatPatchInputPreservesDeepDecimalsNonfiniteAndUTF16(t *testing.T) {
 	const wide = "1234567890123456789012345678901234567890"
 	deep := strings.Repeat("{\"next\":", 160) + wide + strings.Repeat("}", 160)

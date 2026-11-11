@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
 import errno
 import hashlib
 import importlib.util
@@ -21,6 +22,14 @@ probe = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(probe)
 
 
+def patch_proc_stat(monkeypatch: pytest.MonkeyPatch, read_stat: Callable[..., str]) -> None:
+    def read_bytes(path: Path) -> bytes:
+        return read_stat(path).encode("utf-8")
+
+    monkeypatch.setattr(Path, "read_text", read_stat)
+    monkeypatch.setattr(Path, "read_bytes", read_bytes)
+
+
 @pytest.mark.parametrize("reader", ["identity", "state"])
 @pytest.mark.parametrize("error_type,error_number", [(FileNotFoundError, errno.ENOENT), (ProcessLookupError, errno.ESRCH)])
 def test_proc_stat_read_accepts_only_an_absent_or_exited_process(
@@ -30,7 +39,7 @@ def test_proc_stat_read_accepts_only_an_absent_or_exited_process(
         assert path.as_posix() == "/proc/9001/stat"
         raise error_type(error_number, "original process exited during stat read")
 
-    monkeypatch.setattr(Path, "read_text", vanished)
+    patch_proc_stat(monkeypatch, vanished)
     read = probe.patch.reads.process_identity if reader == "identity" else probe.proc_state
     assert read(9001) is None
 
@@ -43,7 +52,7 @@ def test_proc_stat_read_does_not_turn_permission_or_io_errors_into_a_process_exi
     def unreadable(path: Path, *args: Any, **kwargs: Any) -> str:
         raise OSError(error_number, "process state could not be observed")
 
-    monkeypatch.setattr(Path, "read_text", unreadable)
+    patch_proc_stat(monkeypatch, unreadable)
     read = probe.patch.reads.process_identity if reader == "identity" else probe.proc_state
     with pytest.raises(OSError) as caught:
         read(9001)
@@ -55,7 +64,7 @@ def test_proc_stat_read_keeps_the_actual_running_process_state_and_start_time(
     monkeypatch: pytest.MonkeyPatch, reader: str,
 ) -> None:
     stat = "9001 (worker (retained)) R " + " ".join(["0"] * 18 + ["123"])
-    monkeypatch.setattr(Path, "read_text", lambda *args, **kwargs: stat)
+    patch_proc_stat(monkeypatch, lambda *args, **kwargs: stat)
     read = probe.patch.reads.process_identity if reader == "identity" else probe.proc_state
     assert read(9001) == ("123" if reader == "identity" else "R")
 
@@ -73,7 +82,7 @@ def test_original_exit_wait_handles_a_process_vanishing_during_either_stat_read(
             return "9001 (worker) R " + " ".join(["0"] * 18 + ["123"])
         raise ProcessLookupError(errno.ESRCH, "process exited after stat was opened")
 
-    monkeypatch.setattr(Path, "read_text", read_stat)
+    patch_proc_stat(monkeypatch, read_stat)
     assert probe.exited(dict(pid=9001, startTicks="123")) is True
     assert calls == (1 if reader == "identity" else 2)
 
@@ -89,13 +98,13 @@ def test_a_process_vanishing_after_pidfd_binding_is_never_signalled(monkeypatch:
 
     monkeypatch.setattr(probe.sys, "platform", "linux")
     monkeypatch.setattr(probe.signal, "SIGKILL", 9, raising=False)
-    monkeypatch.setattr(Path, "read_text", read_stat)
+    patch_proc_stat(monkeypatch, read_stat)
     monkeypatch.setattr(probe.os, "pidfd_open", lambda pid, flags: 71, raising=False)
     monkeypatch.setattr(probe.os, "close", lambda fd: closed.append(fd))
     monkeypatch.setattr(probe.signal, "pidfd_send_signal", lambda *args: sent.append(args), raising=False)
     with pytest.raises(probe.patch.ProbeFailure, match="MEDIA_CRASH_PID_IDENTITY_CHANGED"):
         probe.signal_owned(dict(pid=9001, startTicks="123"), 9)
-    assert sent == [] and closed == [71]
+    assert sent == [] and closed == [71] and len(calls) == 2
 
 
 @pytest.mark.parametrize("race", ["none", "open-exit", "send-exit", "pid-reused"])

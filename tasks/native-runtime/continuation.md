@@ -1,3 +1,29 @@
+<!-- native checkpoint 2026-11-11 full CI repair -->
+
+The complete 5548113d CI run 42939689927 failed: default Go coverage was
+16927/17886 = 94.638265%, below its unchanged 95% floor. Python 3.10/3.11/3.12
+reported stale additional Windows gate hashes and procfs mocks intercepting only
+text reads after process identity switched to bytes. Evidence Assembly and RC
+readiness consequently failed. Its separate controlled Android workflow
+42939697815 passed all six jobs; that is ancestor/platform scope only.
+
+The aaac6484 Rust run 42941864588 failed compilation because a retained route
+unit helper lacked its test-only python_truthy import. This repair restores that
+import, patches both procfs APIs with the same controlled read, and binds the
+additional Windows test step after auditing all original tests and the unchanged
+original Windows job. New Go regressions verify distinct signed applied/refused
+500 effects, original request/fence/realm/domain binding, flat protobuf/input
+boundaries, scalar/escape fidelity, Python 3.12 diagnostics, body I/O failures,
+and both result codecs through actual authenticated Go TLS streams including
+lost execution replies and interrupted reads. The prior 115 scoped race tests
+remain required; eight more make 123. Default/Android-Go/Python 95% and Rust 80%
+floors, complete suites and platform job bounds remain mandatory.
+
+No new source is qualified until exact-revision cloud results are collected.
+No local native builds are used. All product, authority, recovery, zero-Python,
+desktop/Android/provider and original MCP acceptance requirements remain open;
+whole migration remains ACTIVE / NOT_READY.
+
 <!-- native checkpoint 2026-11-11 retained media segment reader -->
 
 Whole product migration remains ACTIVE / NOT_READY. Source 5548113da5 has
