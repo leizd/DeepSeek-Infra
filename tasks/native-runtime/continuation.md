@@ -1,3 +1,54 @@
+<!-- native checkpoint 2026-11-11 ci.yml 37/37 green, artifacts hash-verified -->
+
+Whole product Rust/Go migration remains ACTIVE / **NOT_READY**.
+
+`ci.yml` run
+[42786170148](https://github.com/leizd/DeepSeek-Infra/actions/runs/42786170148) at
+`7c0713cc` is **37 of 37 jobs successful, zero failures, zero skips** — verified
+from the job API rather than from a partial reading. The local tree hashes to the
+same value the run tested.
+
+Two artifacts from that run were downloaded and **hash-verified**, which is what
+turns "the gate passed" into evidence:
+
+- `release-evidence-v4.8.0`: a 50-artifact bundle whose manifest records
+  `testedRevision 7c0713cc`, `sourceTreeDirty false`, SHA-256
+  `b3350096...49409` — matched.
+- `deepseek-infra-release-v4.8.0`: a 28 MB zip, SHA-256 `6f4bb036...a46af` —
+  matched.
+
+**A finding that had to be recorded rather than glossed.** That release zip is a
+package of the **full source tree** built by `scripts/release.py`: 4294 entries
+including **1029 Python files**. It is not a standalone native runtime. So
+`production_artifact_zero_python` is **not** satisfied by it, and this workstream
+does not claim otherwise. What does pass is the zero-Python *source* contract
+(`scripts/check_zero_python_runtime.py --strict`, 8/8) covering the native
+services' sources. The distinction matters: a source-distribution zip and a
+production artifact with no Python chain are different claims, and only the first
+one is true here.
+
+`release/native_runtime_5_0_evidence_v1.json` was updated so its
+`EXACT_HEAD_CI_MISSING` blocker states the CI half *is* satisfied, with the run,
+revision and verified hashes, while the blocker stays open for the two reasons that
+survive: the release artifact is a source zip, and `measurements`/`gates` stay empty
+until workload-measured zero invariants exist (the validator requires positive
+`samples` and `workload_operations` for every zero, so a CI run cannot populate
+them).
+
+**What is genuinely left**, in dependency order:
+
+1. `production_artifact_zero_python` — a packaged artifact whose production chain
+   contains no Python. Today's release zip is a source distribution, so this needs
+   packaging work, not a test.
+2. Workload-measured zero invariants — real operations with zero Python production
+   HTTP requests, mutations, scheduler runs, storage writes and federation signs,
+   plus zero shared-database writes and zero cgo allocations.
+3. Provider and fault evidence — three-MinIO, two-Fleet/four-MinIO, and the
+   SIGKILL/takeover matrices.
+4. Domain promotion — one real control domain moved end to end against a genuinely
+   stopped-and-fenced Python source, then the ownership contract's
+   `current_production_authority` can leave `python`.
+
 <!-- native checkpoint 2026-11-11 full ci.yml green: 37/37, Go coverage 95.01% -->
 
 Whole product Rust/Go migration remains ACTIVE / **NOT_READY**, but the complete
