@@ -27,7 +27,13 @@
     "worker_plane": {
       "service": "deepseek-worker",
       "runtime": "rust",
-      "roles": ["storage", "transfer", "crypto", "proof", "sandbox"]
+      "roles": [
+        "storage",
+        "transfer",
+        "crypto",
+        "proof",
+        "sandbox"
+      ]
     },
     "user_interface": {
       "service": "frontend",
@@ -64,7 +70,7 @@
     },
     {
       "code": "EXACT_HEAD_CI_MISSING",
-      "detail": "No exact-head CI and Evidence Assembly artifacts qualify this native runtime snapshot."
+      "detail": "The exact-head CI half is now satisfied: ci.yml run 42786170148 at 7c0713ccb09484587ca0a3c15dde3847a2af5186 completed 37 of 37 jobs successfully with no skips, and evidence-assembly produced a 50-artifact bundle (release-evidence-v4.8.0) whose manifest records testedRevision 7c0713cc and sourceTreeDirty false, with SHA-256 b3350096eafad5c4301a2ee95dde09ae98e7f9e4aacab81ee7e44785e7849409 verified. The blocker stays open because the release artifact built in that run is a zip of the full source tree (4294 entries, 1029 Python files) rather than a standalone native runtime, so production_artifact_zero_python remains unmet, and because measurements/gates stay empty until workload-measured zero invariants exist."
     },
     {
       "code": "ZERO_PYTHON_MEASUREMENTS_MISSING",
