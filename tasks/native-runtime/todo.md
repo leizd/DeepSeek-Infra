@@ -3716,3 +3716,14 @@ No native/browser assertion, report requirement or original floor is removed.
 
 
 - [ ] Qualify metadata-only media recovery polling against94bcb486/run40495720177: preserve original10-second maximum-array HTTP200, active-lease exclusion, original signed recovery, corruption denial and original95/80/fullCI/platform floors. Runtime candidate is not yet qualified.
+
+- [ ] Qualify native backup-target deregistration at the exact new source: original
+  public 200/404/authentication semantics, one transaction and journal event,
+  concurrent TCP callers, restart/replay scope, writer-expiry rollback and retained
+  health/provider bytes. Source implementation and bounded regressions are present;
+  native cloud execution and original full coverage gates are still required.
+- [ ] Complete target creation/register-new/probe/adopt/drain/activate and safe
+  same-ID re-registration with the original public topology generation; preserve
+  internal monotonic history and Rust-owned provider effects, unknown-outcome
+  recovery and explicit ownership handback. Do not treat a tombstone-only slice as
+  lifecycle completion.

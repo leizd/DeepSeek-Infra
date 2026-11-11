@@ -19,7 +19,12 @@ func targetHealthPublicStore(t *testing.T, empty bool, now int64) *store.Control
 
 func targetPublicFixtureStore(t *testing.T, empty, withHealth bool, now int64) *store.Control {
 	t.Helper()
-	control, err := store.OpenControl(store.OpenOptions{Path: t.TempDir(), Owner: "target-health-api",
+	return targetPublicFixtureStoreAt(t, empty, withHealth, now, t.TempDir())
+}
+
+func targetPublicFixtureStoreAt(t *testing.T, empty, withHealth bool, now int64, path string) *store.Control {
+	t.Helper()
+	control, err := store.OpenControl(store.OpenOptions{Path: path, Owner: "target-health-api",
 		Now: func() int64 { return now }, AuthorizeCutover: true, PromotionSignerPublicKey: promotionRoutePublic,
 		FleetID: mutationFleetID, Environment: mutationEnvironment})
 	if err != nil {
