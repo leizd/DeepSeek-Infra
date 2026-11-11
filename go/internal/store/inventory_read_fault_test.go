@@ -19,6 +19,7 @@ var errInventoryReadInterrupted = errors.New("inventory database read interrupte
 type inventoryReadFault struct {
 	query                                      string
 	cursor, malformed, commit, armed, injected bool
+	exec                                       bool
 	skip                                       int
 	matched                                    int
 }
@@ -134,6 +135,10 @@ func TestAuthoritativeTargetLastReadMustSucceedAfterSchemaValidation(t *testing.
 }
 
 func (conn inventoryFaultConnection) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
+	if conn.fault.armed && conn.fault.exec && strings.Contains(query, conn.fault.query) {
+		conn.fault.armed, conn.fault.injected = false, true
+		return nil, errInventoryReadInterrupted
+	}
 	return conn.Conn.(driver.ExecerContext).ExecContext(ctx, query, args)
 }
 
