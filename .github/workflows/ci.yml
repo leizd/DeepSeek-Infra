@@ -1714,8 +1714,11 @@ jobs:
         run: >-
           python scripts/run_rust_sidecar_benchmarks.py
           --skip-build
-          --iterations 2
-          --warmups 1
+          # 12 samples per layer: the absolute latency gate needs at least 10 to
+          # assert a p95 at all, and below that it reports itself unmeasured rather
+          # than passing. 2 was never enough to support a percentile.
+          --iterations 12
+          --warmups 3
           --concurrency 1,8,32
           --timeout 45
           --artifact-out artifacts/rust-sidecar-performance.json

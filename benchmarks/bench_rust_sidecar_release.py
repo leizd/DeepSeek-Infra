@@ -1430,6 +1430,141 @@ def validate_report(report: dict[str, Any]) -> None:
         raise RuntimeError("benchmark report contains a forbidden sensitive marker")
 
 
+# Absolute latency budgets, in microseconds, for the pure Rust core and for the
+# release sidecar over HTTP. These are the numbers a merge gate can assert without
+# depending on a comparison to the Python baseline, which the relative gates already
+# cover.
+#
+# How the numbers were chosen: each budget sits at roughly 4x the median measured on
+# the CI runner for that scenario, rounded up. That is deliberately loose. The point
+# of the gate is to catch a change that makes a path an order of magnitude slower -
+# a lost fast path, an accidental JSON round-trip, an allocation storm - not to fail
+# on ordinary runner variance. A tight budget on shared CI hardware produces flakes,
+# and a flaky gate gets disabled, which is worse than a loose one that survives.
+#
+# Scenarios absent from this mapping are measured but not gated: their inputs are
+# either unbounded by design (large multipart content) or dominated by the Python
+# baseline rather than the Rust path.
+# Absolute latency budgets in microseconds, one entry per scenario:
+# ``(core_p95_budget, http_p95_budget)``. These are what a merge gate can assert
+# without depending on a comparison to the Python baseline, which the relative gates
+# already cover.
+#
+# How the numbers were chosen: each budget is roughly 4x the p95 measured on the CI
+# runner for that scenario, rounded up to a readable step. The looseness is
+# deliberate. A gate on shared CI hardware exists to catch a path that became an
+# order of magnitude slower - a lost fast path, an accidental JSON round-trip, an
+# allocation storm - not to fail on ordinary runner variance. A tight budget flakes,
+# and a flaky gate gets switched off, which is worse than a loose one that holds.
+#
+# The core and HTTP budgets are separate because their ratio is not stable: an
+# in-process call skips the socket, the serialisation and the Python frame, so a
+# single derived ratio cannot fit every scenario.
+#
+# Scenarios absent from this mapping are measured but not gated: their inputs are
+# unbounded by design (large multipart content, 1000x1536 vector ranking) and a
+# wall-clock budget on them would measure the runner, not the code.
+LATENCY_BUDGET_US: dict[str, dict[str, tuple[float, float]]] = {
+    "gateway_request_preparation": {
+        "minimal_request": (100.0, 1000.0),
+        "multi_turn_request": (150.0, 1150.0),
+        "tools_heavy_request": (400.0, 1650.0),
+        "invalid_request": (50.0, 750.0),
+    },
+    "mcp_protocol_preparation": {
+        "initialize": (60.0, 900.0),
+        "tools_list": (50.0, 750.0),
+        "tools_call_small_arguments": (60.0, 700.0),
+        "invalid_json_rpc": (50.0, 800.0),
+    },
+    "tool_policy": {
+        "safe_public_url": (50.0, 700.0),
+        "private_loopback_url": (50.0, 650.0),
+        "path_traversal": (50.0, 650.0),
+        "safe_path": (50.0, 650.0),
+        "capability_allow": (120.0, 600.0),
+        "capability_deny": (60.0, 700.0),
+    },
+    "rag_vector_ranking": {
+        "16_candidates_x_384_dimensions": (700.0, 5600.0),
+        "ties_first_match": (60.0, 800.0),
+    },
+    "rag_document_preparation": {
+        "small": (150.0, 1100.0),
+        "medium": (3000.0, 6050.0),
+    },
+}
+# A percentile needs enough samples to mean anything. Below this the gate reports
+# itself as unmeasured rather than passing on a handful of noisy numbers.
+MINIMUM_GATE_SAMPLES = 10
+
+
+def evaluate_absolute_latency_gates(
+    delegates: list[dict[str, Any]], *, iterations: int
+) -> dict[str, Any]:
+    """Assert the absolute budgets, or declare honestly that they were not measured.
+
+    ``iterations`` is the per-layer sample count the run used. A percentile built
+    from a handful of samples is noise, so when the count is below
+    ``MINIMUM_GATE_SAMPLES`` this returns ``measured=False`` with the reason and the
+    count - it does not silently pass, and it does not fail on data that cannot
+    support a verdict either.
+    """
+    if iterations < MINIMUM_GATE_SAMPLES:
+        return {
+            "measured": False,
+            "reason": "insufficient-samples",
+            "iterations": iterations,
+            "minimumSamples": MINIMUM_GATE_SAMPLES,
+            "detail": (
+                "absolute latency percentiles need at least "
+                f"{MINIMUM_GATE_SAMPLES} samples per layer; this run used {iterations}, "
+                "so the budgets are reported as unmeasured rather than passed"
+            ),
+            "scenarios": {},
+        }
+
+    results: dict[str, Any] = {}
+    violations: list[str] = []
+    for delegate in delegates:
+        delegate_name = str(delegate.get("delegate"))
+        for scenario in delegate.get("scenarios") or []:
+            budget = LATENCY_BUDGET_US.get(delegate_name, {}).get(str(scenario.get("name")))
+            if budget is None:
+                continue
+            core_budget, http_budget = budget
+            layers = scenario.get("layers") or {}
+            http_p95 = (layers.get("releaseSidecarHttp") or {}).get("p95Us")
+            core_p95 = (layers.get("pureRustCore") or {}).get("p95Us")
+            key = f"{delegate_name}/{scenario.get('name')}"
+            entry: dict[str, Any] = {"coreBudgetUs": core_budget, "httpBudgetUs": http_budget}
+            if isinstance(http_p95, int | float):
+                entry["httpP95Us"] = http_p95
+                entry["httpWithinBudget"] = http_p95 <= http_budget
+                if not entry["httpWithinBudget"]:
+                    violations.append(f"{key}: http p95 {http_p95}us over budget {http_budget}us")
+            else:
+                entry["httpWithinBudget"] = False
+                violations.append(f"{key}: http p95 missing")
+            if isinstance(core_p95, int | float):
+                entry["coreP95Us"] = core_p95
+                entry["coreWithinBudget"] = core_p95 <= core_budget
+                if not entry["coreWithinBudget"]:
+                    violations.append(f"{key}: core p95 {core_p95}us over budget {core_budget}us")
+            else:
+                entry["coreWithinBudget"] = False
+                violations.append(f"{key}: core p95 missing")
+            results[key] = entry
+    return {
+        "measured": True,
+        "iterations": iterations,
+        "minimumSamples": MINIMUM_GATE_SAMPLES,
+        "scenarios": results,
+        "violations": violations,
+        "passed": not violations,
+    }
+
+
 def run_benchmark(*, iterations: int, warmups: int, concurrency: list[int], timeout: float, skip_build: bool = False) -> dict[str, Any]:
     if not 1 <= iterations <= MAX_ITERATIONS:
         raise ValueError(f"iterations must be in 1..{MAX_ITERATIONS}")
@@ -1641,14 +1776,19 @@ def run_benchmark(*, iterations: int, warmups: int, concurrency: list[int], time
         with urllib.request.urlopen(f"{sidecar.base_url}/metrics", timeout=timeout) as response:  # noqa: S310 - local sidecar
             metrics_text = response.read().decode("utf-8")
 
+    absolute_latency = evaluate_absolute_latency_gates(delegate_reports, iterations=iterations)
     report = {
         "schemaVersion": SCHEMA_VERSION,
         "version": VERSION,
         **evidence_revision(ROOT),
         "status": "PASS",
         "generatedAt": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
-        "informationalOnly": True,
-        "absoluteLatencyMergeGate": False,
+        "absoluteLatency": absolute_latency,
+        # These two stay for compatibility with earlier report readers, but they are
+        # now derived from the measurement instead of hard-coded. A run with too few
+        # samples reports the gate as unmeasured, which is not a pass.
+        "informationalOnly": not absolute_latency["measured"],
+        "absoluteLatencyMergeGate": bool(absolute_latency.get("passed")),
         "machine": machine,
         "coldStart": cold,
         "delegates": delegate_reports,
