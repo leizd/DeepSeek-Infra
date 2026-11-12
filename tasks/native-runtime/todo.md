@@ -3831,3 +3831,19 @@ clone/overlap/contributor and original marker compatibility, Rust initialization
 and unknown-effect recovery, all retained target kinds/health/handback, all
 server/desktop/Android/background/MCP and zero-Python/CI/Evidence/platform
 requirements remain mandatory. ACTIVE / NOT_READY.
+
+
+### 2026-11-12 — Original operator result and event identity remain required
+
+Source0b64adb passed all15 original and additional Go/race families. The
+diagnostic union on identical production bytes is17481/18402=94.995109%, below
+the original95%; rounding does not qualify it, and distinct runs are never
+current full-CI evidence. Add loss of the original operator result while a
+signed witness survives, and an actual malformed single-column SQLite event
+identity. Both must refuse healthy state/publication, retain the original
+record after rollback, and reconcile only the same proven-rolled-back request.
+The fault transport now handles a one-column row without indexing a second
+column. All16 frozen families require cloud execution and all original
+complete gates remain mandatory. Production Go/Rust/Proto and complete
+server/desktop/Android/background/MCP migration scope remain unchanged and
+incomplete. ACTIVE / NOT_READY.

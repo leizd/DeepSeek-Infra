@@ -67,6 +67,7 @@ jobs:
               'TestTargetRegistrationMigrationInterruptionsRetainOriginalV20State',
               'TestTargetRegistrationDamagedSchemaIdentityAndCatalogNeverLookEmpty',
               'TestTargetRegistrationReplayAndPreparationCannotHideReadOrCommitFailure',
+              'TestTargetRegistrationMissingOperatorOrMalformedEventCannotPublishHealthyState',
           }
           actual=set()
           for path in (root/'go/internal/store').glob('*_test.go'):

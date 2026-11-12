@@ -176,7 +176,11 @@ func (rows inventoryFaultRows) Next(values []driver.Value) error {
 		}
 		// A lost revision value must never turn a decoded record into a valid
 		// current target. The underlying stored row remains intact for recovery.
-		values[1] = nil
+		column := 1
+		if len(values) == 1 {
+			column = 0
+		}
+		values[column] = nil
 		return nil
 	}
 	return errInventoryReadInterrupted
