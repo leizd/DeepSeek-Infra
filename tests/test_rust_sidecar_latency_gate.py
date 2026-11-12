@@ -13,6 +13,7 @@ trust.
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -173,3 +174,79 @@ def test_the_committed_report_is_unmeasured_by_its_own_admission() -> None:
     adequate = evaluate_absolute_latency_gates(report["delegates"], iterations=MINIMUM_GATE_SAMPLES)
     assert adequate["measured"] is True
     assert adequate["passed"] is True, adequate["violations"][:5]
+
+
+def _report_with(latency: dict) -> dict:
+    """A report shaped closely enough for main() to write it.
+
+    ``_stable_evidence`` reads ``machine``, so the fixture supplies it rather than
+    making main() defensive about a report the real benchmark always produces.
+    """
+    return {"absoluteLatency": latency, "machine": {}}
+
+
+def test_gate_mode_fails_when_the_run_could_not_be_measured(monkeypatch, tmp_path, capsys) -> None:
+    """A two-sample run must exit non-zero under --require-latency-gate.
+
+    This is the difference between reporting and gating. Without it the budgets were
+    measured and then ignored, which is exactly how the old hard-coded false flag
+    survived.
+    """
+    from benchmarks import bench_rust_sidecar_release as bench
+
+    monkeypatch.setattr(
+        bench,
+        "run_benchmark",
+        lambda **_kwargs: _report_with({"measured": False, "reason": "insufficient-samples", "detail": "only 2 samples"}),
+    )
+    exit_code = bench.main(
+        ["--require-latency-gate", "--artifact-out", str(tmp_path / "a.json"), "--evidence-out", str(tmp_path / "e.json")]
+    )
+    assert exit_code == 1
+    assert "could not be measured" in capsys.readouterr().err
+
+
+def test_gate_mode_fails_and_names_each_budget_violation(monkeypatch, tmp_path, capsys) -> None:
+    from benchmarks import bench_rust_sidecar_release as bench
+
+    monkeypatch.setattr(
+        bench,
+        "run_benchmark",
+        lambda **_kwargs: _report_with(
+            {"measured": True, "passed": False, "violations": ["tool_policy/safe_path: http p95 900us over budget 650us"]}
+        ),
+    )
+    exit_code = bench.main(
+        ["--require-latency-gate", "--artifact-out", str(tmp_path / "a.json"), "--evidence-out", str(tmp_path / "e.json")]
+    )
+    assert exit_code == 1
+    assert "tool_policy/safe_path" in capsys.readouterr().err
+
+
+def test_without_gate_mode_the_benchmark_still_records_and_exits_zero(monkeypatch, tmp_path, capsys) -> None:
+    """The benchmark is also used to collect numbers, so it must not always fail."""
+    from benchmarks import bench_rust_sidecar_release as bench
+
+    monkeypatch.setattr(
+        bench,
+        "run_benchmark",
+        lambda **_kwargs: _report_with({"measured": True, "passed": False, "violations": ["x"]}),
+    )
+    exit_code = bench.main(["--artifact-out", str(tmp_path / "a.json"), "--evidence-out", str(tmp_path / "e.json")])
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert payload["absoluteLatencyGate"] is False
+
+
+def test_gate_mode_passes_when_budgets_hold(monkeypatch, tmp_path) -> None:
+    from benchmarks import bench_rust_sidecar_release as bench
+
+    monkeypatch.setattr(
+        bench,
+        "run_benchmark",
+        lambda **_kwargs: _report_with({"measured": True, "passed": True, "violations": []}),
+    )
+    exit_code = bench.main(
+        ["--require-latency-gate", "--artifact-out", str(tmp_path / "a.json"), "--evidence-out", str(tmp_path / "e.json")]
+    )
+    assert exit_code == 0

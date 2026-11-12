@@ -1721,6 +1721,7 @@ jobs:
           --warmups 3
           --concurrency 1,8,32
           --timeout 45
+          --require-latency-gate
           --artifact-out artifacts/rust-sidecar-performance.json
           --evidence-out docs/evidence/rust-sidecar-performance-v$RELEASE_VERSION.json
       - run: >-

@@ -1858,6 +1858,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--skip-build", action="store_true")
     parser.add_argument("--artifact-out", type=Path, default=ROOT / "artifacts/rust-sidecar-performance.json")
     parser.add_argument("--evidence-out", type=Path, default=ROOT / f"docs/evidence/rust-sidecar-performance-v{VERSION}.json")
+    # Without this the budgets are measured and reported but nothing fails on them,
+    # which is how the gate stayed informational. When set, an over-budget p95 or a
+    # run too small to measure exits non-zero.
+    parser.add_argument(
+        "--require-latency-gate",
+        action="store_true",
+        help="Fail when the absolute latency budgets are exceeded or unmeasurable.",
+    )
     args = parser.parse_args(argv)
     try:
         report = run_benchmark(
@@ -1872,7 +1880,30 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
         print(f"Rust sidecar release benchmark failed: {exc}", file=sys.stderr)
         return 1
-    print(json.dumps({"artifact": str(args.artifact_out), "evidence": str(args.evidence_out)}, ensure_ascii=False))
+    latency = report.get("absoluteLatency") or {}
+    if args.require_latency_gate:
+        if not latency.get("measured"):
+            print(
+                "Absolute latency gate could not be measured: "
+                f"{latency.get('detail') or latency.get('reason')}",
+                file=sys.stderr,
+            )
+            return 1
+        if not latency.get("passed"):
+            for violation in latency.get("violations") or []:
+                print(f"Absolute latency budget exceeded: {violation}", file=sys.stderr)
+            return 1
+    print(
+        json.dumps(
+            {
+                "artifact": str(args.artifact_out),
+                "evidence": str(args.evidence_out),
+                "absoluteLatencyMeasured": bool(latency.get("measured")),
+                "absoluteLatencyGate": bool(latency.get("passed")),
+            },
+            ensure_ascii=False,
+        )
+    )
     return 0
 
 
