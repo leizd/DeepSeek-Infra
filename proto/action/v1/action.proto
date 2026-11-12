@@ -243,3 +243,41 @@ service NativeOriginCustody {
   rpc Read(ReadNativeOriginRequest) returns (NativeOriginState);
   rpc Publish(PublishNativeOriginRequest) returns (NativeOriginState);
 }
+
+// Read-only provider observation. This receipt never admits a mutation, installs
+// an epoch, initializes a target or proves that an earlier effect was unapplied.
+// Go must separately verify its live authority, registration history, overlap
+// and clone checks in the transaction which changes its target registry.
+message InspectFilesystemBackupTargetRequest {
+  uint32 schema_version = 1;
+  deepseek.common.v1.ActionFence fence = 2;
+  string operation_id = 3;
+  string path = 4;
+  uint64 writer_fencing_token = 5;
+}
+
+message FilesystemBackupTargetObservation {
+  uint32 schema_version = 1;
+  deepseek.common.v1.ActionFence fence = 2;
+  string operation_id = 3;
+  uint64 writer_fencing_token = 4;
+  string requested_path = 5;
+  string canonical_path = 6;
+  bool marker_present = 7;
+  bytes marker_json = 8;
+  bytes marker_sha256 = 9;
+  int64 observed_at_unix = 10;
+  string fleet_id = 11;
+  string environment = 12;
+}
+
+message FilesystemBackupTargetInspectionReceipt {
+  uint32 schema_version = 1;
+  FilesystemBackupTargetObservation observation = 2;
+  bytes signature = 3;
+  string signer_public_key = 4;
+}
+
+service BackupTargetInspection {
+  rpc Inspect(InspectFilesystemBackupTargetRequest) returns (FilesystemBackupTargetInspectionReceipt);
+}

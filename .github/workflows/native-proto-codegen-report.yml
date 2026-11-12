@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   source-report:
-    name: Pinned media protocol source generation
+    name: Pinned backup-target protocol source generation
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
@@ -77,10 +77,10 @@ jobs:
         \  https://repo.maven.apache.org/maven2/io/grpc/protoc-gen-grpc-java/1.84.0/protoc-gen-grpc-java-1.84.0-linux-x86_64.exe\n\
         echo \"907c2d4efc2bae9b21cada75c31b36f3821e15b7be96311e214a6be65bcd20aa  $plugin\" | sha256sum --check --strict\n\
         chmod +x \"$plugin\"\necho \"PROTOC_GEN_GRPC_JAVA=$plugin\" >> \"$GITHUB_ENV\"\n"
-    - name: Generate reviewed media bindings and export a bounded source diff report
+    - name: Generate reviewed backup-target bindings and export a bounded source diff report
       run: "set -euo pipefail\npython scripts/native_codegen.py --write\npython scripts/native_android_codegen.py --check\n\
         python - <<'PY'\nfrom pathlib import Path\nimport hashlib, json, os, subprocess\nroot=Path.cwd(); out=root/'artifacts/native-proto-codegen'\n\
-        assert subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()==os.environ['GITHUB_SHA']\nallowed={'go/internal/protocol/mediav1/media.pb.go','go/internal/protocol/mediav1/media_grpc.pb.go','proto/generated/descriptor.pb','proto/generated/codegen-manifest.v1.json'}\n\
+        assert subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()==os.environ['GITHUB_SHA']\nallowed={'go/internal/protocol/actionv1/action.pb.go','go/internal/protocol/actionv1/action_grpc.pb.go','proto/generated/descriptor.pb','proto/generated/codegen-manifest.v1.json'}\n\
         changed=set(subprocess.check_output(['git','diff','--name-only'],text=True).splitlines())\nexpected_changed=allowed\nassert changed==expected_changed,\
         \ 'Generated changes escaped the reviewed four-file output boundary'\nassert not subprocess.check_output(['git','ls-files','--others','--exclude-standard'])\n\
         subprocess.run(['git','diff','--check'],check=True)\npatch=subprocess.check_output(['git','diff','--binary','--',*sorted(allowed)])\n\
