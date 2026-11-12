@@ -297,6 +297,57 @@ func (ControlSigningPurpose) EnumDescriptor() ([]byte, []int) {
 	return file_action_v1_action_proto_rawDescGZIP(), []int{4}
 }
 
+// A signed metadata observation for the original clone/relocation rule. It is
+// neither an execution grant nor proof that an earlier provider effect failed.
+type BackupTargetLocationState int32
+
+const (
+	BackupTargetLocationState_BACKUP_TARGET_LOCATION_STATE_UNSPECIFIED BackupTargetLocationState = 0
+	BackupTargetLocationState_BACKUP_TARGET_LOCATION_STATE_EXISTS      BackupTargetLocationState = 1
+	BackupTargetLocationState_BACKUP_TARGET_LOCATION_STATE_MISSING     BackupTargetLocationState = 2
+)
+
+// Enum value maps for BackupTargetLocationState.
+var (
+	BackupTargetLocationState_name = map[int32]string{
+		0: "BACKUP_TARGET_LOCATION_STATE_UNSPECIFIED",
+		1: "BACKUP_TARGET_LOCATION_STATE_EXISTS",
+		2: "BACKUP_TARGET_LOCATION_STATE_MISSING",
+	}
+	BackupTargetLocationState_value = map[string]int32{
+		"BACKUP_TARGET_LOCATION_STATE_UNSPECIFIED": 0,
+		"BACKUP_TARGET_LOCATION_STATE_EXISTS":      1,
+		"BACKUP_TARGET_LOCATION_STATE_MISSING":     2,
+	}
+)
+
+func (x BackupTargetLocationState) Enum() *BackupTargetLocationState {
+	p := new(BackupTargetLocationState)
+	*p = x
+	return p
+}
+
+func (x BackupTargetLocationState) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (BackupTargetLocationState) Descriptor() protoreflect.EnumDescriptor {
+	return file_action_v1_action_proto_enumTypes[5].Descriptor()
+}
+
+func (BackupTargetLocationState) Type() protoreflect.EnumType {
+	return &file_action_v1_action_proto_enumTypes[5]
+}
+
+func (x BackupTargetLocationState) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use BackupTargetLocationState.Descriptor instead.
+func (BackupTargetLocationState) EnumDescriptor() ([]byte, []int) {
+	return file_action_v1_action_proto_rawDescGZIP(), []int{5}
+}
+
 type AdmitCommandRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Kind          CommandKind            `protobuf:"varint,1,opt,name=kind,proto3,enum=deepseek.action.v1.CommandKind" json:"kind,omitempty"`
@@ -2147,6 +2198,258 @@ func (x *FilesystemBackupTargetInspectionReceipt) GetSignerPublicKey() string {
 	return ""
 }
 
+type ProbeFilesystemBackupTargetLocationRequest struct {
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	SchemaVersion      uint32                 `protobuf:"varint,1,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
+	Fence              *commonv1.ActionFence  `protobuf:"bytes,2,opt,name=fence,proto3" json:"fence,omitempty"`
+	OperationId        string                 `protobuf:"bytes,3,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
+	Path               string                 `protobuf:"bytes,4,opt,name=path,proto3" json:"path,omitempty"`
+	WriterFencingToken uint64                 `protobuf:"varint,5,opt,name=writer_fencing_token,json=writerFencingToken,proto3" json:"writer_fencing_token,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *ProbeFilesystemBackupTargetLocationRequest) Reset() {
+	*x = ProbeFilesystemBackupTargetLocationRequest{}
+	mi := &file_action_v1_action_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProbeFilesystemBackupTargetLocationRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProbeFilesystemBackupTargetLocationRequest) ProtoMessage() {}
+
+func (x *ProbeFilesystemBackupTargetLocationRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_action_v1_action_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProbeFilesystemBackupTargetLocationRequest.ProtoReflect.Descriptor instead.
+func (*ProbeFilesystemBackupTargetLocationRequest) Descriptor() ([]byte, []int) {
+	return file_action_v1_action_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *ProbeFilesystemBackupTargetLocationRequest) GetSchemaVersion() uint32 {
+	if x != nil {
+		return x.SchemaVersion
+	}
+	return 0
+}
+
+func (x *ProbeFilesystemBackupTargetLocationRequest) GetFence() *commonv1.ActionFence {
+	if x != nil {
+		return x.Fence
+	}
+	return nil
+}
+
+func (x *ProbeFilesystemBackupTargetLocationRequest) GetOperationId() string {
+	if x != nil {
+		return x.OperationId
+	}
+	return ""
+}
+
+func (x *ProbeFilesystemBackupTargetLocationRequest) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *ProbeFilesystemBackupTargetLocationRequest) GetWriterFencingToken() uint64 {
+	if x != nil {
+		return x.WriterFencingToken
+	}
+	return 0
+}
+
+type FilesystemBackupTargetLocationObservation struct {
+	state              protoimpl.MessageState    `protogen:"open.v1"`
+	SchemaVersion      uint32                    `protobuf:"varint,1,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
+	Fence              *commonv1.ActionFence     `protobuf:"bytes,2,opt,name=fence,proto3" json:"fence,omitempty"`
+	OperationId        string                    `protobuf:"bytes,3,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
+	WriterFencingToken uint64                    `protobuf:"varint,4,opt,name=writer_fencing_token,json=writerFencingToken,proto3" json:"writer_fencing_token,omitempty"`
+	RequestedPath      string                    `protobuf:"bytes,5,opt,name=requested_path,json=requestedPath,proto3" json:"requested_path,omitempty"`
+	State              BackupTargetLocationState `protobuf:"varint,6,opt,name=state,proto3,enum=deepseek.action.v1.BackupTargetLocationState" json:"state,omitempty"`
+	ObservedAtUnix     int64                     `protobuf:"varint,7,opt,name=observed_at_unix,json=observedAtUnix,proto3" json:"observed_at_unix,omitempty"`
+	FleetId            string                    `protobuf:"bytes,8,opt,name=fleet_id,json=fleetId,proto3" json:"fleet_id,omitempty"`
+	Environment        string                    `protobuf:"bytes,9,opt,name=environment,proto3" json:"environment,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *FilesystemBackupTargetLocationObservation) Reset() {
+	*x = FilesystemBackupTargetLocationObservation{}
+	mi := &file_action_v1_action_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FilesystemBackupTargetLocationObservation) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FilesystemBackupTargetLocationObservation) ProtoMessage() {}
+
+func (x *FilesystemBackupTargetLocationObservation) ProtoReflect() protoreflect.Message {
+	mi := &file_action_v1_action_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FilesystemBackupTargetLocationObservation.ProtoReflect.Descriptor instead.
+func (*FilesystemBackupTargetLocationObservation) Descriptor() ([]byte, []int) {
+	return file_action_v1_action_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *FilesystemBackupTargetLocationObservation) GetSchemaVersion() uint32 {
+	if x != nil {
+		return x.SchemaVersion
+	}
+	return 0
+}
+
+func (x *FilesystemBackupTargetLocationObservation) GetFence() *commonv1.ActionFence {
+	if x != nil {
+		return x.Fence
+	}
+	return nil
+}
+
+func (x *FilesystemBackupTargetLocationObservation) GetOperationId() string {
+	if x != nil {
+		return x.OperationId
+	}
+	return ""
+}
+
+func (x *FilesystemBackupTargetLocationObservation) GetWriterFencingToken() uint64 {
+	if x != nil {
+		return x.WriterFencingToken
+	}
+	return 0
+}
+
+func (x *FilesystemBackupTargetLocationObservation) GetRequestedPath() string {
+	if x != nil {
+		return x.RequestedPath
+	}
+	return ""
+}
+
+func (x *FilesystemBackupTargetLocationObservation) GetState() BackupTargetLocationState {
+	if x != nil {
+		return x.State
+	}
+	return BackupTargetLocationState_BACKUP_TARGET_LOCATION_STATE_UNSPECIFIED
+}
+
+func (x *FilesystemBackupTargetLocationObservation) GetObservedAtUnix() int64 {
+	if x != nil {
+		return x.ObservedAtUnix
+	}
+	return 0
+}
+
+func (x *FilesystemBackupTargetLocationObservation) GetFleetId() string {
+	if x != nil {
+		return x.FleetId
+	}
+	return ""
+}
+
+func (x *FilesystemBackupTargetLocationObservation) GetEnvironment() string {
+	if x != nil {
+		return x.Environment
+	}
+	return ""
+}
+
+type FilesystemBackupTargetLocationReceipt struct {
+	state           protoimpl.MessageState                     `protogen:"open.v1"`
+	SchemaVersion   uint32                                     `protobuf:"varint,1,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
+	Observation     *FilesystemBackupTargetLocationObservation `protobuf:"bytes,2,opt,name=observation,proto3" json:"observation,omitempty"`
+	Signature       []byte                                     `protobuf:"bytes,3,opt,name=signature,proto3" json:"signature,omitempty"`
+	SignerPublicKey string                                     `protobuf:"bytes,4,opt,name=signer_public_key,json=signerPublicKey,proto3" json:"signer_public_key,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *FilesystemBackupTargetLocationReceipt) Reset() {
+	*x = FilesystemBackupTargetLocationReceipt{}
+	mi := &file_action_v1_action_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FilesystemBackupTargetLocationReceipt) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FilesystemBackupTargetLocationReceipt) ProtoMessage() {}
+
+func (x *FilesystemBackupTargetLocationReceipt) ProtoReflect() protoreflect.Message {
+	mi := &file_action_v1_action_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FilesystemBackupTargetLocationReceipt.ProtoReflect.Descriptor instead.
+func (*FilesystemBackupTargetLocationReceipt) Descriptor() ([]byte, []int) {
+	return file_action_v1_action_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *FilesystemBackupTargetLocationReceipt) GetSchemaVersion() uint32 {
+	if x != nil {
+		return x.SchemaVersion
+	}
+	return 0
+}
+
+func (x *FilesystemBackupTargetLocationReceipt) GetObservation() *FilesystemBackupTargetLocationObservation {
+	if x != nil {
+		return x.Observation
+	}
+	return nil
+}
+
+func (x *FilesystemBackupTargetLocationReceipt) GetSignature() []byte {
+	if x != nil {
+		return x.Signature
+	}
+	return nil
+}
+
+func (x *FilesystemBackupTargetLocationReceipt) GetSignerPublicKey() string {
+	if x != nil {
+		return x.SignerPublicKey
+	}
+	return ""
+}
+
 var File_action_v1_action_proto protoreflect.FileDescriptor
 
 const file_action_v1_action_proto_rawDesc = "" +
@@ -2314,6 +2617,27 @@ const file_action_v1_action_proto_rawDesc = "" +
 	"\x0eschema_version\x18\x01 \x01(\rR\rschemaVersion\x12W\n" +
 	"\vobservation\x18\x02 \x01(\v25.deepseek.action.v1.FilesystemBackupTargetObservationR\vobservation\x12\x1c\n" +
 	"\tsignature\x18\x03 \x01(\fR\tsignature\x12*\n" +
+	"\x11signer_public_key\x18\x04 \x01(\tR\x0fsignerPublicKey\"\xf3\x01\n" +
+	"*ProbeFilesystemBackupTargetLocationRequest\x12%\n" +
+	"\x0eschema_version\x18\x01 \x01(\rR\rschemaVersion\x125\n" +
+	"\x05fence\x18\x02 \x01(\v2\x1f.deepseek.common.v1.ActionFenceR\x05fence\x12!\n" +
+	"\foperation_id\x18\x03 \x01(\tR\voperationId\x12\x12\n" +
+	"\x04path\x18\x04 \x01(\tR\x04path\x120\n" +
+	"\x14writer_fencing_token\x18\x05 \x01(\x04R\x12writerFencingToken\"\xb1\x03\n" +
+	")FilesystemBackupTargetLocationObservation\x12%\n" +
+	"\x0eschema_version\x18\x01 \x01(\rR\rschemaVersion\x125\n" +
+	"\x05fence\x18\x02 \x01(\v2\x1f.deepseek.common.v1.ActionFenceR\x05fence\x12!\n" +
+	"\foperation_id\x18\x03 \x01(\tR\voperationId\x120\n" +
+	"\x14writer_fencing_token\x18\x04 \x01(\x04R\x12writerFencingToken\x12%\n" +
+	"\x0erequested_path\x18\x05 \x01(\tR\rrequestedPath\x12C\n" +
+	"\x05state\x18\x06 \x01(\x0e2-.deepseek.action.v1.BackupTargetLocationStateR\x05state\x12(\n" +
+	"\x10observed_at_unix\x18\a \x01(\x03R\x0eobservedAtUnix\x12\x19\n" +
+	"\bfleet_id\x18\b \x01(\tR\afleetId\x12 \n" +
+	"\venvironment\x18\t \x01(\tR\venvironment\"\xf9\x01\n" +
+	"%FilesystemBackupTargetLocationReceipt\x12%\n" +
+	"\x0eschema_version\x18\x01 \x01(\rR\rschemaVersion\x12_\n" +
+	"\vobservation\x18\x02 \x01(\v2=.deepseek.action.v1.FilesystemBackupTargetLocationObservationR\vobservation\x12\x1c\n" +
+	"\tsignature\x18\x03 \x01(\fR\tsignature\x12*\n" +
 	"\x11signer_public_key\x18\x04 \x01(\tR\x0fsignerPublicKey*\x81\x02\n" +
 	"\vCommandKind\x12\x1c\n" +
 	"\x18COMMAND_KIND_UNSPECIFIED\x10\x00\x12\x1f\n" +
@@ -2343,7 +2667,11 @@ const file_action_v1_action_proto_rawDesc = "" +
 	"%CONTROL_SIGNING_PURPOSE_INSTALL_EPOCH\x10\x01\x12'\n" +
 	"#CONTROL_SIGNING_PURPOSE_STORAGE_PUT\x10\x02\x12+\n" +
 	"'CONTROL_SIGNING_PURPOSE_AGENT_EXECUTION\x10\x03\x12/\n" +
-	"+CONTROL_SIGNING_PURPOSE_AGENT_INSTALL_EPOCH\x10\x042\xb4\x04\n" +
+	"+CONTROL_SIGNING_PURPOSE_AGENT_INSTALL_EPOCH\x10\x04*\x9c\x01\n" +
+	"\x19BackupTargetLocationState\x12,\n" +
+	"(BACKUP_TARGET_LOCATION_STATE_UNSPECIFIED\x10\x00\x12'\n" +
+	"#BACKUP_TARGET_LOCATION_STATE_EXISTS\x10\x01\x12(\n" +
+	"$BACKUP_TARGET_LOCATION_STATE_MISSING\x10\x022\xb4\x04\n" +
 	"\x06Worker\x12a\n" +
 	"\fAdmitCommand\x12'.deepseek.action.v1.AdmitCommandRequest\x1a(.deepseek.action.v1.AdmitCommandResponse\x12W\n" +
 	"\vQueryEffect\x12&.deepseek.action.v1.QueryEffectRequest\x1a .deepseek.action.v1.EffectResult\x12\x88\x01\n" +
@@ -2357,9 +2685,10 @@ const file_action_v1_action_proto_rawDesc = "" +
 	"GetBinding\x12/.deepseek.action.v1.ControlSignerBindingRequest\x1a0.deepseek.action.v1.ControlSignerBindingResponse2\xd3\x01\n" +
 	"\x13NativeOriginCustody\x12Z\n" +
 	"\x04Read\x12+.deepseek.action.v1.ReadNativeOriginRequest\x1a%.deepseek.action.v1.NativeOriginState\x12`\n" +
-	"\aPublish\x12..deepseek.action.v1.PublishNativeOriginRequest\x1a%.deepseek.action.v1.NativeOriginState2\x9b\x01\n" +
+	"\aPublish\x12..deepseek.action.v1.PublishNativeOriginRequest\x1a%.deepseek.action.v1.NativeOriginState2\xa8\x02\n" +
 	"\x16BackupTargetInspection\x12\x80\x01\n" +
-	"\aInspect\x128.deepseek.action.v1.InspectFilesystemBackupTargetRequest\x1a;.deepseek.action.v1.FilesystemBackupTargetInspectionReceiptBHZFgithub.com/leizd/DeepSeek-Infra/go/internal/protocol/actionv1;actionv1b\x06proto3"
+	"\aInspect\x128.deepseek.action.v1.InspectFilesystemBackupTargetRequest\x1a;.deepseek.action.v1.FilesystemBackupTargetInspectionReceipt\x12\x8a\x01\n" +
+	"\rProbeLocation\x12>.deepseek.action.v1.ProbeFilesystemBackupTargetLocationRequest\x1a9.deepseek.action.v1.FilesystemBackupTargetLocationReceiptBHZFgithub.com/leizd/DeepSeek-Infra/go/internal/protocol/actionv1;actionv1b\x06proto3"
 
 var (
 	file_action_v1_action_proto_rawDescOnce sync.Once
@@ -2373,104 +2702,114 @@ func file_action_v1_action_proto_rawDescGZIP() []byte {
 	return file_action_v1_action_proto_rawDescData
 }
 
-var file_action_v1_action_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
-var file_action_v1_action_proto_msgTypes = make([]protoimpl.MessageInfo, 23)
+var file_action_v1_action_proto_enumTypes = make([]protoimpl.EnumInfo, 6)
+var file_action_v1_action_proto_msgTypes = make([]protoimpl.MessageInfo, 26)
 var file_action_v1_action_proto_goTypes = []any{
-	(CommandKind)(0),                                // 0: deepseek.action.v1.CommandKind
-	(AdmitStatus)(0),                                // 1: deepseek.action.v1.AdmitStatus
-	(StorageMutationStatus)(0),                      // 2: deepseek.action.v1.StorageMutationStatus
-	(StorageConditionType)(0),                       // 3: deepseek.action.v1.StorageConditionType
-	(ControlSigningPurpose)(0),                      // 4: deepseek.action.v1.ControlSigningPurpose
-	(*AdmitCommandRequest)(nil),                     // 5: deepseek.action.v1.AdmitCommandRequest
-	(*AdmitCommandResponse)(nil),                    // 6: deepseek.action.v1.AdmitCommandResponse
-	(*QueryEffectRequest)(nil),                      // 7: deepseek.action.v1.QueryEffectRequest
-	(*EffectResult)(nil),                            // 8: deepseek.action.v1.EffectResult
-	(*InstallAuthoritativeEpochRequest)(nil),        // 9: deepseek.action.v1.InstallAuthoritativeEpochRequest
-	(*InstallAuthoritativeEpochResponse)(nil),       // 10: deepseek.action.v1.InstallAuthoritativeEpochResponse
-	(*StoragePrecondition)(nil),                     // 11: deepseek.action.v1.StoragePrecondition
-	(*StorageMutationRequest)(nil),                  // 12: deepseek.action.v1.StorageMutationRequest
-	(*StorageMutationResponse)(nil),                 // 13: deepseek.action.v1.StorageMutationResponse
-	(*QueryStorageEffectRequest)(nil),               // 14: deepseek.action.v1.QueryStorageEffectRequest
-	(*SignControlRequest)(nil),                      // 15: deepseek.action.v1.SignControlRequest
-	(*SignControlResponse)(nil),                     // 16: deepseek.action.v1.SignControlResponse
-	(*ControlSignerBindingRequest)(nil),             // 17: deepseek.action.v1.ControlSignerBindingRequest
-	(*ControlSignerBindingResponse)(nil),            // 18: deepseek.action.v1.ControlSignerBindingResponse
-	(*NativeOriginEvidence)(nil),                    // 19: deepseek.action.v1.NativeOriginEvidence
-	(*NativeOriginReceipt)(nil),                     // 20: deepseek.action.v1.NativeOriginReceipt
-	(*NativeOriginPublication)(nil),                 // 21: deepseek.action.v1.NativeOriginPublication
-	(*ReadNativeOriginRequest)(nil),                 // 22: deepseek.action.v1.ReadNativeOriginRequest
-	(*PublishNativeOriginRequest)(nil),              // 23: deepseek.action.v1.PublishNativeOriginRequest
-	(*NativeOriginState)(nil),                       // 24: deepseek.action.v1.NativeOriginState
-	(*InspectFilesystemBackupTargetRequest)(nil),    // 25: deepseek.action.v1.InspectFilesystemBackupTargetRequest
-	(*FilesystemBackupTargetObservation)(nil),       // 26: deepseek.action.v1.FilesystemBackupTargetObservation
-	(*FilesystemBackupTargetInspectionReceipt)(nil), // 27: deepseek.action.v1.FilesystemBackupTargetInspectionReceipt
-	(*commonv1.ActionFence)(nil),                    // 28: deepseek.common.v1.ActionFence
-	(commonv1.EffectState)(0),                       // 29: deepseek.common.v1.EffectState
-	(*commonv1.ErrorDetail)(nil),                    // 30: deepseek.common.v1.ErrorDetail
-	(*agentv1.AgentRunExecutionClaim)(nil),          // 31: deepseek.agent.v1.AgentRunExecutionClaim
+	(CommandKind)(0),                                   // 0: deepseek.action.v1.CommandKind
+	(AdmitStatus)(0),                                   // 1: deepseek.action.v1.AdmitStatus
+	(StorageMutationStatus)(0),                         // 2: deepseek.action.v1.StorageMutationStatus
+	(StorageConditionType)(0),                          // 3: deepseek.action.v1.StorageConditionType
+	(ControlSigningPurpose)(0),                         // 4: deepseek.action.v1.ControlSigningPurpose
+	(BackupTargetLocationState)(0),                     // 5: deepseek.action.v1.BackupTargetLocationState
+	(*AdmitCommandRequest)(nil),                        // 6: deepseek.action.v1.AdmitCommandRequest
+	(*AdmitCommandResponse)(nil),                       // 7: deepseek.action.v1.AdmitCommandResponse
+	(*QueryEffectRequest)(nil),                         // 8: deepseek.action.v1.QueryEffectRequest
+	(*EffectResult)(nil),                               // 9: deepseek.action.v1.EffectResult
+	(*InstallAuthoritativeEpochRequest)(nil),           // 10: deepseek.action.v1.InstallAuthoritativeEpochRequest
+	(*InstallAuthoritativeEpochResponse)(nil),          // 11: deepseek.action.v1.InstallAuthoritativeEpochResponse
+	(*StoragePrecondition)(nil),                        // 12: deepseek.action.v1.StoragePrecondition
+	(*StorageMutationRequest)(nil),                     // 13: deepseek.action.v1.StorageMutationRequest
+	(*StorageMutationResponse)(nil),                    // 14: deepseek.action.v1.StorageMutationResponse
+	(*QueryStorageEffectRequest)(nil),                  // 15: deepseek.action.v1.QueryStorageEffectRequest
+	(*SignControlRequest)(nil),                         // 16: deepseek.action.v1.SignControlRequest
+	(*SignControlResponse)(nil),                        // 17: deepseek.action.v1.SignControlResponse
+	(*ControlSignerBindingRequest)(nil),                // 18: deepseek.action.v1.ControlSignerBindingRequest
+	(*ControlSignerBindingResponse)(nil),               // 19: deepseek.action.v1.ControlSignerBindingResponse
+	(*NativeOriginEvidence)(nil),                       // 20: deepseek.action.v1.NativeOriginEvidence
+	(*NativeOriginReceipt)(nil),                        // 21: deepseek.action.v1.NativeOriginReceipt
+	(*NativeOriginPublication)(nil),                    // 22: deepseek.action.v1.NativeOriginPublication
+	(*ReadNativeOriginRequest)(nil),                    // 23: deepseek.action.v1.ReadNativeOriginRequest
+	(*PublishNativeOriginRequest)(nil),                 // 24: deepseek.action.v1.PublishNativeOriginRequest
+	(*NativeOriginState)(nil),                          // 25: deepseek.action.v1.NativeOriginState
+	(*InspectFilesystemBackupTargetRequest)(nil),       // 26: deepseek.action.v1.InspectFilesystemBackupTargetRequest
+	(*FilesystemBackupTargetObservation)(nil),          // 27: deepseek.action.v1.FilesystemBackupTargetObservation
+	(*FilesystemBackupTargetInspectionReceipt)(nil),    // 28: deepseek.action.v1.FilesystemBackupTargetInspectionReceipt
+	(*ProbeFilesystemBackupTargetLocationRequest)(nil), // 29: deepseek.action.v1.ProbeFilesystemBackupTargetLocationRequest
+	(*FilesystemBackupTargetLocationObservation)(nil),  // 30: deepseek.action.v1.FilesystemBackupTargetLocationObservation
+	(*FilesystemBackupTargetLocationReceipt)(nil),      // 31: deepseek.action.v1.FilesystemBackupTargetLocationReceipt
+	(*commonv1.ActionFence)(nil),                       // 32: deepseek.common.v1.ActionFence
+	(commonv1.EffectState)(0),                          // 33: deepseek.common.v1.EffectState
+	(*commonv1.ErrorDetail)(nil),                       // 34: deepseek.common.v1.ErrorDetail
+	(*agentv1.AgentRunExecutionClaim)(nil),             // 35: deepseek.agent.v1.AgentRunExecutionClaim
 }
 var file_action_v1_action_proto_depIdxs = []int32{
 	0,  // 0: deepseek.action.v1.AdmitCommandRequest.kind:type_name -> deepseek.action.v1.CommandKind
-	28, // 1: deepseek.action.v1.AdmitCommandRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	32, // 1: deepseek.action.v1.AdmitCommandRequest.fence:type_name -> deepseek.common.v1.ActionFence
 	1,  // 2: deepseek.action.v1.AdmitCommandResponse.status:type_name -> deepseek.action.v1.AdmitStatus
-	29, // 3: deepseek.action.v1.AdmitCommandResponse.state:type_name -> deepseek.common.v1.EffectState
-	30, // 4: deepseek.action.v1.AdmitCommandResponse.error:type_name -> deepseek.common.v1.ErrorDetail
-	28, // 5: deepseek.action.v1.QueryEffectRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	28, // 6: deepseek.action.v1.EffectResult.fence:type_name -> deepseek.common.v1.ActionFence
-	29, // 7: deepseek.action.v1.EffectResult.state:type_name -> deepseek.common.v1.EffectState
-	30, // 8: deepseek.action.v1.EffectResult.error:type_name -> deepseek.common.v1.ErrorDetail
-	28, // 9: deepseek.action.v1.InstallAuthoritativeEpochRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	33, // 3: deepseek.action.v1.AdmitCommandResponse.state:type_name -> deepseek.common.v1.EffectState
+	34, // 4: deepseek.action.v1.AdmitCommandResponse.error:type_name -> deepseek.common.v1.ErrorDetail
+	32, // 5: deepseek.action.v1.QueryEffectRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	32, // 6: deepseek.action.v1.EffectResult.fence:type_name -> deepseek.common.v1.ActionFence
+	33, // 7: deepseek.action.v1.EffectResult.state:type_name -> deepseek.common.v1.EffectState
+	34, // 8: deepseek.action.v1.EffectResult.error:type_name -> deepseek.common.v1.ErrorDetail
+	32, // 9: deepseek.action.v1.InstallAuthoritativeEpochRequest.fence:type_name -> deepseek.common.v1.ActionFence
 	1,  // 10: deepseek.action.v1.InstallAuthoritativeEpochResponse.status:type_name -> deepseek.action.v1.AdmitStatus
-	28, // 11: deepseek.action.v1.InstallAuthoritativeEpochResponse.fence:type_name -> deepseek.common.v1.ActionFence
-	30, // 12: deepseek.action.v1.InstallAuthoritativeEpochResponse.error:type_name -> deepseek.common.v1.ErrorDetail
+	32, // 11: deepseek.action.v1.InstallAuthoritativeEpochResponse.fence:type_name -> deepseek.common.v1.ActionFence
+	34, // 12: deepseek.action.v1.InstallAuthoritativeEpochResponse.error:type_name -> deepseek.common.v1.ErrorDetail
 	3,  // 13: deepseek.action.v1.StoragePrecondition.condition_type:type_name -> deepseek.action.v1.StorageConditionType
-	28, // 14: deepseek.action.v1.StorageMutationRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	11, // 15: deepseek.action.v1.StorageMutationRequest.precondition:type_name -> deepseek.action.v1.StoragePrecondition
+	32, // 14: deepseek.action.v1.StorageMutationRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	12, // 15: deepseek.action.v1.StorageMutationRequest.precondition:type_name -> deepseek.action.v1.StoragePrecondition
 	2,  // 16: deepseek.action.v1.StorageMutationResponse.status:type_name -> deepseek.action.v1.StorageMutationStatus
-	29, // 17: deepseek.action.v1.StorageMutationResponse.state:type_name -> deepseek.common.v1.EffectState
-	28, // 18: deepseek.action.v1.StorageMutationResponse.fence:type_name -> deepseek.common.v1.ActionFence
-	30, // 19: deepseek.action.v1.StorageMutationResponse.error:type_name -> deepseek.common.v1.ErrorDetail
-	28, // 20: deepseek.action.v1.QueryStorageEffectRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	33, // 17: deepseek.action.v1.StorageMutationResponse.state:type_name -> deepseek.common.v1.EffectState
+	32, // 18: deepseek.action.v1.StorageMutationResponse.fence:type_name -> deepseek.common.v1.ActionFence
+	34, // 19: deepseek.action.v1.StorageMutationResponse.error:type_name -> deepseek.common.v1.ErrorDetail
+	32, // 20: deepseek.action.v1.QueryStorageEffectRequest.fence:type_name -> deepseek.common.v1.ActionFence
 	4,  // 21: deepseek.action.v1.SignControlRequest.purpose:type_name -> deepseek.action.v1.ControlSigningPurpose
-	28, // 22: deepseek.action.v1.SignControlRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	12, // 23: deepseek.action.v1.SignControlRequest.storage_intent:type_name -> deepseek.action.v1.StorageMutationRequest
-	31, // 24: deepseek.action.v1.SignControlRequest.agent_intent:type_name -> deepseek.agent.v1.AgentRunExecutionClaim
-	28, // 25: deepseek.action.v1.SignControlResponse.fence:type_name -> deepseek.common.v1.ActionFence
-	28, // 26: deepseek.action.v1.NativeOriginEvidence.fence:type_name -> deepseek.common.v1.ActionFence
-	19, // 27: deepseek.action.v1.NativeOriginReceipt.evidence:type_name -> deepseek.action.v1.NativeOriginEvidence
-	28, // 28: deepseek.action.v1.NativeOriginPublication.fence:type_name -> deepseek.common.v1.ActionFence
-	28, // 29: deepseek.action.v1.ReadNativeOriginRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	28, // 30: deepseek.action.v1.PublishNativeOriginRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	20, // 31: deepseek.action.v1.NativeOriginState.origin:type_name -> deepseek.action.v1.NativeOriginReceipt
-	21, // 32: deepseek.action.v1.NativeOriginState.publication:type_name -> deepseek.action.v1.NativeOriginPublication
-	28, // 33: deepseek.action.v1.InspectFilesystemBackupTargetRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	28, // 34: deepseek.action.v1.FilesystemBackupTargetObservation.fence:type_name -> deepseek.common.v1.ActionFence
-	26, // 35: deepseek.action.v1.FilesystemBackupTargetInspectionReceipt.observation:type_name -> deepseek.action.v1.FilesystemBackupTargetObservation
-	5,  // 36: deepseek.action.v1.Worker.AdmitCommand:input_type -> deepseek.action.v1.AdmitCommandRequest
-	7,  // 37: deepseek.action.v1.Worker.QueryEffect:input_type -> deepseek.action.v1.QueryEffectRequest
-	9,  // 38: deepseek.action.v1.Worker.InstallAuthoritativeEpoch:input_type -> deepseek.action.v1.InstallAuthoritativeEpochRequest
-	12, // 39: deepseek.action.v1.Worker.ExecuteStorageMutation:input_type -> deepseek.action.v1.StorageMutationRequest
-	14, // 40: deepseek.action.v1.Worker.QueryStorageEffect:input_type -> deepseek.action.v1.QueryStorageEffectRequest
-	15, // 41: deepseek.action.v1.ControlSigner.SignControl:input_type -> deepseek.action.v1.SignControlRequest
-	17, // 42: deepseek.action.v1.ControlSignerBootstrap.GetBinding:input_type -> deepseek.action.v1.ControlSignerBindingRequest
-	22, // 43: deepseek.action.v1.NativeOriginCustody.Read:input_type -> deepseek.action.v1.ReadNativeOriginRequest
-	23, // 44: deepseek.action.v1.NativeOriginCustody.Publish:input_type -> deepseek.action.v1.PublishNativeOriginRequest
-	25, // 45: deepseek.action.v1.BackupTargetInspection.Inspect:input_type -> deepseek.action.v1.InspectFilesystemBackupTargetRequest
-	6,  // 46: deepseek.action.v1.Worker.AdmitCommand:output_type -> deepseek.action.v1.AdmitCommandResponse
-	8,  // 47: deepseek.action.v1.Worker.QueryEffect:output_type -> deepseek.action.v1.EffectResult
-	10, // 48: deepseek.action.v1.Worker.InstallAuthoritativeEpoch:output_type -> deepseek.action.v1.InstallAuthoritativeEpochResponse
-	13, // 49: deepseek.action.v1.Worker.ExecuteStorageMutation:output_type -> deepseek.action.v1.StorageMutationResponse
-	13, // 50: deepseek.action.v1.Worker.QueryStorageEffect:output_type -> deepseek.action.v1.StorageMutationResponse
-	16, // 51: deepseek.action.v1.ControlSigner.SignControl:output_type -> deepseek.action.v1.SignControlResponse
-	18, // 52: deepseek.action.v1.ControlSignerBootstrap.GetBinding:output_type -> deepseek.action.v1.ControlSignerBindingResponse
-	24, // 53: deepseek.action.v1.NativeOriginCustody.Read:output_type -> deepseek.action.v1.NativeOriginState
-	24, // 54: deepseek.action.v1.NativeOriginCustody.Publish:output_type -> deepseek.action.v1.NativeOriginState
-	27, // 55: deepseek.action.v1.BackupTargetInspection.Inspect:output_type -> deepseek.action.v1.FilesystemBackupTargetInspectionReceipt
-	46, // [46:56] is the sub-list for method output_type
-	36, // [36:46] is the sub-list for method input_type
-	36, // [36:36] is the sub-list for extension type_name
-	36, // [36:36] is the sub-list for extension extendee
-	0,  // [0:36] is the sub-list for field type_name
+	32, // 22: deepseek.action.v1.SignControlRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	13, // 23: deepseek.action.v1.SignControlRequest.storage_intent:type_name -> deepseek.action.v1.StorageMutationRequest
+	35, // 24: deepseek.action.v1.SignControlRequest.agent_intent:type_name -> deepseek.agent.v1.AgentRunExecutionClaim
+	32, // 25: deepseek.action.v1.SignControlResponse.fence:type_name -> deepseek.common.v1.ActionFence
+	32, // 26: deepseek.action.v1.NativeOriginEvidence.fence:type_name -> deepseek.common.v1.ActionFence
+	20, // 27: deepseek.action.v1.NativeOriginReceipt.evidence:type_name -> deepseek.action.v1.NativeOriginEvidence
+	32, // 28: deepseek.action.v1.NativeOriginPublication.fence:type_name -> deepseek.common.v1.ActionFence
+	32, // 29: deepseek.action.v1.ReadNativeOriginRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	32, // 30: deepseek.action.v1.PublishNativeOriginRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	21, // 31: deepseek.action.v1.NativeOriginState.origin:type_name -> deepseek.action.v1.NativeOriginReceipt
+	22, // 32: deepseek.action.v1.NativeOriginState.publication:type_name -> deepseek.action.v1.NativeOriginPublication
+	32, // 33: deepseek.action.v1.InspectFilesystemBackupTargetRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	32, // 34: deepseek.action.v1.FilesystemBackupTargetObservation.fence:type_name -> deepseek.common.v1.ActionFence
+	27, // 35: deepseek.action.v1.FilesystemBackupTargetInspectionReceipt.observation:type_name -> deepseek.action.v1.FilesystemBackupTargetObservation
+	32, // 36: deepseek.action.v1.ProbeFilesystemBackupTargetLocationRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	32, // 37: deepseek.action.v1.FilesystemBackupTargetLocationObservation.fence:type_name -> deepseek.common.v1.ActionFence
+	5,  // 38: deepseek.action.v1.FilesystemBackupTargetLocationObservation.state:type_name -> deepseek.action.v1.BackupTargetLocationState
+	30, // 39: deepseek.action.v1.FilesystemBackupTargetLocationReceipt.observation:type_name -> deepseek.action.v1.FilesystemBackupTargetLocationObservation
+	6,  // 40: deepseek.action.v1.Worker.AdmitCommand:input_type -> deepseek.action.v1.AdmitCommandRequest
+	8,  // 41: deepseek.action.v1.Worker.QueryEffect:input_type -> deepseek.action.v1.QueryEffectRequest
+	10, // 42: deepseek.action.v1.Worker.InstallAuthoritativeEpoch:input_type -> deepseek.action.v1.InstallAuthoritativeEpochRequest
+	13, // 43: deepseek.action.v1.Worker.ExecuteStorageMutation:input_type -> deepseek.action.v1.StorageMutationRequest
+	15, // 44: deepseek.action.v1.Worker.QueryStorageEffect:input_type -> deepseek.action.v1.QueryStorageEffectRequest
+	16, // 45: deepseek.action.v1.ControlSigner.SignControl:input_type -> deepseek.action.v1.SignControlRequest
+	18, // 46: deepseek.action.v1.ControlSignerBootstrap.GetBinding:input_type -> deepseek.action.v1.ControlSignerBindingRequest
+	23, // 47: deepseek.action.v1.NativeOriginCustody.Read:input_type -> deepseek.action.v1.ReadNativeOriginRequest
+	24, // 48: deepseek.action.v1.NativeOriginCustody.Publish:input_type -> deepseek.action.v1.PublishNativeOriginRequest
+	26, // 49: deepseek.action.v1.BackupTargetInspection.Inspect:input_type -> deepseek.action.v1.InspectFilesystemBackupTargetRequest
+	29, // 50: deepseek.action.v1.BackupTargetInspection.ProbeLocation:input_type -> deepseek.action.v1.ProbeFilesystemBackupTargetLocationRequest
+	7,  // 51: deepseek.action.v1.Worker.AdmitCommand:output_type -> deepseek.action.v1.AdmitCommandResponse
+	9,  // 52: deepseek.action.v1.Worker.QueryEffect:output_type -> deepseek.action.v1.EffectResult
+	11, // 53: deepseek.action.v1.Worker.InstallAuthoritativeEpoch:output_type -> deepseek.action.v1.InstallAuthoritativeEpochResponse
+	14, // 54: deepseek.action.v1.Worker.ExecuteStorageMutation:output_type -> deepseek.action.v1.StorageMutationResponse
+	14, // 55: deepseek.action.v1.Worker.QueryStorageEffect:output_type -> deepseek.action.v1.StorageMutationResponse
+	17, // 56: deepseek.action.v1.ControlSigner.SignControl:output_type -> deepseek.action.v1.SignControlResponse
+	19, // 57: deepseek.action.v1.ControlSignerBootstrap.GetBinding:output_type -> deepseek.action.v1.ControlSignerBindingResponse
+	25, // 58: deepseek.action.v1.NativeOriginCustody.Read:output_type -> deepseek.action.v1.NativeOriginState
+	25, // 59: deepseek.action.v1.NativeOriginCustody.Publish:output_type -> deepseek.action.v1.NativeOriginState
+	28, // 60: deepseek.action.v1.BackupTargetInspection.Inspect:output_type -> deepseek.action.v1.FilesystemBackupTargetInspectionReceipt
+	31, // 61: deepseek.action.v1.BackupTargetInspection.ProbeLocation:output_type -> deepseek.action.v1.FilesystemBackupTargetLocationReceipt
+	51, // [51:62] is the sub-list for method output_type
+	40, // [40:51] is the sub-list for method input_type
+	40, // [40:40] is the sub-list for extension type_name
+	40, // [40:40] is the sub-list for extension extendee
+	0,  // [0:40] is the sub-list for field type_name
 }
 
 func init() { file_action_v1_action_proto_init() }
@@ -2483,8 +2822,8 @@ func file_action_v1_action_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_action_v1_action_proto_rawDesc), len(file_action_v1_action_proto_rawDesc)),
-			NumEnums:      5,
-			NumMessages:   23,
+			NumEnums:      6,
+			NumMessages:   26,
 			NumExtensions: 0,
 			NumServices:   5,
 		},

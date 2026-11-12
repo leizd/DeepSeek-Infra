@@ -618,7 +618,8 @@ var NativeOriginCustody_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	BackupTargetInspection_Inspect_FullMethodName = "/deepseek.action.v1.BackupTargetInspection/Inspect"
+	BackupTargetInspection_Inspect_FullMethodName       = "/deepseek.action.v1.BackupTargetInspection/Inspect"
+	BackupTargetInspection_ProbeLocation_FullMethodName = "/deepseek.action.v1.BackupTargetInspection/ProbeLocation"
 )
 
 // BackupTargetInspectionClient is the client API for BackupTargetInspection service.
@@ -626,6 +627,7 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type BackupTargetInspectionClient interface {
 	Inspect(ctx context.Context, in *InspectFilesystemBackupTargetRequest, opts ...grpc.CallOption) (*FilesystemBackupTargetInspectionReceipt, error)
+	ProbeLocation(ctx context.Context, in *ProbeFilesystemBackupTargetLocationRequest, opts ...grpc.CallOption) (*FilesystemBackupTargetLocationReceipt, error)
 }
 
 type backupTargetInspectionClient struct {
@@ -646,11 +648,22 @@ func (c *backupTargetInspectionClient) Inspect(ctx context.Context, in *InspectF
 	return out, nil
 }
 
+func (c *backupTargetInspectionClient) ProbeLocation(ctx context.Context, in *ProbeFilesystemBackupTargetLocationRequest, opts ...grpc.CallOption) (*FilesystemBackupTargetLocationReceipt, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(FilesystemBackupTargetLocationReceipt)
+	err := c.cc.Invoke(ctx, BackupTargetInspection_ProbeLocation_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // BackupTargetInspectionServer is the server API for BackupTargetInspection service.
 // All implementations must embed UnimplementedBackupTargetInspectionServer
 // for forward compatibility.
 type BackupTargetInspectionServer interface {
 	Inspect(context.Context, *InspectFilesystemBackupTargetRequest) (*FilesystemBackupTargetInspectionReceipt, error)
+	ProbeLocation(context.Context, *ProbeFilesystemBackupTargetLocationRequest) (*FilesystemBackupTargetLocationReceipt, error)
 	mustEmbedUnimplementedBackupTargetInspectionServer()
 }
 
@@ -663,6 +676,9 @@ type UnimplementedBackupTargetInspectionServer struct{}
 
 func (UnimplementedBackupTargetInspectionServer) Inspect(context.Context, *InspectFilesystemBackupTargetRequest) (*FilesystemBackupTargetInspectionReceipt, error) {
 	return nil, status.Error(codes.Unimplemented, "method Inspect not implemented")
+}
+func (UnimplementedBackupTargetInspectionServer) ProbeLocation(context.Context, *ProbeFilesystemBackupTargetLocationRequest) (*FilesystemBackupTargetLocationReceipt, error) {
+	return nil, status.Error(codes.Unimplemented, "method ProbeLocation not implemented")
 }
 func (UnimplementedBackupTargetInspectionServer) mustEmbedUnimplementedBackupTargetInspectionServer() {
 }
@@ -704,6 +720,24 @@ func _BackupTargetInspection_Inspect_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BackupTargetInspection_ProbeLocation_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ProbeFilesystemBackupTargetLocationRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BackupTargetInspectionServer).ProbeLocation(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BackupTargetInspection_ProbeLocation_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BackupTargetInspectionServer).ProbeLocation(ctx, req.(*ProbeFilesystemBackupTargetLocationRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // BackupTargetInspection_ServiceDesc is the grpc.ServiceDesc for BackupTargetInspection service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -714,6 +748,10 @@ var BackupTargetInspection_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Inspect",
 			Handler:    _BackupTargetInspection_Inspect_Handler,
+		},
+		{
+			MethodName: "ProbeLocation",
+			Handler:    _BackupTargetInspection_ProbeLocation_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

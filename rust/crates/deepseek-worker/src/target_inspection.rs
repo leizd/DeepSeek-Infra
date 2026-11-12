@@ -3,8 +3,10 @@ use crate::WorkerRpcService;
 use deepseek_protocol::{
     backup_target_inspection as wire,
     generated::deepseek::action::v1::{
-        FilesystemBackupTargetInspectionReceipt, FilesystemBackupTargetObservation,
-        InspectFilesystemBackupTargetRequest,
+        BackupTargetLocationState, FilesystemBackupTargetInspectionReceipt,
+        FilesystemBackupTargetLocationObservation, FilesystemBackupTargetLocationReceipt,
+        FilesystemBackupTargetObservation, InspectFilesystemBackupTargetRequest,
+        ProbeFilesystemBackupTargetLocationRequest,
         backup_target_inspection_server::BackupTargetInspection,
     },
 };
@@ -185,7 +187,64 @@ fn invalid_marker() -> Status {
     Status::invalid_argument("Backup target marker is unreadable or invalid")
 }
 
+// Match the retained Path.exists clone check. This reads metadata only: it
+// follows an old registered link, but never opens its marker or initializes it.
+fn probe_location(path: &str) -> Result<BackupTargetLocationState, Status> {
+    if path.len() > 32768 || path.contains('\0') || !Path::new(path).is_absolute() {
+        return Err(Status::invalid_argument("BACKUP_TARGET_LOCATION_INVALID"));
+    }
+    location_state(fs::metadata(path))
+}
+
+fn location_state(
+    result: std::io::Result<fs::Metadata>,
+) -> Result<BackupTargetLocationState, Status> {
+    match result {
+        Ok(_) => Ok(BackupTargetLocationState::Exists),
+        Err(error) if location_missing_error(&error) => Ok(BackupTargetLocationState::Missing),
+        Err(_) => Err(Status::unavailable("BACKUP_TARGET_LOCATION_UNRESOLVED")),
+    }
+}
+
+fn location_missing_error(error: &std::io::Error) -> bool {
+    if matches!(
+        error.kind(),
+        std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+    ) {
+        return true;
+    }
+    // CPython 3.10 pathlib._ignore_error also ignores EBADF and ELOOP, and
+    // Windows NOT_READY / INVALID_NAME / CANT_RESOLVE_FILENAME. All other
+    // errors remain unresolved; permission or I/O failure is never absence.
+    #[cfg(unix)]
+    {
+        let eloop = if cfg!(target_os = "macos") { 62 } else { 40 };
+        error.raw_os_error() == Some(9) || error.raw_os_error() == Some(eloop)
+    }
+    #[cfg(windows)]
+    {
+        matches!(error.raw_os_error(), Some(21 | 123 | 1921))
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        false
+    }
+}
+
 impl WorkerRpcService {
+    fn target_inspection_caller<T>(&self, request: &Request<T>) -> Result<(), Status> {
+        let identity = self
+            .authenticator
+            .authenticate(request.metadata())
+            .map_err(|e| Status::unauthenticated(e.code()))?;
+        if identity.service_name != "go-control-plane" || identity.role != "controller" {
+            return Err(Status::permission_denied(
+                "BACKUP_TARGET_INSPECTION_CALLER_DENIED",
+            ));
+        }
+        Ok(())
+    }
+
     pub fn with_backup_target_inspection(
         mut self,
         workspace: &Path,
@@ -216,18 +275,7 @@ impl BackupTargetInspection for WorkerRpcService {
         &self,
         request: Request<InspectFilesystemBackupTargetRequest>,
     ) -> Result<Response<FilesystemBackupTargetInspectionReceipt>, Status> {
-        let caller = || -> Result<(), Status> {
-            let identity = self
-                .authenticator
-                .authenticate(request.metadata())
-                .map_err(|e| Status::unauthenticated(e.code()))?;
-            if identity.service_name != "go-control-plane" || identity.role != "controller" {
-                return Err(Status::permission_denied(
-                    "BACKUP_TARGET_INSPECTION_CALLER_DENIED",
-                ));
-            }
-            Ok(())
-        };
+        let caller = || self.target_inspection_caller(&request);
         caller()?;
         let input = request.get_ref();
         let fence = input
@@ -309,6 +357,89 @@ impl BackupTargetInspection for WorkerRpcService {
             .sign_backup_target_observation(&observation)
             .map_err(|_| invalid_marker())?;
         Ok(Response::new(FilesystemBackupTargetInspectionReceipt {
+            schema_version: 1,
+            observation: Some(observation),
+            signature,
+            signer_public_key: signer.key.public_key(),
+        }))
+    }
+
+    async fn probe_location(
+        &self,
+        request: Request<ProbeFilesystemBackupTargetLocationRequest>,
+    ) -> Result<Response<FilesystemBackupTargetLocationReceipt>, Status> {
+        self.target_inspection_caller(&request)?;
+        let input = request.get_ref();
+        let fence = input
+            .fence
+            .as_ref()
+            .ok_or_else(|| Status::invalid_argument("FENCE_MISMATCH"))?;
+        deepseek_protocol::validate_fence(fence)
+            .map_err(|_| Status::invalid_argument("FENCE_MISMATCH"))?;
+        if input.schema_version != 1
+            || input.operation_id != fence.action_id
+            || !input.operation_id.starts_with("target-inspect-")
+            || input.operation_id.len() > 128
+            || fence.execution_epoch > i64::MAX as u64
+        {
+            return Err(Status::invalid_argument("BACKUP_TARGET_LOCATION_INVALID"));
+        }
+        let policy = self
+            .target_inspection
+            .as_ref()
+            .ok_or_else(|| Status::unavailable("BACKUP_TARGET_INSPECTION_UNAVAILABLE"))?
+            .clone();
+        let config = self.worker.lock().await.agent_node_authority()?;
+        if input.writer_fencing_token != config.fencing_token as u64 {
+            return Err(Status::failed_precondition("FENCE_MISMATCH"));
+        }
+        let path = input.path.clone();
+        let permit = policy
+            .readers
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| Status::resource_exhausted("BACKUP_TARGET_INSPECTION_BUSY"))?;
+        let state = tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            probe_location(&path)
+        })
+        .await
+        .map_err(|_| Status::unavailable("BACKUP_TARGET_LOCATION_UNRESOLVED"))??;
+        let observation = FilesystemBackupTargetLocationObservation {
+            schema_version: 1,
+            fence: Some(fence.clone()),
+            operation_id: input.operation_id.clone(),
+            writer_fencing_token: input.writer_fencing_token,
+            requested_path: input.path.clone(),
+            state: state as i32,
+            observed_at_unix: crate::service::unix_now_seconds()
+                .map_err(|_| Status::unavailable("BACKUP_TARGET_LOCATION_UNRESOLVED"))?,
+            fleet_id: config.fleet_id,
+            environment: config.environment,
+        };
+        self.target_inspection_caller(&request)?;
+        let worker = self.worker.lock().await;
+        let authority = worker.agent_node_authority()?;
+        if authority.fencing_token as u64 != observation.writer_fencing_token
+            || authority.fleet_id != observation.fleet_id
+            || authority.environment != observation.environment
+        {
+            return Err(Status::failed_precondition("FENCE_MISMATCH"));
+        }
+        let signer = self
+            .control_signer
+            .as_ref()
+            .ok_or_else(|| Status::unavailable("CONTROL_SIGNER_UNAVAILABLE"))?
+            .lock()
+            .await;
+        if signer.key.public_key() != authority.signer_public_key {
+            return Err(Status::failed_precondition("FENCE_MISMATCH"));
+        }
+        let signature = signer
+            .key
+            .sign_backup_target_location(&observation)
+            .map_err(|_| Status::invalid_argument("BACKUP_TARGET_LOCATION_INVALID"))?;
+        Ok(Response::new(FilesystemBackupTargetLocationReceipt {
             schema_version: 1,
             observation: Some(observation),
             signature,

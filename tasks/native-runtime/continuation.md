@@ -15094,3 +15094,30 @@ server/desktop/Android/background functionality, retained MCP test execution,
 zero production Python/server TypeScript, CI/Evidence/platform/release remain
 required. Overall migration remains ACTIVE/NOT_READY; keep local native builds,
 caches and Docker validation in the cloud and retain the original dirty root.
+
+
+### 2026-11-12 — Clone-location observation and registration recovery cases
+
+The native private target inspection service now implements a separate typed
+ProbeLocation candidate. Rust observes only filesystem metadata, distinguishes
+EXISTS/MISSING from unresolved permission or I/O errors, binds the exact path,
+action/epoch, operation, writer, deployment and timestamp, and signs with a
+separate location purpose. It does not read or rewrite markers, install an epoch,
+authorize initialization, or conclude an earlier unknown provider effect failed.
+The original marker inspection still refuses symlinks and protected roots; an
+old registered symlink is followed only for the retained clone-existence rule.
+
+Actual source 8a0bf84 passed its eight Go race cases but failed the full original
+Go floor: 17411/18402 = 94.614715791762%. Evidence and RC downstream refused it.
+Preserve that failure; do not lower the original Go/Android-Go95, Rust80 or
+Python95 floors. This candidate adds malformed signed-frame and JSON admission,
+actual SQLite read/cursor faults with original-row recovery, closed-transaction
+refusal, and corrupt original witness/generation/fence regressions. Twelve frozen
+Go families and six new Rust tests require exact-source cloud execution.
+
+This is not public target registration qualification. Go consumption of the
+new location proof, complete clone/overlap/contributor checks, original marker
+coercions and bounds, Rust-owned fresh initialization and unknown-effect
+recovery, S3/other retained lifecycle, health and staged handback remain required.
+All server/desktop/Android/background/MCP functionality and exact-source full
+CI/Evidence/platform/zero-Python release remain mandatory. ACTIVE / NOT_READY.

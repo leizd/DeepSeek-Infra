@@ -2,7 +2,7 @@ name: Native target registration store development
 
 on:
   push:
-    branches: ["codex/native-target-registration-store-*"]
+    branches: ["codex/native-target-registration-store-*", "codex/native-target-location-observation-*"]
   workflow_dispatch:
 
 permissions:
@@ -60,6 +60,10 @@ jobs:
               'TestTargetRegistrationDatabaseFailuresCannotLeavePartialPublication',
               'TestTargetRegistrationLostWitnessAndSignerPinNeverLookHealthy',
               'TestTargetRegistrationV20UpgradePreservesOldRecordsWithoutInventingWitnesses',
+              'TestTargetRegistrationMalformedRequestsCannotEnterTheJournal',
+              'TestTargetRegistrationQueryFailuresPreserveOriginalRowsAndReplay',
+              'TestTargetRegistrationClosedTransactionsCannotMasqueradeAsMissingState',
+              'TestTargetRegistrationHistoryRejectsWrongGenerationsFencesAndWitnessBytes',
           }
           actual=set()
           for path in (root/'go/internal/store').glob('*_test.go'):
