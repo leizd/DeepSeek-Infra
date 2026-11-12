@@ -15121,3 +15121,25 @@ coercions and bounds, Rust-owned fresh initialization and unknown-effect
 recovery, S3/other retained lifecycle, health and staged handback remain required.
 All server/desktop/Android/background/MCP functionality and exact-source full
 CI/Evidence/platform/zero-Python release remain mandatory. ACTIVE / NOT_READY.
+
+
+### 2026-11-12 — Registration migration interruption and missing-state recovery
+
+Parent ce5a778 passed all12 frozen Go race families. Its cross-run diagnostic
+with byte-identical production Go sources exercised51 additional statements,
+but is not current full-Go qualification and still predicts a shortfall versus
+the unchanged95% gate. Do not combine those runs into release evidence.
+
+Add real v20-layout migration interruption/rollback/retry, immutable-schema and
+signer-pin loss, orphaned catalog event and generation overflow, replay read and
+lease-commit failures, and failed empty-extension retirement regressions. The
+fixed development inventory now includes all15 original and additional families.
+Database corruption is isolated negative test data, not signed promotion proof.
+Go production, Rust location implementation, protocols and dependency bytes are
+unchanged. New cases and full original coverage/race require cloud execution.
+
+ProbeLocation consumption, full public target registration/re-registration,
+clone/overlap/contributor and original marker compatibility, Rust initialization
+and unknown-effect recovery, all retained target kinds/health/handback, all
+server/desktop/Android/background/MCP and zero-Python/CI/Evidence/platform
+requirements remain mandatory. ACTIVE / NOT_READY.

@@ -64,6 +64,9 @@ jobs:
               'TestTargetRegistrationQueryFailuresPreserveOriginalRowsAndReplay',
               'TestTargetRegistrationClosedTransactionsCannotMasqueradeAsMissingState',
               'TestTargetRegistrationHistoryRejectsWrongGenerationsFencesAndWitnessBytes',
+              'TestTargetRegistrationMigrationInterruptionsRetainOriginalV20State',
+              'TestTargetRegistrationDamagedSchemaIdentityAndCatalogNeverLookEmpty',
+              'TestTargetRegistrationReplayAndPreparationCannotHideReadOrCommitFailure',
           }
           actual=set()
           for path in (root/'go/internal/store').glob('*_test.go'):
