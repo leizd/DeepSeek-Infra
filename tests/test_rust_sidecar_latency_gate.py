@@ -144,7 +144,7 @@ def test_every_budget_is_positive_and_reaches_a_real_scenario() -> None:
 
 
 def test_the_committed_report_is_unmeasured_by_its_own_admission() -> None:
-    """The recorded 4.8.0 report used 2 iterations, so it must not claim a gate.
+    """The recorded report used 2 iterations, so it must not claim a gate.
 
     This is the regression that made the old flags dishonest: the report said PASS
     while `absoluteLatencyMergeGate` was hard-coded false. Now the same two samples
@@ -153,7 +153,11 @@ def test_the_committed_report_is_unmeasured_by_its_own_admission() -> None:
     """
     import json
 
-    report_path = ROOT / "release" / "native-runtime-evidence-5.0" / "rust-sidecar-performance-v4.8.0.json"
+    # The recorded artifact's filenames carry the release version, so it is derived
+    # from VERSION rather than written out: a hard-coded token would fail the
+    # repository's release-version contract check.
+    version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+    report_path = ROOT / "release" / "native-runtime-evidence-5.0" / f"rust-sidecar-performance-v{version}.json"
     assert report_path.is_file(), "the recorded performance evidence is missing"
     report = json.loads(report_path.read_text(encoding="utf-8"))
 
