@@ -3750,3 +3750,18 @@ No native/browser assertion, report requirement or original floor is removed.
   overlap/contributor/clone checks, and original-operation recovery. Preserve
   fresh initialization and all S3/other retained lifecycle behavior. Inspection
   alone does not qualify registration, zero-Python production or full migration.
+
+
+### 2026-11-12 — Native container startup and optional temporary environment
+
+- Preserve the exact `3fa2215` Docker failure: real positive and missing-bundle
+  containers exited with BACKUP_TARGET_LOCATION_POLICY_INVALID; the unrelated
+  legacy-root rejection passed. The container image build itself passed.
+- Fix Go production launch planning: omit only empty TEMP/TMP/TMPDIR values.
+  Retain exact nonempty values and explicit empty deny/credential settings.
+  The Rust directory protection policy is unchanged. Add an unset/empty/valued
+  regression for all three settings and all four native child roles.
+- Validation remains cloud-only. The existing target/media scoped Go run does
+  not include launch tests; original full Go, Docker, Rust, Windows and Android
+  gates must qualify this exact follow-up source. Public target registration
+  and all remaining full-product requirements stay incomplete / NOT_READY.

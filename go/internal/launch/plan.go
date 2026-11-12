@@ -165,6 +165,11 @@ func productionEnv(dataRoot, staticDir, controlListen, gatewayBind string) []str
 	}
 	env := make([]string, 0, len(order)+len(operatorConfigKeys))
 	for _, key := range order {
+		// An empty optional temp override is not an OS default. In particular,
+		// TMPDIR= makes Rust return an empty path instead of its default temp root.
+		if (key == "TEMP" || key == "TMP" || key == "TMPDIR") && values[key] == "" {
+			continue
+		}
 		env = append(env, key+"="+values[key])
 	}
 	// COM, WinRT and WebView2 expand these OS directories. Missing SystemDrive
