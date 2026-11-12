@@ -63,7 +63,7 @@ jobs:
           }
           actual=set()
           for path in (root/'go/internal/store').glob('*_test.go'):
-              actual.update(re.findall(r'^func (TestTargetRegistrationw*)(',path.read_text(),re.M))
+              actual.update(re.findall(r'^func (TestTargetRegistration[A-Za-z0-9_]*)[(]',path.read_text(),re.M))
           assert actual==required
           subprocess.run(['python','scripts/capture_evidence_context.py','--version',(root/'VERSION').read_text().strip(),'--out',str(out/'source-context.json')],check=True)
           args=['go','test','-race','-json','-count=1','-timeout=8m','-covermode=atomic','-coverprofile='+str(out/'coverage.out'),'-run','^TestTargetRegistration','./internal/store']
