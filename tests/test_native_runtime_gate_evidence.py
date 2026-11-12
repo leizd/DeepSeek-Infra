@@ -133,7 +133,7 @@ def test_every_outstanding_gate_states_its_concrete_reason() -> None:
     detail = outstanding["perGateDetail"]
     assert set(detail) == set(outstanding["gates"])
     assert "informationalOnly" in detail["performance"]
-    assert "no fuzz target" in detail["fuzz"]
+    assert "coverage-guided" in detail["fuzz"]
     for gate in ("go_control_authority", "rust_data_authority"):
         # Either spelling is fine; what matters is that the reason names the
         # specific missing prerequisite rather than restating "not done".
