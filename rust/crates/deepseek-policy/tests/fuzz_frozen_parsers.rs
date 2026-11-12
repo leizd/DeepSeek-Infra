@@ -100,6 +100,19 @@ const ALPHABET: &[&str] = &[
     "false",
     "1970-01-01T00:00:00Z",
     "9999-12-31T23:59:59Z",
+    // MIME-shaped pieces: without a slash the classification tests would only ever
+    // see text that matches no prefix, so the precedence rules would go unexercised.
+    "image/",
+    "audio/",
+    "video/",
+    "text/html",
+    "application/pdf",
+    "application/xhtml+xml",
+    ".pdf",
+    ".mp3",
+    ".mp4",
+    ".html",
+    "/",
 ];
 
 fn random_text(rng: &mut Rng, max_parts: usize) -> String {
