@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"math"
-	"strconv"
 )
 
 type targetMetadataCommand string
@@ -81,7 +80,11 @@ func (store *Control) mutateBackupTarget(operationID, actionID, actor, targetID 
 	}
 	// A separate registration command must preserve the target identity without
 	// resetting its internal journal/fence. Activation never revives a deletion.
-	document["topologyGeneration"] = json.Number(strconv.FormatInt(next.Revision, 10))
+	generation, err := nextTargetPublicGenerationTx(tx, existing)
+	if err != nil {
+		return Record{}, OperatorMutationResult{}, err
+	}
+	document["topologyGeneration"] = generation
 	next.Payload, err = json.Marshal(document)
 	if err != nil {
 		return Record{}, OperatorMutationResult{}, err

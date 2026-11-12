@@ -39,6 +39,9 @@ func (store *Control) listAuthoritativeRecords(domain string, withHealth bool) (
 	if err := verifySchemaTx(tx, store.schema); err != nil {
 		return nil, nil, err
 	}
+	if err := store.verifyTargetRegistrationIdentityTx(tx); err != nil {
+		return nil, nil, err
+	}
 	cutover, err := readCutoverTx(tx, domain)
 	if err != nil {
 		return nil, nil, err

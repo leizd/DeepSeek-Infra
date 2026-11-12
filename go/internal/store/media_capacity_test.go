@@ -25,6 +25,7 @@ func mediaCapacityV19Fixture(t *testing.T) (*Control, ed25519.PrivateKey) {
 		t.Fatal(err)
 	}
 	defer tx.Rollback()
+	dropEmptyTargetRegistrationFixture(t, tx)
 	if _, err := tx.Exec("DROP TABLE control_media_operations"); err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +104,7 @@ func mediaCapacityReopen(t *testing.T, c *Control) *Control {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { next.Close() })
-	if next.SchemaVersion() != SchemaV20 {
+	if next.SchemaVersion() != CurrentSchema {
 		t.Fatal("version-20 upgrade was not committed")
 	}
 	return next

@@ -85,7 +85,7 @@ type operatorMutationContext struct {
 // bypass the fenced-domain rule. A domain whose mutations belong to the lease and
 // admission path (`action`, `scheduler_run`, `wave`, `transfer`) is refused here too.
 func (store *Control) beginOperatorMutationTx(
-	operationID, actionID, actor, domain string,
+	operationID, actionID, actor, domain string, registration ...bool,
 ) (*sql.Tx, operatorMutationContext, error) {
 	if store.closed {
 		return nil, operatorMutationContext{}, ErrWriterFenceHeld
@@ -116,6 +116,11 @@ func (store *Control) beginOperatorMutationTx(
 		return nil, operatorMutationContext{}, err
 	}
 	if err := verifySchemaTx(tx, store.schema); err != nil {
+		_ = tx.Rollback()
+		return nil, operatorMutationContext{}, err
+	}
+	allowRegistration := len(registration) == 1 && registration[0]
+	if err := targetRegistrationOperationAllowedTx(tx, operationID, allowRegistration); err != nil {
 		_ = tx.Rollback()
 		return nil, operatorMutationContext{}, err
 	}

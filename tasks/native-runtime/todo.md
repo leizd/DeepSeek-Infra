@@ -3765,3 +3765,20 @@ No native/browser assertion, report requirement or original floor is removed.
   not include launch tests; original full Go, Docker, Rust, Windows and Android
   gates must qualify this exact follow-up source. Public target registration
   and all remaining full-product requirements stay incomplete / NOT_READY.
+
+
+### 2026-11-12 — Atomic target registration metadata and public generation binding
+
+- Implement the Go schema-v21 registration ledger, configured signer/deployment
+  pin and immutable legacy event boundary. Settle row/event/operator receipt and
+  original typed Rust observation atomically; retain exact original-result replay.
+- Preserve monotonic internal history across repeated delete/re-register cycles
+  while public generation resets to one. Subsequent metadata mutations use the
+  retained generation binding; unbound legacy behavior remains unchanged.
+- Add eight scoped Go transaction/recovery/migration cases with raw race events,
+  real database interruption and lost-witness tests. Cloud qualification pending;
+  original complete Go coverage/race and platform gates remain required.
+- [ ] Wire the complete public path, clone/contributor/overlap and relocated or
+  missing path inspections, all retained marker forms, Rust initialization,
+  original-operation recovery and staged handback. No public registration or
+  physical provider effect is qualified by the store fixtures. NOT_READY.

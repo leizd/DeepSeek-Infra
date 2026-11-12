@@ -15,6 +15,7 @@ type nativeOriginLegacyFixtureDB interface {
 // birth, must never be turned into a supposed legacy fixture.
 func dropEmptyNativeOriginFixture(t *testing.T, db nativeOriginLegacyFixtureDB) {
 	t.Helper()
+	dropEmptyTargetRegistrationFixture(t, db)
 	// Current native stores also contain v19 media admission metadata. A
 	// historical fixture may retire this extension only if it has no history.
 	var mediaExists, mediaRows int
@@ -47,5 +48,30 @@ func dropEmptyNativeOriginFixture(t *testing.T, db nativeOriginLegacyFixtureDB) 
 	}
 	if _, err := db.Exec("DROP TABLE control_native_origin"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Only historical test databases may remove an empty newer extension. Keep
+// their exact old object catalogs without weakening production admission.
+func dropEmptyTargetRegistrationFixture(t *testing.T, db nativeOriginLegacyFixtureDB) {
+	t.Helper()
+	for _, name := range []string{"control_target_registration_identity", "control_target_registrations"} {
+		var exists, rows int
+		if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_schema WHERE type='table' AND name=?", name).Scan(&exists); err != nil {
+			t.Fatal(err)
+		}
+		if exists != 0 {
+			if err := db.QueryRow("SELECT COUNT(*) FROM " + name).Scan(&rows); err != nil {
+				t.Fatal(err)
+			}
+			if rows != 0 {
+				t.Fatal("cannot manufacture historical schema from retained target registration custody")
+			}
+		}
+	}
+	for _, name := range []string{"control_target_registrations", "control_target_registration_identity", "control_target_registration_boundary"} {
+		if _, err := db.Exec("DROP TABLE IF EXISTS " + name); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

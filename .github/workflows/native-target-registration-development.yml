@@ -1,0 +1,100 @@
+name: Native target registration store development
+
+on:
+  push:
+    branches: ["codex/native-target-registration-store-*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: native-target-registration-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  registration-go:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GOTOOLCHAIN: local
+      CGO_ENABLED: "1"
+      GOCACHE: ${{ runner.temp }}/target-registration-go-cache
+      GOMODCACHE: ${{ runner.temp }}/target-registration-go-modules
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+      - name: Install the unchanged checksum-pinned Go
+        run: |
+          archive="$RUNNER_TEMP/go1.27.1.linux-amd64.tar.gz"
+          curl --fail --location --silent --show-error --output "$archive" https://go.dev/dl/go1.27.1.linux-amd64.tar.gz
+          echo "63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445  $archive" | sha256sum --check --strict
+          mkdir -p "$RUNNER_TEMP/target-registration-go"
+          tar -xzf "$archive" -C "$RUNNER_TEMP/target-registration-go"
+          echo "$RUNNER_TEMP/target-registration-go/go/bin" >> "$GITHUB_PATH"
+      - name: Verify the exact source and registration control transactions
+        timeout-minutes: 10
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from collections import Counter
+          import hashlib, json, os, re, subprocess
+          root=Path.cwd(); out=root/'artifacts/native-target-registration-development';out.mkdir(parents=True,exist_ok=True)
+          source=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
+          tree=subprocess.check_output(['git','rev-parse','HEAD^{tree}'],text=True).strip()
+          assert source==os.environ['GITHUB_SHA'] and not subprocess.check_output(['git','status','--porcelain=v1','--untracked-files=all'])
+          required={
+              'TestTargetRegistrationRetainsInternalHistoryAcrossOriginalPublicGenerationResets',
+              'TestTargetRegistrationReplaysItsOriginalDocumentAfterDeletionAndWriterTakeover',
+              'TestTargetRegistrationRejectsUnboundObservationsWithoutCommitting',
+              'TestTargetRegistrationRequiresTheUnchangedRegistrySnapshot',
+              'TestTargetRegistrationWitnessAndIdentityCannotBeDeletedOrReplaced',
+              'TestTargetRegistrationDatabaseFailuresCannotLeavePartialPublication',
+              'TestTargetRegistrationLostWitnessAndSignerPinNeverLookHealthy',
+              'TestTargetRegistrationV20UpgradePreservesOldRecordsWithoutInventingWitnesses',
+          }
+          actual=set()
+          for path in (root/'go/internal/store').glob('*_test.go'):
+              actual.update(re.findall(r'^func (TestTargetRegistrationw*)(',path.read_text(),re.M))
+          assert actual==required
+          subprocess.run(['python','scripts/capture_evidence_context.py','--version',(root/'VERSION').read_text().strip(),'--out',str(out/'source-context.json')],check=True)
+          args=['go','test','-race','-json','-count=1','-timeout=8m','-covermode=atomic','-coverprofile='+str(out/'coverage.out'),'-run','^TestTargetRegistration','./internal/store']
+          with (out/'go-tests.jsonl').open('wb') as stream:
+              run=subprocess.run(args,cwd=root/'go',stdout=stream,stderr=subprocess.STDOUT,check=False)
+          raw=(out/'go-tests.jsonl').read_bytes();events=[];parse_errors=[]
+          for line in raw.decode('utf-8').splitlines():
+              if line.startswith('{'):
+                  events.append(json.loads(line))
+              elif line.strip() and not re.fullmatch(r'go: downloading [A-Za-z0-9./_~+@-]+ v[0-9A-Za-z.+_-]+',line):
+                  parse_errors.append(line[:200])
+          top=[e for e in events if e.get('Test') and '/' not in e['Test']]
+          starts=Counter(e['Test'] for e in top if e['Action']=='run')
+          ends=Counter(e['Test'] for e in top if e['Action'] in {'pass','fail','skip'})
+          package=[e for e in events if not e.get('Test') and e['Action'] in {'pass','fail','skip'}]
+          good=run.returncode==0 and not parse_errors and set(starts)==required and starts==ends and set(starts.values())=={1}
+          good=good and all(e['Action']=='pass' for e in top if e['Action'] in {'pass','fail','skip'}) and len(package)==1 and package[0]['Action']=='pass'
+          good=good and not any(e['Action']=='fail' or 'WARNING: DATA RACE' in e.get('Output','') for e in events)
+          report=dict(status='PASS' if good else 'FAIL',sourceCommit=source,sourceTree=tree,runId=os.environ['GITHUB_RUN_ID'],event=os.environ['GITHUB_EVENT_NAME'],attempt=os.environ['GITHUB_RUN_ATTEMPT'],
+              expectedTests=sorted(required),command=args,exitCode=run.returncode,raceEnabled=True,timeout='8m',rawEventsSha256=hashlib.sha256(raw).hexdigest(),parseErrors=parse_errors,
+              passed=sum(e['Action']=='pass' for e in top),failed=sum(e['Action']=='fail' for e in top),skipped=sum(e['Action']=='skip' for e in top),
+              physicalRustInspectionQualified=False,publicRegistrationQualified=False,fullGoSuiteQualified=False,original95PercentCoverageQualified=False,fullMigrationQualified=False,readiness='NOT_READY')
+          (out/'result.json').write_text(json.dumps(report,indent=2)+'\n')
+          print(json.dumps({k:report[k] for k in ['status','sourceCommit','passed','failed','skipped','exitCode']}))
+          if not good: raise SystemExit(1)
+          PY
+      - name: Return only source-bound reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: native-target-registration-go-${{ github.sha }}
+          path: artifacts/native-target-registration-development/
+          if-no-files-found: error
+          retention-days: 7

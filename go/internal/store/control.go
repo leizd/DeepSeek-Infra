@@ -540,6 +540,15 @@ func expectedControlUserObjects(schema int) map[string]string {
 			objects[name] = kind
 		}
 	}
+	if schema >= SchemaV21 {
+		for index, name := range targetRegistrationSchemaOrder {
+			kind := "trigger"
+			if index < 3 {
+				kind = "table"
+			}
+			objects[name] = kind
+		}
+	}
 	return objects
 }
 
@@ -657,6 +666,9 @@ func (store *Control) bootstrapAndClaim(databaseExisted bool) error {
 		return ErrForeignRuntimeStore
 	}
 	if err := validateControlUserObjects(tx, store.schema); err != nil {
+		return err
+	}
+	if err := store.verifyTargetRegistrationIdentityTx(tx); err != nil {
 		return err
 	}
 
@@ -845,6 +857,11 @@ func (store *Control) migrateTx(tx *sql.Tx) error {
 	}
 	if store.schema == SchemaV19 {
 		if err := store.migrateToV20Tx(tx); err != nil {
+			return err
+		}
+	}
+	if store.schema == SchemaV20 {
+		if err := store.migrateToV21Tx(tx); err != nil {
 			return err
 		}
 	}
@@ -1184,6 +1201,11 @@ func verifySchemaTx(tx *sql.Tx, schema int) error {
 			return err
 		}
 	}
+	if schema >= SchemaV21 {
+		if err := verifyTargetRegistrationSchemaTx(tx); err != nil {
+			return err
+		}
+	}
 	tables := append(append([]string(nil), controlTableNames[:]...), "control_events")
 	if schema >= SchemaV2 {
 		tables = append(tables, "control_cutover", "control_cutover_events")
@@ -1512,25 +1534,26 @@ func (store *Control) putLeasedControlRecord(record Record, dispatch *StorageDis
 // A prepared write owns its canonical bytes, including a dispatch's operation
 // identity. It cannot be rebound by modifying the caller's payload or intent.
 type controlRecordWrite struct {
-	agentEvent                  bool
-	agentRecovery               bool
-	agentRecoveryProgress       bool
-	agentExecution              bool
-	agentNodeDispatch           bool
-	agentNodeOutcome            bool
-	agentTasksCompletion        bool
-	agentCancellationSettlement bool
-	agentTaskSettlement         bool
-	agentPlanSettlement         bool
-	agentSynthesisSettlement    bool
-	agentFailureSettlement      bool
-	record                      Record
-	table                       string
-	intentJSON                  []byte
-	intentDigest                string
-	operationID                 string
-	allowBoundLease             bool
-	allowImportedBaseline       bool
+	agentEvent                   bool
+	agentRecovery                bool
+	agentRecoveryProgress        bool
+	agentExecution               bool
+	agentNodeDispatch            bool
+	agentNodeOutcome             bool
+	agentTasksCompletion         bool
+	agentCancellationSettlement  bool
+	agentTaskSettlement          bool
+	agentPlanSettlement          bool
+	agentSynthesisSettlement     bool
+	agentFailureSettlement       bool
+	record                       Record
+	table                        string
+	intentJSON                   []byte
+	intentDigest                 string
+	operationID                  string
+	allowBoundLease              bool
+	allowImportedBaseline        bool
+	targetRegistrationGeneration int64
 }
 
 func prepareControlRecordWrite(record Record, dispatch *StorageDispatchIntent) (controlRecordWrite, error) {
@@ -1575,8 +1598,35 @@ func (store *Control) putControlRecordTx(tx *sql.Tx, write controlRecordWrite, n
 			return err
 		}
 		if write.allowImportedBaseline || imports != 0 {
-			if err := validateInventoryCASPayload(record); err != nil {
+			if record.Domain != "target" || store.schema < SchemaV21 {
+				if err := validateInventoryCASPayload(record); err != nil {
+					return err
+				}
+			} else if write.targetRegistrationGeneration == 0 {
+				expected, bound, err := targetBoundGenerationTx(tx, record)
+				if err != nil {
+					return err
+				}
+				if !bound {
+					expected = record.Revision
+				}
+				if err := validateTargetPublicGeneration(record, expected); err != nil {
+					return err
+				}
+			}
+		}
+		if record.Domain == "target" && store.schema >= SchemaV21 {
+			expected, bound, err := targetBoundGenerationTx(tx, record)
+			if err != nil {
 				return err
+			}
+			if write.targetRegistrationGeneration > 0 {
+				expected, bound = write.targetRegistrationGeneration, true
+			}
+			if bound {
+				if err := validateTargetPublicGeneration(record, expected); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -1723,6 +1773,9 @@ func (store *Control) putControlRecordTx(tx *sql.Tx, write controlRecordWrite, n
 		}
 	}
 	legal := LegalTransition(record.Domain, from, record.State)
+	if record.Domain == "target" && write.targetRegistrationGeneration > 0 && record.State == "ACTIVE" && from == TombstoneState {
+		legal = true
+	}
 	if write.agentFailureSettlement {
 		if !exists || !nativeAgentFailureSettlementEdge(existing, record) {
 			return ErrAgentRunExecutionRequired
@@ -1891,6 +1944,9 @@ func (store *Control) Get(domain, id string) (Record, bool, error) {
 	if err := verifySchemaTx(tx, store.schema); err != nil {
 		return Record{}, false, err
 	}
+	if err := store.verifyTargetRegistrationIdentityTx(tx); err != nil {
+		return Record{}, false, err
+	}
 	record, exists, err := readControlRecord(tx.QueryRow(
 		fmt.Sprintf(
 			"SELECT id, revision, execution_epoch, state, payload_json, record_digest, writer_fencing_token, updated_at FROM %s WHERE id = ?",
@@ -1982,6 +2038,14 @@ func validateNoControlHistory(tx *sql.Tx, domain, id string) error {
 }
 
 func validateControlHistory(tx *sql.Tx, latest Record) error {
+	var targetBindings map[int64]targetRegistrationBinding
+	if latest.Domain == "target" {
+		var err error
+		targetBindings, err = loadTargetRegistrationBindingsTx(tx, latest.ID)
+		if err != nil {
+			return err
+		}
+	}
 	reconciliationBoundary, verificationBoundary := int64(math.MaxInt64), int64(math.MaxInt64)
 	if latest.Domain == "action" {
 		var err error
@@ -2009,6 +2073,7 @@ func validateControlHistory(tx *sql.Tx, latest Record) error {
 	var previousEpoch uint64
 	var previousWriterToken, previousTimestamp int64
 	var final Record
+	var boundRevision, boundGeneration int64
 	for rows.Next() {
 		var eventID int64
 		event, metadata, exists, err := scanControlRecord(rows, latest.Domain, &eventID)
@@ -2022,6 +2087,21 @@ func validateControlHistory(tx *sql.Tx, latest Record) error {
 			expectedRevision = event.Revision
 		}
 		legal := LegalTransition(latest.Domain, previousState, event.State)
+		if latest.Domain == "target" {
+			if binding, exists := targetBindings[event.Revision]; exists {
+				if err := validateTargetRegistrationEvent(binding, final, event, metadata); err != nil {
+					return err
+				}
+				boundRevision, boundGeneration = event.Revision, binding.generation
+				legal = true
+				delete(targetBindings, event.Revision)
+			} else if boundRevision > 0 {
+				delta := event.Revision - boundRevision
+				if delta < 0 || boundGeneration > math.MaxInt64-delta || validateTargetPublicGeneration(event, boundGeneration+delta) != nil {
+					return ErrCorruptRecord
+				}
+			}
+		}
 		if latest.Domain == "agent_run" && nativeAgentMetadata(event.Payload) {
 			if err := validateAgentRecoveryMetadataEdge(final, event); err != nil {
 				return ErrCorruptRecord
@@ -2105,6 +2185,9 @@ func validateControlHistory(tx *sql.Tx, latest Record) error {
 	}
 	if expectedRevision-1 != latest.Revision || !sameControlRecord(final, latest) {
 		return fmt.Errorf("%w: latest record does not match event history", ErrCorruptRecord)
+	}
+	if len(targetBindings) != 0 {
+		return ErrCorruptRecord
 	}
 	table, ok := tableForDomain(latest.Domain)
 	if !ok {
@@ -2237,6 +2320,9 @@ func knownState(domain, state string) bool {
 func (store *Control) assertWriterTx(tx *sql.Tx, now int64) (int64, error) {
 	if store.closed {
 		return 0, ErrWriterFenceHeld
+	}
+	if err := store.verifyTargetRegistrationIdentityTx(tx); err != nil {
+		return 0, err
 	}
 	leaseUntil, err := store.nextLeaseUntil(now)
 	if err != nil {
@@ -2396,6 +2482,11 @@ func (store *Control) Rollback(version int) error {
 	leaseUntil, err := store.assertWriterTx(tx, now)
 	if err != nil {
 		return err
+	}
+	if store.schema >= SchemaV21 {
+		if err := retireEmptyTargetRegistrationsTx(tx); err != nil {
+			return err
+		}
 	}
 	if store.schema >= SchemaV19 {
 		if err := retireEmptyMediaPatchTx(tx); err != nil {
