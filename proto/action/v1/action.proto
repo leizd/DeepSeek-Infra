@@ -278,6 +278,42 @@ message FilesystemBackupTargetInspectionReceipt {
   string signer_public_key = 4;
 }
 
+// A signed metadata observation for the original clone/relocation rule. It is
+// neither an execution grant nor proof that an earlier provider effect failed.
+enum BackupTargetLocationState {
+  BACKUP_TARGET_LOCATION_STATE_UNSPECIFIED = 0;
+  BACKUP_TARGET_LOCATION_STATE_EXISTS = 1;
+  BACKUP_TARGET_LOCATION_STATE_MISSING = 2;
+}
+
+message ProbeFilesystemBackupTargetLocationRequest {
+  uint32 schema_version = 1;
+  deepseek.common.v1.ActionFence fence = 2;
+  string operation_id = 3;
+  string path = 4;
+  uint64 writer_fencing_token = 5;
+}
+
+message FilesystemBackupTargetLocationObservation {
+  uint32 schema_version = 1;
+  deepseek.common.v1.ActionFence fence = 2;
+  string operation_id = 3;
+  uint64 writer_fencing_token = 4;
+  string requested_path = 5;
+  BackupTargetLocationState state = 6;
+  int64 observed_at_unix = 7;
+  string fleet_id = 8;
+  string environment = 9;
+}
+
+message FilesystemBackupTargetLocationReceipt {
+  uint32 schema_version = 1;
+  FilesystemBackupTargetLocationObservation observation = 2;
+  bytes signature = 3;
+  string signer_public_key = 4;
+}
+
 service BackupTargetInspection {
   rpc Inspect(InspectFilesystemBackupTargetRequest) returns (FilesystemBackupTargetInspectionReceipt);
+  rpc ProbeLocation(ProbeFilesystemBackupTargetLocationRequest) returns (FilesystemBackupTargetLocationReceipt);
 }
