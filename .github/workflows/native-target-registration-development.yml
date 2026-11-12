@@ -23,8 +23,6 @@ jobs:
     env:
       GOTOOLCHAIN: local
       CGO_ENABLED: "1"
-      GOCACHE: ${{ runner.temp }}/target-registration-go-cache
-      GOMODCACHE: ${{ runner.temp }}/target-registration-go-modules
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -34,6 +32,8 @@ jobs:
           python-version: "3.11"
       - name: Install the unchanged checksum-pinned Go
         run: |
+          echo "GOCACHE=$RUNNER_TEMP/target-registration-go-cache" >> "$GITHUB_ENV"
+          echo "GOMODCACHE=$RUNNER_TEMP/target-registration-go-modules" >> "$GITHUB_ENV"
           archive="$RUNNER_TEMP/go1.27.1.linux-amd64.tar.gz"
           curl --fail --location --silent --show-error --output "$archive" https://go.dev/dl/go1.27.1.linux-amd64.tar.gz
           echo "63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445  $archive" | sha256sum --check --strict
