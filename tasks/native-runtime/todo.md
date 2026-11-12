@@ -3733,3 +3733,20 @@ No native/browser assertion, report requirement or original floor is removed.
   concurrency, original-result replay after later mutation/deletion and restart,
   SQLite interruptions, receipt bindings and writer-expiry rollback. Retain every
   prior deletion regression and original full coverage/Evidence/platform gate.
+
+
+### 2026-11-12 — Rust filesystem target observation, registration incomplete
+
+- Implement a typed private, controller-authenticated Rust inspection RPC over
+  real existing directories and original target marker bytes. Bind observations
+  to action/epoch, deployment writer and a separate Rust-custodied signature;
+  reject unsafe roots, links/reparse points, malformed or over-bound markers.
+- Verify original marker/ciphertext preservation and markerless non-initializing
+  reads through real filesystem tests; exercise the actual gRPC client/server,
+  authentication, writer fencing and signature verification in cloud Rust gates.
+  New implementation qualification is pending until exact-source reports pass.
+- [ ] Complete public filesystem registration/re-registration through the Go
+  authoritative transaction, monotonic retained history/public-generation reset,
+  overlap/contributor/clone checks, and original-operation recovery. Preserve
+  fresh initialization and all S3/other retained lifecycle behavior. Inspection
+  alone does not qualify registration, zero-Python production or full migration.

@@ -52,6 +52,7 @@ mod operation_grant_replay_tests;
 mod service;
 mod signature_journal;
 mod storage_transport;
+mod target_inspection;
 mod transport;
 pub use agent_execution_grant::{
     AGENT_EXECUTION_GRANT_SCHEMA, AgentExecutionControl, AgentExecutionGrantContext,

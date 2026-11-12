@@ -17,6 +17,8 @@ const ENVELOPE_DOMAIN: &[u8] = b"deepseek-infra:federation-private-key-envelope-
 mod media_outcome;
 #[path = "native_origin.rs"]
 mod native_origin;
+#[path = "target_inspection.rs"]
+mod target_inspection;
 pub use native_origin::{verify_native_origin, verify_native_origin_publication};
 
 pub struct ControlSigningKey {

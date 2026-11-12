@@ -616,3 +616,106 @@ var NativeOriginCustody_ServiceDesc = grpc.ServiceDesc{
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "action/v1/action.proto",
 }
+
+const (
+	BackupTargetInspection_Inspect_FullMethodName = "/deepseek.action.v1.BackupTargetInspection/Inspect"
+)
+
+// BackupTargetInspectionClient is the client API for BackupTargetInspection service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+type BackupTargetInspectionClient interface {
+	Inspect(ctx context.Context, in *InspectFilesystemBackupTargetRequest, opts ...grpc.CallOption) (*FilesystemBackupTargetInspectionReceipt, error)
+}
+
+type backupTargetInspectionClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewBackupTargetInspectionClient(cc grpc.ClientConnInterface) BackupTargetInspectionClient {
+	return &backupTargetInspectionClient{cc}
+}
+
+func (c *backupTargetInspectionClient) Inspect(ctx context.Context, in *InspectFilesystemBackupTargetRequest, opts ...grpc.CallOption) (*FilesystemBackupTargetInspectionReceipt, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(FilesystemBackupTargetInspectionReceipt)
+	err := c.cc.Invoke(ctx, BackupTargetInspection_Inspect_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// BackupTargetInspectionServer is the server API for BackupTargetInspection service.
+// All implementations must embed UnimplementedBackupTargetInspectionServer
+// for forward compatibility.
+type BackupTargetInspectionServer interface {
+	Inspect(context.Context, *InspectFilesystemBackupTargetRequest) (*FilesystemBackupTargetInspectionReceipt, error)
+	mustEmbedUnimplementedBackupTargetInspectionServer()
+}
+
+// UnimplementedBackupTargetInspectionServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedBackupTargetInspectionServer struct{}
+
+func (UnimplementedBackupTargetInspectionServer) Inspect(context.Context, *InspectFilesystemBackupTargetRequest) (*FilesystemBackupTargetInspectionReceipt, error) {
+	return nil, status.Error(codes.Unimplemented, "method Inspect not implemented")
+}
+func (UnimplementedBackupTargetInspectionServer) mustEmbedUnimplementedBackupTargetInspectionServer() {
+}
+func (UnimplementedBackupTargetInspectionServer) testEmbeddedByValue() {}
+
+// UnsafeBackupTargetInspectionServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to BackupTargetInspectionServer will
+// result in compilation errors.
+type UnsafeBackupTargetInspectionServer interface {
+	mustEmbedUnimplementedBackupTargetInspectionServer()
+}
+
+func RegisterBackupTargetInspectionServer(s grpc.ServiceRegistrar, srv BackupTargetInspectionServer) {
+	// If the following call panics, it indicates UnimplementedBackupTargetInspectionServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&BackupTargetInspection_ServiceDesc, srv)
+}
+
+func _BackupTargetInspection_Inspect_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(InspectFilesystemBackupTargetRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BackupTargetInspectionServer).Inspect(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BackupTargetInspection_Inspect_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BackupTargetInspectionServer).Inspect(ctx, req.(*InspectFilesystemBackupTargetRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// BackupTargetInspection_ServiceDesc is the grpc.ServiceDesc for BackupTargetInspection service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var BackupTargetInspection_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "deepseek.action.v1.BackupTargetInspection",
+	HandlerType: (*BackupTargetInspectionServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "Inspect",
+			Handler:    _BackupTargetInspection_Inspect_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "action/v1/action.proto",
+}

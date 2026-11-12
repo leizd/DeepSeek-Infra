@@ -220,6 +220,7 @@ pub struct WorkerRpcService {
     pub(crate) agent_execution_control: Option<crate::AgentExecutionControl>,
     pub(crate) agent_plan_executor: Option<Arc<crate::AgentPlanExecutor>>,
     pub(crate) media_journal: Option<Arc<Mutex<crate::media_journal::MediaJournal>>>,
+    pub(crate) target_inspection: Option<Arc<crate::target_inspection::LocationPolicy>>,
     #[cfg(feature = "s3")]
     transport: Option<Arc<deepseek_storage::s3::S3Transport>>,
 }
@@ -241,6 +242,7 @@ impl WorkerRpcService {
             agent_execution_control: None,
             agent_plan_executor: None,
             media_journal: None,
+            target_inspection: None,
             #[cfg(feature = "s3")]
             transport: None,
         }
@@ -257,6 +259,7 @@ impl WorkerRpcService {
             agent_execution_control: None,
             agent_plan_executor: None,
             media_journal: None,
+            target_inspection: None,
             #[cfg(feature = "s3")]
             transport: None,
         }
