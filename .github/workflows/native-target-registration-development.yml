@@ -68,13 +68,27 @@ jobs:
               'TestTargetRegistrationDamagedSchemaIdentityAndCatalogNeverLookEmpty',
               'TestTargetRegistrationReplayAndPreparationCannotHideReadOrCommitFailure',
               'TestTargetRegistrationMissingOperatorOrMalformedEventCannotPublishHealthyState',
+              'TestAgentDriverLoopKeepsUnknownAndToolsPendingCustodyWithoutRedispatch',
+              'TestTargetInspectionClientBoundsUntrustedResponseSizes',
+              'TestTargetInspectionClientNeverFallsBackToPlaintextOrDuplicateCredentials',
+              'TestTargetInspectionClientReadsBothStatesWithTLSAndPinnedPublicMetadata',
+              'TestTargetInspectionClientRejectsInvalidBindingsBeforeRPC',
+              'TestTargetInspectionClientRejectsUnboundResponsesAndTransportFailures',
+              'TestTargetLocationRejectsUnresolvedRebindingAndPurposeConfusion',
+              'TestTargetObservationAcceptsSignedAbsenceWithoutAdmittingRegistration',
+              'TestTargetObservationRejectsInvalidPinnedKeysAndUnencodableFields',
+              'TestTargetObservationRejectsInvalidReadRequests',
+              'TestTargetObservationRejectsSignedRebindingAndMalformedEnvelopes',
+              'TestTargetObservationRequiresPinnedDeploymentAndFreshTime',
           }
-          actual=set()
-          for path in (root/'go/internal/store').glob('*_test.go'):
-              actual.update(re.findall(r'^func (TestTargetRegistration[A-Za-z0-9_]*)[(]',path.read_text(),re.M))
-          assert actual==required
+          actual=[]
+          expression=r'^func (TestTarget(?:Registration|Observation|Location|Inspection)[A-Za-z0-9_]*|TestAgentDriverLoopKeepsUnknownAndToolsPendingCustodyWithoutRedispatch)[(]'
+          for package in ('store','worker','api'):
+              for path in (root/'go/internal'/package).glob('*_test.go'):
+                  actual.extend(re.findall(expression,path.read_text(),re.M))
+          assert len(actual)==len(set(actual))==len(required) and set(actual)==required
           subprocess.run(['python','scripts/capture_evidence_context.py','--version',(root/'VERSION').read_text().strip(),'--out',str(out/'source-context.json')],check=True)
-          args=['go','test','-race','-json','-count=1','-timeout=8m','-covermode=atomic','-coverprofile='+str(out/'coverage.out'),'-run','^TestTargetRegistration','./internal/store']
+          args=['go','test','-race','-json','-count=1','-timeout=8m','-covermode=atomic','-coverprofile='+str(out/'coverage.out'),'-run','^(TestTarget(Registration|Observation|Location|Inspection)|TestAgentDriverLoopKeepsUnknownAndToolsPendingCustodyWithoutRedispatch$)','./internal/store','./internal/worker','./internal/api']
           with (out/'go-tests.jsonl').open('wb') as stream:
               run=subprocess.run(args,cwd=root/'go',stdout=stream,stderr=subprocess.STDOUT,check=False)
           raw=(out/'go-tests.jsonl').read_bytes();events=[];parse_errors=[]
@@ -88,7 +102,7 @@ jobs:
           ends=Counter(e['Test'] for e in top if e['Action'] in {'pass','fail','skip'})
           package=[e for e in events if not e.get('Test') and e['Action'] in {'pass','fail','skip'}]
           good=run.returncode==0 and not parse_errors and set(starts)==required and starts==ends and set(starts.values())=={1}
-          good=good and all(e['Action']=='pass' for e in top if e['Action'] in {'pass','fail','skip'}) and len(package)==1 and package[0]['Action']=='pass'
+          good=good and all(e['Action']=='pass' for e in top if e['Action'] in {'pass','fail','skip'}) and len(package)==3 and all(e['Action']=='pass' for e in package) and {e['Package'] for e in package}=={'github.com/leizd/DeepSeek-Infra/go/internal/'+p for p in ('store','worker','api')}
           good=good and not any(e['Action']=='fail' or 'WARNING: DATA RACE' in e.get('Output','') for e in events)
           report=dict(status='PASS' if good else 'FAIL',sourceCommit=source,sourceTree=tree,runId=os.environ['GITHUB_RUN_ID'],event=os.environ['GITHUB_EVENT_NAME'],attempt=os.environ['GITHUB_RUN_ATTEMPT'],
               expectedTests=sorted(required),command=args,exitCode=run.returncode,raceEnabled=True,timeout='8m',rawEventsSha256=hashlib.sha256(raw).hexdigest(),parseErrors=parse_errors,

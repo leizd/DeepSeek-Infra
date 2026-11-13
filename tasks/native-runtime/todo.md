@@ -3847,3 +3847,10 @@ column. All16 frozen families require cloud execution and all original
 complete gates remain mandatory. Production Go/Rust/Proto and complete
 server/desktop/Android/background/MCP migration scope remain unchanged and
 incomplete. ACTIVE / NOT_READY.
+
+
+### 2026-11-13 — Go consumption of Rust target observations, registration still open
+
+Add TLS-only Go consumers of Inspect/ProbeLocation, public-key/deployment/fence/path/time/purpose binding, six verifier and five client test families, and an actual Go-to-Rust custody/filesystem integration case in full CI. Keep the original sixteen registration families and the Agent pending-custody loop regression in the 28-family cloud development inventory. Marker absence is a verified read only; RegisterInspectedBackupTarget still rejects it. Full initialization, public POST, clone/overlap/contributor validation, signed location-proof retention, all target lifecycles and recovery remain incomplete.
+
+Whole-product server/desktop/Android/background/MCP functionality, original Go95/Android-Go95/Rust80/Python95 floors, unique authoritative writers, complete recovery and zero production Python/server TypeScript remain required. ACTIVE / NOT_READY. No PR mutation, main merge, release or real-data operation. Native compilation and caches stay in GitHub Actions.

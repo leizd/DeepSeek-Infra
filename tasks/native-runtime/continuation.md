@@ -15159,3 +15159,10 @@ column. All16 frozen families require cloud execution and all original
 complete gates remain mandatory. Production Go/Rust/Proto and complete
 server/desktop/Android/background/MCP migration scope remain unchanged and
 incomplete. ACTIVE / NOT_READY.
+
+
+### 2026-11-13 — Native target observation consumer and actual-boundary verification
+
+The Go TLS client now consumes both Rust observation RPCs using pinned public metadata. No private custody bytes enter Go. Pure Go test signatures are fixture evidence only; full CI adds a real Rust-managed custody process and filesystem test, including present/absent markers, existing/missing paths, wrong writer/deployment, unchanged marker bytes, and no effect-epoch installation. These native checks are pending for this exact new source. The parent bc8a2d3 default full coverage reached 17483/18402 (95.0059776111%); its full race gate failed because a fixed 4.3-second cancellation preempted the pending-custody scenario. Replace that wait with two actual production-loop custody queries; retain every original no-redispatch/no-completion/lease-retention assertion. Do not inherit the parent result or treat scoped coverage as current full qualification.
+
+Whole-product server/desktop/Android/background/MCP functionality, original Go95/Android-Go95/Rust80/Python95 floors, unique authoritative writers, complete recovery and zero production Python/server TypeScript remain required. ACTIVE / NOT_READY. No PR mutation, main merge, release or real-data operation. Native compilation and caches stay in GitHub Actions.

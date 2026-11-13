@@ -23,16 +23,17 @@ var (
 )
 
 type Client struct {
-	rpc            actionv1.WorkerClient
-	connection     *grpc.ClientConn
-	tlsSecured     bool
-	bearerAttached bool
-	signer         actionv1.ControlSignerClient
-	bootstrap      actionv1.ControlSignerBootstrapClient
-	origin         actionv1.NativeOriginCustodyClient
-	nodes          agentNodeClient
-	media          mediav1.MediaMutationWorkerClient
-	mediaCreation  mediav1.MediaCreationPayloadsClient
+	rpc              actionv1.WorkerClient
+	connection       *grpc.ClientConn
+	tlsSecured       bool
+	bearerAttached   bool
+	signer           actionv1.ControlSignerClient
+	bootstrap        actionv1.ControlSignerBootstrapClient
+	origin           actionv1.NativeOriginCustodyClient
+	nodes            agentNodeClient
+	media            mediav1.MediaMutationWorkerClient
+	mediaCreation    mediav1.MediaCreationPayloadsClient
+	targetInspection actionv1.BackupTargetInspectionClient
 }
 
 func New(rpc actionv1.WorkerClient) *Client {

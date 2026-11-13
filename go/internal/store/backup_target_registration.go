@@ -116,16 +116,33 @@ func targetRegistryDigestTx(tx *sql.Tx) (string, error) {
 }
 
 func verifyTargetObservation(receipt *actionv1.FilesystemBackupTargetInspectionReceipt, public, fleet, environment string) error {
+	if err := verifyTargetObservationEnvelope(receipt, public, fleet, environment); err != nil {
+		return err
+	}
+	if !receipt.Observation.MarkerPresent {
+		return ErrTargetRegistrationInvalid
+	}
+	return nil
+}
+
+func verifyTargetObservationEnvelope(receipt *actionv1.FilesystemBackupTargetInspectionReceipt, public, fleet, environment string) error {
 	if receipt == nil || receipt.Observation == nil || receipt.SchemaVersion != 1 || receipt.SignerPublicKey != public || len(receipt.Signature) != ed25519.SignatureSize || proto.Size(receipt) > maximumTargetInspectionBytes {
 		return ErrTargetRegistrationInvalid
 	}
 	o := receipt.Observation
-	if o.Fence == nil || !nativeKnown(receipt, o, o.Fence) || o.SchemaVersion != 1 || o.Fence.ExecutionEpoch == 0 || o.Fence.ExecutionEpoch > math.MaxInt64 || o.OperationId != o.Fence.ActionId || !strings.HasPrefix(o.OperationId, targetInspectionOperationPrefix) || len(o.OperationId) > 128 || o.WriterFencingToken == 0 || o.WriterFencingToken > math.MaxInt64 || !o.MarkerPresent || len(o.MarkerJson) == 0 || len(o.MarkerJson) > 4*1024*1024 || o.ObservedAtUnix <= 0 || o.FleetId != fleet || o.Environment != environment || len(o.RequestedPath) == 0 || len(o.RequestedPath) > 32768 || len(o.CanonicalPath) > 32768 || !filepath.IsAbs(o.CanonicalPath) {
+	if o.Fence == nil || !nativeKnown(receipt, o, o.Fence) || o.SchemaVersion != 1 || o.Fence.ExecutionEpoch == 0 || o.Fence.ExecutionEpoch > math.MaxInt64 || o.OperationId != o.Fence.ActionId || !strings.HasPrefix(o.OperationId, targetInspectionOperationPrefix) || len(o.OperationId) > 128 || o.WriterFencingToken == 0 || o.WriterFencingToken > math.MaxInt64 || o.ObservedAtUnix <= 0 || o.FleetId != fleet || o.Environment != environment || len(o.RequestedPath) == 0 || len(o.RequestedPath) > 32768 || len(o.CanonicalPath) > 32768 || !filepath.IsAbs(o.CanonicalPath) {
 		return ErrTargetRegistrationInvalid
 	}
-	digest := sha256.Sum256(o.MarkerJson)
+	if o.MarkerPresent {
+		digest := sha256.Sum256(o.MarkerJson)
+		if len(o.MarkerJson) == 0 || len(o.MarkerJson) > 4*1024*1024 || !bytes.Equal(digest[:], o.MarkerSha256) {
+			return ErrTargetRegistrationInvalid
+		}
+	} else if len(o.MarkerJson) != 0 || len(o.MarkerSha256) != 0 {
+		return ErrTargetRegistrationInvalid
+	}
 	key, err := decodeFixedBase64(public, ed25519.PublicKeySize)
-	if err != nil || !bytes.Equal(digest[:], o.MarkerSha256) {
+	if err != nil {
 		return ErrTargetRegistrationInvalid
 	}
 	wire, err := proto.MarshalOptions{Deterministic: true}.Marshal(o)

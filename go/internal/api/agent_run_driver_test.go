@@ -66,16 +66,17 @@ func TestDriverRecoveryKeepsCancellationHistoryAndCompletesOnlySelectedTasks(t *
 // Offline signed worker fixtures qualify Go orchestration and refusal behavior;
 // they never qualify Rust custody, a provider or the public native process path.
 type driverFixtureWorker struct {
-	t          *testing.T
-	nodes      *agentNodeService
-	private    ed25519.PrivateKey
-	binding    worker.ControlSignerBinding
-	effects    map[string]*agentv1.AgentNodeEffectMetadata
-	calls      []string
-	fail       string
-	failAfter  string
-	rejectNode string
-	closes     int
+	t               *testing.T
+	nodes           *agentNodeService
+	private         ed25519.PrivateKey
+	binding         worker.ControlSignerBinding
+	effects         map[string]*agentv1.AgentNodeEffectMetadata
+	calls           []string
+	fail            string
+	failAfter       string
+	rejectNode      string
+	closes          int
+	observedPending chan string
 }
 
 func (fixture *driverFixtureWorker) AuthorizeAgentExecution(_ context.Context, claim *agentv1.AgentRunExecutionClaim, id, nonce string, binding worker.ControlSignerBinding) ([]byte, error) {
@@ -177,6 +178,12 @@ func (fixture *driverFixtureWorker) QueryAgentNodeEffect(_ context.Context, inpu
 	effect := fixture.effects[input.OperationId]
 	if effect == nil {
 		return nil, errAgentDriverUnknown
+	}
+	if fixture.observedPending != nil && effect.NodeId == "coder" {
+		select {
+		case fixture.observedPending <- effect.State:
+		default:
+		}
 	}
 	return proto.Clone(effect).(*agentv1.AgentNodeEffectMetadata), nil
 }
@@ -774,8 +781,27 @@ func TestAgentDriverLoopKeepsUnknownAndToolsPendingCustodyWithoutRedispatch(t *t
 		t.Run(failure, func(t *testing.T) {
 			driver, fixture, run := newDriverFixture(t, false)
 			fixture.fail = failure
+			fixture.observedPending = make(chan string, 4)
 			cancel, done := driverFixtureLoop(t, driver)
-			time.Sleep(4300 * time.Millisecond)
+			// Wait for actual retained-custody queries on two loop iterations.
+			// A fixed sleep could cancel the first phase during a slow SQLite
+			// commit, before the intended unknown/tools path was ever reached.
+			deadline := time.NewTimer(45 * time.Second)
+			defer deadline.Stop()
+			expected := "EFFECT_UNKNOWN"
+			if failure == "tools" {
+				expected = "AWAITING_TOOLS"
+			}
+			for observed := 0; observed < 2; observed++ {
+				select {
+				case state := <-fixture.observedPending:
+					if state != expected {
+						t.Fatal("loop observed a fabricated custody state", state)
+					}
+				case <-deadline.C:
+					t.Fatal("loop never observed retained pending custody twice")
+				}
+			}
 			cancel()
 			<-done
 			run = driverFixtureRun(t, driver, run.RunID)

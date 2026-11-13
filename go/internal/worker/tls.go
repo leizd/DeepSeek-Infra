@@ -147,16 +147,17 @@ func DialTLS(cfg TLSDialConfig) (*Client, error) {
 		return nil, ErrWorkerTLSConfigInvalid
 	}
 	return &Client{
-		rpc:            actionv1.NewWorkerClient(connection),
-		signer:         actionv1.NewControlSignerClient(connection),
-		bootstrap:      actionv1.NewControlSignerBootstrapClient(connection),
-		origin:         actionv1.NewNativeOriginCustodyClient(connection),
-		nodes:          agentv1.NewAgentNodeWorkerClient(connection),
-		media:          mediav1.NewMediaMutationWorkerClient(connection),
-		mediaCreation:  mediav1.NewMediaCreationPayloadsClient(connection),
-		connection:     connection,
-		tlsSecured:     true,
-		bearerAttached: true,
+		rpc:              actionv1.NewWorkerClient(connection),
+		signer:           actionv1.NewControlSignerClient(connection),
+		bootstrap:        actionv1.NewControlSignerBootstrapClient(connection),
+		origin:           actionv1.NewNativeOriginCustodyClient(connection),
+		nodes:            agentv1.NewAgentNodeWorkerClient(connection),
+		media:            mediav1.NewMediaMutationWorkerClient(connection),
+		mediaCreation:    mediav1.NewMediaCreationPayloadsClient(connection),
+		targetInspection: actionv1.NewBackupTargetInspectionClient(connection),
+		connection:       connection,
+		tlsSecured:       true,
+		bearerAttached:   true,
 	}, nil
 }
 

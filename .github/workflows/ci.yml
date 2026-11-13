@@ -1556,6 +1556,24 @@ jobs:
         env:
           DEEPSEEK_TEST_RUST_WORKER_BINARY: ${{ github.workspace }}/rust/target/debug/deepseek-worker
         run: go test -tags=integration ./internal/worker -run '^TestRustWorkerTLSRealBoundary$' -count=1 -timeout=30s
+      - name: Verify Go target observations against actual Rust custody and filesystem
+        timeout-minutes: 4
+        env:
+          DEEPSEEK_TEST_RUST_WORKER_BINARY: ${{ github.workspace }}/rust/target/debug/deepseek-worker
+          DEEPSEEK_TEST_TARGET_EXTERNAL_ROOT: ${{ runner.temp }}
+        run: |
+          mkdir -p ../artifacts/native-target-observation
+          (cd .. && python scripts/capture_evidence_context.py --version "$(cat VERSION)" --out artifacts/native-target-observation/source-context.json)
+          set -o pipefail
+          go test -tags=integration -race -json ./internal/worker -run '^TestRustTargetObservationGoClientAgainstRealCustodyAndFilesystem$' -count=1 -timeout=3m | tee ../artifacts/native-target-observation/go-rust-tests.jsonl
+      - name: Return source-bound target observation reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: native-target-observation-${{ github.sha }}
+          path: artifacts/native-target-observation/
+          if-no-files-found: warn
+          retention-days: 7
       - name: Run authenticated Go-to-Rust epoch install boundary
         shell: bash
         env:
