@@ -292,6 +292,9 @@ message ProbeFilesystemBackupTargetLocationRequest {
   string operation_id = 3;
   string path = 4;
   uint64 writer_fencing_token = 5;
+  // Opt-in retained Path.resolve(strict=False) result for overlap checks.
+  // The default preserves the original existence-only clone observation.
+  bool resolve_path = 6;
 }
 
 message FilesystemBackupTargetLocationObservation {
@@ -304,6 +307,9 @@ message FilesystemBackupTargetLocationObservation {
   int64 observed_at_unix = 7;
   string fleet_id = 8;
   string environment = 9;
+  // Nonempty only for resolve_path requests. Missing suffixes can remain:
+  // this is a path comparison observation, never proof of a failed effect.
+  string canonical_path = 10;
 }
 
 message FilesystemBackupTargetLocationReceipt {
