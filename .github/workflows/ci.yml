@@ -1458,6 +1458,9 @@ jobs:
       - run: test "$(go env GOVERSION)" = "go1.27.1"
       - run: test -z "$(gofmt -l .)"
       - run: go vet ./...
+      - name: Build the exact-source v21 registration fixture producer
+        timeout-minutes: 12
+        run: python ../scripts/build_native_v21_target_fixture.py --report ../artifacts/native-target-observation/legacy-v21-producer-build.json
       - run: go test ./...
       # The full pure-Go SQLite race suite exceeded 30m while creating its final fixtures.
       # Keep every test, bound each package at 60m, and preserve per-test timing evidence.

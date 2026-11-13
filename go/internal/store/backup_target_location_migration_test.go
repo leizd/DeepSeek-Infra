@@ -40,31 +40,11 @@ func locationV21Fixture(t *testing.T, control *Control) {
 }
 
 func TestTargetRegistrationLocationV21UpgradePreservesOriginalBytesAndReplay(t *testing.T) {
-	control := targetDeletePromotedStore(t, true)
-	locationV21Fixture(t, control)
-	previous := filepath.Join(t.TempDir(), "old")
-	scope, marker, document := registrationFixture(t, control, "target-inspect-pre-location-first", "target_relocated", previous)
-	if _, _, err := control.RegisterInspectedBackupTarget(scope, marker, document); err != nil {
-		t.Fatal(err)
-	}
-	scope, marker, document = registrationFixture(t, control, "target-inspect-pre-location-move", "target_relocated", filepath.Join(t.TempDir(), "moved"))
-	oldProof := relocationFixture(t, control, previous, scope, actionv1.BackupTargetLocationState_BACKUP_TARGET_LOCATION_STATE_MISSING)
-	if _, _, err := control.RegisterInspectedBackupTargetWithLocation(scope, marker, oldProof, document); !errors.Is(err, ErrTargetRegistrationInvalid) {
-		t.Fatal("v21 silently wrote a v22 extension", err)
-	}
-	original, result, err := control.RegisterInspectedBackupTarget(scope, marker, document)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var boundary int64
-	if err := control.db.QueryRow("SELECT COALESCE(MAX(event_id),0) FROM control_events").Scan(&boundary); err != nil {
-		t.Fatal(err)
-	}
-	path := control.path
-	if err := control.Close(); err != nil {
-		t.Fatal(err)
-	}
-	recovered := reopenTargetDeleteStore(t, path, func() int64 { return 1000 })
+	fixture := produceLegacyTargetV21Fixture(t)
+	scope, marker, document := fixture.scope, fixture.marker, fixture.document
+	original, result, previous, boundary := fixture.record, fixture.result, fixture.previous, fixture.boundary
+	recovered := openLegacyTargetV21Copy(t, fixture)
+	oldProof := relocationFixture(t, recovered, previous, scope, actionv1.BackupTargetLocationState_BACKUP_TARGET_LOCATION_STATE_MISSING)
 	if recovered.SchemaVersion() != SchemaV22 {
 		t.Fatal("v21 did not upgrade to the location-proof layout")
 	}
@@ -109,14 +89,18 @@ func TestTargetRegistrationLocationV21UpgradePreservesOriginalBytesAndReplay(t *
 }
 
 func TestTargetRegistrationLocationV22MigrationInterruptionsPreserveV21State(t *testing.T) {
+	fixture := produceLegacyTargetV21Fixture(t)
 	for _, phase := range []string{"CREATE TABLE control_store_meta_v22", "INSERT INTO control_store_meta_v22", "DROP TABLE control_store_meta", "ALTER TABLE control_store_meta_v22", "CREATE TABLE control_target_registration_locations", "CREATE TRIGGER control_target_registration_locations_no_replace", "INSERT INTO control_target_location_boundary", "INSERT INTO schema_migrations VALUES(22", "UPDATE control_store_meta SET schema_version=22", "PRAGMA user_version=22", "negative-clock"} {
 		t.Run(phase, func(t *testing.T) {
-			control := targetDeletePromotedStore(t, true)
+			control := openLegacyTargetV21Copy(t, fixture)
 			locationV21Fixture(t, control)
-			scope, marker, document := registrationFixture(t, control, "target-inspect-before-v22", "target_legacy_location", filepath.Join(t.TempDir(), "original"))
-			before, _, err := control.RegisterInspectedBackupTarget(scope, marker, document)
-			if err != nil {
-				t.Fatal(err)
+			before := fixture.record
+			if _, _, err := control.RegisterInspectedBackupTarget(fixture.scope, fixture.marker, fixture.document); !errors.Is(err, ErrSchemaInactive) {
+				t.Fatal("current code wrote a legacy database before upgrading", err)
+			}
+			oldProof := relocationFixture(t, control, fixture.previous, fixture.scope, actionv1.BackupTargetLocationState_BACKUP_TARGET_LOCATION_STATE_MISSING)
+			if _, _, err := control.RegisterInspectedBackupTargetWithLocation(fixture.scope, fixture.marker, oldProof, fixture.document); !errors.Is(err, ErrTargetRegistrationInvalid) {
+				t.Fatal("v21 accepted a v22 extension", err)
 			}
 			fault := inventoryReadFault{query: phase, exec: true, armed: phase != "negative-clock"}
 			installInventoryReadFault(t, control, &fault)

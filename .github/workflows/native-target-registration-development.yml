@@ -40,6 +40,9 @@ jobs:
           mkdir -p "$RUNNER_TEMP/target-registration-go"
           tar -xzf "$archive" -C "$RUNNER_TEMP/target-registration-go"
           echo "$RUNNER_TEMP/target-registration-go/go/bin" >> "$GITHUB_PATH"
+      - name: Build the exact-source v21 registration fixture producer
+        timeout-minutes: 10
+        run: python scripts/build_native_v21_target_fixture.py --report artifacts/native-target-registration-development/legacy-v21-producer-build.json
       - name: Verify the exact source and registration control transactions
         timeout-minutes: 10
         run: |

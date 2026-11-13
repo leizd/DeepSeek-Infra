@@ -1,0 +1,76 @@
+package store
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"google.golang.org/protobuf/proto"
+)
+
+// Compiled only against the frozen, previously uploaded v21 source. This is an
+// offline test producer using that revision's normal promotion-test fixtures.
+// Its fake fixture signatures are never production promotion evidence.
+func TestProduceLegacyV21TargetRegistration(t *testing.T) {
+	if CurrentSchema != 21 {
+		t.Fatal("producer must be compiled against actual v21 source")
+	}
+	out := os.Getenv("DEEPSEEK_TEST_V21_OUT")
+	if !filepath.IsAbs(out) {
+		t.Fatal("isolated output directory required")
+	}
+	entries, err := os.ReadDir(out)
+	if err != nil || len(entries) != 0 {
+		t.Fatal("producer output must be a new empty directory", err)
+	}
+	control := targetDeletePromotedStore(t, true)
+	previous := filepath.Join(t.TempDir(), "original-target")
+	scope, marker, document := registrationFixture(t, control, "target-inspect-pre-location-first", "target_legacy_location", previous)
+	if _, _, err := control.RegisterInspectedBackupTarget(scope, marker, document); err != nil {
+		t.Fatal(err)
+	}
+	scope, marker, document = registrationFixture(t, control, "target-inspect-pre-location-move", "target_legacy_location", filepath.Join(t.TempDir(), "relocated-target"))
+	record, result, err := control.RegisterInspectedBackupTarget(scope, marker, document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire, err := proto.MarshalOptions{Deterministic: true}.Marshal(marker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var boundary int64
+	if err := control.db.QueryRow("SELECT COALESCE(MAX(event_id),0) FROM control_events").Scan(&boundary); err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(control.path, ControlDatabaseFilename)
+	if err := control.Close(); err != nil {
+		t.Fatal(err)
+	}
+	database, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(out, "go-control")
+	if err := os.Mkdir(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, ControlDatabaseFilename), database, 0600); err != nil {
+		t.Fatal(err)
+	}
+	value := map[string]any{
+		"sourceCommit": os.Getenv("DEEPSEEK_TEST_V21_SOURCE_COMMIT"), "schemaVersion": CurrentSchema,
+		"scope": map[string]any{"operationId": scope.operationID, "actionId": scope.actionID, "actor": scope.actor,
+			"requestedPath": scope.requestedPath, "snapshot": scope.snapshot, "writerFence": scope.writerFence,
+			"cutoverRevision": scope.cutoverRevision, "epoch": scope.epoch},
+		"marker": wire, "document": document, "record": record, "result": result,
+		"previousPath": previous, "eventBoundary": boundary,
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(out, "legacy-result.json"), encoded, 0600); err != nil {
+		t.Fatal(err)
+	}
+}
