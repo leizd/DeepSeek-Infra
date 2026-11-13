@@ -277,6 +277,117 @@ func TestAndroidGuardianCoreSettlesRealExitAndCancellation(t *testing.T) {
 	}
 }
 
+// TestAndroidGuardianRetriesWhileEscapedDescendantsAreAdopted covers the retry arm
+// in superviseGuardian's stopping path.
+//
+// That arm is a `select` between a child signal and a 10ms timer. Under the ordinary
+// fixture the signal usually wins, so the timer branch is reached only by timing luck
+// - the Android coverage profile moved by exactly one statement between two runs of
+// identical Go sources because of it. A gate that reads 94.998906% on one run and
+// 95.004377% on the next is testing the clock, not the code.
+//
+// This drives the branch deterministically instead: the helper exits while the
+// guardian still owns an escaped descendant, so the adopt loop has work to do and the
+// retry wait is entered every time rather than sometimes.
+func TestAndroidGuardianRetriesWhileEscapedDescendantsAreAdopted(t *testing.T) {
+	var previous int32
+	if err := unix.Prctl(unix.PR_GET_CHILD_SUBREAPER, uintptr(unsafe.Pointer(&previous)), 0, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = unix.Prctl(unix.PR_SET_CHILD_SUBREAPER, uintptr(previous), 0, 0, 0) })
+
+	ready := t.TempDir()
+	stop := filepath.Join(t.TempDir(), "stop")
+	var listeners map[string]string
+	t.Cleanup(func() {
+		_ = os.WriteFile(stop, []byte("stop"), 0o600)
+		deadline := time.Now().Add(3 * time.Second)
+		for _, address := range listeners {
+			for {
+				connection, err := net.DialTimeout("tcp", address, 100*time.Millisecond)
+				if err != nil {
+					break
+				}
+				_ = connection.Close()
+				if time.Now().After(deadline) {
+					break
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
+	})
+
+	// The helper forks a leaf, reports both listeners, then waits for the stop file.
+	// Killing it leaves the leaf behind, which the guardian adopts.
+	root := exec.Command(os.Args[0])
+	root.Env = append(androidGuardianHelperEnv("tree"),
+		"DEEPSEEK_LAUNCH_HELPER=1",
+		"DEEPSEEK_LAUNCH_READY_DIR="+ready,
+		"DEEPSEEK_ANDROID_GUARDIAN_STOP="+stop,
+	)
+	if err := root.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waited := false
+	t.Cleanup(func() {
+		if !waited {
+			_ = root.Process.Kill()
+			_ = root.Wait()
+		}
+	})
+	listeners = readLaunchListeners(t, ready, 2)
+
+	read, write, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer read.Close()
+	defer write.Close()
+	type result struct {
+		code int
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		value, err := superviseGuardian(Process{Name: "deepseekd", Path: os.Args[0]}, read)
+		done <- result{value, err}
+	}()
+
+	// Killing the root is what sets stopping, and the still-live leaf keeps the adopt
+	// loop iterating so the retry wait runs.
+	if err := root.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	_ = root.Wait()
+	waited = true
+	_ = write.Close()
+
+	select {
+	case value := <-done:
+		if value.code == 0 && value.err != nil {
+			t.Fatalf("guardian reported an error while settling an adopted child: %v", value.err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("guardian never settled after the root was killed")
+	}
+
+	// The adopted leaf must be gone: that is what the retry loop is for.
+	deadline := time.Now().Add(5 * time.Second)
+	for address := range listeners {
+		for {
+			connection, err := net.DialTimeout("tcp", address, 100*time.Millisecond)
+			if err != nil {
+				break
+			}
+			_ = connection.Close()
+			if time.Now().After(deadline) {
+				t.Fatalf("adopted descendant at %s survived the guardian", address)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+}
+
 func TestAndroidGuardianRefusesMissingPipeAndForeignImage(t *testing.T) {
 	process := Process{Name: "deepseekd", Path: os.Args[0]}
 	file, err := os.CreateTemp(t.TempDir(), "not-a-pipe")
