@@ -11,10 +11,13 @@ import (
 )
 
 type targetRegistrationBinding struct {
-	operation            string
-	revision, generation int64
-	receipt              *actionv1.FilesystemBackupTargetInspectionReceipt
-	result               OperatorMutationResult
+	operation                 string
+	revision, generation      int64
+	receipt                   *actionv1.FilesystemBackupTargetInspectionReceipt
+	result                    OperatorMutationResult
+	location                  *actionv1.FilesystemBackupTargetLocationReceipt
+	previousPath              string
+	locationRequiredByVersion bool
 }
 
 func targetRegistrationSchemaActiveTx(tx *sql.Tx) (bool, error) {
@@ -97,6 +100,9 @@ func loadTargetRegistrationBindingsTx(tx *sql.Tx, id string) (map[int64]targetRe
 	if expected != len(bindings) {
 		return nil, ErrCorruptRecord
 	}
+	if err := attachTargetLocationBindingsTx(tx, id, bindings); err != nil {
+		return nil, err
+	}
 	return bindings, nil
 }
 
@@ -119,6 +125,9 @@ func validateTargetRegistrationEvent(binding targetRegistrationBinding, before, 
 	}
 	if _, _, err := targetRegistrationDocument(o, event.Payload); err != nil {
 		return ErrCorruptRecord
+	}
+	if err := validateTargetLocationEvent(binding, before, metadata); err != nil {
+		return err
 	}
 	digest, err := operatorPayloadDigest(event.Payload)
 	if err != nil || digest != binding.result.PayloadDigest {

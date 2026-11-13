@@ -188,6 +188,16 @@ func targetRegistrationDocument(o *actionv1.FilesystemBackupTargetObservation, d
 // still supply the public route's complete containment/clone/contributor checks;
 // this method never initializes a marker or treats absence as a failed effect.
 func (store *Control) RegisterInspectedBackupTarget(scope BackupTargetRegistrationScope, receipt *actionv1.FilesystemBackupTargetInspectionReceipt, document json.RawMessage) (Record, OperatorMutationResult, error) {
+	return store.registerInspectedBackupTarget(scope, receipt, nil, document)
+}
+
+// The second receipt is a separate Rust read of the previously registered path.
+// It cannot authorize initialization, a provider retry, or an effect epoch.
+func (store *Control) RegisterInspectedBackupTargetWithLocation(scope BackupTargetRegistrationScope, receipt *actionv1.FilesystemBackupTargetInspectionReceipt, location *actionv1.FilesystemBackupTargetLocationReceipt, document json.RawMessage) (Record, OperatorMutationResult, error) {
+	return store.registerInspectedBackupTarget(scope, receipt, location, document)
+}
+
+func (store *Control) registerInspectedBackupTarget(scope BackupTargetRegistrationScope, receipt *actionv1.FilesystemBackupTargetInspectionReceipt, location *actionv1.FilesystemBackupTargetLocationReceipt, document json.RawMessage) (Record, OperatorMutationResult, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if err := verifyTargetObservation(receipt, store.promotionSignerKey, store.fleetID, store.environment); err != nil {
@@ -205,9 +215,21 @@ func (store *Control) RegisterInspectedBackupTarget(scope BackupTargetRegistrati
 	if err != nil {
 		return Record{}, OperatorMutationResult{}, err
 	}
-	material, err := canonicalAuthorityJSON(map[string]any{"command": "backup-target-register-v1", "operationId": scope.operationID,
+	requestMaterial := map[string]any{"command": "backup-target-register-v1", "operationId": scope.operationID,
 		"actionId": scope.actionID, "actor": scope.actor, "snapshot": scope.snapshot, "writerFence": scope.writerFence,
-		"cutoverRevision": scope.cutoverRevision, "epoch": scope.epoch, "document": json.RawMessage(document), "observation": hex.EncodeToString(witness)})
+		"cutoverRevision": scope.cutoverRevision, "epoch": scope.epoch, "document": json.RawMessage(document), "observation": hex.EncodeToString(witness)}
+	var locationWitness []byte
+	if location != nil {
+		if store.schema < SchemaV22 || proto.Size(location) > MaxBackupTargetLocationReceiptBytes {
+			return Record{}, OperatorMutationResult{}, ErrTargetRegistrationInvalid
+		}
+		locationWitness, err = proto.MarshalOptions{Deterministic: true}.Marshal(location)
+		if err != nil {
+			return Record{}, OperatorMutationResult{}, err
+		}
+		requestMaterial["locationObservation"] = hex.EncodeToString(locationWitness)
+	}
+	material, err := canonicalAuthorityJSON(requestMaterial)
 	if err != nil {
 		return Record{}, OperatorMutationResult{}, err
 	}
@@ -243,6 +265,13 @@ func (store *Control) RegisterInspectedBackupTarget(scope BackupTargetRegistrati
 	existing, exists, err := readTargetMetadataTx(tx, id)
 	if err != nil {
 		return Record{}, OperatorMutationResult{}, err
+	}
+	previousPath := ""
+	if store.schema >= SchemaV22 {
+		previousPath, err = validateTargetRelocation(existing, receipt, location, context.now)
+		if err != nil {
+			return Record{}, OperatorMutationResult{}, err
+		}
 	}
 	revision, generation := int64(1), int64(1)
 	if exists {
@@ -288,6 +317,11 @@ func (store *Control) RegisterInspectedBackupTarget(scope BackupTargetRegistrati
 	}
 	if _, err := tx.Exec(`INSERT INTO control_target_registrations(operation_id,target_id,revision,public_generation,observation) VALUES(?,?,?,?,?)`, scope.operationID, id, revision, generation, witness); err != nil {
 		return Record{}, OperatorMutationResult{}, err
+	}
+	if len(locationWitness) != 0 {
+		if _, err := tx.Exec(`INSERT INTO control_target_registration_locations(operation_id,previous_path,observation) VALUES(?,?,?)`, scope.operationID, previousPath, locationWitness); err != nil {
+			return Record{}, OperatorMutationResult{}, err
+		}
 	}
 	if err := validateControlHistory(tx, write.record); err != nil {
 		return Record{}, OperatorMutationResult{}, err

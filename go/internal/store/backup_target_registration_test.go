@@ -300,7 +300,7 @@ func TestTargetRegistrationV20UpgradePreservesOldRecordsWithoutInventingWitnesse
 	}
 	recovered := reopenTargetDeleteStore(t, path, func() int64 { return 1000 })
 	after, exists, err := recovered.Get("target", before.ID)
-	if err != nil || !exists || !reflect.DeepEqual(before, after) || recovered.SchemaVersion() != SchemaV21 {
+	if err != nil || !exists || !reflect.DeepEqual(before, after) || recovered.SchemaVersion() != CurrentSchema {
 		t.Fatalf("v20 upgrade changed retained state: %+v %+v %v", before, after, err)
 	}
 	var witnesses int

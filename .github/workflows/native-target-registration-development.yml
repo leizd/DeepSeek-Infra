@@ -80,6 +80,19 @@ jobs:
               'TestTargetObservationRejectsInvalidReadRequests',
               'TestTargetObservationRejectsSignedRebindingAndMalformedEnvelopes',
               'TestTargetObservationRequiresPinnedDeploymentAndFreshTime',
+              'TestTargetRegistrationLocationBindingReadFailuresNeverBecomeAbsentEvidence',
+              'TestTargetRegistrationLocationCannotPublishPartialWitnessOnDatabaseFailure',
+              'TestTargetRegistrationLocationIsNotAnOptionalWitnessForOtherMutations',
+              'TestTargetRegistrationLocationMissingOrAlteredEvidenceCannotLookHealthy',
+              'TestTargetRegistrationLocationRejectsUnneededOrMalformedWitnesses',
+              'TestTargetRegistrationLocationRetirementRejectsRetainedOrUnreadableCustody',
+              'TestTargetRegistrationLocationSchemaReadErrorsAndOrphansFailClosed',
+              'TestTargetRegistrationLocationV21UpgradePreservesOriginalBytesAndReplay',
+              'TestTargetRegistrationLocationV22MigrationInterruptionsPreserveV21State',
+              'TestTargetRegistrationLocationWitnessAndUpgradeBoundaryAreImmutable',
+              'TestTargetRegistrationRelocationRejectsUnboundUnresolvedAndExpiredProofs',
+              'TestTargetRegistrationRelocationReplaysOriginalProofAfterDeletionAndTakeover',
+              'TestTargetRegistrationRelocationRequiresSignedMissingOriginalLocation',
           }
           actual=[]
           expression=r'^func (TestTarget(?:Registration|Observation|Location|Inspection)[A-Za-z0-9_]*|TestAgentDriverLoopKeepsUnknownAndToolsPendingCustodyWithoutRedispatch)[(]'
