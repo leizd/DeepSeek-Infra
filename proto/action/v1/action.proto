@@ -309,6 +309,7 @@ message FilesystemBackupTargetLocationObservation {
   string environment = 9;
   // Nonempty only for resolve_path requests. Missing suffixes can remain:
   // this is a path comparison observation, never proof of a failed effect.
+  // In this mode state is UNSPECIFIED; existence requires a separate probe.
   string canonical_path = 10;
 }
 
