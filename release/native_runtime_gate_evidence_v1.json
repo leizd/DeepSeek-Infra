@@ -145,5 +145,12 @@
   "readiness": "NOT_READY",
   "fullMigrationQualified": false,
   "gatesPassing": 11,
-  "gatesRequired": 15
+  "gatesRequired": 15,
+  "flakyCoverageFinding": {
+    "symptom": "The Android Go coverage check moved between 95.004377% (17363/18276) and 94.998906% (17362/18276) across runs with byte-identical go/ sources, and the lower value is one statement under the 95.0 floor.",
+    "howItWasDiagnosed": "Diffed the two uploaded android-coverage.out profiles from runs 42786170148 and 43228212473. Block counts are identical (12973), and exactly one block differs: go/internal/launch/guardian_android_compat.go:127, the retry wait in superviseGuardian's stopping path.",
+    "rootCause": "That arm is a select between a child signal and a 10ms timer. Under the existing fixture whichever wins is a scheduling matter, so coverage depended on the clock rather than on the code.",
+    "fix": "Added TestAndroidGuardianRetriesWhileEscapedDescendantsAreAdopted, which forks a leaf, kills the root so stopping is set, and keeps a live adopted descendant so the adopt loop iterates and the retry wait is entered by design. No production code changed and the floor was not lowered.",
+    "whyItMatters": "A coverage floor that oscillates on identical sources is not a gate; it randomly fails merges. The honest fix is to make the branch reachable on purpose, not to relax the floor."
+  }
 }
