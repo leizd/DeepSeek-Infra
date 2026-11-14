@@ -1710,13 +1710,15 @@ jobs:
       - run: python -m pip install -r requirements.txt
       - name: Build locked release sidecar
         run: cargo build --release --locked --manifest-path rust/Cargo.toml -p deepseek-gateway
+      # 12 samples per layer: the absolute latency gate needs at least 10 to assert a
+      # p95 at all, and below that it reports itself unmeasured rather than passing.
+      # 2 was never enough to support a percentile. A comment inside a `>-` block is
+      # not a YAML comment - it becomes part of the shell command, and it swallowed
+      # every flag after it the first time this was attempted.
       - name: Run bounded layered benchmark
         run: >-
           python scripts/run_rust_sidecar_benchmarks.py
           --skip-build
-          # 12 samples per layer: the absolute latency gate needs at least 10 to
-          # assert a p95 at all, and below that it reports itself unmeasured rather
-          # than passing. 2 was never enough to support a percentile.
           --iterations 12
           --warmups 3
           --concurrency 1,8,32
