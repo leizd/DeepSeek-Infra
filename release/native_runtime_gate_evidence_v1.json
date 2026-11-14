@@ -251,5 +251,17 @@
       "androidCoverage": "95.004377% (17363/18276)",
       "note": "the Android figure is the same value the earlier passing run produced, and it is now reached by construction rather than by whichever of a signal and a 10ms timer arrived first."
     }
+  },
+  "zeroInvariantMeasurement": {
+    "measuredAt": "2026-11-14",
+    "harness": "scripts/measure_native_zero_invariants.py",
+    "artifact": {
+      "path": "release/native-runtime-evidence-5.0/zero-invariant-measurement.json",
+      "sha256": "298fc7122b3211c94d35c2021951c6ca9adf4a2e97c78409c1e347efa36f878e"
+    },
+    "result": "all seven invariants measured at 0, with 48 samples and 96 workload operations",
+    "whatActuallyRan": "A real deepseekd process was started in shadow mode on an ephemeral port with a scratch root, and driven through 48 iterations of health and status reads plus an unauthenticated mutation attempt per iteration. 48 operations succeeded, 48 mutation attempts were refused, and no Python interpreter appeared in the process tree at any probe.",
+    "whyItIsNotVacuous": "The validator refuses a vacuous zero, so the harness refuses to report one: it fails if fewer operations complete than were requested, if no read succeeded, or if no mutation attempt was refused. The first version of this harness reported python.exe as observed and was corrected - the harness is itself Python, so the probe now excludes its own pid and parent.",
+    "whatIsStillNotProven": "This is an isolated shadow-mode process, not production traffic. It demonstrates that a native workload runs with zero Python involvement and that the measurement method works; it does not demonstrate that a production deployment under real load makes no Python calls, because no production deployment of this runtime exists yet. That distinction is why the assessment stays NOT_READY rather than being populated with these numbers."
   }
 }

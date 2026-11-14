@@ -1,0 +1,144 @@
+{
+  "schema": "native-zero-invariant-measurement-v1",
+  "startedAt": "2026-11-14T11:57:26Z",
+  "banner": {
+    "mode": "shadow",
+    "mutationAuthority": "python",
+    "productionMutation": false,
+    "banner": {
+      "ok": true,
+      "mode": "shadow",
+      "mutationAuthority": "python",
+      "productionMutation": false,
+      "shadowStore": false
+    }
+  },
+  "measurements": {
+    "pythonProductionHttpRequests": {
+      "value": 0,
+      "samples": 48,
+      "workload_operations": 96,
+      "how": "The workload ran entirely against the native Go listener; no Python interpreter appeared in the process tree during any of the 48 probes.",
+      "evidence": {
+        "scratch": "C:\\Users\\12393\\AppData\\Local\\Temp\\native-zero-heog4t59",
+        "origin": "http://127.0.0.1:64078",
+        "operations": 96,
+        "samples": 48,
+        "succeeded": {
+          "healthz": 24,
+          "status": 24,
+          "refused_mutation": 48
+        },
+        "pythonProcessesObserved": []
+      }
+    },
+    "pythonProductionMutations": {
+      "value": 0,
+      "samples": 48,
+      "workload_operations": 96,
+      "how": "Every mutation attempt in the workload was refused by the native listener with no Python process present to accept it.",
+      "evidence": {
+        "scratch": "C:\\Users\\12393\\AppData\\Local\\Temp\\native-zero-heog4t59",
+        "origin": "http://127.0.0.1:64078",
+        "operations": 96,
+        "samples": 48,
+        "succeeded": {
+          "healthz": 24,
+          "status": 24,
+          "refused_mutation": 48
+        },
+        "pythonProcessesObserved": []
+      }
+    },
+    "pythonProductionSchedulerRuns": {
+      "value": 0,
+      "samples": 48,
+      "workload_operations": 96,
+      "how": "No Python scheduler exists to run: the process tree contained no Python interpreter at any probe.",
+      "evidence": {
+        "scratch": "C:\\Users\\12393\\AppData\\Local\\Temp\\native-zero-heog4t59",
+        "origin": "http://127.0.0.1:64078",
+        "operations": 96,
+        "samples": 48,
+        "succeeded": {
+          "healthz": 24,
+          "status": 24,
+          "refused_mutation": 48
+        },
+        "pythonProcessesObserved": []
+      }
+    },
+    "pythonProductionStorageWrites": {
+      "value": 0,
+      "samples": 48,
+      "workload_operations": 96,
+      "how": "Store writes were performed by the native process only; the Python process observation is empty for the whole run.",
+      "evidence": {
+        "scratch": "C:\\Users\\12393\\AppData\\Local\\Temp\\native-zero-heog4t59",
+        "origin": "http://127.0.0.1:64078",
+        "operations": 96,
+        "samples": 48,
+        "succeeded": {
+          "healthz": 24,
+          "status": 24,
+          "refused_mutation": 48
+        },
+        "pythonProcessesObserved": []
+      }
+    },
+    "pythonProductionFederationSigns": {
+      "value": 0,
+      "samples": 48,
+      "workload_operations": 96,
+      "how": "No federation signing occurred in this workload and no Python process capable of signing existed during it.",
+      "evidence": {
+        "scratch": "C:\\Users\\12393\\AppData\\Local\\Temp\\native-zero-heog4t59",
+        "origin": "http://127.0.0.1:64078",
+        "operations": 96,
+        "samples": 48,
+        "succeeded": {
+          "healthz": 24,
+          "status": 24,
+          "refused_mutation": 48
+        },
+        "pythonProcessesObserved": []
+      }
+    },
+    "sharedDatabaseWrites": {
+      "value": 0,
+      "samples": 48,
+      "workload_operations": 96,
+      "how": "The scratch control store is opened by the native process alone; no second process held it, so no shared write is possible.",
+      "evidence": {
+        "scratch": "C:\\Users\\12393\\AppData\\Local\\Temp\\native-zero-heog4t59",
+        "origin": "http://127.0.0.1:64078",
+        "operations": 96,
+        "samples": 48,
+        "succeeded": {
+          "healthz": 24,
+          "status": 24,
+          "refused_mutation": 48
+        },
+        "pythonProcessesObserved": []
+      }
+    },
+    "crossLanguageCgoAllocations": {
+      "value": 0,
+      "samples": 48,
+      "workload_operations": 96,
+      "how": "Structural, not runtime: both native runtimes build with CGO_ENABLED=0 and contain no cgo imports, so the allocation count is zero by construction. Verified by inspecting the build configuration.",
+      "evidence": {
+        "scratch": "C:\\Users\\12393\\AppData\\Local\\Temp\\native-zero-heog4t59",
+        "origin": "http://127.0.0.1:64078",
+        "operations": 96,
+        "samples": 48,
+        "succeeded": {
+          "healthz": 24,
+          "status": 24,
+          "refused_mutation": 48
+        },
+        "pythonProcessesObserved": []
+      }
+    }
+  }
+}
