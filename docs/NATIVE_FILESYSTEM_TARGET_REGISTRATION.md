@@ -39,7 +39,7 @@ conflict. Concurrent identical requests recover the same committed result.
 The offline metadata oracle executes the retained HTTP conversion function and
 `backup_targets._register`, replacing authentication and filesystem effects only
 inside the oracle. Canonical comparison requires CPython 3.12 / Unicode 15.0.0;
-developer runs on another interpreter are explicitly unqualified. Its 72 cases
+developer runs on another interpreter are explicitly unqualified. Its 74 cases
 cover ordered containers, duplicate keys, integer precision, numeric conversion,
 Unicode strings, cost booleans and strict QoS. Frozen Go Unicode classifications
 are checked against every Python code point and the official Unicode 15 data.

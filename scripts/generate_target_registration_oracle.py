@@ -61,6 +61,9 @@ def cases() -> list[dict]:
     rows.append(dict(inputRaw='{"label":{"b":1,"a":2,"b":3},"priority":9007199254740993}', marker=markers[0]))
     rows.append(dict(inputRaw='{"priority":1e999}', marker=markers[0]))
     rows.append(dict(inputRaw='{"label":[-0,1e999,-1e999]}', marker=markers[0]))
+    rows.append(dict(input={"label": "00012", "region": "00034", "failureDomain": "-0", "provider": "00123",
+                           "jurisdiction": "00056", "costClass": "00078", "priority": "0012"}, marker=markers[0]))
+    rows.append(dict(input={}, marker={"targetId": "target_oracle", "targetNonce": "000123", "createdAt": "0001"}))
     return rows
 
 

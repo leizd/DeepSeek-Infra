@@ -195,9 +195,6 @@ func (n node) str() string {
 	case "null":
 		return "None"
 	case "string":
-		if value, ok := new(big.Int).SetString(n.text, 10); ok {
-			return value.String()
-		}
 		return n.text
 	case "bool":
 		if n.boolean {
@@ -208,6 +205,9 @@ func (n node) str() string {
 		if strings.ContainsAny(n.text, ".eE") {
 			f, _ := strconv.ParseFloat(n.text, 64)
 			return floatString(f)
+		}
+		if value, ok := new(big.Int).SetString(n.text, 10); ok {
+			return value.String()
 		}
 		return n.text
 	case "array":

@@ -2328,6 +2328,93 @@
         "createdAt": "2000-01-01T00:00:00Z",
         "registeredAt": "2000-01-01T00:00:00Z"
       }
+    },
+    {
+      "input": {
+        "label": "00012",
+        "region": "00034",
+        "failureDomain": "-0",
+        "provider": "00123",
+        "jurisdiction": "00056",
+        "costClass": "00078",
+        "priority": "0012",
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": "original",
+        "createdAt": "2000-01-01T00:00:00Z"
+      },
+      "name": "retained-metadata-072",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "ok",
+      "document": {
+        "schemaVersion": 3,
+        "targetId": "target_oracle",
+        "kind": "filesystem",
+        "path": "/retained/target",
+        "targetNonce": "original",
+        "label": "00012",
+        "region": "00034",
+        "failureDomain": "-0",
+        "provider": "00123",
+        "jurisdiction": "00056",
+        "priority": 12,
+        "costClass": "00078",
+        "storageCostPerGiBMonth": null,
+        "egressCostPerGiB": null,
+        "maxReadBytesPerSecond": 104857600,
+        "maxWriteBytesPerSecond": 104857600,
+        "maxConcurrentTransfers": 4,
+        "storageTier": "hot",
+        "restoreLatencyClass": "seconds",
+        "minResidenceSeconds": 0,
+        "retrievalCostPerGiB": null,
+        "drainState": "active",
+        "createdAt": "2000-01-01T00:00:00Z",
+        "registeredAt": "2000-01-01T00:00:00Z"
+      }
+    },
+    {
+      "input": {
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": "000123",
+        "createdAt": "0001"
+      },
+      "name": "retained-metadata-073",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "ok",
+      "document": {
+        "schemaVersion": 3,
+        "targetId": "target_oracle",
+        "kind": "filesystem",
+        "path": "/retained/target",
+        "targetNonce": "000123",
+        "label": "",
+        "region": "local",
+        "failureDomain": "local",
+        "provider": "operator-filesystem",
+        "jurisdiction": "local",
+        "priority": 0,
+        "costClass": "standard",
+        "storageCostPerGiBMonth": null,
+        "egressCostPerGiB": null,
+        "maxReadBytesPerSecond": 104857600,
+        "maxWriteBytesPerSecond": 104857600,
+        "maxConcurrentTransfers": 4,
+        "storageTier": "hot",
+        "restoreLatencyClass": "seconds",
+        "minResidenceSeconds": 0,
+        "retrievalCostPerGiB": null,
+        "drainState": "active",
+        "createdAt": "0001",
+        "registeredAt": "2000-01-01T00:00:00Z"
+      }
     }
   ]
 }

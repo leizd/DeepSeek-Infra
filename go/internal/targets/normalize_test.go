@@ -76,7 +76,7 @@ func TestTargetMetadataRetainedHTTPAndRegisterOracle(t *testing.T) {
 	if err := json.Unmarshal(raw, &corpus); err != nil {
 		t.Fatal(err)
 	}
-	if corpus.SchemaVersion != 1 || len(corpus.Cases) != 72 {
+	if corpus.SchemaVersion != 1 || len(corpus.Cases) != 74 {
 		t.Fatal("retained oracle inventory changed")
 	}
 	for _, row := range corpus.Cases {
