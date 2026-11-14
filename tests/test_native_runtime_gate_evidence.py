@@ -194,10 +194,15 @@ def test_the_fuzz_gate_is_a_real_target_not_an_assertion() -> None:
     run_steps = [step for step in job["steps"] if "fuzz run" in str(step.get("run", ""))]
     assert len(run_steps) == 3, run_steps
     for step in run_steps:
-        # From the repository root, with the fuzz/ prefix on the corpus path; the
-        # crate is discovered through its metadata.cargo-fuzz marker.
-        assert step.get("working-directory") in (None, "."), step.get("run")
-        assert " fuzz/corpus/" in str(step.get("run", "")), step.get("run")
+        command = str(step.get("run", ""))
+        # This repository has no Cargo.toml at its root, and cargo-fuzz's
+        # find_package() walks up looking for one, so the step must run from rust/
+        # (a real Cargo project) and name the crate explicitly.
+        assert step.get("working-directory") == "rust", command
+        assert "--fuzz-dir=../fuzz" in command, command
+        # An absolute corpus path avoids relying on whether the relative one resolves
+        # against the working directory or against the fuzz directory.
+        assert "$GITHUB_WORKSPACE/fuzz/corpus/" in command, command
     marker = (ROOT / "fuzz" / "Cargo.toml").read_text(encoding="utf-8")
     assert "metadata.cargo-fuzz = true" in marker, (
         "cargo-fuzz locates its project by this marker; without it the CLI reports "
@@ -207,7 +212,9 @@ def test_the_fuzz_gate_is_a_real_target_not_an_assertion() -> None:
     commands = [str(step.get("run", "")) for step in job["steps"]]
     joined = "\n".join(commands)
     for name in ("transport_frozen_documents", "restore_relative_path", "evidence_proof_envelope"):
-        assert f"fuzz run {name}" in joined, f"{name} is never run"
+        # The flag sits between `run` and the target, so match them separately rather
+        # than as one contiguous string.
+        assert f"--fuzz-dir=../fuzz {name}" in joined, f"{name} is never run"
     # Each target must be time-bounded, or a hang looks like a slow CI job.
     assert joined.count("-max_total_time=") == 3, joined
     # And a finding has to block a release, not just colour a job red.

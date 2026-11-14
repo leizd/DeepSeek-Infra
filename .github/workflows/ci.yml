@@ -1716,18 +1716,27 @@ jobs:
           version="$(cat fuzz/cargo-fuzz-version.txt)"
           cargo install cargo-fuzz --version "$version" --locked
           cargo fuzz --version
-      # Run from the repository root: cargo-fuzz walks up from the working directory
-      # looking for a Cargo.toml that is *not* marked metadata.cargo-fuzz, then looks
-      # for fuzz/Cargo.toml beneath it. Running from inside fuzz/ instead makes it
-      # search for fuzz/fuzz/Cargo.toml, and a corpus path with the fuzz/ prefix
-      # doubles the same way. Both mistakes read as fuzz findings while being
-      # configuration errors, so this comment is load-bearing.
+      # Run from rust/, where a real Cargo.toml exists, and point --fuzz-dir at the
+      # fuzz crate. cargo-fuzz's find_package() walks up from the working directory
+      # for a Cargo.toml that is not itself a fuzz manifest, and this repository has
+      # none at its root - so running from the root can only ever report "could not
+      # find a cargo project". --fuzz-dir then names the crate explicitly, which also
+      # removes the fuzz/ vs fuzz/fuzz/ ambiguity that broke the previous attempt.
       - name: Fuzz the frozen transport validators
-        run: cargo +nightly fuzz run transport_frozen_documents fuzz/corpus/transport_frozen_documents -- -max_total_time=180
+        run: >-
+          cargo +nightly fuzz run --fuzz-dir=../fuzz transport_frozen_documents
+          "$GITHUB_WORKSPACE/fuzz/corpus/transport_frozen_documents" -- -max_total_time=180
+        working-directory: rust
       - name: Fuzz the restore path sanitiser
-        run: cargo +nightly fuzz run restore_relative_path fuzz/corpus/restore_relative_path -- -max_total_time=180
+        run: >-
+          cargo +nightly fuzz run --fuzz-dir=../fuzz restore_relative_path
+          "$GITHUB_WORKSPACE/fuzz/corpus/restore_relative_path" -- -max_total_time=180
+        working-directory: rust
       - name: Fuzz the evidence proof envelope
-        run: cargo +nightly fuzz run evidence_proof_envelope fuzz/corpus/evidence_proof_envelope -- -max_total_time=180
+        run: >-
+          cargo +nightly fuzz run --fuzz-dir=../fuzz evidence_proof_envelope
+          "$GITHUB_WORKSPACE/fuzz/corpus/evidence_proof_envelope" -- -max_total_time=180
+        working-directory: rust
       - name: Upload any crash artifact
         if: failure()
         uses: actions/upload-artifact@v4
