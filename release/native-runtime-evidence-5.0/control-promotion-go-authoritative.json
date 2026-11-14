@@ -1,0 +1,96 @@
+{
+  "schema": "control-transfer-verification-v1",
+  "domain": "policy",
+  "transferId": "fixture-policy",
+  "scratchRoot": "C:\\Users\\12393\\AppData\\Local\\Temp\\ctv7-855947a6",
+  "steps": [
+    {
+      "name": "open-isolated-go-store",
+      "status": "pass",
+      "detail": {
+        "schema": 20,
+        "storeDir": "C:\\Users\\12393\\AppData\\Local\\Temp\\ctv7-855947a6\\go-store"
+      }
+    },
+    {
+      "name": "attest-python-source",
+      "status": "pass",
+      "detail": {
+        "sourceDb": "C:\\Users\\12393\\AppData\\Local\\Temp\\promo3-eo1i6xlv\\.backup-control\\control.sqlite3"
+      }
+    },
+    {
+      "name": "claim-authority",
+      "status": "pass",
+      "detail": {
+        "advanced": true,
+        "digest": "3b6568e00d14451c826baa6a42775a2a971bda7016bdec77685182e9dcb2405e",
+        "generation": 1
+      }
+    },
+    {
+      "name": "read-authority-head",
+      "status": "pass",
+      "detail": {
+        "digest": "3b6568e00d14451c826baa6a42775a2a971bda7016bdec77685182e9dcb2405e",
+        "generation": 1
+      }
+    },
+    {
+      "name": "enter-dual-evaluate",
+      "status": "pass",
+      "detail": {
+        "artifactDigest": "eb319e8c87a93ec20cdc37ac334a0fa4208cb10150b6d9d3584f1f1312ea5b0e",
+        "from": "shadow",
+        "to": "dual_evaluate"
+      }
+    },
+    {
+      "name": "import-attested-inventory",
+      "status": "pass",
+      "detail": {
+        "imported": 1,
+        "manifestDigest": "1d561f3cd54f7668154cfe4d1d628039e8ba2108eb5283eff62353d46c782dff",
+        "sourceDigest": "c3e4e296aa87365b779e6eb94336c8d4ae91ae3be3fa8caabcbb173e3f36d4af"
+      }
+    },
+    {
+      "name": "observe-dual-evaluate",
+      "status": "pass",
+      "detail": {
+        "revision": 2,
+        "state": "dual_evaluate"
+      }
+    },
+    {
+      "name": "sign-promotion",
+      "status": "pass",
+      "detail": {
+        "artifactDigest": "d1fe3b27b6c7230e1e163b43336a6d9155a9b4b1d0f7d2c61d9e6f84c6914137",
+        "signerKeyId": ""
+      }
+    },
+    {
+      "name": "verify-go-authoritative",
+      "status": "pass",
+      "detail": {
+        "epoch": 3,
+        "fencingToken": 3,
+        "owner": "go",
+        "revision": 3,
+        "state": "go_authoritative"
+      }
+    },
+    {
+      "name": "verify-rollback",
+      "status": "pass",
+      "detail": {
+        "owner": "python",
+        "previousOwner": "go",
+        "state": "shadow"
+      }
+    }
+  ],
+  "status": "pass",
+  "completedAt": "2026-11-14T10:18:25.7282743Z"
+}

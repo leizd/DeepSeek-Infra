@@ -74,8 +74,8 @@ def test_gate_evidence_stays_partial_and_never_becomes_a_release_claim() -> None
     assert evidence["fullMigrationQualified"] is False
 
     outstanding = evidence["notYetPassing"]
-    assert outstanding["count"] == 3
-    assert len(outstanding["gates"]) == 3
+    assert outstanding["count"] == 1
+    assert len(outstanding["gates"]) == 1
     # A measured zero invariant needs positive samples and workload operations, so
     # none can be claimed from a CI pass alone. This pins that none are.
     assert outstanding["zeroInvariantsMeasured"] == 0
@@ -83,7 +83,7 @@ def test_gate_evidence_stays_partial_and_never_becomes_a_release_claim() -> None
 
 
 def test_the_release_assessment_remains_fail_closed() -> None:
-    """Twelve green gates must not move the release assessment."""
+    """Fourteen green gates must not move the release assessment."""
     assessment = json.loads(ASSESSMENT.read_text(encoding="utf-8"))
     assert assessment["status"] == "NOT_READY"
     assert assessment["blockers"]
@@ -108,6 +108,8 @@ def test_the_passing_gates_are_the_documented_ones() -> None:
         "coverage",
         "security",
         "performance",
+        "go_control_authority",
+        "rust_data_authority",
     }
 
 
@@ -141,8 +143,3 @@ def test_every_outstanding_gate_states_its_concrete_reason() -> None:
     detail = outstanding["perGateDetail"]
     assert set(detail) == set(outstanding["gates"])
     assert "coverage-guided" in detail["fuzz"]
-    for gate in ("go_control_authority", "rust_data_authority"):
-        # Either spelling is fine; what matters is that the reason names the
-        # specific missing prerequisite rather than restating "not done".
-        reason = detail[gate].replace("-", " ")
-        assert "stopped and fenced" in reason

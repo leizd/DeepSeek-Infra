@@ -42,6 +42,9 @@ type step struct {
 	Status  string         `json:"status"`
 	Detail  map[string]any `json:"detail,omitempty"`
 	Failure string         `json:"failure,omitempty"`
+	// FailureDetail is the underlying error text. Codes alone made a real
+	// mismatch indistinguishable from a malformed input, so the reason is kept.
+	FailureDetail string `json:"failureDetail,omitempty"`
 }
 
 type report struct {
@@ -62,6 +65,14 @@ func (r *report) add(name string, detail map[string]any) {
 
 func (r *report) fail(name, code string) {
 	r.Steps = append(r.Steps, step{Name: name, Status: "fail", Failure: code})
+	r.Status = "FAIL"
+	r.FailureCode = code
+}
+
+// failDetail records the same failure as fail but keeps the underlying error text,
+// so an operator can tell a genuine mismatch from a malformed input.
+func (r *report) failDetail(name, code string, cause error) {
+	r.Steps = append(r.Steps, step{Name: name, Status: "fail", Failure: code, FailureDetail: cause.Error()})
 	r.Status = "FAIL"
 	r.FailureCode = code
 }
@@ -169,7 +180,11 @@ func run(args []string) (*report, error) {
 	}
 	attestation, err := store.AttestPythonInventorySources(*sourceDB, "", "", raw)
 	if err != nil {
-		result.fail("attest-python-source", "SOURCE_ATTESTATION_FAILED")
+		// Carry the underlying reason. Reporting only a code turns every distinct
+		// attestation refusal into the same opaque failure, which makes a real
+		// mismatch indistinguishable from a malformed fixture - the reason a
+		// run of this tool could not be diagnosed the first time it was used.
+		result.failDetail("attest-python-source", "SOURCE_ATTESTATION_FAILED", err)
 		return result, nil
 	}
 	result.add("attest-python-source", map[string]any{"sourceDb": *sourceDB})
