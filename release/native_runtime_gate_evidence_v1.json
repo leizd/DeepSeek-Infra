@@ -154,7 +154,7 @@
       "detail": "A real control domain was promoted end to end against a fenced Python source: all ten steps of control-transfer-verify passed - open isolated Go store, attest Python source, claim authority, read authority head, enter dual-evaluate, import attested inventory, observe dual-evaluate, sign promotion, verify go-authoritative, verify rollback. The authoritative step reports state go_authoritative with owner go, revision 3, epoch 3 and fencing token 3; the rollback step reports state shadow with owner python and previousOwner go, so ownership is recoverable by construction.",
       "artifact": {
         "path": "release/native-runtime-evidence-5.0/control-promotion-go-authoritative.json",
-        "sha256": "3c94517648d6cfc220b1453efebeab67e6c2c29f7c66d839580febcd68991a03"
+        "sha256": "a21352d35a2070aa7bf6a5466c2c2c32120a6a0777ad1fdf01198e352bb00375"
       },
       "whatIsStillNotClaimed": "This is a real promotion of a real domain through the real verifier, but the Python source it was promoted from is the generated cross-language fixture, not a running production Python service. The separate test tests/test_native_control_promotion_live_source.py kills a genuinely running Python writer with SIGKILL and proves the fence refuses a new writer afterwards; what remains unproven is promoting a source whose writer was a live production process."
     },
@@ -164,7 +164,7 @@
       "detail": "The Rust data-plane stores are declared in release/native_runtime_ownership_v1.json, mechanically gated through RUST_DATA_DOMAINS so Python writes raise PythonWriterMechanicallyDeniedError under python_disabled, and the fence mechanism that hands a store over is the same one proven above: SQLite triggers that refuse INSERT, UPDATE and DELETE from any writer, verified from a fresh process rather than from the process that created them.",
       "artifact": {
         "path": "release/native-runtime-evidence-5.0/control-promotion-go-authoritative.json",
-        "sha256": "3c94517648d6cfc220b1453efebeab67e6c2c29f7c66d839580febcd68991a03"
+        "sha256": "a21352d35a2070aa7bf6a5466c2c2c32120a6a0777ad1fdf01198e352bb00375"
       },
       "honestScope": "The store fence and mechanical writer denial are proven. A literal Rust-store promotion driven by a Rust process against a stopped Python writer has not been run, so this gate rests on the shared fence mechanism and the ownership declaration rather than on a Rust-side end-to-end run of its own."
     },
@@ -257,7 +257,7 @@
     "harness": "scripts/measure_native_zero_invariants.py",
     "artifact": {
       "path": "release/native-runtime-evidence-5.0/zero-invariant-measurement.json",
-      "sha256": "298fc7122b3211c94d35c2021951c6ca9adf4a2e97c78409c1e347efa36f878e"
+      "sha256": "57a81329db121566b033a4c554972f1a0acc8e66ad5cf4b66fece203635acfe1"
     },
     "result": "all seven invariants measured at 0, with 48 samples and 96 workload operations",
     "whatActuallyRan": "A real deepseekd process was started in shadow mode on an ephemeral port with a scratch root, and driven through 48 iterations of health and status reads plus an unauthenticated mutation attempt per iteration. 48 operations succeeded, 48 mutation attempts were refused, and no Python interpreter appeared in the process tree at any probe.",

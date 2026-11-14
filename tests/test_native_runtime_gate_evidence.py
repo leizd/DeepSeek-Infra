@@ -264,3 +264,33 @@ def test_the_fuzz_gate_records_an_observed_run_not_just_wiring() -> None:
     # The recorded total must equal its parts, so the summary cannot inflate.
     assert observed["totalExecutions"] == sum(s["executions"] for s in targets.values())
     assert observed["totalExecutions"] > 1_000_000
+
+
+def test_evidence_artifacts_are_byte_identical_across_platforms() -> None:
+    """The recorded digests must hold on a Linux checkout, not only on Windows.
+
+    These files are hashed and re-verified, so a newline translation breaks the
+    evidence: with CRLF in the worktree and LF in the repository, the digest matched
+    on one platform and not the other. CI caught it, which is a slow way to learn.
+    The fix is an eol=lf rule plus LF content, and this test states both so the rule
+    cannot be dropped.
+    """
+    attributes = (ROOT / ".gitattributes").read_text(encoding="utf-8")
+    assert "release/native-runtime-evidence-5.0/*.json text eol=lf" in attributes
+
+    import json
+    import subprocess
+
+    evidence = json.loads(GATE_EVIDENCE.read_text(encoding="utf-8"))
+    paths = [gate["artifact"]["path"] for gate in evidence["gates"].values() if gate.get("artifact")]
+    paths.append(evidence["zeroInvariantMeasurement"]["artifact"]["path"])
+    assert paths
+
+    for relative in paths:
+        committed = subprocess.run(
+            ["git", "-C", str(ROOT), "cat-file", "blob", f"HEAD:{relative}"],
+            capture_output=True,
+        ).stdout
+        assert committed, relative
+        # The digest a reviewer recomputes from a clean checkout is the committed one.
+        assert b"\r\n" not in committed, f"{relative} is committed with CRLF newlines"
