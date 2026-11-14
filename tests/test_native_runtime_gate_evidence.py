@@ -228,3 +228,39 @@ def test_the_fuzz_gate_is_a_real_target_not_an_assertion() -> None:
     pin = ROOT / "fuzz" / "cargo-fuzz-version.txt"
     assert pin.is_file(), "the cargo-fuzz pin must live next to the crate"
     assert re.fullmatch(r"\d+\.\d+\.\d+", pin.read_text(encoding="utf-8").strip())
+
+
+def test_the_fuzz_gate_records_an_observed_run_not_just_wiring() -> None:
+    """Wiring is not evidence. This asserts the gate carries a measured execution.
+
+    The gate was once "PASS" on wiring alone, with a note admitting no target had
+    run. That is the exact failure mode this file exists to prevent, so the recorded
+    numbers are checked: a real execution count per target, a real duration, and zero
+    findings. A future edit that drops back to a claim has to fail here first.
+    """
+    gate = _evidence()["gates"]["fuzz"]
+    observed = gate["observed"]
+
+    assert observed["conclusion"] == "success"
+    assert observed["findings"] == {
+        "crashes": 0,
+        "leaks": 0,
+        "timeouts": 0,
+        "assertionFailures": 0,
+    }
+
+    targets = observed["targets"]
+    assert set(targets) == {
+        "transport_frozen_documents",
+        "restore_relative_path",
+        "evidence_proof_envelope",
+    }
+    for name, stats in targets.items():
+        # A target that executed a handful of inputs is not fuzzing. The budget is
+        # 180 seconds, and even a slow target clears six figures.
+        assert stats["executions"] > 100_000, (name, stats["executions"])
+        assert stats["seconds"] >= 120, (name, stats["seconds"])
+
+    # The recorded total must equal its parts, so the summary cannot inflate.
+    assert observed["totalExecutions"] == sum(s["executions"] for s in targets.values())
+    assert observed["totalExecutions"] > 1_000_000

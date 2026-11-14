@@ -21,10 +21,8 @@
     },
     "note": "the local tree hashes to the same tree value the run tested, so this evidence describes exactly this content; the first three gates were qualified on run 42786170148 at 7c0713cc and are retained here because the same artifacts remain valid at this revision, which re-passed all 37 jobs",
     "latestGreen": {
-      "run": 43582666126,
-      "exact_head": "69a5a881d6f7ea21eb8905037bd9a0d60f74ffa0",
-      "jobsTotal": 37,
-      "jobsSuccess": 37
+      "run": 43590301053,
+      "exact_head": "13a99e29cb1db01718abb89734d6ce75d749a794"
     }
   },
   "gates": {
@@ -172,7 +170,7 @@
     },
     "fuzz": {
       "status": "PASS",
-      "exact_head": "69a5a881d6f7ea21eb8905037bd9a0d60f74ffa0",
+      "exact_head": "13a99e29cb1db01718abb89734d6ce75d749a794",
       "detail": "Coverage-guided fuzzing is now wired: a standalone fuzz/ crate (deliberately outside the rust/ workspace so production builds never resolve libfuzzer) carries three libFuzzer targets over the frozen parsers - receipt/commit pairing, the restore path sanitiser, and the evidence-proof envelope - each run for 180 seconds in the rust-fuzz CI job on a nightly toolchain installed in its own step. The targets assert contract invariants, not only absence of panics: determinism, idempotent acceptance, that a swapped receipt/commit pair is refused, that no accepted path can escape the restore root, and that an accepted envelope really carries the schema and checks it claims. rc-readiness depends on rust-fuzz, so a finding blocks a release.",
       "artifacts": {
         "manifest": "fuzz/Cargo.toml",
@@ -189,7 +187,35 @@
         ],
         "ciJob": "rust-fuzz"
       },
-      "notYetObserved": "The first exact-head run of rust-fuzz is what will produce the run report. The wiring, the targets and the corpus are in the tree; the observed fuzz execution is pending that run."
+      "observed": {
+        "run": 43590301053,
+        "job": "rust-fuzz",
+        "conclusion": "success",
+        "targets": {
+          "transport_frozen_documents": {
+            "executions": 7292449,
+            "seconds": 181
+          },
+          "restore_relative_path": {
+            "executions": 17401786,
+            "seconds": 181
+          },
+          "evidence_proof_envelope": {
+            "executions": 3965733,
+            "seconds": 181,
+            "finalCoverage": 2015,
+            "finalFeatures": 8008
+          }
+        },
+        "totalExecutions": 28659968,
+        "findings": {
+          "crashes": 0,
+          "leaks": 0,
+          "timeouts": 0,
+          "assertionFailures": 0
+        },
+        "note": "Counts read from the libFuzzer summary lines in the job log, not inferred from the job conclusion."
+      }
     }
   },
   "notYetPassing": {
