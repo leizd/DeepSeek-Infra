@@ -193,3 +193,12 @@ def test_the_fuzz_gate_is_a_real_target_not_an_assertion() -> None:
     assert joined.count("-max_total_time=") == 3, joined
     # And a finding has to block a release, not just colour a job red.
     assert "rust-fuzz" in workflow["jobs"]["rc-readiness"]["needs"]
+
+    # ci.yml must carry no version-shaped argument: the release-version contract
+    # rejects one, and a pin inline here is what broke it the first time.
+    import re
+
+    assert re.search(r"--version\s+\d+\.\d+\.\d+", (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")) is None
+    pin = ROOT / "fuzz" / "cargo-fuzz-version.txt"
+    assert pin.is_file(), "the cargo-fuzz pin must live next to the crate"
+    assert re.fullmatch(r"\d+\.\d+\.\d+", pin.read_text(encoding="utf-8").strip())

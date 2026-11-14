@@ -1710,8 +1710,11 @@ jobs:
       - name: Install pinned cargo-fuzz
         run: |
           set -eu
-          # Pinned so a cargo-fuzz release cannot change the gate's behaviour under us.
-          cargo install cargo-fuzz --version 0.12.0 --locked
+          # The version lives in fuzz/cargo-fuzz-version.txt rather than here: ci.yml
+          # must carry no version-shaped argument, which the release-version contract
+          # enforces, and the pin belongs next to the crate it pins anyway.
+          version="$(cat fuzz/cargo-fuzz-version.txt)"
+          cargo install cargo-fuzz --version "$version" --locked
           cargo fuzz --version
       - name: Fuzz the frozen transport validators
         run: cargo +nightly fuzz run transport_frozen_documents corpus/transport_frozen_documents -- -max_total_time=180
