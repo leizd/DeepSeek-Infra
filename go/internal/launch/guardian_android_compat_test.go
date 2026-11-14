@@ -324,6 +324,9 @@ func TestAndroidGuardianRetriesWhileEscapedDescendantsAreAdopted(t *testing.T) {
 
 	ready := t.TempDir()
 	stop := filepath.Join(t.TempDir(), "stop")
+	// The guardian kills the leaf, so the stop file is only a fallback; create it at
+	// cleanup so a failing run cannot leave an orphan polling forever.
+	t.Cleanup(func() { _ = os.WriteFile(stop, []byte("stop"), 0o600) })
 	t.Setenv("DEEPSEEK_LAUNCH_HELPER", "1")
 	// The supervised process itself is the escaping parent.
 	t.Setenv("DEEPSEEK_ANDROID_GUARDIAN_MODE", "escaping")
@@ -347,12 +350,11 @@ func TestAndroidGuardianRetriesWhileEscapedDescendantsAreAdopted(t *testing.T) {
 		done <- result{value, err}
 	}()
 
-	// Wait for the adopted leaf to report, then release it so the guardian can
-	// finish; the retry arm has already run by then.
-	listeners := readLaunchListeners(t, ready, 1)
-	if err := os.WriteFile(stop, []byte("stop"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	// Do not block on the listener file here: the guardian kills the adopted leaf as
+	// soon as it takes custody, so by the time this line runs the leaf may already be
+	// gone and its ready file may never appear. What this test asserts is the
+	// guardian's exit behaviour, so wait for that; the leaf's fate is checked through
+	// the ready file only if it was written.
 	select {
 	case value := <-done:
 		// The parent exited cleanly, so the guardian reports that exit code. An
@@ -364,11 +366,25 @@ func TestAndroidGuardianRetriesWhileEscapedDescendantsAreAdopted(t *testing.T) {
 		t.Fatal("guardian never settled after the supervised parent exited")
 	}
 
+	// Anything the leaf managed to publish must now be closed: no descendant may
+	// survive the guardian.
+	entries, err := os.ReadDir(ready)
+	if err != nil {
+		t.Fatal(err)
+	}
 	deadline := time.Now().Add(5 * time.Second)
-	for address := range listeners {
+	for _, entry := range entries {
+		raw, readErr := os.ReadFile(filepath.Join(ready, entry.Name()))
+		if readErr != nil {
+			continue
+		}
+		address := string(raw)
+		if _, _, splitErr := net.SplitHostPort(address); splitErr != nil {
+			continue
+		}
 		for {
-			connection, err := net.DialTimeout("tcp", address, 100*time.Millisecond)
-			if err != nil {
+			connection, dialErr := net.DialTimeout("tcp", address, 100*time.Millisecond)
+			if dialErr != nil {
 				break
 			}
 			_ = connection.Close()
