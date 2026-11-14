@@ -19,7 +19,13 @@
       "failure": 0,
       "skipped": 0
     },
-    "note": "the local tree hashes to the same tree value the run tested, so this evidence describes exactly this content; the first three gates were qualified on run 42786170148 at 7c0713cc and are retained here because the same artifacts remain valid at this revision, which re-passed all 37 jobs"
+    "note": "the local tree hashes to the same tree value the run tested, so this evidence describes exactly this content; the first three gates were qualified on run 42786170148 at 7c0713cc and are retained here because the same artifacts remain valid at this revision, which re-passed all 37 jobs",
+    "latestGreen": {
+      "run": 43560365409,
+      "exact_head": "afd061387256174a18c0f89f871bfe7c6756c0ad",
+      "jobsTotal": 37,
+      "jobsSuccess": 37
+    }
   },
   "gates": {
     "exact_head_ci": {
@@ -155,6 +161,18 @@
     "firstAttemptDidNotWork": "The first test forked a leaf and stayed alive itself, so the guardian's Wait4 loop kept finding waitable children and exited through the ECHILD return before reaching the retry arm. Coverage did not move by a single statement, which is how that was detected.",
     "secondAttemptHadTwoRaces": "It blocked on readLaunchListeners before releasing the leaf, but the guardian kills the adopted leaf as soon as it takes custody, so the ready file might never appear and the test would fail on a timeout that said nothing about the code. It also depended on a stop file the guardian may never give the leaf time to observe.",
     "finalShape": "A new 'escaping' helper mode forks a long-lived new-session leaf and exits immediately, so the guardian's supervised process is gone while the adopted descendant is still running - the state the retry arm exists to handle. The test waits on the guardian's own exit (the thing it asserts) and then checks that anything the leaf published is closed.",
-    "proofItIsNotMyRegression": "go/ is byte-identical between the passing run (9f18b772, tree 19f6956523b5) and the failing ones (68c9b5b7, same tree). The only Go change in this workstream is a _test.go file."
+    "proofItIsNotMyRegression": "go/ is byte-identical between the passing run (9f18b772, tree 19f6956523b5) and the failing ones (68c9b5b7, same tree). The only Go change in this workstream is a _test.go file.",
+    "resolved": {
+      "greenRun": 43560365409,
+      "sourceCommit": "afd061387256174a18c0f89f871bfe7c6756c0ad",
+      "jobs": {
+        "total": 37,
+        "success": 37,
+        "failure": 0
+      },
+      "defaultCoverage": "95.010592% (17043/17938)",
+      "androidCoverage": "95.004377% (17363/18276)",
+      "note": "the Android figure is the same value the earlier passing run produced, and it is now reached by construction rather than by whichever of a signal and a 10ms timer arrived first."
+    }
   }
 }
