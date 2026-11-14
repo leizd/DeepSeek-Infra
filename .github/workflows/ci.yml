@@ -1687,6 +1687,49 @@ jobs:
             docs/evidence/rust-coverage-v${{ env.RELEASE_VERSION }}.json
           if-no-files-found: error
 
+  # Bounded, coverage-guided fuzzing of the frozen parsers with libFuzzer.
+  #
+  # This runs on nightly because cargo-fuzz and the sanitizer toolchain it needs are
+  # nightly-only. The rest of the repository pins 1.85 on purpose and keeps doing so:
+  # this job installs nightly in its own step and never changes the toolchain the
+  # product builds with.
+  #
+  # It fails on any finding. libFuzzer exits non-zero when it finds a crash, a hang or
+  # a failed assertion, and each target asserts contract invariants (determinism,
+  # idempotent acceptance, no escape) rather than only "did not panic", so a green run
+  # means the parsers still hold their promises for arbitrary input.
+  rust-fuzz:
+    needs:
+      - release-version
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install nightly for cargo-fuzz only
+        uses: dtolnay/rust-toolchain@nightly
+      - name: Install pinned cargo-fuzz
+        run: |
+          set -eu
+          # Pinned so a cargo-fuzz release cannot change the gate's behaviour under us.
+          cargo install cargo-fuzz --version 0.12.0 --locked
+          cargo fuzz --version
+      - name: Fuzz the frozen transport validators
+        run: cargo +nightly fuzz run transport_frozen_documents corpus/transport_frozen_documents -- -max_total_time=180
+        working-directory: fuzz
+      - name: Fuzz the restore path sanitiser
+        run: cargo +nightly fuzz run restore_relative_path corpus/restore_relative_path -- -max_total_time=180
+        working-directory: fuzz
+      - name: Fuzz the evidence proof envelope
+        run: cargo +nightly fuzz run evidence_proof_envelope corpus/evidence_proof_envelope -- -max_total_time=180
+        working-directory: fuzz
+      - name: Upload any crash artifact
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-fuzz-crashes
+          path: fuzz/artifacts/
+          if-no-files-found: warn
+
   rust-sidecar-performance:
     needs:
       - evidence-context
@@ -1905,6 +1948,7 @@ jobs:
       - rust
       - rust-coverage
       - rust-sidecar-performance
+      - rust-fuzz
       - evidence-assembly
       - release-package
       - release-version

@@ -33,7 +33,11 @@ def test_gate_evidence_artifacts_still_hash_to_their_recorded_digests() -> None:
     gates = evidence["gates"]
     assert gates, "the gate evidence must name at least one gate"
     for name, gate in gates.items():
-        artifact = gate["artifact"]
+        artifact = gate.get("artifact")
+        if artifact is None:
+            # Gates whose evidence is a set of source paths rather than one produced
+            # file (fuzz) are checked by their own test below.
+            continue
         path = ROOT / artifact["path"]
         assert path.is_file(), f"{name}: artifact {artifact['path']} is missing"
         actual = hashlib.sha256(path.read_bytes()).hexdigest()
@@ -74,8 +78,8 @@ def test_gate_evidence_stays_partial_and_never_becomes_a_release_claim() -> None
     assert evidence["fullMigrationQualified"] is False
 
     outstanding = evidence["notYetPassing"]
-    assert outstanding["count"] == 1
-    assert len(outstanding["gates"]) == 1
+    assert outstanding["count"] == 0
+    assert outstanding["gates"] == []
     # A measured zero invariant needs positive samples and workload operations, so
     # none can be claimed from a CI pass alone. This pins that none are.
     assert outstanding["zeroInvariantsMeasured"] == 0
@@ -83,7 +87,7 @@ def test_gate_evidence_stays_partial_and_never_becomes_a_release_claim() -> None
 
 
 def test_the_release_assessment_remains_fail_closed() -> None:
-    """Fourteen green gates must not move the release assessment."""
+    """Fifteen green gates must still not move the release assessment."""
     assessment = json.loads(ASSESSMENT.read_text(encoding="utf-8"))
     assert assessment["status"] == "NOT_READY"
     assert assessment["blockers"]
@@ -110,6 +114,7 @@ def test_the_passing_gates_are_the_documented_ones() -> None:
         "performance",
         "go_control_authority",
         "rust_data_authority",
+        "fuzz",
     }
 
 
@@ -131,15 +136,60 @@ def test_zero_python_gate_rests_on_the_image_not_the_source_zip() -> None:
     assert report["status"] == "PASS"
 
 
-def test_every_outstanding_gate_states_its_concrete_reason() -> None:
-    """An outstanding gate must say what is missing, not just that it is missing.
+def test_all_fifteen_gates_pass_but_the_assessment_still_refuses_to_deliver() -> None:
+    """Every gate now has evidence; the release still cannot be called delivered.
 
-    Without this, "not done" decays into a vague claim that nobody can act on. Each
-    entry here names a verifiable gap: no fuzz harness exists, the performance report
-    self-declares it is informational only, and neither authority gate has been
-    promoted against a stopped-and-fenced Python source.
+    This is the distinction the whole file exists for. Gates measure capability - can
+    the runtime do the thing. The zero invariants measure *production behaviour* - did
+    a running system make zero Python calls while doing it. Fifteen green gates do not
+    imply seven measured zeroes, and the validator refuses a zero with no samples.
     """
-    outstanding = _evidence()["notYetPassing"]
-    detail = outstanding["perGateDetail"]
-    assert set(detail) == set(outstanding["gates"])
-    assert "coverage-guided" in detail["fuzz"]
+    evidence = _evidence()
+    assert len(evidence["gates"]) == 15
+    outstanding = evidence["notYetPassing"]
+    assert outstanding["gates"] == []
+    assert outstanding["count"] == 0
+    # The blocker that survives is measurement, not capability.
+    assert outstanding["zeroInvariantsMeasured"] == 0
+    assert outstanding["zeroInvariantsRequired"] == 7
+
+
+def test_the_fuzz_gate_is_a_real_target_not_an_assertion() -> None:
+    """The fuzz gate has to point at code that actually fuzzes something.
+
+    A gate that claims coverage-guided fuzzing while carrying no target is exactly the
+    failure this file was written to prevent, so the wiring is checked rather than
+    taken on trust: a standalone crate, three binaries, seeded corpora, and a CI job
+    that runs each of them on nightly.
+    """
+    import yaml
+
+    gate = _evidence()["gates"]["fuzz"]
+    artifacts = gate["artifacts"]
+
+    manifest = (ROOT / artifacts["manifest"]).read_text(encoding="utf-8")
+    assert "[workspace]" in manifest, "the fuzz crate must be its own workspace"
+    for target in artifacts["targets"]:
+        assert (ROOT / target).is_file(), target
+    for corpus in artifacts["corpora"]:
+        directory = ROOT / corpus
+        assert directory.is_dir(), corpus
+        # A corpus with no seeds spends the whole budget rediscovering structure.
+        assert any(directory.iterdir()), f"{corpus} has no seed inputs"
+
+    workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_bytes())
+    job = workflow["jobs"][artifacts["ciJob"]]
+
+    # The fuzz crate's targets must be built by a nightly toolchain, because
+    # libFuzzer needs one; the product build stays on its pinned stable.
+    uses = " ".join(str(step.get("uses", "")) for step in job["steps"])
+    assert "rust-toolchain@nightly" in uses, "cargo-fuzz requires nightly"
+
+    commands = [str(step.get("run", "")) for step in job["steps"]]
+    joined = "\n".join(commands)
+    for name in ("transport_frozen_documents", "restore_relative_path", "evidence_proof_envelope"):
+        assert f"fuzz run {name}" in joined, f"{name} is never run"
+    # Each target must be time-bounded, or a hang looks like a slow CI job.
+    assert joined.count("-max_total_time=") == 3, joined
+    # And a finding has to block a release, not just colour a job red.
+    assert "rust-fuzz" in workflow["jobs"]["rc-readiness"]["needs"]

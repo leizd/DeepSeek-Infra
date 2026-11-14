@@ -1,0 +1,40 @@
+[package]
+name = "deepseek-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# This crate is deliberately *not* a member of the rust/ workspace. cargo-fuzz needs
+# a nightly toolchain and a separate target directory, and pulling it into the
+# workspace would make every `cargo build --locked` in production resolve these
+# dependencies too. It is built only by the CI fuzz job.
+[workspace]
+
+[[bin]]
+name = "transport_frozen_documents"
+path = "fuzz_targets/transport_frozen_documents.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "restore_relative_path"
+path = "fuzz_targets/restore_relative_path.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "evidence_proof_envelope"
+path = "fuzz_targets/evidence_proof_envelope.rs"
+test = false
+doc = false
+bench = false
+
+[dependencies]
+libfuzzer-sys = "0.4"
+deepseek-storage = { path = "../rust/crates/deepseek-storage" }
+deepseek-proof = { path = "../rust/crates/deepseek-proof" }
+# Pinned to the same versions the workspace resolves so the fuzz build sees the
+# same serde_json semantics as production.
+serde_json = { version = "1.0", features = ["preserve_order"] }
