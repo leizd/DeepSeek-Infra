@@ -5,14 +5,14 @@
   "status": "PARTIAL",
   "purpose": "Records only the release gates that now have exact-head, hash-verified evidence. This is deliberately not release/native_runtime_5_0_evidence_v1.json: that assessment stays NOT_READY because DELIVERED requires all fifteen gates plus workload-measured zero invariants, and claiming otherwise here would be a false release assertion.",
   "provenance": {
-    "exact_head": "9f18b7721c90bad52c746151d10923e1ffb428b9",
-    "source_tree": "f2ef2311710a7fc631e8568903671b1a74f04937",
+    "exact_head": "69a5a881d6f7ea21eb8905037bd9a0d60f74ffa0",
+    "source_tree": "48c53522021ac936c5c387583c57451e57280a45",
     "source_tree_dirty": false,
-    "workflow_run": 42962854437,
+    "workflow_run": 43582666126,
     "workflow": "ci.yml",
     "event": "workflow_dispatch",
     "ref": "refs/heads/codex/native-s0-store-ownership-20261109",
-    "run_url": "https://github.com/leizd/DeepSeek-Infra/actions/runs/42962854437",
+    "run_url": "https://github.com/leizd/DeepSeek-Infra/actions/runs/43582666126",
     "jobs": {
       "total": 37,
       "success": 37,
@@ -21,8 +21,8 @@
     },
     "note": "the local tree hashes to the same tree value the run tested, so this evidence describes exactly this content; the first three gates were qualified on run 42786170148 at 7c0713cc and are retained here because the same artifacts remain valid at this revision, which re-passed all 37 jobs",
     "latestGreen": {
-      "run": 43560365409,
-      "exact_head": "afd061387256174a18c0f89f871bfe7c6756c0ad",
+      "run": 43582666126,
+      "exact_head": "69a5a881d6f7ea21eb8905037bd9a0d60f74ffa0",
       "jobsTotal": 37,
       "jobsSuccess": 37
     }
@@ -35,7 +35,8 @@
       "artifact": {
         "path": "release/native-runtime-evidence-5.0/evidence-manifest-7c0713cc.json",
         "sha256": "b3350096eafad5c4301a2ee95dde09ae98e7f9e4aacab81ee7e44785e7849409"
-      }
+      },
+      "qualifiedAt": "9f18b7721c90bad52c746151d10923e1ffb428b9"
     },
     "evidence_assembly": {
       "status": "PASS",
@@ -44,7 +45,8 @@
       "artifact": {
         "path": "release/native-runtime-evidence-5.0/evidence-manifest-7c0713cc.json",
         "sha256": "b3350096eafad5c4301a2ee95dde09ae98e7f9e4aacab81ee7e44785e7849409"
-      }
+      },
+      "qualifiedAt": "9f18b7721c90bad52c746151d10923e1ffb428b9"
     },
     "production_artifact_zero_python": {
       "status": "PASS",
@@ -54,7 +56,8 @@
         "path": "release/native-runtime-evidence-5.0/native-default-image-7c0713cc.json",
         "sha256": "f3234aa399308946e4588b410e77779e41f35add3c11038ee6047b1670a970d5"
       },
-      "whyThisIsTheRealClaim": "This is a packaged image with no Python on PATH, not the source-distribution zip. The release zip built in the same run is a 4294-entry source tree containing 1029 Python files and does NOT satisfy this gate; that distinction is the reason this artifact is the image verification report and not the zip."
+      "whyThisIsTheRealClaim": "This is a packaged image with no Python on PATH, not the source-distribution zip. The release zip built in the same run is a 4294-entry source tree containing 1029 Python files and does NOT satisfy this gate; that distinction is the reason this artifact is the image verification report and not the zip.",
+      "qualifiedAt": "9f18b7721c90bad52c746151d10923e1ffb428b9"
     },
     "native_two_fleet_four_minio": {
       "status": "PASS",
@@ -63,7 +66,8 @@
       "artifact": {
         "path": "release/native-runtime-evidence-5.0/storage-control-plane-minio-9f18b772.json",
         "sha256": "8560e249d024d0dd8bff77786379812a9fb63a9cdbb5fd7620b23aaf41906129"
-      }
+      },
+      "qualifiedAt": "9f18b7721c90bad52c746151d10923e1ffb428b9"
     },
     "go_controller_sigkill": {
       "status": "PASS",
@@ -72,7 +76,8 @@
       "artifact": {
         "path": "release/native-runtime-evidence-5.0/storage-control-plane-minio-9f18b772.json",
         "sha256": "8560e249d024d0dd8bff77786379812a9fb63a9cdbb5fd7620b23aaf41906129"
-      }
+      },
+      "qualifiedAt": "9f18b7721c90bad52c746151d10923e1ffb428b9"
     },
     "rust_worker_sigkill": {
       "status": "PASS",
@@ -81,7 +86,8 @@
       "artifact": {
         "path": "release/native-runtime-evidence-5.0/storage-control-plane-minio-9f18b772.json",
         "sha256": "8560e249d024d0dd8bff77786379812a9fb63a9cdbb5fd7620b23aaf41906129"
-      }
+      },
+      "qualifiedAt": "9f18b7721c90bad52c746151d10923e1ffb428b9"
     },
     "rust_receiver_sigkill": {
       "status": "PASS",
@@ -90,7 +96,8 @@
       "artifact": {
         "path": "release/native-runtime-evidence-5.0/storage-control-plane-minio-9f18b772.json",
         "sha256": "8560e249d024d0dd8bff77786379812a9fb63a9cdbb5fd7620b23aaf41906129"
-      }
+      },
+      "qualifiedAt": "9f18b7721c90bad52c746151d10923e1ffb428b9"
     },
     "public_http_sse_mcp_a2a_parity": {
       "status": "PASS",
@@ -99,7 +106,8 @@
       "artifact": {
         "path": "release/native-runtime-evidence-5.0/gateway-request-parity-v4.8.0.json",
         "sha256": "90ccc3306c12f94603594260ef9c4187ab7140765113a695aa7b18c25ff34beb"
-      }
+      },
+      "qualifiedAt": "9f18b7721c90bad52c746151d10923e1ffb428b9"
     },
     "frozen_wire_parity": {
       "status": "PASS",
@@ -108,7 +116,8 @@
       "artifact": {
         "path": "release/native-runtime-evidence-5.0/storage-control-plane-minio-9f18b772.json",
         "sha256": "8560e249d024d0dd8bff77786379812a9fb63a9cdbb5fd7620b23aaf41906129"
-      }
+      },
+      "qualifiedAt": "9f18b7721c90bad52c746151d10923e1ffb428b9"
     },
     "coverage": {
       "status": "PASS",
@@ -117,7 +126,8 @@
       "artifact": {
         "path": "release/native-runtime-evidence-5.0/rust-coverage-v4.8.0.json",
         "sha256": "619af7066c072492434fb15f46ebe40b4eb5efc1cb210714f5ddef88cb510def"
-      }
+      },
+      "qualifiedAt": "9f18b7721c90bad52c746151d10923e1ffb428b9"
     },
     "security": {
       "status": "PASS",
@@ -127,22 +137,31 @@
         "path": "release/native-runtime-evidence-5.0/evidence-manifest-7c0713cc.json",
         "sha256": "b3350096eafad5c4301a2ee95dde09ae98e7f9e4aacab81ee7e44785e7849409"
       },
-      "provenanceCaveat": "this job uploads no artifact of its own, so the evidence is the job conclusion plus the upstream evidence assembly that requires it. Stated plainly."
+      "provenanceCaveat": "this job uploads no artifact of its own, so the evidence is the job conclusion plus the upstream evidence assembly that requires it. Stated plainly.",
+      "qualifiedAt": "9f18b7721c90bad52c746151d10923e1ffb428b9"
+    },
+    "performance": {
+      "status": "PASS",
+      "exact_head": "69a5a881d6f7ea21eb8905037bd9a0d60f74ffa0",
+      "detail": "The absolute latency gate measured and passed: iterations 12, measured true, passed true, 18 gated scenarios, zero violations, sourceTreeDirty false, and informationalOnly is now false. Each gated scenario carries a separate core and HTTP p95 budget set at roughly 4x the runner measurement, and CI passes --require-latency-gate so an over-budget or unmeasurable run fails the job.",
+      "artifact": {
+        "path": "release/native-runtime-evidence-5.0/rust-sidecar-performance-69a5a881.json",
+        "sha256": "170fd68744cf56f91c9394352f01840d8ba584f9bde65570913d68699d9f9e09"
+      },
+      "history": "This gate was previously claimed as measurable and was not: a comment placed inside the step's >- shell block was folded into the command, so the shell treated every flag after # as a comment and the benchmark ran with no flags at all - default iterations, no gate mode, exit 0. That is recorded here because the job stayed green throughout."
     }
   },
   "notYetPassing": {
-    "count": 4,
+    "count": 3,
     "gates": [
       "go_control_authority",
       "rust_data_authority",
-      "fuzz",
-      "performance"
+      "fuzz"
     ],
     "zeroInvariantsMeasured": 0,
     "zeroInvariantsRequired": 7,
     "reason": "These need live workload measurements (real provider operations, process-kill matrices, and zero-Python operation counts with positive samples and workload_operations). A CI pass cannot populate them, and the validator refuses a vacuous zero.",
     "perGateDetail": {
-      "performance": "The reason it could never pass was in the source: the benchmark report hard-coded informationalOnly True and absoluteLatencyMergeGate False, and CI ran the benchmark with --iterations 2, so every p95 came from two samples and no threshold table existed. Both are now fixed: CI uses --iterations 12 --warmups 3, and LATENCY_BUDGET_US gives each gated scenario a separate core and HTTP p95 budget calibrated at ~4x the runner measurement. The evaluator reports measured False below ten samples rather than passing. The gate stays outstanding only because the exact-head run that produces the measured artifact has not completed yet; this change makes it measurable, it does not itself measure it.",
       "fuzz": "A structured fuzz harness now exists - rust/crates/deepseek-policy/tests/fuzz_frozen_parsers.rs drives parse_iso, validate_project_id, parse_due_at and media_type_from_mime with a deterministic corpus and asserts no-panic, determinism, idempotent acceptance and documented bounds. It runs inside the existing 'cargo test --all' step, not a nightly-only job. The gate stays outstanding because this is structured input generation, not coverage-guided mutation: cargo-fuzz/libFuzzer needs a nightly toolchain this workspace deliberately does not pin, and calling structured generation a fuzz gate would overstate it.",
       "go_control_authority": "the cutover state machine, promotion signing and isolated transfer/rollback tooling all exist and are tested, but no production control domain has been promoted against a genuinely stopped-and-fenced Python source.",
       "rust_data_authority": "the Rust data stores are declared and mechanically gated, but no store has been cut over against a live Python writer that was stopped and fenced."
@@ -150,7 +169,7 @@
   },
   "readiness": "NOT_READY",
   "fullMigrationQualified": false,
-  "gatesPassing": 11,
+  "gatesPassing": 12,
   "gatesRequired": 15,
   "flakyCoverageFinding": {
     "symptom": "The Android Go coverage check moved between 95.004377% (17363/18276) and 94.998906% (17362/18276) across runs with byte-identical go/ sources, and the lower value is one statement under the 95.0 floor.",
