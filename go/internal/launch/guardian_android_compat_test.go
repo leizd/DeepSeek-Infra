@@ -64,6 +64,18 @@ func runAndroidGuardianTestHelper() int {
 			return 94
 		}
 		return androidGuardianTestListener()
+	case "escaping":
+		// Fork a long-lived new-session leaf and exit immediately. The guardian
+		// supervises this process, so its exit sets `stopping` while the leaf is
+		// still running and therefore still un-waitable - which is exactly the
+		// state the retry arm in superviseGuardian exists to handle.
+		cmd := exec.Command(os.Args[0])
+		cmd.Env = androidGuardianHelperEnv("leaf")
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+		if err := cmd.Start(); err != nil {
+			return 93
+		}
+		return 0
 	case "leaf":
 		return androidGuardianTestListener()
 	default:
@@ -289,6 +301,20 @@ func TestAndroidGuardianCoreSettlesRealExitAndCancellation(t *testing.T) {
 // This drives the branch deterministically instead: the helper exits while the
 // guardian still owns an escaped descendant, so the adopt loop has work to do and the
 // retry wait is entered every time rather than sometimes.
+// TestAndroidGuardianRetriesWhileEscapedDescendantsAreAdopted covers the retry arm
+// in superviseGuardian's stopping path.
+//
+// The ordinary fixtures fork a leaf *and stay alive*, so the guardian's Wait4 loop
+// keeps finding waitable children and the loop exits through the ECHILD return
+// before the retry arm is reached. Whether the arm runs at all then depends on
+// scheduling, which is why the Android coverage profile moved by exactly one
+// statement (guardian_android_compat.go:127) between two runs of byte-identical Go
+// sources - 95.004377% then 94.998906%, the latter one statement under the floor.
+//
+// This drives it by construction: the supervised process forks a long-lived leaf and
+// exits immediately, so `stopping` is set while the adopted leaf is still running.
+// The loop then cannot return through ECHILD, and the retry wait is entered every
+// time rather than sometimes.
 func TestAndroidGuardianRetriesWhileEscapedDescendantsAreAdopted(t *testing.T) {
 	var previous int32
 	if err := unix.Prctl(unix.PR_GET_CHILD_SUBREAPER, uintptr(unsafe.Pointer(&previous)), 0, 0, 0); err != nil {
@@ -298,44 +324,11 @@ func TestAndroidGuardianRetriesWhileEscapedDescendantsAreAdopted(t *testing.T) {
 
 	ready := t.TempDir()
 	stop := filepath.Join(t.TempDir(), "stop")
-	var listeners map[string]string
-	t.Cleanup(func() {
-		_ = os.WriteFile(stop, []byte("stop"), 0o600)
-		deadline := time.Now().Add(3 * time.Second)
-		for _, address := range listeners {
-			for {
-				connection, err := net.DialTimeout("tcp", address, 100*time.Millisecond)
-				if err != nil {
-					break
-				}
-				_ = connection.Close()
-				if time.Now().After(deadline) {
-					break
-				}
-				time.Sleep(10 * time.Millisecond)
-			}
-		}
-	})
-
-	// The helper forks a leaf, reports both listeners, then waits for the stop file.
-	// Killing it leaves the leaf behind, which the guardian adopts.
-	root := exec.Command(os.Args[0])
-	root.Env = append(androidGuardianHelperEnv("tree"),
-		"DEEPSEEK_LAUNCH_HELPER=1",
-		"DEEPSEEK_LAUNCH_READY_DIR="+ready,
-		"DEEPSEEK_ANDROID_GUARDIAN_STOP="+stop,
-	)
-	if err := root.Start(); err != nil {
-		t.Fatal(err)
-	}
-	waited := false
-	t.Cleanup(func() {
-		if !waited {
-			_ = root.Process.Kill()
-			_ = root.Wait()
-		}
-	})
-	listeners = readLaunchListeners(t, ready, 2)
+	t.Setenv("DEEPSEEK_LAUNCH_HELPER", "1")
+	// The supervised process itself is the escaping parent.
+	t.Setenv("DEEPSEEK_ANDROID_GUARDIAN_MODE", "escaping")
+	t.Setenv("DEEPSEEK_LAUNCH_READY_DIR", ready)
+	t.Setenv("DEEPSEEK_ANDROID_GUARDIAN_STOP", stop)
 
 	read, write, err := os.Pipe()
 	if err != nil {
@@ -343,6 +336,7 @@ func TestAndroidGuardianRetriesWhileEscapedDescendantsAreAdopted(t *testing.T) {
 	}
 	defer read.Close()
 	defer write.Close()
+
 	type result struct {
 		code int
 		err  error
@@ -353,25 +347,23 @@ func TestAndroidGuardianRetriesWhileEscapedDescendantsAreAdopted(t *testing.T) {
 		done <- result{value, err}
 	}()
 
-	// Killing the root is what sets stopping, and the still-live leaf keeps the adopt
-	// loop iterating so the retry wait runs.
-	if err := root.Process.Kill(); err != nil {
+	// Wait for the adopted leaf to report, then release it so the guardian can
+	// finish; the retry arm has already run by then.
+	listeners := readLaunchListeners(t, ready, 1)
+	if err := os.WriteFile(stop, []byte("stop"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_ = root.Wait()
-	waited = true
-	_ = write.Close()
-
 	select {
 	case value := <-done:
-		if value.code == 0 && value.err != nil {
-			t.Fatalf("guardian reported an error while settling an adopted child: %v", value.err)
+		// The parent exited cleanly, so the guardian reports that exit code. An
+		// error here would mean custody was abandoned instead of retained.
+		if value.code != 0 || value.err != nil {
+			t.Fatalf("guardian did not settle an adopted descendant: %+v", value)
 		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("guardian never settled after the root was killed")
+	case <-time.After(15 * time.Second):
+		t.Fatal("guardian never settled after the supervised parent exited")
 	}
 
-	// The adopted leaf must be gone: that is what the retry loop is for.
 	deadline := time.Now().Add(5 * time.Second)
 	for address := range listeners {
 		for {
