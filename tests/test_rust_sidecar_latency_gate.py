@@ -250,3 +250,34 @@ def test_gate_mode_passes_when_budgets_hold(monkeypatch, tmp_path) -> None:
         ["--require-latency-gate", "--artifact-out", str(tmp_path / "a.json"), "--evidence-out", str(tmp_path / "e.json")]
     )
     assert exit_code == 0
+
+
+def test_ci_invokes_the_benchmark_with_the_gate_actually_enabled() -> None:
+    """The gate only exists if CI passes the flags.
+
+    This test exists because it once did not: an explanatory comment was placed
+    inside the step's `>-` shell block, which YAML folds into the command string, so
+    the shell treated everything after `#` as a comment. The benchmark then ran with
+    no flags at all - default iterations, no gate mode, exit 0 - while the job stayed
+    green and the artifact said `measured: false`. Asserting on the *parsed* command
+    is what catches that; reading the YAML source would not.
+    """
+    import yaml
+
+    workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_bytes())
+    steps = workflow["jobs"]["rust-sidecar-performance"]["steps"]
+    step = next(s for s in steps if s.get("name") == "Run bounded layered benchmark")
+    command = step["run"]
+
+    assert "run_rust_sidecar_benchmarks.py" in command
+    assert "--iterations 12" in command, command
+    assert "--require-latency-gate" in command, command
+    # A '#' inside the block would silently truncate everything after it.
+    assert "#" not in command, f"a shell comment truncates the command: {command!r}"
+
+    # The sample count must clear the gate's own floor, or the run is unmeasurable
+    # by construction and --require-latency-gate would fail every merge.
+    from benchmarks.bench_rust_sidecar_release import MINIMUM_GATE_SAMPLES
+
+    requested = int(command.split("--iterations ")[1].split()[0])
+    assert requested >= MINIMUM_GATE_SAMPLES, (requested, MINIMUM_GATE_SAMPLES)
