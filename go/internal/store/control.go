@@ -1666,6 +1666,9 @@ func (store *Control) putControlRecordTx(tx *sql.Tx, write controlRecordWrite, n
 	} else if err := validateNoControlHistory(tx, record.Domain, record.ID); err != nil {
 		return err
 	}
+	if record.Domain == "target" && write.targetRegistrationGeneration == 0 && !samePublicTargetContext(existing.Payload, record.Payload) {
+		return ErrTargetRegistrationInvalid
+	}
 	if record.Domain == "agent_run" && !write.agentEvent &&
 		(nativeAgentMetadata(record.Payload) || exists && nativeAgentMetadata(existing.Payload)) {
 		return ErrAgentRunEventRequired
@@ -2114,10 +2117,15 @@ func validateControlHistory(tx *sql.Tx, latest Record) error {
 				boundRevision, boundGeneration = event.Revision, binding.generation
 				legal = true
 				delete(targetBindings, event.Revision)
-			} else if boundRevision > 0 {
-				delta := event.Revision - boundRevision
-				if delta < 0 || boundGeneration > math.MaxInt64-delta || validateTargetPublicGeneration(event, boundGeneration+delta) != nil {
+			} else {
+				if !samePublicTargetContext(final.Payload, event.Payload) {
 					return ErrCorruptRecord
+				}
+				if boundRevision > 0 {
+					delta := event.Revision - boundRevision
+					if delta < 0 || boundGeneration > math.MaxInt64-delta || validateTargetPublicGeneration(event, boundGeneration+delta) != nil {
+						return ErrCorruptRecord
+					}
 				}
 			}
 		}

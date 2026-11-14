@@ -21,6 +21,9 @@ func (scope BackupTargetRegistrationScope) LocationRequest(path string) *actionv
 }
 
 func priorTargetRegistrationPath(before Record, canonical string) (string, bool, error) {
+	return priorTargetRegistrationPathMode(before, canonical, false)
+}
+func priorTargetRegistrationPathMode(before Record, canonical string, full bool) (string, bool, error) {
 	if before.State == "" || before.State == TombstoneState {
 		return "", false, nil
 	}
@@ -38,6 +41,9 @@ func priorTargetRegistrationPath(before Record, canonical string) (string, bool,
 	same := filepath.Clean(path) == filepath.Clean(canonical)
 	if runtime.GOOS == "windows" {
 		same = strings.EqualFold(filepath.Clean(path), filepath.Clean(canonical))
+		if full {
+			same = SameBackupTargetLocation(path, canonical)
+		}
 	}
 	if same {
 		return "", false, nil
@@ -47,7 +53,7 @@ func priorTargetRegistrationPath(before Record, canonical string) (string, bool,
 
 func validateTargetRelocation(before Record, inspection *actionv1.FilesystemBackupTargetInspectionReceipt, location *actionv1.FilesystemBackupTargetLocationReceipt, now int64) (string, error) {
 	o := inspection.Observation
-	previous, needed, err := priorTargetRegistrationPath(before, o.CanonicalPath)
+	previous, needed, err := priorTargetRegistrationPathMode(before, o.CanonicalPath, o.FullContainmentChecked)
 	if err != nil {
 		return "", err
 	}

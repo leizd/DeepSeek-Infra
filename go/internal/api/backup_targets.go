@@ -44,7 +44,12 @@ func backupTargetsList(writer http.ResponseWriter, request *http.Request, contro
 			continue
 		}
 		var target map[string]any
-		decoder := json.NewDecoder(strings.NewReader(string(record.Payload)))
+		public, err := store.PublicBackupTargetRecord(record.Payload)
+		if err != nil {
+			backupPolicyError(writer, http.StatusInternalServerError, "GO_CONTROL_READ_FAILED", "Backup target payload invalid")
+			return
+		}
+		decoder := json.NewDecoder(strings.NewReader(string(public)))
 		decoder.UseNumber()
 		if err := decoder.Decode(&target); err != nil || target == nil || target["targetId"] != record.ID {
 			backupPolicyError(writer, http.StatusInternalServerError, "GO_CONTROL_READ_FAILED", "Backup target payload invalid")

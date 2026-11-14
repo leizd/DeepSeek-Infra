@@ -52,7 +52,7 @@ func VerifyBackupTargetInspectionReceipt(request *actionv1.InspectFilesystemBack
 	}
 	o := receipt.Observation
 	if !proto.Equal(request.Fence, o.Fence) || request.OperationId != o.OperationId || request.WriterFencingToken != o.WriterFencingToken ||
-		request.Path != o.RequestedPath || o.ObservedAtUnix > context.Now || context.Now-o.ObservedAtUnix > 60 {
+		request.Path != o.RequestedPath || request.RequireFullContainment != o.FullContainmentChecked || o.ObservedAtUnix > context.Now || context.Now-o.ObservedAtUnix > 60 {
 		return ErrTargetRegistrationInvalid
 	}
 	return nil

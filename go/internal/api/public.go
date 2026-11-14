@@ -89,6 +89,10 @@ func RegisterPublicView(mux *http.ServeMux, control *store.Control, view PublicV
 		}
 	})
 	mux.HandleFunc("/api/workspace/backup-targets", func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method == http.MethodPost {
+			backupTargetRegister(writer, request, control, view)
+			return
+		}
 		backupTargetsList(writer, request, control)
 	})
 	mux.HandleFunc("/api/workspace/backup-targets/", func(writer http.ResponseWriter, request *http.Request) {

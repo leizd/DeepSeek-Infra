@@ -34,7 +34,12 @@ func backupTargetResource(writer http.ResponseWriter, request *http.Request, con
 			return
 		}
 		writer.Header().Set("Content-Type", "application/json")
-		_, _ = writer.Write(record.Payload)
+		public, err := store.PublicBackupTargetRecord(record.Payload)
+		if err != nil {
+			backupTargetMutationRefusal(writer, err, "activation")
+			return
+		}
+		_, _ = writer.Write(public)
 		return
 	}
 	if _, err := control.DeleteBackupTarget(newOperationID(), newActionID(), "operator:public-api", targetID); err != nil {

@@ -1929,8 +1929,11 @@ type InspectFilesystemBackupTargetRequest struct {
 	OperationId        string                 `protobuf:"bytes,3,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
 	Path               string                 `protobuf:"bytes,4,opt,name=path,proto3" json:"path,omitempty"`
 	WriterFencingToken uint64                 `protobuf:"varint,5,opt,name=writer_fencing_token,json=writerFencingToken,proto3" json:"writer_fencing_token,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// Public registration must fail closed with an older worker which does not
+	// attest the complete built-in contributor/root containment check.
+	RequireFullContainment bool `protobuf:"varint,6,opt,name=require_full_containment,json=requireFullContainment,proto3" json:"require_full_containment,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *InspectFilesystemBackupTargetRequest) Reset() {
@@ -1998,22 +2001,30 @@ func (x *InspectFilesystemBackupTargetRequest) GetWriterFencingToken() uint64 {
 	return 0
 }
 
+func (x *InspectFilesystemBackupTargetRequest) GetRequireFullContainment() bool {
+	if x != nil {
+		return x.RequireFullContainment
+	}
+	return false
+}
+
 type FilesystemBackupTargetObservation struct {
-	state              protoimpl.MessageState `protogen:"open.v1"`
-	SchemaVersion      uint32                 `protobuf:"varint,1,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
-	Fence              *commonv1.ActionFence  `protobuf:"bytes,2,opt,name=fence,proto3" json:"fence,omitempty"`
-	OperationId        string                 `protobuf:"bytes,3,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
-	WriterFencingToken uint64                 `protobuf:"varint,4,opt,name=writer_fencing_token,json=writerFencingToken,proto3" json:"writer_fencing_token,omitempty"`
-	RequestedPath      string                 `protobuf:"bytes,5,opt,name=requested_path,json=requestedPath,proto3" json:"requested_path,omitempty"`
-	CanonicalPath      string                 `protobuf:"bytes,6,opt,name=canonical_path,json=canonicalPath,proto3" json:"canonical_path,omitempty"`
-	MarkerPresent      bool                   `protobuf:"varint,7,opt,name=marker_present,json=markerPresent,proto3" json:"marker_present,omitempty"`
-	MarkerJson         []byte                 `protobuf:"bytes,8,opt,name=marker_json,json=markerJson,proto3" json:"marker_json,omitempty"`
-	MarkerSha256       []byte                 `protobuf:"bytes,9,opt,name=marker_sha256,json=markerSha256,proto3" json:"marker_sha256,omitempty"`
-	ObservedAtUnix     int64                  `protobuf:"varint,10,opt,name=observed_at_unix,json=observedAtUnix,proto3" json:"observed_at_unix,omitempty"`
-	FleetId            string                 `protobuf:"bytes,11,opt,name=fleet_id,json=fleetId,proto3" json:"fleet_id,omitempty"`
-	Environment        string                 `protobuf:"bytes,12,opt,name=environment,proto3" json:"environment,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	state                  protoimpl.MessageState `protogen:"open.v1"`
+	SchemaVersion          uint32                 `protobuf:"varint,1,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
+	Fence                  *commonv1.ActionFence  `protobuf:"bytes,2,opt,name=fence,proto3" json:"fence,omitempty"`
+	OperationId            string                 `protobuf:"bytes,3,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
+	WriterFencingToken     uint64                 `protobuf:"varint,4,opt,name=writer_fencing_token,json=writerFencingToken,proto3" json:"writer_fencing_token,omitempty"`
+	RequestedPath          string                 `protobuf:"bytes,5,opt,name=requested_path,json=requestedPath,proto3" json:"requested_path,omitempty"`
+	CanonicalPath          string                 `protobuf:"bytes,6,opt,name=canonical_path,json=canonicalPath,proto3" json:"canonical_path,omitempty"`
+	MarkerPresent          bool                   `protobuf:"varint,7,opt,name=marker_present,json=markerPresent,proto3" json:"marker_present,omitempty"`
+	MarkerJson             []byte                 `protobuf:"bytes,8,opt,name=marker_json,json=markerJson,proto3" json:"marker_json,omitempty"`
+	MarkerSha256           []byte                 `protobuf:"bytes,9,opt,name=marker_sha256,json=markerSha256,proto3" json:"marker_sha256,omitempty"`
+	ObservedAtUnix         int64                  `protobuf:"varint,10,opt,name=observed_at_unix,json=observedAtUnix,proto3" json:"observed_at_unix,omitempty"`
+	FleetId                string                 `protobuf:"bytes,11,opt,name=fleet_id,json=fleetId,proto3" json:"fleet_id,omitempty"`
+	Environment            string                 `protobuf:"bytes,12,opt,name=environment,proto3" json:"environment,omitempty"`
+	FullContainmentChecked bool                   `protobuf:"varint,13,opt,name=full_containment_checked,json=fullContainmentChecked,proto3" json:"full_containment_checked,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *FilesystemBackupTargetObservation) Reset() {
@@ -2128,6 +2139,13 @@ func (x *FilesystemBackupTargetObservation) GetEnvironment() string {
 		return x.Environment
 	}
 	return ""
+}
+
+func (x *FilesystemBackupTargetObservation) GetFullContainmentChecked() bool {
+	if x != nil {
+		return x.FullContainmentChecked
+	}
+	return false
 }
 
 type FilesystemBackupTargetInspectionReceipt struct {
@@ -2612,13 +2630,14 @@ const file_action_v1_action_proto_rawDesc = "" +
 	"\x11NativeOriginState\x12%\n" +
 	"\x0eschema_version\x18\x01 \x01(\rR\rschemaVersion\x12?\n" +
 	"\x06origin\x18\x02 \x01(\v2'.deepseek.action.v1.NativeOriginReceiptR\x06origin\x12M\n" +
-	"\vpublication\x18\x03 \x01(\v2+.deepseek.action.v1.NativeOriginPublicationR\vpublication\"\xed\x01\n" +
+	"\vpublication\x18\x03 \x01(\v2+.deepseek.action.v1.NativeOriginPublicationR\vpublication\"\xa7\x02\n" +
 	"$InspectFilesystemBackupTargetRequest\x12%\n" +
 	"\x0eschema_version\x18\x01 \x01(\rR\rschemaVersion\x125\n" +
 	"\x05fence\x18\x02 \x01(\v2\x1f.deepseek.common.v1.ActionFenceR\x05fence\x12!\n" +
 	"\foperation_id\x18\x03 \x01(\tR\voperationId\x12\x12\n" +
 	"\x04path\x18\x04 \x01(\tR\x04path\x120\n" +
-	"\x14writer_fencing_token\x18\x05 \x01(\x04R\x12writerFencingToken\"\xf8\x03\n" +
+	"\x14writer_fencing_token\x18\x05 \x01(\x04R\x12writerFencingToken\x128\n" +
+	"\x18require_full_containment\x18\x06 \x01(\bR\x16requireFullContainment\"\xb2\x04\n" +
 	"!FilesystemBackupTargetObservation\x12%\n" +
 	"\x0eschema_version\x18\x01 \x01(\rR\rschemaVersion\x125\n" +
 	"\x05fence\x18\x02 \x01(\v2\x1f.deepseek.common.v1.ActionFenceR\x05fence\x12!\n" +
@@ -2633,7 +2652,8 @@ const file_action_v1_action_proto_rawDesc = "" +
 	"\x10observed_at_unix\x18\n" +
 	" \x01(\x03R\x0eobservedAtUnix\x12\x19\n" +
 	"\bfleet_id\x18\v \x01(\tR\afleetId\x12 \n" +
-	"\venvironment\x18\f \x01(\tR\venvironment\"\xf3\x01\n" +
+	"\venvironment\x18\f \x01(\tR\venvironment\x128\n" +
+	"\x18full_containment_checked\x18\r \x01(\bR\x16fullContainmentChecked\"\xf3\x01\n" +
 	"'FilesystemBackupTargetInspectionReceipt\x12%\n" +
 	"\x0eschema_version\x18\x01 \x01(\rR\rschemaVersion\x12W\n" +
 	"\vobservation\x18\x02 \x01(\v25.deepseek.action.v1.FilesystemBackupTargetObservationR\vobservation\x12\x1c\n" +

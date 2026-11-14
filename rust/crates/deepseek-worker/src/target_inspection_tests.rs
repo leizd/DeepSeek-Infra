@@ -306,6 +306,101 @@ fn target_inspection_reads_existing_identity_without_changing_any_bytes() {
     assert_eq!(fs::read_dir(&target).unwrap().count(), 2);
 }
 
+#[cfg(unix)]
+#[test]
+fn target_full_containment_resolves_every_builtin_contributor_outside_runtime_root() {
+    use std::os::unix::fs::symlink;
+    let root = tempfile::tempdir().unwrap();
+    let runtime = root.path().join("runtime");
+    fs::create_dir(&runtime).unwrap();
+    let external = root.path().join("external");
+    fs::create_dir(&external).unwrap();
+    let policy = LocationPolicy::new(std::slice::from_ref(&runtime)).unwrap();
+    let candidate = external.join("candidate");
+    fs::create_dir(&candidate).unwrap();
+    fs::write(candidate.join(MARKER_NAME), marker()).unwrap();
+    for name in [
+        ".restore-staging",
+        ".backups",
+        ".projects",
+        ".file-cache",
+        ".generated",
+        ".memory",
+        ".media",
+        ".skills",
+        ".automation",
+        ".reminders",
+        ".agent-runs",
+        ".a2a",
+        ".traces",
+    ] {
+        symlink(&external, runtime.join(name)).unwrap();
+        // The original basic mode remains an observation, not a full admission.
+        assert!(policy.inspect(candidate.to_str().unwrap()).is_ok());
+        assert_eq!(
+            policy
+                .check_contributors(&fs::canonicalize(&candidate).unwrap())
+                .unwrap_err()
+                .code(),
+            tonic::Code::InvalidArgument
+        );
+        fs::remove_file(runtime.join(name)).unwrap();
+    }
+    assert!(
+        policy
+            .check_contributors(&fs::canonicalize(&candidate).unwrap())
+            .is_ok()
+    );
+    assert_eq!(fs::read(candidate.join(MARKER_NAME)).unwrap(), marker());
+}
+
+#[tokio::test]
+async fn target_full_containment_signed_flag_cannot_be_added_or_removed_from_observation() {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+    use prost::Message as _;
+    let (root, policy, target) = directories();
+    fs::write(target.join(MARKER_NAME), marker()).unwrap();
+    let service = signed_service(root.path(), policy);
+    for complete in [false, true] {
+        let mut request = Request::new(InspectFilesystemBackupTargetRequest {
+            schema_version: 1,
+            fence: Some(ActionFence {
+                action_id: "target-inspect-complete".into(),
+                execution_epoch: 3,
+            }),
+            operation_id: "target-inspect-complete".into(),
+            path: target.to_str().unwrap().into(),
+            writer_fencing_token: 7,
+            require_full_containment: complete,
+        });
+        request.metadata_mut().insert(
+            "authorization",
+            "Bearer target-inspection-fixture-bearer".parse().unwrap(),
+        );
+        let receipt = service.inspect(request).await.unwrap().into_inner();
+        let mut observation = receipt.observation.unwrap();
+        assert_eq!(observation.full_containment_checked, complete);
+        let key: [u8; 32] = URL_SAFE_NO_PAD
+            .decode(receipt.signer_public_key)
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let key = VerifyingKey::from_bytes(&key).unwrap();
+        let signature = Signature::from_slice(&receipt.signature).unwrap();
+        let bytes = |value: &FilesystemBackupTargetObservation| {
+            let mut message = wire::SIGNATURE_DOMAIN.to_vec();
+            message.extend(value.encode_to_vec());
+            message
+        };
+        key.verify(&bytes(&observation), &signature).unwrap();
+        observation.full_containment_checked = !complete;
+        assert!(key.verify(&bytes(&observation), &signature).is_err());
+    }
+    assert!(service.worker.lock().await.live_epochs.is_empty());
+    assert_eq!(fs::read(target.join(MARKER_NAME)).unwrap(), marker());
+}
+
 #[test]
 fn target_inspection_observes_uninitialized_directory_without_initializing_it() {
     let (_root, policy, target) = directories();
@@ -485,6 +580,7 @@ async fn target_inspection_real_grpc_binds_signature_and_preserves_worker_epoch_
         operation_id: "target-inspect-fixture".into(),
         path: target.to_str().unwrap().into(),
         writer_fencing_token: 7,
+        require_full_containment: false,
     };
     assert_eq!(
         client.inspect(input.clone()).await.unwrap_err().code(),
@@ -577,6 +673,7 @@ async fn target_inspection_rpc_refuses_missing_configuration_and_wrong_roles() {
         }),
         writer_fencing_token: 1,
         path: "a path which must never be read".into(),
+        require_full_containment: false,
     });
     request
         .metadata_mut()

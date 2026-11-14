@@ -103,6 +103,9 @@ func loadTargetRegistrationBindingsTx(tx *sql.Tx, id string) (map[int64]targetRe
 	if err := attachTargetLocationBindingsTx(tx, id, bindings); err != nil {
 		return nil, err
 	}
+	if err := validatePublicTargetBindingsTx(tx, id, bindings); err != nil {
+		return nil, err
+	}
 	return bindings, nil
 }
 

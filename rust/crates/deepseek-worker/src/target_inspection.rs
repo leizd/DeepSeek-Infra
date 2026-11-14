@@ -37,6 +37,36 @@ struct Inspection {
 }
 
 impl LocationPolicy {
+    fn check_contributors(&self, candidate: &Path) -> Result<(), Status> {
+        // Built-in contributor paths are settings.root-derived in the retained
+        // application. Resolve each one: a contributor can itself be a link
+        // outside the protected runtime directory.
+        let root = self.protected.first().ok_or_else(invalid_marker)?;
+        for relative in [
+            ".restore-staging",
+            ".backups",
+            ".projects",
+            ".file-cache",
+            ".generated",
+            ".memory",
+            ".media",
+            ".skills",
+            ".automation",
+            ".reminders",
+            ".agent-runs",
+            ".a2a",
+            ".traces",
+        ] {
+            let raw = root.join(relative);
+            let resolved = path_resolution::resolve(raw.to_str().ok_or_else(invalid_marker)?)?;
+            if contained(candidate, Path::new(&resolved)) {
+                return Err(Status::invalid_argument(
+                    "Unsafe backup target: target is inside a contributor or managed backup root",
+                ));
+            }
+        }
+        Ok(())
+    }
     fn new(protected: &[PathBuf]) -> Result<Self, Status> {
         if protected.is_empty() || protected.iter().any(|p| !p.is_absolute()) {
             return Err(Status::failed_precondition(
@@ -190,6 +220,24 @@ fn invalid_marker() -> Status {
     Status::invalid_argument("Backup target marker is unreadable or invalid")
 }
 
+fn observation_path(path: &Path, requested: &str, full: bool) -> Result<String, Status> {
+    let value = path.to_str().ok_or_else(invalid_marker)?;
+    #[cfg(windows)]
+    if full && !requested.starts_with(r"\\?\") {
+        // The directory was resolved and pinned by inspect(), not re-read
+        // through a potentially replaced link. Match the retained public path.
+        if let Some(tail) = value.strip_prefix(r"\\?\UNC\") {
+            return Ok(format!(r"\\{tail}"));
+        }
+        if let Some(tail) = value.strip_prefix(r"\\?\") {
+            return Ok(tail.into());
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = (requested, full);
+    Ok(value.into())
+}
+
 // Match the retained Path.exists clone check. This reads metadata only: it
 // follows an old registered link, but never opens its marker or initializes it.
 fn probe_location(path: &str) -> Result<BackupTargetLocationState, Status> {
@@ -309,11 +357,16 @@ impl BackupTargetInspection for WorkerRpcService {
             .clone()
             .try_acquire_owned()
             .map_err(|_| Status::resource_exhausted("BACKUP_TARGET_INSPECTION_BUSY"))?;
+        let full_containment = input.require_full_containment;
         let inspected = tokio::task::spawn_blocking(move || {
             // Cancellation of the RPC must not release the bound while its
             // blocking reader still owns memory and the filesystem handle.
             let _permit = permit;
-            policy.inspect(&path)
+            let inspected = policy.inspect(&path)?;
+            if full_containment {
+                policy.check_contributors(&inspected.path)?;
+            }
+            Ok::<_, Status>(inspected)
         })
         .await
         .map_err(|_| invalid_marker())??;
@@ -330,20 +383,24 @@ impl BackupTargetInspection for WorkerRpcService {
             operation_id: input.operation_id.clone(),
             writer_fencing_token: input.writer_fencing_token,
             requested_path: input.path.clone(),
-            canonical_path: inspected.path.to_str().ok_or_else(invalid_marker)?.into(),
+            canonical_path: observation_path(&inspected.path, &input.path, full_containment)?,
             marker_present,
             marker_json,
             marker_sha256,
             observed_at_unix: crate::service::unix_now_seconds().map_err(|_| invalid_marker())?,
             fleet_id: config.fleet_id,
             environment: config.environment,
+            full_containment_checked: full_containment,
         };
         // Match the established worker -> signer lock order and recheck the
         // expiring transport credential before issuing the read-only witness.
         caller()?;
         let worker = self.worker.lock().await;
         let authority = worker.agent_node_authority()?;
-        if authority.fencing_token as u64 != observation.writer_fencing_token {
+        if authority.fencing_token as u64 != observation.writer_fencing_token
+            || authority.fleet_id != observation.fleet_id
+            || authority.environment != observation.environment
+        {
             return Err(Status::failed_precondition("FENCE_MISMATCH"));
         }
         let signer = self

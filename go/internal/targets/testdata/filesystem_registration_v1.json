@@ -1,0 +1,2333 @@
+{
+  "schemaVersion": 1,
+  "oracle": "retained HTTP function and unmodified backup_targets._register; metadata only",
+  "cases": [
+    {
+      "input": {
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": "original",
+        "createdAt": "2000-01-01T00:00:00Z"
+      },
+      "name": "retained-metadata-000",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "ok",
+      "document": {
+        "schemaVersion": 3,
+        "targetId": "target_oracle",
+        "kind": "filesystem",
+        "path": "/retained/target",
+        "targetNonce": "original",
+        "label": "",
+        "region": "local",
+        "failureDomain": "local",
+        "provider": "operator-filesystem",
+        "jurisdiction": "local",
+        "priority": 0,
+        "costClass": "standard",
+        "storageCostPerGiBMonth": null,
+        "egressCostPerGiB": null,
+        "maxReadBytesPerSecond": 104857600,
+        "maxWriteBytesPerSecond": 104857600,
+        "maxConcurrentTransfers": 4,
+        "storageTier": "hot",
+        "restoreLatencyClass": "seconds",
+        "minResidenceSeconds": 0,
+        "retrievalCostPerGiB": null,
+        "drainState": "active",
+        "createdAt": "2000-01-01T00:00:00Z",
+        "registeredAt": "2000-01-01T00:00:00Z"
+      }
+    },
+    {
+      "input": {
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": [
+          true,
+          {
+            "b": false,
+            "a": 1
+          }
+        ]
+      },
+      "name": "retained-metadata-001",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "ok",
+      "document": {
+        "schemaVersion": 3,
+        "targetId": "target_oracle",
+        "kind": "filesystem",
+        "path": "/retained/target",
+        "targetNonce": "[True, {'b': False, 'a': 1}]",
+        "label": "",
+        "region": "local",
+        "failureDomain": "local",
+        "provider": "operator-filesystem",
+        "jurisdiction": "local",
+        "priority": 0,
+        "costClass": "standard",
+        "storageCostPerGiBMonth": null,
+        "egressCostPerGiB": null,
+        "maxReadBytesPerSecond": 104857600,
+        "maxWriteBytesPerSecond": 104857600,
+        "maxConcurrentTransfers": 4,
+        "storageTier": "hot",
+        "restoreLatencyClass": "seconds",
+        "minResidenceSeconds": 0,
+        "retrievalCostPerGiB": null,
+        "drainState": "active",
+        "createdAt": "2000-01-01T00:00:00Z",
+        "registeredAt": "2000-01-01T00:00:00Z"
+      }
+    },
+    {
+      "input": {
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": 1.0,
+        "createdAt": false
+      },
+      "name": "retained-metadata-002",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "ok",
+      "document": {
+        "schemaVersion": 3,
+        "targetId": "target_oracle",
+        "kind": "filesystem",
+        "path": "/retained/target",
+        "targetNonce": "1.0",
+        "label": "",
+        "region": "local",
+        "failureDomain": "local",
+        "provider": "operator-filesystem",
+        "jurisdiction": "local",
+        "priority": 0,
+        "costClass": "standard",
+        "storageCostPerGiBMonth": null,
+        "egressCostPerGiB": null,
+        "maxReadBytesPerSecond": 104857600,
+        "maxWriteBytesPerSecond": 104857600,
+        "maxConcurrentTransfers": 4,
+        "storageTier": "hot",
+        "restoreLatencyClass": "seconds",
+        "minResidenceSeconds": 0,
+        "retrievalCostPerGiB": null,
+        "drainState": "active",
+        "createdAt": "2000-01-01T00:00:00Z",
+        "registeredAt": "2000-01-01T00:00:00Z"
+      }
+    },
+    {
+      "input": {
+        "label": {
+          "b": true,
+          "a": [
+            1,
+            null,
+            "x"
+          ]
+        },
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": "original",
+        "createdAt": "2000-01-01T00:00:00Z"
+      },
+      "name": "retained-metadata-003",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "ok",
+      "document": {
+        "schemaVersion": 3,
+        "targetId": "target_oracle",
+        "kind": "filesystem",
+        "path": "/retained/target",
+        "targetNonce": "original",
+        "label": "{'b': True, 'a': [1, None, 'x']}",
+        "region": "local",
+        "failureDomain": "local",
+        "provider": "operator-filesystem",
+        "jurisdiction": "local",
+        "priority": 0,
+        "costClass": "standard",
+        "storageCostPerGiBMonth": null,
+        "egressCostPerGiB": null,
+        "maxReadBytesPerSecond": 104857600,
+        "maxWriteBytesPerSecond": 104857600,
+        "maxConcurrentTransfers": 4,
+        "storageTier": "hot",
+        "restoreLatencyClass": "seconds",
+        "minResidenceSeconds": 0,
+        "retrievalCostPerGiB": null,
+        "drainState": "active",
+        "createdAt": "2000-01-01T00:00:00Z",
+        "registeredAt": "2000-01-01T00:00:00Z"
+      }
+    },
+    {
+      "input": {
+        "label": {
+          "b": true,
+          "a": [
+            1,
+            null,
+            "x"
+          ]
+        },
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": [
+          true,
+          {
+            "b": false,
+            "a": 1
+          }
+        ]
+      },
+      "name": "retained-metadata-004",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "ok",
+      "document": {
+        "schemaVersion": 3,
+        "targetId": "target_oracle",
+        "kind": "filesystem",
+        "path": "/retained/target",
+        "targetNonce": "[True, {'b': False, 'a': 1}]",
+        "label": "{'b': True, 'a': [1, None, 'x']}",
+        "region": "local",
+        "failureDomain": "local",
+        "provider": "operator-filesystem",
+        "jurisdiction": "local",
+        "priority": 0,
+        "costClass": "standard",
+        "storageCostPerGiBMonth": null,
+        "egressCostPerGiB": null,
+        "maxReadBytesPerSecond": 104857600,
+        "maxWriteBytesPerSecond": 104857600,
+        "maxConcurrentTransfers": 4,
+        "storageTier": "hot",
+        "restoreLatencyClass": "seconds",
+        "minResidenceSeconds": 0,
+        "retrievalCostPerGiB": null,
+        "drainState": "active",
+        "createdAt": "2000-01-01T00:00:00Z",
+        "registeredAt": "2000-01-01T00:00:00Z"
+      }
+    },
+    {
+      "input": {
+        "label": {
+          "b": true,
+          "a": [
+            1,
+            null,
+            "x"
+          ]
+        },
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": 1.0,
+        "createdAt": false
+      },
+      "name": "retained-metadata-005",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "ok",
+      "document": {
+        "schemaVersion": 3,
+        "targetId": "target_oracle",
+        "kind": "filesystem",
+        "path": "/retained/target",
+        "targetNonce": "1.0",
+        "label": "{'b': True, 'a': [1, None, 'x']}",
+        "region": "local",
+        "failureDomain": "local",
+        "provider": "operator-filesystem",
+        "jurisdiction": "local",
+        "priority": 0,
+        "costClass": "standard",
+        "storageCostPerGiBMonth": null,
+        "egressCostPerGiB": null,
+        "maxReadBytesPerSecond": 104857600,
+        "maxWriteBytesPerSecond": 104857600,
+        "maxConcurrentTransfers": 4,
+        "storageTier": "hot",
+        "restoreLatencyClass": "seconds",
+        "minResidenceSeconds": 0,
+        "retrievalCostPerGiB": null,
+        "drainState": "active",
+        "createdAt": "2000-01-01T00:00:00Z",
+        "registeredAt": "2000-01-01T00:00:00Z"
+      }
+    },
+    {
+      "input": {
+        "label": 1.0,
+        "priority": "\u0661_\u0662",
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": "original",
+        "createdAt": "2000-01-01T00:00:00Z"
+      },
+      "name": "retained-metadata-006",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "ok",
+      "document": {
+        "schemaVersion": 3,
+        "targetId": "target_oracle",
+        "kind": "filesystem",
+        "path": "/retained/target",
+        "targetNonce": "original",
+        "label": "1.0",
+        "region": "local",
+        "failureDomain": "local",
+        "provider": "operator-filesystem",
+        "jurisdiction": "local",
+        "priority": 12,
+        "costClass": "standard",
+        "storageCostPerGiBMonth": null,
+        "egressCostPerGiB": null,
+        "maxReadBytesPerSecond": 104857600,
+        "maxWriteBytesPerSecond": 104857600,
+        "maxConcurrentTransfers": 4,
+        "storageTier": "hot",
+        "restoreLatencyClass": "seconds",
+        "minResidenceSeconds": 0,
+        "retrievalCostPerGiB": null,
+        "drainState": "active",
+        "createdAt": "2000-01-01T00:00:00Z",
+        "registeredAt": "2000-01-01T00:00:00Z"
+      }
+    },
+    {
+      "input": {
+        "label": 1.0,
+        "priority": "\u0661_\u0662",
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": [
+          true,
+          {
+            "b": false,
+            "a": 1
+          }
+        ]
+      },
+      "name": "retained-metadata-007",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "ok",
+      "document": {
+        "schemaVersion": 3,
+        "targetId": "target_oracle",
+        "kind": "filesystem",
+        "path": "/retained/target",
+        "targetNonce": "[True, {'b': False, 'a': 1}]",
+        "label": "1.0",
+        "region": "local",
+        "failureDomain": "local",
+        "provider": "operator-filesystem",
+        "jurisdiction": "local",
+        "priority": 12,
+        "costClass": "standard",
+        "storageCostPerGiBMonth": null,
+        "egressCostPerGiB": null,
+        "maxReadBytesPerSecond": 104857600,
+        "maxWriteBytesPerSecond": 104857600,
+        "maxConcurrentTransfers": 4,
+        "storageTier": "hot",
+        "restoreLatencyClass": "seconds",
+        "minResidenceSeconds": 0,
+        "retrievalCostPerGiB": null,
+        "drainState": "active",
+        "createdAt": "2000-01-01T00:00:00Z",
+        "registeredAt": "2000-01-01T00:00:00Z"
+      }
+    },
+    {
+      "input": {
+        "label": 1.0,
+        "priority": "\u0661_\u0662",
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": 1.0,
+        "createdAt": false
+      },
+      "name": "retained-metadata-008",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "ok",
+      "document": {
+        "schemaVersion": 3,
+        "targetId": "target_oracle",
+        "kind": "filesystem",
+        "path": "/retained/target",
+        "targetNonce": "1.0",
+        "label": "1.0",
+        "region": "local",
+        "failureDomain": "local",
+        "provider": "operator-filesystem",
+        "jurisdiction": "local",
+        "priority": 12,
+        "costClass": "standard",
+        "storageCostPerGiBMonth": null,
+        "egressCostPerGiB": null,
+        "maxReadBytesPerSecond": 104857600,
+        "maxWriteBytesPerSecond": 104857600,
+        "maxConcurrentTransfers": 4,
+        "storageTier": "hot",
+        "restoreLatencyClass": "seconds",
+        "minResidenceSeconds": 0,
+        "retrievalCostPerGiB": null,
+        "drainState": "active",
+        "createdAt": "2000-01-01T00:00:00Z",
+        "registeredAt": "2000-01-01T00:00:00Z"
+      }
+    },
+    {
+      "input": {
+        "priority": 1e+20,
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": "original",
+        "createdAt": "2000-01-01T00:00:00Z"
+      },
+      "name": "retained-metadata-009",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "ok",
+      "document": {
+        "schemaVersion": 3,
+        "targetId": "target_oracle",
+        "kind": "filesystem",
+        "path": "/retained/target",
+        "targetNonce": "original",
+        "label": "",
+        "region": "local",
+        "failureDomain": "local",
+        "provider": "operator-filesystem",
+        "jurisdiction": "local",
+        "priority": 100000000000000000000,
+        "costClass": "standard",
+        "storageCostPerGiBMonth": null,
+        "egressCostPerGiB": null,
+        "maxReadBytesPerSecond": 104857600,
+        "maxWriteBytesPerSecond": 104857600,
+        "maxConcurrentTransfers": 4,
+        "storageTier": "hot",
+        "restoreLatencyClass": "seconds",
+        "minResidenceSeconds": 0,
+        "retrievalCostPerGiB": null,
+        "drainState": "active",
+        "createdAt": "2000-01-01T00:00:00Z",
+        "registeredAt": "2000-01-01T00:00:00Z"
+      }
+    },
+    {
+      "input": {
+        "priority": 1e+20,
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": [
+          true,
+          {
+            "b": false,
+            "a": 1
+          }
+        ]
+      },
+      "name": "retained-metadata-010",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "ok",
+      "document": {
+        "schemaVersion": 3,
+        "targetId": "target_oracle",
+        "kind": "filesystem",
+        "path": "/retained/target",
+        "targetNonce": "[True, {'b': False, 'a': 1}]",
+        "label": "",
+        "region": "local",
+        "failureDomain": "local",
+        "provider": "operator-filesystem",
+        "jurisdiction": "local",
+        "priority": 100000000000000000000,
+        "costClass": "standard",
+        "storageCostPerGiBMonth": null,
+        "egressCostPerGiB": null,
+        "maxReadBytesPerSecond": 104857600,
+        "maxWriteBytesPerSecond": 104857600,
+        "maxConcurrentTransfers": 4,
+        "storageTier": "hot",
+        "restoreLatencyClass": "seconds",
+        "minResidenceSeconds": 0,
+        "retrievalCostPerGiB": null,
+        "drainState": "active",
+        "createdAt": "2000-01-01T00:00:00Z",
+        "registeredAt": "2000-01-01T00:00:00Z"
+      }
+    },
+    {
+      "input": {
+        "priority": 1e+20,
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": 1.0,
+        "createdAt": false
+      },
+      "name": "retained-metadata-011",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "ok",
+      "document": {
+        "schemaVersion": 3,
+        "targetId": "target_oracle",
+        "kind": "filesystem",
+        "path": "/retained/target",
+        "targetNonce": "1.0",
+        "label": "",
+        "region": "local",
+        "failureDomain": "local",
+        "provider": "operator-filesystem",
+        "jurisdiction": "local",
+        "priority": 100000000000000000000,
+        "costClass": "standard",
+        "storageCostPerGiBMonth": null,
+        "egressCostPerGiB": null,
+        "maxReadBytesPerSecond": 104857600,
+        "maxWriteBytesPerSecond": 104857600,
+        "maxConcurrentTransfers": 4,
+        "storageTier": "hot",
+        "restoreLatencyClass": "seconds",
+        "minResidenceSeconds": 0,
+        "retrievalCostPerGiB": null,
+        "drainState": "active",
+        "createdAt": "2000-01-01T00:00:00Z",
+        "registeredAt": "2000-01-01T00:00:00Z"
+      }
+    },
+    {
+      "input": {
+        "priority": true,
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": "original",
+        "createdAt": "2000-01-01T00:00:00Z"
+      },
+      "name": "retained-metadata-012",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "ok",
+      "document": {
+        "schemaVersion": 3,
+        "targetId": "target_oracle",
+        "kind": "filesystem",
+        "path": "/retained/target",
+        "targetNonce": "original",
+        "label": "",
+        "region": "local",
+        "failureDomain": "local",
+        "provider": "operator-filesystem",
+        "jurisdiction": "local",
+        "priority": 1,
+        "costClass": "standard",
+        "storageCostPerGiBMonth": null,
+        "egressCostPerGiB": null,
+        "maxReadBytesPerSecond": 104857600,
+        "maxWriteBytesPerSecond": 104857600,
+        "maxConcurrentTransfers": 4,
+        "storageTier": "hot",
+        "restoreLatencyClass": "seconds",
+        "minResidenceSeconds": 0,
+        "retrievalCostPerGiB": null,
+        "drainState": "active",
+        "createdAt": "2000-01-01T00:00:00Z",
+        "registeredAt": "2000-01-01T00:00:00Z"
+      }
+    },
+    {
+      "input": {
+        "priority": true,
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": [
+          true,
+          {
+            "b": false,
+            "a": 1
+          }
+        ]
+      },
+      "name": "retained-metadata-013",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "ok",
+      "document": {
+        "schemaVersion": 3,
+        "targetId": "target_oracle",
+        "kind": "filesystem",
+        "path": "/retained/target",
+        "targetNonce": "[True, {'b': False, 'a': 1}]",
+        "label": "",
+        "region": "local",
+        "failureDomain": "local",
+        "provider": "operator-filesystem",
+        "jurisdiction": "local",
+        "priority": 1,
+        "costClass": "standard",
+        "storageCostPerGiBMonth": null,
+        "egressCostPerGiB": null,
+        "maxReadBytesPerSecond": 104857600,
+        "maxWriteBytesPerSecond": 104857600,
+        "maxConcurrentTransfers": 4,
+        "storageTier": "hot",
+        "restoreLatencyClass": "seconds",
+        "minResidenceSeconds": 0,
+        "retrievalCostPerGiB": null,
+        "drainState": "active",
+        "createdAt": "2000-01-01T00:00:00Z",
+        "registeredAt": "2000-01-01T00:00:00Z"
+      }
+    },
+    {
+      "input": {
+        "priority": true,
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": 1.0,
+        "createdAt": false
+      },
+      "name": "retained-metadata-014",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "ok",
+      "document": {
+        "schemaVersion": 3,
+        "targetId": "target_oracle",
+        "kind": "filesystem",
+        "path": "/retained/target",
+        "targetNonce": "1.0",
+        "label": "",
+        "region": "local",
+        "failureDomain": "local",
+        "provider": "operator-filesystem",
+        "jurisdiction": "local",
+        "priority": 1,
+        "costClass": "standard",
+        "storageCostPerGiBMonth": null,
+        "egressCostPerGiB": null,
+        "maxReadBytesPerSecond": 104857600,
+        "maxWriteBytesPerSecond": 104857600,
+        "maxConcurrentTransfers": 4,
+        "storageTier": "hot",
+        "restoreLatencyClass": "seconds",
+        "minResidenceSeconds": 0,
+        "retrievalCostPerGiB": null,
+        "drainState": "active",
+        "createdAt": "2000-01-01T00:00:00Z",
+        "registeredAt": "2000-01-01T00:00:00Z"
+      }
+    },
+    {
+      "input": {
+        "region": "  ",
+        "failureDomain": [
+          "a",
+          false
+        ],
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": "original",
+        "createdAt": "2000-01-01T00:00:00Z"
+      },
+      "name": "retained-metadata-015",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "ok",
+      "document": {
+        "schemaVersion": 3,
+        "targetId": "target_oracle",
+        "kind": "filesystem",
+        "path": "/retained/target",
+        "targetNonce": "original",
+        "label": "",
+        "region": "local",
+        "failureDomain": "['a', False]",
+        "provider": "operator-filesystem",
+        "jurisdiction": "local",
+        "priority": 0,
+        "costClass": "standard",
+        "storageCostPerGiBMonth": null,
+        "egressCostPerGiB": null,
+        "maxReadBytesPerSecond": 104857600,
+        "maxWriteBytesPerSecond": 104857600,
+        "maxConcurrentTransfers": 4,
+        "storageTier": "hot",
+        "restoreLatencyClass": "seconds",
+        "minResidenceSeconds": 0,
+        "retrievalCostPerGiB": null,
+        "drainState": "active",
+        "createdAt": "2000-01-01T00:00:00Z",
+        "registeredAt": "2000-01-01T00:00:00Z"
+      }
+    },
+    {
+      "input": {
+        "region": "  ",
+        "failureDomain": [
+          "a",
+          false
+        ],
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": [
+          true,
+          {
+            "b": false,
+            "a": 1
+          }
+        ]
+      },
+      "name": "retained-metadata-016",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "ok",
+      "document": {
+        "schemaVersion": 3,
+        "targetId": "target_oracle",
+        "kind": "filesystem",
+        "path": "/retained/target",
+        "targetNonce": "[True, {'b': False, 'a': 1}]",
+        "label": "",
+        "region": "local",
+        "failureDomain": "['a', False]",
+        "provider": "operator-filesystem",
+        "jurisdiction": "local",
+        "priority": 0,
+        "costClass": "standard",
+        "storageCostPerGiBMonth": null,
+        "egressCostPerGiB": null,
+        "maxReadBytesPerSecond": 104857600,
+        "maxWriteBytesPerSecond": 104857600,
+        "maxConcurrentTransfers": 4,
+        "storageTier": "hot",
+        "restoreLatencyClass": "seconds",
+        "minResidenceSeconds": 0,
+        "retrievalCostPerGiB": null,
+        "drainState": "active",
+        "createdAt": "2000-01-01T00:00:00Z",
+        "registeredAt": "2000-01-01T00:00:00Z"
+      }
+    },
+    {
+      "input": {
+        "region": "  ",
+        "failureDomain": [
+          "a",
+          false
+        ],
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": 1.0,
+        "createdAt": false
+      },
+      "name": "retained-metadata-017",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "ok",
+      "document": {
+        "schemaVersion": 3,
+        "targetId": "target_oracle",
+        "kind": "filesystem",
+        "path": "/retained/target",
+        "targetNonce": "1.0",
+        "label": "",
+        "region": "local",
+        "failureDomain": "['a', False]",
+        "provider": "operator-filesystem",
+        "jurisdiction": "local",
+        "priority": 0,
+        "costClass": "standard",
+        "storageCostPerGiBMonth": null,
+        "egressCostPerGiB": null,
+        "maxReadBytesPerSecond": 104857600,
+        "maxWriteBytesPerSecond": 104857600,
+        "maxConcurrentTransfers": 4,
+        "storageTier": "hot",
+        "restoreLatencyClass": "seconds",
+        "minResidenceSeconds": 0,
+        "retrievalCostPerGiB": null,
+        "drainState": "active",
+        "createdAt": "2000-01-01T00:00:00Z",
+        "registeredAt": "2000-01-01T00:00:00Z"
+      }
+    },
+    {
+      "input": {
+        "storageCostPerGiBMonth": true,
+        "egressCostPerGiB": "\u0661_\u0662.\u0665",
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": "original",
+        "createdAt": "2000-01-01T00:00:00Z"
+      },
+      "name": "retained-metadata-018",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "ok",
+      "document": {
+        "schemaVersion": 3,
+        "targetId": "target_oracle",
+        "kind": "filesystem",
+        "path": "/retained/target",
+        "targetNonce": "original",
+        "label": "",
+        "region": "local",
+        "failureDomain": "local",
+        "provider": "operator-filesystem",
+        "jurisdiction": "local",
+        "priority": 0,
+        "costClass": "standard",
+        "storageCostPerGiBMonth": 1.0,
+        "egressCostPerGiB": 12.5,
+        "maxReadBytesPerSecond": 104857600,
+        "maxWriteBytesPerSecond": 104857600,
+        "maxConcurrentTransfers": 4,
+        "storageTier": "hot",
+        "restoreLatencyClass": "seconds",
+        "minResidenceSeconds": 0,
+        "retrievalCostPerGiB": null,
+        "drainState": "active",
+        "createdAt": "2000-01-01T00:00:00Z",
+        "registeredAt": "2000-01-01T00:00:00Z"
+      }
+    },
+    {
+      "input": {
+        "storageCostPerGiBMonth": true,
+        "egressCostPerGiB": "\u0661_\u0662.\u0665",
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": [
+          true,
+          {
+            "b": false,
+            "a": 1
+          }
+        ]
+      },
+      "name": "retained-metadata-019",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "ok",
+      "document": {
+        "schemaVersion": 3,
+        "targetId": "target_oracle",
+        "kind": "filesystem",
+        "path": "/retained/target",
+        "targetNonce": "[True, {'b': False, 'a': 1}]",
+        "label": "",
+        "region": "local",
+        "failureDomain": "local",
+        "provider": "operator-filesystem",
+        "jurisdiction": "local",
+        "priority": 0,
+        "costClass": "standard",
+        "storageCostPerGiBMonth": 1.0,
+        "egressCostPerGiB": 12.5,
+        "maxReadBytesPerSecond": 104857600,
+        "maxWriteBytesPerSecond": 104857600,
+        "maxConcurrentTransfers": 4,
+        "storageTier": "hot",
+        "restoreLatencyClass": "seconds",
+        "minResidenceSeconds": 0,
+        "retrievalCostPerGiB": null,
+        "drainState": "active",
+        "createdAt": "2000-01-01T00:00:00Z",
+        "registeredAt": "2000-01-01T00:00:00Z"
+      }
+    },
+    {
+      "input": {
+        "storageCostPerGiBMonth": true,
+        "egressCostPerGiB": "\u0661_\u0662.\u0665",
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": 1.0,
+        "createdAt": false
+      },
+      "name": "retained-metadata-020",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "ok",
+      "document": {
+        "schemaVersion": 3,
+        "targetId": "target_oracle",
+        "kind": "filesystem",
+        "path": "/retained/target",
+        "targetNonce": "1.0",
+        "label": "",
+        "region": "local",
+        "failureDomain": "local",
+        "provider": "operator-filesystem",
+        "jurisdiction": "local",
+        "priority": 0,
+        "costClass": "standard",
+        "storageCostPerGiBMonth": 1.0,
+        "egressCostPerGiB": 12.5,
+        "maxReadBytesPerSecond": 104857600,
+        "maxWriteBytesPerSecond": 104857600,
+        "maxConcurrentTransfers": 4,
+        "storageTier": "hot",
+        "restoreLatencyClass": "seconds",
+        "minResidenceSeconds": 0,
+        "retrievalCostPerGiB": null,
+        "drainState": "active",
+        "createdAt": "2000-01-01T00:00:00Z",
+        "registeredAt": "2000-01-01T00:00:00Z"
+      }
+    },
+    {
+      "input": {
+        "maxReadBytesPerSecond": 1.0,
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": "original",
+        "createdAt": "2000-01-01T00:00:00Z"
+      },
+      "name": "retained-metadata-021",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "error",
+      "errorKind": "AppError",
+      "httpStatus": 400,
+      "message": "Backup target maxReadBytesPerSecond must be a positive integer",
+      "errorCode": "invalid_payload"
+    },
+    {
+      "input": {
+        "maxReadBytesPerSecond": 1.0,
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": [
+          true,
+          {
+            "b": false,
+            "a": 1
+          }
+        ]
+      },
+      "name": "retained-metadata-022",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "error",
+      "errorKind": "AppError",
+      "httpStatus": 400,
+      "message": "Backup target maxReadBytesPerSecond must be a positive integer",
+      "errorCode": "invalid_payload"
+    },
+    {
+      "input": {
+        "maxReadBytesPerSecond": 1.0,
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": 1.0,
+        "createdAt": false
+      },
+      "name": "retained-metadata-023",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "error",
+      "errorKind": "AppError",
+      "httpStatus": 400,
+      "message": "Backup target maxReadBytesPerSecond must be a positive integer",
+      "errorCode": "invalid_payload"
+    },
+    {
+      "input": {
+        "priority": "bad",
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": "original",
+        "createdAt": "2000-01-01T00:00:00Z"
+      },
+      "name": "retained-metadata-024",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "error",
+      "errorKind": "ValueError",
+      "httpStatus": 500,
+      "message": "invalid literal for int() with base 10: 'bad'"
+    },
+    {
+      "input": {
+        "priority": "bad",
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": [
+          true,
+          {
+            "b": false,
+            "a": 1
+          }
+        ]
+      },
+      "name": "retained-metadata-025",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "error",
+      "errorKind": "ValueError",
+      "httpStatus": 500,
+      "message": "invalid literal for int() with base 10: 'bad'"
+    },
+    {
+      "input": {
+        "priority": "bad",
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": 1.0,
+        "createdAt": false
+      },
+      "name": "retained-metadata-026",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "error",
+      "errorKind": "ValueError",
+      "httpStatus": 500,
+      "message": "invalid literal for int() with base 10: 'bad'"
+    },
+    {
+      "input": {
+        "storageCostPerGiBMonth": "bad",
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": "original",
+        "createdAt": "2000-01-01T00:00:00Z"
+      },
+      "name": "retained-metadata-027",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "error",
+      "errorKind": "ValueError",
+      "httpStatus": 500,
+      "message": "could not convert string to float: 'bad'"
+    },
+    {
+      "input": {
+        "storageCostPerGiBMonth": "bad",
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": [
+          true,
+          {
+            "b": false,
+            "a": 1
+          }
+        ]
+      },
+      "name": "retained-metadata-028",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "error",
+      "errorKind": "ValueError",
+      "httpStatus": 500,
+      "message": "could not convert string to float: 'bad'"
+    },
+    {
+      "input": {
+        "storageCostPerGiBMonth": "bad",
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": 1.0,
+        "createdAt": false
+      },
+      "name": "retained-metadata-029",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "error",
+      "errorKind": "ValueError",
+      "httpStatus": 500,
+      "message": "could not convert string to float: 'bad'"
+    },
+    {
+      "input": {
+        "storageCostPerGiBMonth": "nan",
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": "original",
+        "createdAt": "2000-01-01T00:00:00Z"
+      },
+      "name": "retained-metadata-030",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "error",
+      "errorKind": "AppError",
+      "httpStatus": 400,
+      "message": "Backup target storageCostPerGiBMonth must be a finite non-negative number",
+      "errorCode": "invalid_payload"
+    },
+    {
+      "input": {
+        "storageCostPerGiBMonth": "nan",
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": [
+          true,
+          {
+            "b": false,
+            "a": 1
+          }
+        ]
+      },
+      "name": "retained-metadata-031",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "error",
+      "errorKind": "AppError",
+      "httpStatus": 400,
+      "message": "Backup target storageCostPerGiBMonth must be a finite non-negative number",
+      "errorCode": "invalid_payload"
+    },
+    {
+      "input": {
+        "storageCostPerGiBMonth": "nan",
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": 1.0,
+        "createdAt": false
+      },
+      "name": "retained-metadata-032",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "error",
+      "errorKind": "AppError",
+      "httpStatus": 400,
+      "message": "Backup target storageCostPerGiBMonth must be a finite non-negative number",
+      "errorCode": "invalid_payload"
+    },
+    {
+      "input": {
+        "egressCostPerGiB": -1,
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": "original",
+        "createdAt": "2000-01-01T00:00:00Z"
+      },
+      "name": "retained-metadata-033",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "error",
+      "errorKind": "AppError",
+      "httpStatus": 400,
+      "message": "Backup target egressCostPerGiB must be a finite non-negative number",
+      "errorCode": "invalid_payload"
+    },
+    {
+      "input": {
+        "egressCostPerGiB": -1,
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": [
+          true,
+          {
+            "b": false,
+            "a": 1
+          }
+        ]
+      },
+      "name": "retained-metadata-034",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "error",
+      "errorKind": "AppError",
+      "httpStatus": 400,
+      "message": "Backup target egressCostPerGiB must be a finite non-negative number",
+      "errorCode": "invalid_payload"
+    },
+    {
+      "input": {
+        "egressCostPerGiB": -1,
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": 1.0,
+        "createdAt": false
+      },
+      "name": "retained-metadata-035",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "error",
+      "errorKind": "AppError",
+      "httpStatus": 400,
+      "message": "Backup target egressCostPerGiB must be a finite non-negative number",
+      "errorCode": "invalid_payload"
+    },
+    {
+      "input": {
+        "maxConcurrentTransfers": false,
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": "original",
+        "createdAt": "2000-01-01T00:00:00Z"
+      },
+      "name": "retained-metadata-036",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "error",
+      "errorKind": "AppError",
+      "httpStatus": 400,
+      "message": "Backup target maxConcurrentTransfers must be a positive integer",
+      "errorCode": "invalid_payload"
+    },
+    {
+      "input": {
+        "maxConcurrentTransfers": false,
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": [
+          true,
+          {
+            "b": false,
+            "a": 1
+          }
+        ]
+      },
+      "name": "retained-metadata-037",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "error",
+      "errorKind": "AppError",
+      "httpStatus": 400,
+      "message": "Backup target maxConcurrentTransfers must be a positive integer",
+      "errorCode": "invalid_payload"
+    },
+    {
+      "input": {
+        "maxConcurrentTransfers": false,
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": 1.0,
+        "createdAt": false
+      },
+      "name": "retained-metadata-038",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "error",
+      "errorKind": "AppError",
+      "httpStatus": 400,
+      "message": "Backup target maxConcurrentTransfers must be a positive integer",
+      "errorCode": "invalid_payload"
+    },
+    {
+      "input": {
+        "label": "a\u2028b\u001c",
+        "provider": "\u001c provider \u001f",
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": "original",
+        "createdAt": "2000-01-01T00:00:00Z"
+      },
+      "name": "retained-metadata-039",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "ok",
+      "document": {
+        "schemaVersion": 3,
+        "targetId": "target_oracle",
+        "kind": "filesystem",
+        "path": "/retained/target",
+        "targetNonce": "original",
+        "label": "a\u2028b\u001c",
+        "region": "local",
+        "failureDomain": "local",
+        "provider": "provider",
+        "jurisdiction": "local",
+        "priority": 0,
+        "costClass": "standard",
+        "storageCostPerGiBMonth": null,
+        "egressCostPerGiB": null,
+        "maxReadBytesPerSecond": 104857600,
+        "maxWriteBytesPerSecond": 104857600,
+        "maxConcurrentTransfers": 4,
+        "storageTier": "hot",
+        "restoreLatencyClass": "seconds",
+        "minResidenceSeconds": 0,
+        "retrievalCostPerGiB": null,
+        "drainState": "active",
+        "createdAt": "2000-01-01T00:00:00Z",
+        "registeredAt": "2000-01-01T00:00:00Z"
+      }
+    },
+    {
+      "input": {
+        "label": "a\u2028b\u001c",
+        "provider": "\u001c provider \u001f",
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": [
+          true,
+          {
+            "b": false,
+            "a": 1
+          }
+        ]
+      },
+      "name": "retained-metadata-040",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "ok",
+      "document": {
+        "schemaVersion": 3,
+        "targetId": "target_oracle",
+        "kind": "filesystem",
+        "path": "/retained/target",
+        "targetNonce": "[True, {'b': False, 'a': 1}]",
+        "label": "a\u2028b\u001c",
+        "region": "local",
+        "failureDomain": "local",
+        "provider": "provider",
+        "jurisdiction": "local",
+        "priority": 0,
+        "costClass": "standard",
+        "storageCostPerGiBMonth": null,
+        "egressCostPerGiB": null,
+        "maxReadBytesPerSecond": 104857600,
+        "maxWriteBytesPerSecond": 104857600,
+        "maxConcurrentTransfers": 4,
+        "storageTier": "hot",
+        "restoreLatencyClass": "seconds",
+        "minResidenceSeconds": 0,
+        "retrievalCostPerGiB": null,
+        "drainState": "active",
+        "createdAt": "2000-01-01T00:00:00Z",
+        "registeredAt": "2000-01-01T00:00:00Z"
+      }
+    },
+    {
+      "input": {
+        "label": "a\u2028b\u001c",
+        "provider": "\u001c provider \u001f",
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": 1.0,
+        "createdAt": false
+      },
+      "name": "retained-metadata-041",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "ok",
+      "document": {
+        "schemaVersion": 3,
+        "targetId": "target_oracle",
+        "kind": "filesystem",
+        "path": "/retained/target",
+        "targetNonce": "1.0",
+        "label": "a\u2028b\u001c",
+        "region": "local",
+        "failureDomain": "local",
+        "provider": "provider",
+        "jurisdiction": "local",
+        "priority": 0,
+        "costClass": "standard",
+        "storageCostPerGiBMonth": null,
+        "egressCostPerGiB": null,
+        "maxReadBytesPerSecond": 104857600,
+        "maxWriteBytesPerSecond": 104857600,
+        "maxConcurrentTransfers": 4,
+        "storageTier": "hot",
+        "restoreLatencyClass": "seconds",
+        "minResidenceSeconds": 0,
+        "retrievalCostPerGiB": null,
+        "drainState": "active",
+        "createdAt": "2000-01-01T00:00:00Z",
+        "registeredAt": "2000-01-01T00:00:00Z"
+      }
+    },
+    {
+      "input": {
+        "priority": {
+          "a": 1
+        },
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": "original",
+        "createdAt": "2000-01-01T00:00:00Z"
+      },
+      "name": "retained-metadata-042",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "error",
+      "errorKind": "TypeError",
+      "httpStatus": 500,
+      "message": "int() argument must be a string, a bytes-like object or a real number, not 'dict'"
+    },
+    {
+      "input": {
+        "priority": {
+          "a": 1
+        },
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": [
+          true,
+          {
+            "b": false,
+            "a": 1
+          }
+        ]
+      },
+      "name": "retained-metadata-043",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "error",
+      "errorKind": "TypeError",
+      "httpStatus": 500,
+      "message": "int() argument must be a string, a bytes-like object or a real number, not 'dict'"
+    },
+    {
+      "input": {
+        "priority": {
+          "a": 1
+        },
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": 1.0,
+        "createdAt": false
+      },
+      "name": "retained-metadata-044",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "error",
+      "errorKind": "TypeError",
+      "httpStatus": 500,
+      "message": "int() argument must be a string, a bytes-like object or a real number, not 'dict'"
+    },
+    {
+      "input": {
+        "region": {
+          "b": false,
+          "a": 2
+        },
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": "original",
+        "createdAt": "2000-01-01T00:00:00Z"
+      },
+      "name": "retained-metadata-045",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "ok",
+      "document": {
+        "schemaVersion": 3,
+        "targetId": "target_oracle",
+        "kind": "filesystem",
+        "path": "/retained/target",
+        "targetNonce": "original",
+        "label": "",
+        "region": "{'b': False, 'a': 2}",
+        "failureDomain": "local",
+        "provider": "operator-filesystem",
+        "jurisdiction": "local",
+        "priority": 0,
+        "costClass": "standard",
+        "storageCostPerGiBMonth": null,
+        "egressCostPerGiB": null,
+        "maxReadBytesPerSecond": 104857600,
+        "maxWriteBytesPerSecond": 104857600,
+        "maxConcurrentTransfers": 4,
+        "storageTier": "hot",
+        "restoreLatencyClass": "seconds",
+        "minResidenceSeconds": 0,
+        "retrievalCostPerGiB": null,
+        "drainState": "active",
+        "createdAt": "2000-01-01T00:00:00Z",
+        "registeredAt": "2000-01-01T00:00:00Z"
+      }
+    },
+    {
+      "input": {
+        "region": {
+          "b": false,
+          "a": 2
+        },
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": [
+          true,
+          {
+            "b": false,
+            "a": 1
+          }
+        ]
+      },
+      "name": "retained-metadata-046",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "ok",
+      "document": {
+        "schemaVersion": 3,
+        "targetId": "target_oracle",
+        "kind": "filesystem",
+        "path": "/retained/target",
+        "targetNonce": "[True, {'b': False, 'a': 1}]",
+        "label": "",
+        "region": "{'b': False, 'a': 2}",
+        "failureDomain": "local",
+        "provider": "operator-filesystem",
+        "jurisdiction": "local",
+        "priority": 0,
+        "costClass": "standard",
+        "storageCostPerGiBMonth": null,
+        "egressCostPerGiB": null,
+        "maxReadBytesPerSecond": 104857600,
+        "maxWriteBytesPerSecond": 104857600,
+        "maxConcurrentTransfers": 4,
+        "storageTier": "hot",
+        "restoreLatencyClass": "seconds",
+        "minResidenceSeconds": 0,
+        "retrievalCostPerGiB": null,
+        "drainState": "active",
+        "createdAt": "2000-01-01T00:00:00Z",
+        "registeredAt": "2000-01-01T00:00:00Z"
+      }
+    },
+    {
+      "input": {
+        "region": {
+          "b": false,
+          "a": 2
+        },
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": 1.0,
+        "createdAt": false
+      },
+      "name": "retained-metadata-047",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "ok",
+      "document": {
+        "schemaVersion": 3,
+        "targetId": "target_oracle",
+        "kind": "filesystem",
+        "path": "/retained/target",
+        "targetNonce": "1.0",
+        "label": "",
+        "region": "{'b': False, 'a': 2}",
+        "failureDomain": "local",
+        "provider": "operator-filesystem",
+        "jurisdiction": "local",
+        "priority": 0,
+        "costClass": "standard",
+        "storageCostPerGiBMonth": null,
+        "egressCostPerGiB": null,
+        "maxReadBytesPerSecond": 104857600,
+        "maxWriteBytesPerSecond": 104857600,
+        "maxConcurrentTransfers": 4,
+        "storageTier": "hot",
+        "restoreLatencyClass": "seconds",
+        "minResidenceSeconds": 0,
+        "retrievalCostPerGiB": null,
+        "drainState": "active",
+        "createdAt": "2000-01-01T00:00:00Z",
+        "registeredAt": "2000-01-01T00:00:00Z"
+      }
+    },
+    {
+      "input": {
+        "priority": "\u001c1\u001c",
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": "original",
+        "createdAt": "2000-01-01T00:00:00Z"
+      },
+      "name": "retained-metadata-048",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "error",
+      "errorKind": "ValueError",
+      "httpStatus": 500,
+      "message": "invalid literal for int() with base 10: '\\x1c1\\x1c'"
+    },
+    {
+      "input": {
+        "priority": "\u00851\u0085",
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": "original",
+        "createdAt": "2000-01-01T00:00:00Z"
+      },
+      "name": "retained-metadata-049",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "ok",
+      "document": {
+        "schemaVersion": 3,
+        "targetId": "target_oracle",
+        "kind": "filesystem",
+        "path": "/retained/target",
+        "targetNonce": "original",
+        "label": "",
+        "region": "local",
+        "failureDomain": "local",
+        "provider": "operator-filesystem",
+        "jurisdiction": "local",
+        "priority": 1,
+        "costClass": "standard",
+        "storageCostPerGiBMonth": null,
+        "egressCostPerGiB": null,
+        "maxReadBytesPerSecond": 104857600,
+        "maxWriteBytesPerSecond": 104857600,
+        "maxConcurrentTransfers": 4,
+        "storageTier": "hot",
+        "restoreLatencyClass": "seconds",
+        "minResidenceSeconds": 0,
+        "retrievalCostPerGiB": null,
+        "drainState": "active",
+        "createdAt": "2000-01-01T00:00:00Z",
+        "registeredAt": "2000-01-01T00:00:00Z"
+      }
+    },
+    {
+      "input": {
+        "priority": "\u20001\u2000",
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": "original",
+        "createdAt": "2000-01-01T00:00:00Z"
+      },
+      "name": "retained-metadata-050",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "ok",
+      "document": {
+        "schemaVersion": 3,
+        "targetId": "target_oracle",
+        "kind": "filesystem",
+        "path": "/retained/target",
+        "targetNonce": "original",
+        "label": "",
+        "region": "local",
+        "failureDomain": "local",
+        "provider": "operator-filesystem",
+        "jurisdiction": "local",
+        "priority": 1,
+        "costClass": "standard",
+        "storageCostPerGiBMonth": null,
+        "egressCostPerGiB": null,
+        "maxReadBytesPerSecond": 104857600,
+        "maxWriteBytesPerSecond": 104857600,
+        "maxConcurrentTransfers": 4,
+        "storageTier": "hot",
+        "restoreLatencyClass": "seconds",
+        "minResidenceSeconds": 0,
+        "retrievalCostPerGiB": null,
+        "drainState": "active",
+        "createdAt": "2000-01-01T00:00:00Z",
+        "registeredAt": "2000-01-01T00:00:00Z"
+      }
+    },
+    {
+      "input": {
+        "priority": -1.9,
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": "original",
+        "createdAt": "2000-01-01T00:00:00Z"
+      },
+      "name": "retained-metadata-051",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "ok",
+      "document": {
+        "schemaVersion": 3,
+        "targetId": "target_oracle",
+        "kind": "filesystem",
+        "path": "/retained/target",
+        "targetNonce": "original",
+        "label": "",
+        "region": "local",
+        "failureDomain": "local",
+        "provider": "operator-filesystem",
+        "jurisdiction": "local",
+        "priority": -1,
+        "costClass": "standard",
+        "storageCostPerGiBMonth": null,
+        "egressCostPerGiB": null,
+        "maxReadBytesPerSecond": 104857600,
+        "maxWriteBytesPerSecond": 104857600,
+        "maxConcurrentTransfers": 4,
+        "storageTier": "hot",
+        "restoreLatencyClass": "seconds",
+        "minResidenceSeconds": 0,
+        "retrievalCostPerGiB": null,
+        "drainState": "active",
+        "createdAt": "2000-01-01T00:00:00Z",
+        "registeredAt": "2000-01-01T00:00:00Z"
+      }
+    },
+    {
+      "input": {
+        "priority": [],
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": "original",
+        "createdAt": "2000-01-01T00:00:00Z"
+      },
+      "name": "retained-metadata-052",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "ok",
+      "document": {
+        "schemaVersion": 3,
+        "targetId": "target_oracle",
+        "kind": "filesystem",
+        "path": "/retained/target",
+        "targetNonce": "original",
+        "label": "",
+        "region": "local",
+        "failureDomain": "local",
+        "provider": "operator-filesystem",
+        "jurisdiction": "local",
+        "priority": 0,
+        "costClass": "standard",
+        "storageCostPerGiBMonth": null,
+        "egressCostPerGiB": null,
+        "maxReadBytesPerSecond": 104857600,
+        "maxWriteBytesPerSecond": 104857600,
+        "maxConcurrentTransfers": 4,
+        "storageTier": "hot",
+        "restoreLatencyClass": "seconds",
+        "minResidenceSeconds": 0,
+        "retrievalCostPerGiB": null,
+        "drainState": "active",
+        "createdAt": "2000-01-01T00:00:00Z",
+        "registeredAt": "2000-01-01T00:00:00Z"
+      }
+    },
+    {
+      "input": {
+        "priority": [
+          1
+        ],
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": "original",
+        "createdAt": "2000-01-01T00:00:00Z"
+      },
+      "name": "retained-metadata-053",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "error",
+      "errorKind": "TypeError",
+      "httpStatus": 500,
+      "message": "int() argument must be a string, a bytes-like object or a real number, not 'list'"
+    },
+    {
+      "input": {
+        "egressCostPerGiB": "\u001c1\u001c",
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": "original",
+        "createdAt": "2000-01-01T00:00:00Z"
+      },
+      "name": "retained-metadata-054",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "error",
+      "errorKind": "ValueError",
+      "httpStatus": 500,
+      "message": "could not convert string to float: '\\x1c1\\x1c'"
+    },
+    {
+      "input": {
+        "egressCostPerGiB": "0x1p1",
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": "original",
+        "createdAt": "2000-01-01T00:00:00Z"
+      },
+      "name": "retained-metadata-055",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "error",
+      "errorKind": "ValueError",
+      "httpStatus": 500,
+      "message": "could not convert string to float: '0x1p1'"
+    },
+    {
+      "input": {
+        "egressCostPerGiB": "+Infinity",
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": "original",
+        "createdAt": "2000-01-01T00:00:00Z"
+      },
+      "name": "retained-metadata-056",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "error",
+      "errorKind": "AppError",
+      "httpStatus": 400,
+      "message": "Backup target egressCostPerGiB must be a finite non-negative number",
+      "errorCode": "invalid_payload"
+    },
+    {
+      "input": {
+        "egressCostPerGiB": "1e999",
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": "original",
+        "createdAt": "2000-01-01T00:00:00Z"
+      },
+      "name": "retained-metadata-057",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "error",
+      "errorKind": "AppError",
+      "httpStatus": 400,
+      "message": "Backup target egressCostPerGiB must be a finite non-negative number",
+      "errorCode": "invalid_payload"
+    },
+    {
+      "input": {
+        "egressCostPerGiB": "1e-999",
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": "original",
+        "createdAt": "2000-01-01T00:00:00Z"
+      },
+      "name": "retained-metadata-058",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "ok",
+      "document": {
+        "schemaVersion": 3,
+        "targetId": "target_oracle",
+        "kind": "filesystem",
+        "path": "/retained/target",
+        "targetNonce": "original",
+        "label": "",
+        "region": "local",
+        "failureDomain": "local",
+        "provider": "operator-filesystem",
+        "jurisdiction": "local",
+        "priority": 0,
+        "costClass": "standard",
+        "storageCostPerGiBMonth": null,
+        "egressCostPerGiB": 0.0,
+        "maxReadBytesPerSecond": 104857600,
+        "maxWriteBytesPerSecond": 104857600,
+        "maxConcurrentTransfers": 4,
+        "storageTier": "hot",
+        "restoreLatencyClass": "seconds",
+        "minResidenceSeconds": 0,
+        "retrievalCostPerGiB": null,
+        "drainState": "active",
+        "createdAt": "2000-01-01T00:00:00Z",
+        "registeredAt": "2000-01-01T00:00:00Z"
+      }
+    },
+    {
+      "input": {
+        "egressCostPerGiB": "1__2",
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": "original",
+        "createdAt": "2000-01-01T00:00:00Z"
+      },
+      "name": "retained-metadata-059",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "error",
+      "errorKind": "ValueError",
+      "httpStatus": 500,
+      "message": "could not convert string to float: '1__2'"
+    },
+    {
+      "input": {
+        "egressCostPerGiB": [],
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": "original",
+        "createdAt": "2000-01-01T00:00:00Z"
+      },
+      "name": "retained-metadata-060",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "error",
+      "errorKind": "TypeError",
+      "httpStatus": 500,
+      "message": "float() argument must be a string or a real number, not 'list'"
+    },
+    {
+      "input": {
+        "egressCostPerGiB": 10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000,
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": "original",
+        "createdAt": "2000-01-01T00:00:00Z"
+      },
+      "name": "retained-metadata-061",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "error",
+      "errorKind": "OverflowError",
+      "httpStatus": 500,
+      "message": "int too large to convert to float"
+    },
+    {
+      "input": {
+        "maxReadBytesPerSecond": 9007199254740993,
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": "original",
+        "createdAt": "2000-01-01T00:00:00Z"
+      },
+      "name": "retained-metadata-062",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "ok",
+      "document": {
+        "schemaVersion": 3,
+        "targetId": "target_oracle",
+        "kind": "filesystem",
+        "path": "/retained/target",
+        "targetNonce": "original",
+        "label": "",
+        "region": "local",
+        "failureDomain": "local",
+        "provider": "operator-filesystem",
+        "jurisdiction": "local",
+        "priority": 0,
+        "costClass": "standard",
+        "storageCostPerGiBMonth": null,
+        "egressCostPerGiB": null,
+        "maxReadBytesPerSecond": 9007199254740993,
+        "maxWriteBytesPerSecond": 104857600,
+        "maxConcurrentTransfers": 4,
+        "storageTier": "hot",
+        "restoreLatencyClass": "seconds",
+        "minResidenceSeconds": 0,
+        "retrievalCostPerGiB": null,
+        "drainState": "active",
+        "createdAt": "2000-01-01T00:00:00Z",
+        "registeredAt": "2000-01-01T00:00:00Z"
+      }
+    },
+    {
+      "input": {
+        "maxWriteBytesPerSecond": "10",
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": "original",
+        "createdAt": "2000-01-01T00:00:00Z"
+      },
+      "name": "retained-metadata-063",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "error",
+      "errorKind": "AppError",
+      "httpStatus": 400,
+      "message": "Backup target maxWriteBytesPerSecond must be a positive integer",
+      "errorCode": "invalid_payload"
+    },
+    {
+      "input": {
+        "maxConcurrentTransfers": 0,
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": "original",
+        "createdAt": "2000-01-01T00:00:00Z"
+      },
+      "name": "retained-metadata-064",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "error",
+      "errorKind": "AppError",
+      "httpStatus": 400,
+      "message": "Backup target maxConcurrentTransfers must be a positive integer",
+      "errorCode": "invalid_payload"
+    },
+    {
+      "input": {
+        "maxConcurrentTransfers": -1,
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": "original",
+        "createdAt": "2000-01-01T00:00:00Z"
+      },
+      "name": "retained-metadata-065",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "error",
+      "errorKind": "AppError",
+      "httpStatus": 400,
+      "message": "Backup target maxConcurrentTransfers must be a positive integer",
+      "errorCode": "invalid_payload"
+    },
+    {
+      "input": {
+        "label": [
+          "a'b",
+          "a\"b",
+          "both'\"",
+          "\u00a0",
+          "\u0378",
+          "\ud839\udcd0"
+        ],
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": "original",
+        "createdAt": "2000-01-01T00:00:00Z"
+      },
+      "name": "retained-metadata-066",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "ok",
+      "document": {
+        "schemaVersion": 3,
+        "targetId": "target_oracle",
+        "kind": "filesystem",
+        "path": "/retained/target",
+        "targetNonce": "original",
+        "label": "[\"a'b\", 'a\"b', 'both\\'\"', '\\xa0', '\\u0378', '\ud839\udcd0']",
+        "region": "local",
+        "failureDomain": "local",
+        "provider": "operator-filesystem",
+        "jurisdiction": "local",
+        "priority": 0,
+        "costClass": "standard",
+        "storageCostPerGiBMonth": null,
+        "egressCostPerGiB": null,
+        "maxReadBytesPerSecond": 104857600,
+        "maxWriteBytesPerSecond": 104857600,
+        "maxConcurrentTransfers": 4,
+        "storageTier": "hot",
+        "restoreLatencyClass": "seconds",
+        "minResidenceSeconds": 0,
+        "retrievalCostPerGiB": null,
+        "drainState": "active",
+        "createdAt": "2000-01-01T00:00:00Z",
+        "registeredAt": "2000-01-01T00:00:00Z"
+      }
+    },
+    {
+      "input": {
+        "priority": "\ud835\udfd9\ud835\udfda",
+        "storageCostPerGiBMonth": ".5_0e+2",
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": "original",
+        "createdAt": "2000-01-01T00:00:00Z"
+      },
+      "name": "retained-metadata-067",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "ok",
+      "document": {
+        "schemaVersion": 3,
+        "targetId": "target_oracle",
+        "kind": "filesystem",
+        "path": "/retained/target",
+        "targetNonce": "original",
+        "label": "",
+        "region": "local",
+        "failureDomain": "local",
+        "provider": "operator-filesystem",
+        "jurisdiction": "local",
+        "priority": 12,
+        "costClass": "standard",
+        "storageCostPerGiBMonth": 50.0,
+        "egressCostPerGiB": null,
+        "maxReadBytesPerSecond": 104857600,
+        "maxWriteBytesPerSecond": 104857600,
+        "maxConcurrentTransfers": 4,
+        "storageTier": "hot",
+        "restoreLatencyClass": "seconds",
+        "minResidenceSeconds": 0,
+        "retrievalCostPerGiB": null,
+        "drainState": "active",
+        "createdAt": "2000-01-01T00:00:00Z",
+        "registeredAt": "2000-01-01T00:00:00Z"
+      }
+    },
+    {
+      "input": {
+        "provider": [
+          false,
+          null
+        ],
+        "jurisdiction": {},
+        "costClass": 0,
+        "path": "/retained/target"
+      },
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": "original",
+        "createdAt": "2000-01-01T00:00:00Z"
+      },
+      "name": "retained-metadata-068",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "ok",
+      "document": {
+        "schemaVersion": 3,
+        "targetId": "target_oracle",
+        "kind": "filesystem",
+        "path": "/retained/target",
+        "targetNonce": "original",
+        "label": "",
+        "region": "local",
+        "failureDomain": "local",
+        "provider": "[False, None]",
+        "jurisdiction": "local",
+        "priority": 0,
+        "costClass": "standard",
+        "storageCostPerGiBMonth": null,
+        "egressCostPerGiB": null,
+        "maxReadBytesPerSecond": 104857600,
+        "maxWriteBytesPerSecond": 104857600,
+        "maxConcurrentTransfers": 4,
+        "storageTier": "hot",
+        "restoreLatencyClass": "seconds",
+        "minResidenceSeconds": 0,
+        "retrievalCostPerGiB": null,
+        "drainState": "active",
+        "createdAt": "2000-01-01T00:00:00Z",
+        "registeredAt": "2000-01-01T00:00:00Z"
+      }
+    },
+    {
+      "inputRaw": "{\"label\":{\"b\":1,\"a\":2,\"b\":3},\"priority\":9007199254740993,\"path\":\"/retained/target\"}",
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": "original",
+        "createdAt": "2000-01-01T00:00:00Z"
+      },
+      "name": "retained-metadata-069",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "ok",
+      "document": {
+        "schemaVersion": 3,
+        "targetId": "target_oracle",
+        "kind": "filesystem",
+        "path": "/retained/target",
+        "targetNonce": "original",
+        "label": "{'b': 3, 'a': 2}",
+        "region": "local",
+        "failureDomain": "local",
+        "provider": "operator-filesystem",
+        "jurisdiction": "local",
+        "priority": 9007199254740993,
+        "costClass": "standard",
+        "storageCostPerGiBMonth": null,
+        "egressCostPerGiB": null,
+        "maxReadBytesPerSecond": 104857600,
+        "maxWriteBytesPerSecond": 104857600,
+        "maxConcurrentTransfers": 4,
+        "storageTier": "hot",
+        "restoreLatencyClass": "seconds",
+        "minResidenceSeconds": 0,
+        "retrievalCostPerGiB": null,
+        "drainState": "active",
+        "createdAt": "2000-01-01T00:00:00Z",
+        "registeredAt": "2000-01-01T00:00:00Z"
+      }
+    },
+    {
+      "inputRaw": "{\"priority\":1e999,\"path\":\"/retained/target\"}",
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": "original",
+        "createdAt": "2000-01-01T00:00:00Z"
+      },
+      "name": "retained-metadata-070",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "error",
+      "errorKind": "OverflowError",
+      "httpStatus": 500,
+      "message": "cannot convert float infinity to integer"
+    },
+    {
+      "inputRaw": "{\"label\":[-0,1e999,-1e999],\"path\":\"/retained/target\"}",
+      "marker": {
+        "targetId": "target_oracle",
+        "targetNonce": "original",
+        "createdAt": "2000-01-01T00:00:00Z"
+      },
+      "name": "retained-metadata-071",
+      "path": "/retained/target",
+      "now": 946684800,
+      "status": "ok",
+      "document": {
+        "schemaVersion": 3,
+        "targetId": "target_oracle",
+        "kind": "filesystem",
+        "path": "/retained/target",
+        "targetNonce": "original",
+        "label": "[0, inf, -inf]",
+        "region": "local",
+        "failureDomain": "local",
+        "provider": "operator-filesystem",
+        "jurisdiction": "local",
+        "priority": 0,
+        "costClass": "standard",
+        "storageCostPerGiBMonth": null,
+        "egressCostPerGiB": null,
+        "maxReadBytesPerSecond": 104857600,
+        "maxWriteBytesPerSecond": 104857600,
+        "maxConcurrentTransfers": 4,
+        "storageTier": "hot",
+        "restoreLatencyClass": "seconds",
+        "minResidenceSeconds": 0,
+        "retrievalCostPerGiB": null,
+        "drainState": "active",
+        "createdAt": "2000-01-01T00:00:00Z",
+        "registeredAt": "2000-01-01T00:00:00Z"
+      }
+    }
+  ]
+}

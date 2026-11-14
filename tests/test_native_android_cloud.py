@@ -254,7 +254,25 @@ def test_ignored_status_or_runner_crash_never_counts_as_pass() -> None:
 def test_inventory_includes_every_existing_instrumentation_method() -> None:
     root = Path(__file__).resolve().parents[1]
     cases = instrumentation_cases(root)
-    assert len(cases) == 14
+    original = {
+        "com.deepseek.mobile.NativeControlLockIntegrationTest#packagedControlExcludesLegacyLockFamiliesAndReleasesOnlyAfterShutdown",
+        "com.deepseek.mobile.NativeControlLockIntegrationTest#storeLeaseExcludesDuplicateJvmChannelsUntilActualChildExit",
+        "com.deepseek.mobile.NativeFileOcrIntegrationTest#actualImageAndRasterPdfUploadReadRenderAndPersist",
+        "com.deepseek.mobile.NativeFileOcrIntegrationTest#disabledAndBlankOcrRetainPublicDenials",
+        "com.deepseek.mobile.NativeMcpCustodyIntegrationTest#actualCancellationReapsDetachedAppUidDescendant",
+        "com.deepseek.mobile.NativeMcpCustodyIntegrationTest#actualDriverDeathClosesCustodyLifetime",
+        "com.deepseek.mobile.NativeMcpCustodyIntegrationTest#detachedTimeoutReapsAllAppUidChildren",
+        "com.deepseek.mobile.NativeMcpCustodyIntegrationTest#normalRootExitReapsDetachedAppUidDescendant",
+        "com.deepseek.mobile.NativeMcpCustodyIntegrationTest#ordinaryTimeoutReapsAllAppUidChildren",
+        "com.deepseek.mobile.NativeRuntimeIntegrationTest#cancelledStartupClosesChildrenAndSameInstanceCanRestart",
+        "com.deepseek.mobile.NativeRuntimeIntegrationTest#packagedRuntimeCreatesRunsDownloadsAndRecoversPersistedState",
+        "com.deepseek.mobile.NativeRuntimeIntegrationTest#retainedPlatformOcrReadsActualImageAndPdfWithoutPython",
+        "com.deepseek.mobile.PlatformOcrProtocolIntegrationTest#cancelledUploadAndRestartCleanOwnedTemporaryFilesAndRotateCredential",
+        "com.deepseek.mobile.PlatformOcrProtocolIntegrationTest#privateCredentialLengthAndDigestAreRequiredBeforeDecoding",
+    }
+    added = {"com.deepseek.mobile.PlatformOcrProtocolIntegrationTest#acceptedPlatformStreamsSurviveConcurrentTransportShutdown"}
+    assert len(original) == 14 and not original & added
+    assert cases == original | added
     custody = {"ordinaryTimeoutReapsAllAppUidChildren", "detachedTimeoutReapsAllAppUidChildren",
                "normalRootExitReapsDetachedAppUidDescendant", "actualDriverDeathClosesCustodyLifetime",
                "actualCancellationReapsDetachedAppUidDescendant"}

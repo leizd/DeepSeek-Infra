@@ -161,6 +161,7 @@ mod tests {
             marker_present: true,
             marker_sha256: Sha256::digest(&bytes).to_vec(),
             marker_json: bytes,
+            full_containment_checked: false,
             observed_at_unix: 1794445200,
             fleet_id: "fleet-a".into(),
             environment: "test".into(),

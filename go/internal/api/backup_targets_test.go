@@ -18,9 +18,14 @@ func targetHealthPublicStore(t *testing.T, empty bool, now int64) *store.Control
 }
 
 func targetPublicFixtureStore(t *testing.T, empty, withHealth bool, now int64) *store.Control {
+	return targetPublicFixtureStoreClock(t, empty, withHealth, func() int64 { return now })
+}
+
+func targetPublicFixtureStoreClock(t *testing.T, empty, withHealth bool, clock func() int64) *store.Control {
 	t.Helper()
+	now := clock()
 	control, err := store.OpenControl(store.OpenOptions{Path: t.TempDir(), Owner: "target-health-api",
-		Now: func() int64 { return now }, AuthorizeCutover: true, PromotionSignerPublicKey: promotionRoutePublic,
+		Now: clock, AuthorizeCutover: true, PromotionSignerPublicKey: promotionRoutePublic,
 		FleetID: mutationFleetID, Environment: mutationEnvironment})
 	if err != nil {
 		t.Fatal(err)

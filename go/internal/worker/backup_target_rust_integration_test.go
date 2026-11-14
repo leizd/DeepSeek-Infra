@@ -213,6 +213,13 @@ func TestRustTargetObservationGoClientAgainstRealCustodyAndFilesystem(t *testing
 	if err != nil || inspection == nil || !inspection.Observation.MarkerPresent || !bytes.Equal(inspection.Observation.MarkerJson, marker) || inspection.Observation.CanonicalPath != directory {
 		t.Fatal("real Go-to-Rust marker inspection failed", err)
 	}
+	completeRequest := proto.Clone(request).(*actionv1.InspectFilesystemBackupTargetRequest)
+	completeRequest.RequireFullContainment = true
+	complete, err := client.InspectFilesystemBackupTarget(ctx, completeRequest, binding)
+	if err != nil || complete == nil || !complete.Observation.FullContainmentChecked || !bytes.Equal(complete.Observation.MarkerJson, marker) {
+		t.Fatal("real Rust did not sign complete containment with original marker bytes", err)
+	}
+	t.Log("actual Rust full-containment request and signed receipt verified without marker mutation")
 	absentRequest := proto.Clone(request).(*actionv1.InspectFilesystemBackupTargetRequest)
 	absentRequest.Path = empty
 	absent, err := client.InspectFilesystemBackupTarget(ctx, absentRequest, binding)

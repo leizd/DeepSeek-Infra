@@ -34,6 +34,7 @@ type observationPeer struct {
 	binding         ControlSignerBinding
 	absent          bool
 	wait            bool
+	fullContainment bool
 	state           actionv1.BackupTargetLocationState
 	alterInspection func(*actionv1.FilesystemBackupTargetInspectionReceipt)
 	alterLocation   func(*actionv1.FilesystemBackupTargetLocationReceipt)
@@ -61,7 +62,7 @@ func (peer *observationPeer) Inspect(ctx context.Context, request *actionv1.Insp
 	observation := &actionv1.FilesystemBackupTargetObservation{SchemaVersion: 1, Fence: request.Fence, OperationId: request.OperationId,
 		WriterFencingToken: request.WriterFencingToken, RequestedPath: request.Path, CanonicalPath: filepath.Clean(request.Path),
 		MarkerPresent: true, MarkerJson: marker, MarkerSha256: markerDigest[:], ObservedAtUnix: time.Now().Unix(),
-		FleetId: peer.binding.FleetID, Environment: peer.binding.Environment}
+		FleetId: peer.binding.FleetID, Environment: peer.binding.Environment, FullContainmentChecked: request.RequireFullContainment && peer.fullContainment}
 	if peer.absent {
 		observation.MarkerPresent = false
 		observation.MarkerJson = nil
@@ -289,5 +290,24 @@ func TestTargetInspectionClientBoundsUntrustedResponseSizes(t *testing.T) {
 	}
 	if _, err := client.ProbeFilesystemBackupTargetLocation(context.Background(), targetLocationRequest(request), peer.binding); status.Code(err) != codes.ResourceExhausted {
 		t.Fatal("oversized location response was not bounded", err)
+	}
+}
+
+func TestTargetInspectionClientBindsFullContainmentAndRejectsDowngrade(t *testing.T) {
+	peer := newObservationPeer(t)
+	client := targetObservationTLSClient(t, peer)
+	request := targetObservationRequest(t)
+	request.RequireFullContainment = true
+	if _, err := client.InspectFilesystemBackupTarget(context.Background(), request, peer.binding); !errors.Is(err, ErrTargetInspectionResponse) {
+		t.Fatal("old worker silently omitted contributor checks", err)
+	}
+	peer.fullContainment = true
+	observed, err := client.InspectFilesystemBackupTarget(context.Background(), request, peer.binding)
+	if err != nil || !observed.Observation.FullContainmentChecked {
+		t.Fatal("signed complete containment refused", err)
+	}
+	observed.Observation.FullContainmentChecked = false
+	if err := store.VerifyBackupTargetInspectionReceipt(request, observed, observationContext(peer.binding)); err == nil {
+		t.Fatal("unsigned downgrade retained a valid signature")
 	}
 }

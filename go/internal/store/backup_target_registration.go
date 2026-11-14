@@ -16,6 +16,7 @@ import (
 
 	actionv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/actionv1"
 	commonv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/commonv1"
+	targetmodel "github.com/leizd/DeepSeek-Infra/go/internal/targets"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -37,7 +38,8 @@ type BackupTargetRegistrationScope struct {
 func (scope BackupTargetRegistrationScope) InspectionRequest() *actionv1.InspectFilesystemBackupTargetRequest {
 	return &actionv1.InspectFilesystemBackupTargetRequest{SchemaVersion: 1,
 		OperationId: scope.operationID, Fence: &commonv1.ActionFence{ActionId: scope.actionID, ExecutionEpoch: scope.epoch},
-		Path: scope.requestedPath, WriterFencingToken: uint64(scope.writerFence)}
+		Path: scope.requestedPath, WriterFencingToken: uint64(scope.writerFence),
+		RequireFullContainment: strings.HasPrefix(scope.operationID, PublicTargetOperationPrefix)}
 }
 
 func (store *Control) PrepareBackupTargetRegistration(operationID, actionID, actor, path string) (BackupTargetRegistrationScope, error) {
@@ -169,16 +171,12 @@ func targetPublicGeneration(record Record) (int64, error) {
 }
 
 func targetRegistrationDocument(o *actionv1.FilesystemBackupTargetObservation, document json.RawMessage) (map[string]any, string, error) {
-	var body, marker map[string]any
-	if decodeSingleJSON(document, &body) != nil || body == nil || decodeSingleJSON(o.MarkerJson, &marker) != nil || marker == nil {
+	var body map[string]any
+	if decodeSingleJSON(document, &body) != nil || body == nil {
 		return nil, "", ErrTargetRegistrationInvalid
 	}
-	id, validID := marker["targetId"].(string)
-	nonce, validNonce := marker["targetNonce"].(string)
-	if marker["targetNonce"] == nil {
-		nonce, validNonce = "", true
-	}
-	if !validID || !validNonce || !targetRegistrationID.MatchString(id) || body["targetId"] != id || body["targetNonce"] != nonce || body["kind"] != "filesystem" || body["path"] != o.CanonicalPath || body["drainState"] != "active" {
+	id, nonce, _, identityErr := targetmodel.MarkerIdentity(o.MarkerJson)
+	if identityErr != nil || !targetRegistrationID.MatchString(id) || body["targetId"] != id || body["targetNonce"] != nonce || body["kind"] != "filesystem" || body["path"] != o.CanonicalPath || body["drainState"] != "active" {
 		return nil, "", ErrTargetRegistrationInvalid
 	}
 	return body, id, nil
@@ -188,16 +186,16 @@ func targetRegistrationDocument(o *actionv1.FilesystemBackupTargetObservation, d
 // still supply the public route's complete containment/clone/contributor checks;
 // this method never initializes a marker or treats absence as a failed effect.
 func (store *Control) RegisterInspectedBackupTarget(scope BackupTargetRegistrationScope, receipt *actionv1.FilesystemBackupTargetInspectionReceipt, document json.RawMessage) (Record, OperatorMutationResult, error) {
-	return store.registerInspectedBackupTarget(scope, receipt, nil, document)
+	return store.registerInspectedBackupTarget(scope, receipt, nil, document, nil)
 }
 
 // The second receipt is a separate Rust read of the previously registered path.
 // It cannot authorize initialization, a provider retry, or an effect epoch.
 func (store *Control) RegisterInspectedBackupTargetWithLocation(scope BackupTargetRegistrationScope, receipt *actionv1.FilesystemBackupTargetInspectionReceipt, location *actionv1.FilesystemBackupTargetLocationReceipt, document json.RawMessage) (Record, OperatorMutationResult, error) {
-	return store.registerInspectedBackupTarget(scope, receipt, location, document)
+	return store.registerInspectedBackupTarget(scope, receipt, location, document, nil)
 }
 
-func (store *Control) registerInspectedBackupTarget(scope BackupTargetRegistrationScope, receipt *actionv1.FilesystemBackupTargetInspectionReceipt, location *actionv1.FilesystemBackupTargetLocationReceipt, document json.RawMessage) (Record, OperatorMutationResult, error) {
+func (store *Control) registerInspectedBackupTarget(scope BackupTargetRegistrationScope, receipt *actionv1.FilesystemBackupTargetInspectionReceipt, location *actionv1.FilesystemBackupTargetLocationReceipt, document json.RawMessage, publicContext []byte) (Record, OperatorMutationResult, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if err := verifyTargetObservation(receipt, store.promotionSignerKey, store.fleetID, store.environment); err != nil {
@@ -210,6 +208,9 @@ func (store *Control) registerInspectedBackupTarget(scope BackupTargetRegistrati
 	body, id, err := targetRegistrationDocument(observation, document)
 	if err != nil {
 		return Record{}, OperatorMutationResult{}, err
+	}
+	if _, reserved := body[publicTargetContextField]; reserved {
+		return Record{}, OperatorMutationResult{}, ErrTargetRegistrationInvalid
 	}
 	witness, err := proto.MarshalOptions{Deterministic: true}.Marshal(receipt)
 	if err != nil {
@@ -228,6 +229,10 @@ func (store *Control) registerInspectedBackupTarget(scope BackupTargetRegistrati
 			return Record{}, OperatorMutationResult{}, err
 		}
 		requestMaterial["locationObservation"] = hex.EncodeToString(locationWitness)
+	}
+	if len(publicContext) != 0 {
+		sum := sha256.Sum256(publicContext)
+		requestMaterial["publicRegistrationContextSHA256"] = hex.EncodeToString(sum[:])
 	}
 	material, err := canonicalAuthorityJSON(requestMaterial)
 	if err != nil {
@@ -261,6 +266,28 @@ func (store *Control) registerInspectedBackupTarget(scope BackupTargetRegistrati
 	}
 	if snapshot != scope.snapshot {
 		return Record{}, OperatorMutationResult{}, ErrRevisionConflict
+	}
+	if strings.HasPrefix(scope.operationID, PublicTargetOperationPrefix) != (len(publicContext) != 0) {
+		return Record{}, OperatorMutationResult{}, ErrTargetRegistrationInvalid
+	}
+	if len(publicContext) != 0 {
+		wrapped, _ := json.Marshal(map[string]json.RawMessage{publicTargetContextField: publicContext})
+		frame, err := decodePublicTargetContext(wrapped)
+		if err != nil || frame == nil || frame.Scope != scope.publicScope() || !bytes.Equal(frame.Document, document) {
+			return Record{}, OperatorMutationResult{}, ErrTargetRegistrationInvalid
+		}
+		records, err := targetRecordsAtEvent(tx, math.MaxInt64)
+		if err != nil {
+			return Record{}, OperatorMutationResult{}, err
+		}
+		paths, err := targetPaths(records, id)
+		if err != nil {
+			return Record{}, OperatorMutationResult{}, err
+		}
+		if err := verifyPublicTargetPaths(scope, receipt, paths, frame.Paths, context.now); err != nil {
+			return Record{}, OperatorMutationResult{}, err
+		}
+		body[publicTargetContextField] = json.RawMessage(publicContext)
 	}
 	existing, exists, err := readTargetMetadataTx(tx, id)
 	if err != nil {
