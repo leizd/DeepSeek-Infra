@@ -185,6 +185,15 @@ def test_the_fuzz_gate_is_a_real_target_not_an_assertion() -> None:
     uses = " ".join(str(step.get("uses", "")) for step in job["steps"])
     assert "rust-toolchain@nightly" in uses, "cargo-fuzz requires nightly"
 
+    # cargo-fuzz resolves <cwd>/fuzz/Cargo.toml on its own, so a run step with
+    # `working-directory: fuzz` asks for fuzz/fuzz/Cargo.toml and fails before any
+    # target starts. That reads as a fuzz finding in the job summary but is not one.
+    for step in job["steps"]:
+        if "fuzz run" in str(step.get("run", "")):
+            assert step.get("working-directory") in (None, "."), (
+                f"a fuzz run step must not set working-directory: {step.get('working-directory')}"
+            )
+
     commands = [str(step.get("run", "")) for step in job["steps"]]
     joined = "\n".join(commands)
     for name in ("transport_frozen_documents", "restore_relative_path", "evidence_proof_envelope"):
