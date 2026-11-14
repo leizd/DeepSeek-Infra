@@ -5,6 +5,8 @@ package worker
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"net"
@@ -12,13 +14,17 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	internalprotocol "github.com/leizd/DeepSeek-Infra/go/internal/protocol"
 	actionv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/actionv1"
 	commonv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/commonv1"
+	controlv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/controlv1"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
@@ -83,6 +89,44 @@ func TestRustTargetObservationGoClientAgainstRealCustodyAndFilesystem(t *testing
 	if !validObservationBinding(binding) || binding.FleetID != "native-"+profile || binding.Environment != "local" {
 		t.Fatal("Rust public deployment metadata missing")
 	}
+	// The normal python_disabled startup requires its private control transport
+	// before opening the media journal. Configure an actual mTLS gRPC peer which
+	// rejects every command; read observations must never call it. Only public
+	// Rust CA material is read by Go. Rust reads its own client key file itself.
+	controlMaterial := generateTLSMaterial(t, t.TempDir(), "deepseek-control.test")
+	controlCertificate, err := tls.LoadX509KeyPair(controlMaterial.certFile, controlMaterial.keyFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rustCA, err := os.ReadFile(filepath.Join(managed, "custody", "transport-ca.pem"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientRoots := x509.NewCertPool()
+	if !clientRoots.AppendCertsFromPEM(rustCA) {
+		t.Fatal("Rust public transport CA invalid")
+	}
+	controlListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var controlCalls atomic.Int64
+	controlServer := grpc.NewServer(grpc.Creds(credentials.NewTLS(&tls.Config{
+		Certificates: []tls.Certificate{controlCertificate}, ClientAuth: tls.RequireAndVerifyClientCert,
+		ClientCAs: clientRoots, MinVersion: tls.VersionTLS12,
+	})), grpc.UnaryInterceptor(func(ctx context.Context, request any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		controlCalls.Add(1)
+		return nil, status.Error(codes.PermissionDenied, "read-only fixture never grants control commands")
+	}))
+	controlv1.RegisterControlPlaneServer(controlServer, &controlv1.UnimplementedControlPlaneServer{})
+	go func() { _ = controlServer.Serve(controlListener) }()
+	t.Cleanup(controlServer.Stop)
+	env = append(env,
+		"DEEPSEEK_GO_CONTROL_RPC_URL=https://"+controlListener.Addr().String(),
+		"DEEPSEEK_GO_CONTROL_RPC_TLS_CA_FILE="+controlMaterial.caFile,
+		"DEEPSEEK_GO_CONTROL_RPC_TLS_CERT_FILE="+filepath.Join(managed, "custody", "control-client.pem"),
+		"DEEPSEEK_GO_CONTROL_RPC_TLS_KEY_FILE="+filepath.Join(managed, "custody", "control-client-key.pem"),
+		"DEEPSEEK_GO_CONTROL_RPC_TLS_SERVER_NAME=deepseek-control.test", "DEEPSEEK_INTERNAL_BEARER="+tlsTestSecret)
 	reservation, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -271,6 +315,9 @@ print(json.dumps({'pythonVersion':sys.version.split()[0],'cases':out}))`
 	}
 	if err := client.Admit(ctx, actionv1.CommandKind_COMMAND_KIND_EXECUTE_BACKUP, request.Fence); !errors.Is(err, internalprotocol.ErrFenceMismatch) {
 		t.Fatal("read installed an effect epoch", err)
+	}
+	if controlCalls.Load() != 0 {
+		t.Fatal("read observations attempted a control command", controlCalls.Load())
 	}
 	t.Log("actual Rust custody and TLS observation verified; original bytes retained; no marker initialization or effect epoch admission")
 }

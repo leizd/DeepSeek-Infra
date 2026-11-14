@@ -15213,3 +15213,19 @@ initialization and unknown-effect recovery remain incomplete. This is a
 production read-path and platform repair, not completion of the target lifecycle
 or whole-product server/desktop/Android/background/MCP migration. Keep NOT_READY;
 retain the original workspace and cloud-only native compilation boundary.
+
+### 2026-11-14 filesystem-probe control-transport configuration repair
+
+The exact d5751c6 development job43535553782 retained the actual subprocess
+failure: MEDIA_MUTATION_INVALID before readiness. Production with_media_journal
+requires both the custody signer and a configured Go execution-control channel;
+the earlier standalone test supplied only the signer. Preserve that production
+guard. Configure a real loopback mTLS gRPC ControlPlane test peer which rejects
+every command, with Rust reading its own client certificate/private key and Go
+reading only the public Rust CA. Assert that all signed read observations and
+retained Python path comparisons issue zero control commands and still cannot
+install an effect epoch. No HTTP/JSON bridge, production source change, private
+signing-key inspection, store seeding, relaxed assertion or success is implied.
+This is an integration-fixture correction; public registration, canonical proof
+persistence, initialization/recovery and every whole-product requirement remain
+open until independently qualified. Retain NOT_READY and exact-source gates.
