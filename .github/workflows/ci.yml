@@ -1716,9 +1716,12 @@ jobs:
           version="$(cat fuzz/cargo-fuzz-version.txt)"
           cargo install cargo-fuzz --version "$version" --locked
           cargo fuzz --version
-      # cargo-fuzz resolves <cwd>/fuzz/Cargo.toml itself, so these run from the
-      # repository root. Running them with `working-directory: fuzz` makes it look for
-      # fuzz/fuzz/Cargo.toml, which is the mistake this comment exists to prevent.
+      # Run from the repository root: cargo-fuzz walks up from the working directory
+      # looking for a Cargo.toml that is *not* marked metadata.cargo-fuzz, then looks
+      # for fuzz/Cargo.toml beneath it. Running from inside fuzz/ instead makes it
+      # search for fuzz/fuzz/Cargo.toml, and a corpus path with the fuzz/ prefix
+      # doubles the same way. Both mistakes read as fuzz findings while being
+      # configuration errors, so this comment is load-bearing.
       - name: Fuzz the frozen transport validators
         run: cargo +nightly fuzz run transport_frozen_documents fuzz/corpus/transport_frozen_documents -- -max_total_time=180
       - name: Fuzz the restore path sanitiser

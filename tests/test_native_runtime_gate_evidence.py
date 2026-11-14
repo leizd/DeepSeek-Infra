@@ -185,14 +185,24 @@ def test_the_fuzz_gate_is_a_real_target_not_an_assertion() -> None:
     uses = " ".join(str(step.get("uses", "")) for step in job["steps"])
     assert "rust-toolchain@nightly" in uses, "cargo-fuzz requires nightly"
 
-    # cargo-fuzz resolves <cwd>/fuzz/Cargo.toml on its own, so a run step with
-    # `working-directory: fuzz` asks for fuzz/fuzz/Cargo.toml and fails before any
-    # target starts. That reads as a fuzz finding in the job summary but is not one.
-    for step in job["steps"]:
-        if "fuzz run" in str(step.get("run", "")):
-            assert step.get("working-directory") in (None, "."), (
-                f"a fuzz run step must not set working-directory: {step.get('working-directory')}"
-            )
+    # The fuzz steps must run inside the fuzz crate and address corpora relative to
+    # it. Both halves have been wrong in different ways: running from the repository
+    # root fails with "could not find a cargo project" (there is no Cargo.toml there),
+    # and running from fuzz/ with a `fuzz/` prefix in the corpus path looks for
+    # fuzz/fuzz/corpus. Each mistake reads as a fuzz finding while being nothing of
+    # the kind, so the pair is asserted together.
+    run_steps = [step for step in job["steps"] if "fuzz run" in str(step.get("run", ""))]
+    assert len(run_steps) == 3, run_steps
+    for step in run_steps:
+        # From the repository root, with the fuzz/ prefix on the corpus path; the
+        # crate is discovered through its metadata.cargo-fuzz marker.
+        assert step.get("working-directory") in (None, "."), step.get("run")
+        assert " fuzz/corpus/" in str(step.get("run", "")), step.get("run")
+    marker = (ROOT / "fuzz" / "Cargo.toml").read_text(encoding="utf-8")
+    assert "metadata.cargo-fuzz = true" in marker, (
+        "cargo-fuzz locates its project by this marker; without it the CLI reports "
+        "'could not find a cargo project'"
+    )
 
     commands = [str(step.get("run", "")) for step in job["steps"]]
     joined = "\n".join(commands)

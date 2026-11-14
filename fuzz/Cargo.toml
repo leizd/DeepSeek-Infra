@@ -3,6 +3,11 @@ name = "deepseek-fuzz"
 version = "0.0.0"
 edition = "2024"
 publish = false
+# cargo-fuzz identifies its own project by this marker: find_package() walks up from
+# the working directory and keeps going only while each Cargo.toml carries it, so
+# without it the CLI reports "could not find a cargo project". `cargo fuzz init`
+# writes this field, which is why hand-written manifests miss it.
+metadata.cargo-fuzz = true
 
 # This crate is deliberately *not* a member of the rust/ workspace. cargo-fuzz needs
 # a nightly toolchain and a separate target directory, and pulling it into the
