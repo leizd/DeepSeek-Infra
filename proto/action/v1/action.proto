@@ -254,6 +254,9 @@ message InspectFilesystemBackupTargetRequest {
   string operation_id = 3;
   string path = 4;
   uint64 writer_fencing_token = 5;
+  // Public registration must fail closed with an older worker which does not
+  // attest the complete built-in contributor/root containment check.
+  bool require_full_containment = 6;
 }
 
 message FilesystemBackupTargetObservation {
@@ -269,6 +272,7 @@ message FilesystemBackupTargetObservation {
   int64 observed_at_unix = 10;
   string fleet_id = 11;
   string environment = 12;
+  bool full_containment_checked = 13;
 }
 
 message FilesystemBackupTargetInspectionReceipt {
