@@ -67,9 +67,15 @@ func VerifyBackupTargetLocationReceipt(request *actionv1.ProbeFilesystemBackupTa
 	o := receipt.Observation
 	if o.SchemaVersion != 1 || o.Fence == nil || !nativeKnown(receipt, o, o.Fence) || !proto.Equal(request.Fence, o.Fence) ||
 		o.OperationId != request.OperationId || o.WriterFencingToken != request.WriterFencingToken || o.RequestedPath != request.Path ||
-		(o.State != actionv1.BackupTargetLocationState_BACKUP_TARGET_LOCATION_STATE_EXISTS && o.State != actionv1.BackupTargetLocationState_BACKUP_TARGET_LOCATION_STATE_MISSING) ||
 		o.FleetId != context.FleetID || o.Environment != context.Environment || o.ObservedAtUnix <= 0 ||
 		o.ObservedAtUnix > context.Now || context.Now-o.ObservedAtUnix > 60 {
+		return ErrTargetRegistrationInvalid
+	}
+	if request.ResolvePath {
+		if o.State != actionv1.BackupTargetLocationState_BACKUP_TARGET_LOCATION_STATE_UNSPECIFIED || !filepath.IsAbs(o.CanonicalPath) || len(o.CanonicalPath) > 32768 || strings.ContainsRune(o.CanonicalPath, 0) {
+			return ErrTargetRegistrationInvalid
+		}
+	} else if o.CanonicalPath != "" || (o.State != actionv1.BackupTargetLocationState_BACKUP_TARGET_LOCATION_STATE_EXISTS && o.State != actionv1.BackupTargetLocationState_BACKUP_TARGET_LOCATION_STATE_MISSING) {
 		return ErrTargetRegistrationInvalid
 	}
 	key, err := decodeFixedBase64(context.PublicKey, ed25519.PublicKeySize)

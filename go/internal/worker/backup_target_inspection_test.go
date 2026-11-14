@@ -83,6 +83,10 @@ func (peer *observationPeer) ProbeLocation(ctx context.Context, request *actionv
 	observation := &actionv1.FilesystemBackupTargetLocationObservation{SchemaVersion: 1, Fence: request.Fence, OperationId: request.OperationId,
 		WriterFencingToken: request.WriterFencingToken, RequestedPath: request.Path, State: peer.state, ObservedAtUnix: time.Now().Unix(),
 		FleetId: peer.binding.FleetID, Environment: peer.binding.Environment}
+	if request.ResolvePath {
+		observation.CanonicalPath = filepath.Clean(request.Path)
+		observation.State = actionv1.BackupTargetLocationState_BACKUP_TARGET_LOCATION_STATE_UNSPECIFIED
+	}
 	wire, _ := proto.MarshalOptions{Deterministic: true}.Marshal(observation)
 	receipt := &actionv1.FilesystemBackupTargetLocationReceipt{SchemaVersion: 1, Observation: observation, SignerPublicKey: peer.binding.PublicKey,
 		Signature: ed25519.Sign(peer.private, append([]byte("deepseek-infra:backup-target-location-v1\x00"), wire...))}
@@ -134,6 +138,30 @@ func targetObservationRequest(t *testing.T) *actionv1.InspectFilesystemBackupTar
 func targetLocationRequest(request *actionv1.InspectFilesystemBackupTargetRequest) *actionv1.ProbeFilesystemBackupTargetLocationRequest {
 	return &actionv1.ProbeFilesystemBackupTargetLocationRequest{SchemaVersion: request.SchemaVersion, OperationId: request.OperationId,
 		Fence: proto.Clone(request.Fence).(*commonv1.ActionFence), Path: request.Path, WriterFencingToken: request.WriterFencingToken}
+}
+
+func TestTargetInspectionClientBindsCanonicalResolutionAndRejectsDowngrade(t *testing.T) {
+	peer := newObservationPeer(t)
+	client := targetObservationTLSClient(t, peer)
+	request := targetLocationRequest(targetObservationRequest(t))
+	request.ResolvePath = true
+	receipt, err := client.ProbeFilesystemBackupTargetLocation(context.Background(), request, peer.binding)
+	if err != nil || receipt == nil || receipt.Observation.CanonicalPath != filepath.Clean(request.Path) {
+		t.Fatal("pinned canonical resolution failed", err)
+	}
+	downgrade := newObservationPeer(t)
+	downgrade.alterLocation = func(receipt *actionv1.FilesystemBackupTargetLocationReceipt) {
+		receipt.Observation.CanonicalPath = ""
+		wire, marshalErr := proto.MarshalOptions{Deterministic: true}.Marshal(receipt.Observation)
+		if marshalErr != nil {
+			panic(marshalErr)
+		}
+		receipt.Signature = ed25519.Sign(downgrade.private, append([]byte("deepseek-infra:backup-target-location-v1\x00"), wire...))
+	}
+	downgradeClient := targetObservationTLSClient(t, downgrade)
+	if _, err := downgradeClient.ProbeFilesystemBackupTargetLocation(context.Background(), request, downgrade.binding); !errors.Is(err, ErrTargetInspectionResponse) {
+		t.Fatal("signed existence-only downgrade accepted", err)
+	}
 }
 
 func TestTargetInspectionClientReadsBothStatesWithTLSAndPinnedPublicMetadata(t *testing.T) {

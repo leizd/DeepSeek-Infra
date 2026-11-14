@@ -3868,3 +3868,36 @@ This remains an incomplete product migration. Public target registration, comple
 The first v22 cloud suite passed 39 of 41 families. The two historical cases failed at SCHEMA_INACTIVE because current Go correctly refuses to mutate a manually downgraded v21 database. Keep that production guard. Build an offline test producer from the exact uploaded ab09a93 source in GitHub Actions, verify all retained Git blobs, and retain all production Go bytes. That old executable creates the original two-operation v21 registration history through its normal Go test fixtures. The current tests consume isolated copies, upgrade/read/replay the original bytes, or remove only the empty new extension before injecting migration failures. Neither direct SQL target seeding nor weakening CurrentSchema admission substitutes for an old runtime. Fake fixture signatures remain offline evidence only.
 
 The original 41-family inventory and all original coverage floors remain required. Source-bound legacy producer reports may return; compiler binaries, source build caches and database fixtures remain in the cloud. Full public registration, initialization/recovery, complete target semantics and whole-product migration remain ACTIVE / NOT_READY.
+
+### 2026-11-14 target overlap resolution and Android transport recovery (unqualified)
+
+The read-only target-location RPC now has an opt-in signed non-strict path
+resolution mode. Resolution receipts use UNSPECIFIED existence; the original
+EXISTS/MISSING clone probe remains separate and cannot consume a resolution
+receipt. Rust implements component/link resolution and missing suffix handling,
+including the retained platform-specific parent and loop rules. Go pins the
+requested mode, public signer, deployment, fence, operation, path, and freshness.
+No observation admits an effect, initializes a marker, or proves an unknown
+write unapplied. The default protocol bytes and retained v21 producer are kept.
+
+The exact-source development workflow retains all 41 previous Go race families
+and adds two resolution/client families. A separate cloud job runs the real
+Go/TLS/Rust custody probe against retained CPython 3.12 filesystem results and
+returns bounded process-exit diagnostics. Full CI, the original Go95 / Android
+Go95 / Rust80 / Python95 coverage floors, and platform gates remain mandatory.
+
+The preceding 72bb36c full CI failed when its Rust inspection subprocess exited
+before readiness without retained diagnostics; this remains unqualified. Its
+Android API24 run43361530745 crashed in Socket.getInputStream during OCR
+transport shutdown. The Android platform socket factory now acquires accepted
+streams before exposing the socket to asynchronous readers. A new physical
+instrumentation case exercises bidirectional I/O and concurrent close, while
+all original OCR/upload/read/render/persistence and custody cases remain.
+These fixes require actual exact-source cloud verification; no pass is implied.
+
+Public target registration, canonical overlap/contributor evidence committed
+with the registry snapshot, complete marker compatibility, Rust-owned marker
+initialization and unknown-effect recovery remain incomplete. This is a
+production read-path and platform repair, not completion of the target lifecycle
+or whole-product server/desktop/Android/background/MCP migration. Keep NOT_READY;
+retain the original workspace and cloud-only native compilation boundary.

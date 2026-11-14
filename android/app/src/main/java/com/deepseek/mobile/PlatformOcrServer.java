@@ -62,6 +62,7 @@ final class PlatformOcrServer {
     void start() throws IOException {
         cache = prepareCache(app);
         server = OkHttpServerBuilder.forPort(new InetSocketAddress("127.0.0.1", 0), InsecureServerCredentials.create())
+            .socketFactory(new PlatformServerSocketFactory())
             .executor(callbacks).flowControlWindow(131_072).maxConcurrentCallsPerConnection(4)
             .maxInboundMessageSize(MAX_CHUNK_BYTES + 4_096).maxInboundMetadataSize(4_096)
             .intercept(new ServerInterceptor() {

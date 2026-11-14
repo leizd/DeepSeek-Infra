@@ -74,6 +74,7 @@ mod location_tests {
             observed_at_unix: 1794445200,
             fleet_id: "fleet-a".into(),
             environment: "test".into(),
+            canonical_path: String::new(),
         };
         let signature = key.sign_backup_target_location(&observation).unwrap();
         let parsed = Signature::from_slice(&signature).unwrap();
@@ -94,7 +95,14 @@ mod location_tests {
             key.sign_backup_target_location(&missing).unwrap(),
             signature
         );
-        let mutations: [fn(&mut FilesystemBackupTargetLocationObservation); 12] = [
+        let mut resolved = observation.clone();
+        resolved.canonical_path = observation.requested_path.clone();
+        resolved.state = BackupTargetLocationState::Unspecified as i32;
+        assert_ne!(
+            key.sign_backup_target_location(&resolved).unwrap(),
+            signature
+        );
+        let mutations: [fn(&mut FilesystemBackupTargetLocationObservation); 15] = [
             |o| o.schema_version = 2,
             |o| o.fence = None,
             |o| o.fence.as_mut().unwrap().execution_epoch = 0,
@@ -107,6 +115,9 @@ mod location_tests {
             |o| o.observed_at_unix = 0,
             |o| o.fleet_id = "other-fleet".into(),
             |o| o.environment = "other-environment".into(),
+            |o| o.canonical_path = "relative".into(),
+            |o| o.canonical_path = format!("{}\0", o.requested_path),
+            |o| o.canonical_path = format!("{}/{}", o.requested_path, "x".repeat(32769)),
         ];
         for change in mutations {
             let mut bad = observation.clone();

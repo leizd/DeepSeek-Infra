@@ -113,7 +113,12 @@ func TestRustTargetObservationGoClientAgainstRealCustodyAndFilesystem(t *testing
 		case <-exited:
 			logs := output.String()
 			if strings.Contains(logs, tlsTestSecret) || strings.Contains(logs, "PRIVATE KEY") {
-				t.Error("worker exposed credential bytes")
+				t.Error("worker exposed credential bytes; diagnostic output withheld")
+			} else if t.Failed() {
+				if len(logs) > 8192 {
+					logs = logs[len(logs)-8192:]
+				}
+				t.Logf("isolated Rust process diagnostic after confirmed exit: %s", logs)
 			}
 		case <-time.After(5 * time.Second):
 			t.Error("isolated Rust process was not reaped")
@@ -185,6 +190,59 @@ func TestRustTargetObservationGoClientAgainstRealCustodyAndFilesystem(t *testing
 			t.Fatal("real signed existence observation failed", err)
 		}
 	}
+	// Offline retained Python is the comparison oracle only. The actual worker
+	// resolves and signs these reads in Rust over the production TLS client.
+	if err := os.MkdirAll(filepath.Join(base, "resolved-real", "nested"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	for name, target := range map[string]string{"resolved-link": "resolved-real/nested", "resolved-broken": "uncreated/child", "resolved-loop": "resolved-loop"} {
+		if err := os.Symlink(target, filepath.Join(base, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	paths := []string{directory, base + "/missing-target/child", markerPath + "/child", base + "/resolved-link/../leaf",
+		base + "/resolved-link/missing/../leaf", base + "/resolved-broken/../leaf", base + "/resolved-loop", base + "/resolved-loop/.."}
+	encodedPaths, err := json.Marshal(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oracleScript := `import json,pathlib,sys
+assert (3,10) <= sys.version_info[:2] <= (3,12), sys.version
+out=[]
+for raw in json.loads(sys.argv[1]):
+    try: out.append({'path':raw,'resolved':str(pathlib.Path(raw).resolve()),'loop':False})
+    except RuntimeError: out.append({'path':raw,'resolved':'','loop':True})
+print(json.dumps({'pythonVersion':sys.version.split()[0],'cases':out}))`
+	oracleBytes, err := exec.CommandContext(ctx, "python", "-I", "-S", "-c", oracleScript, string(encodedPaths)).CombinedOutput()
+	if err != nil || len(oracleBytes) > 128*1024 {
+		t.Fatal("retained offline path oracle failed", err, string(oracleBytes))
+	}
+	var oracle struct {
+		PythonVersion string
+		Cases         []struct {
+			Path, Resolved string
+			Loop           bool
+		}
+	}
+	if err := json.Unmarshal(oracleBytes, &oracle); err != nil || len(oracle.Cases) != len(paths) {
+		t.Fatal("path oracle report invalid", err)
+	}
+	for index, expected := range oracle.Cases {
+		if expected.Path != paths[index] {
+			t.Fatal("oracle changed the requested case order")
+		}
+		location := targetLocationRequest(request)
+		location.Path, location.ResolvePath = expected.Path, true
+		result, err := client.ProbeFilesystemBackupTargetLocation(ctx, location, binding)
+		if expected.Loop {
+			if status.Code(err) != codes.Unavailable {
+				t.Fatal("Rust failed to retain the path loop error", err)
+			}
+		} else if err != nil || result == nil || result.Observation.CanonicalPath != expected.Resolved {
+			t.Fatalf("Rust/retained-Python path mismatch: case=%d expected=%q result=%+v error=%v", index, expected.Resolved, result, err)
+		}
+	}
+	t.Logf("actual Go/TLS/Rust custody path resolution matched %d retained CPython %s cases", len(paths), oracle.PythonVersion)
 	wrongWriter := proto.Clone(request).(*actionv1.InspectFilesystemBackupTargetRequest)
 	wrongWriter.WriterFencingToken++
 	if _, err := client.InspectFilesystemBackupTarget(ctx, wrongWriter, binding); status.Code(err) != codes.FailedPrecondition {

@@ -36,6 +36,52 @@ import static org.junit.Assert.*;
 /** Exercise the actual loopback server, admission and cancellation on an Android device. */
 @RunWith(AndroidJUnit4.class)
 public class PlatformOcrProtocolIntegrationTest {
+    @Test public void acceptedPlatformStreamsSurviveConcurrentTransportShutdown() throws Exception {
+        PlatformServerSocketFactory factory = new PlatformServerSocketFactory();
+        try (java.net.ServerSocket listener = factory.createServerSocket(0)) {
+            listener.setSoTimeout(3000);
+            assertTrue(listener.getInetAddress().isLoopbackAddress());
+            java.util.concurrent.ExecutorService readers = java.util.concurrent.Executors.newSingleThreadExecutor();
+            try {
+                for (int attempt = 0; attempt < 32; attempt++) {
+                    try (java.net.Socket client = new java.net.Socket("127.0.0.1", listener.getLocalPort());
+                         java.net.Socket accepted = listener.accept()) {
+                        client.setSoTimeout(3000);
+                        accepted.setSoTimeout(3000);
+                        java.io.InputStream input = accepted.getInputStream();
+                        java.io.OutputStream output = accepted.getOutputStream();
+                        client.getOutputStream().write(37);
+                        assertEquals(37, input.read());
+                        output.write(41);
+                        assertEquals(41, client.getInputStream().read());
+                        CountDownLatch start = new CountDownLatch(1);
+                        java.util.concurrent.Future<?> read = readers.submit(() -> {
+                            try {
+                                if (!start.await(3, TimeUnit.SECONDS)) throw new AssertionError("Read barrier timed out");
+                                accepted.getInputStream().read();
+                            } catch (java.io.IOException expectedClose) {
+                                // Closure remains a transport failure, never a successful OCR response.
+                            } catch (InterruptedException interrupted) {
+                                Thread.currentThread().interrupt();
+                                throw new AssertionError(interrupted);
+                            }
+                        });
+                        start.countDown();
+                        accepted.close();
+                        read.get(5, TimeUnit.SECONDS);
+                        try { accepted.getInputStream(); fail("Closed input accepted"); }
+                        catch (java.net.SocketException expectedClose) { assertTrue(accepted.isClosed()); }
+                        try { accepted.getOutputStream(); fail("Closed output accepted"); }
+                        catch (java.net.SocketException expectedClose) { assertTrue(accepted.isClosed()); }
+                    }
+                }
+            } finally {
+                readers.shutdownNow();
+                assertTrue("Transport reader reaped", readers.awaitTermination(5, TimeUnit.SECONDS));
+            }
+        }
+    }
+
     private static final Metadata.Key<String> KEY = Metadata.Key.of(
         "x-deepseek-platform-token", Metadata.ASCII_STRING_MARSHALLER);
 

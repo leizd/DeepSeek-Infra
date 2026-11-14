@@ -88,6 +88,7 @@ fn location_request(path: &Path) -> ProbeFilesystemBackupTargetLocationRequest {
         operation_id: "target-inspect-location".into(),
         path: path.to_str().unwrap().into(),
         writer_fencing_token: 7,
+        resolve_path: false,
     }
 }
 

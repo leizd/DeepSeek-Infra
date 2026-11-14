@@ -22,6 +22,9 @@ use tonic::{Request, Response, Status};
 const MARKER_NAME: &str = ".deepseek-infra-backup-target.json";
 const MAX_MARKER_BYTES: usize = wire::MAX_MARKER_BYTES;
 
+#[path = "target_path_resolution.rs"]
+mod path_resolution;
+
 #[derive(Debug)]
 pub(crate) struct LocationPolicy {
     protected: Vec<PathBuf>,
@@ -399,9 +402,18 @@ impl BackupTargetInspection for WorkerRpcService {
             .clone()
             .try_acquire_owned()
             .map_err(|_| Status::resource_exhausted("BACKUP_TARGET_INSPECTION_BUSY"))?;
-        let state = tokio::task::spawn_blocking(move || {
+        let resolve_path = input.resolve_path;
+        let (state, canonical_path) = tokio::task::spawn_blocking(move || {
             let _permit = permit;
-            probe_location(&path)
+            let (state, canonical) = if resolve_path {
+                (
+                    BackupTargetLocationState::Unspecified,
+                    path_resolution::resolve(&path)?,
+                )
+            } else {
+                (probe_location(&path)?, String::new())
+            };
+            Ok::<_, Status>((state, canonical))
         })
         .await
         .map_err(|_| Status::unavailable("BACKUP_TARGET_LOCATION_UNRESOLVED"))??;
@@ -416,6 +428,7 @@ impl BackupTargetInspection for WorkerRpcService {
                 .map_err(|_| Status::unavailable("BACKUP_TARGET_LOCATION_UNRESOLVED"))?,
             fleet_id: config.fleet_id,
             environment: config.environment,
+            canonical_path,
         };
         self.target_inspection_caller(&request)?;
         let worker = self.worker.lock().await;

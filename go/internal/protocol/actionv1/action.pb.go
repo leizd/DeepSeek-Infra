@@ -2205,8 +2205,11 @@ type ProbeFilesystemBackupTargetLocationRequest struct {
 	OperationId        string                 `protobuf:"bytes,3,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
 	Path               string                 `protobuf:"bytes,4,opt,name=path,proto3" json:"path,omitempty"`
 	WriterFencingToken uint64                 `protobuf:"varint,5,opt,name=writer_fencing_token,json=writerFencingToken,proto3" json:"writer_fencing_token,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// Opt-in retained Path.resolve(strict=False) result for overlap checks.
+	// The default preserves the original existence-only clone observation.
+	ResolvePath   bool `protobuf:"varint,6,opt,name=resolve_path,json=resolvePath,proto3" json:"resolve_path,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ProbeFilesystemBackupTargetLocationRequest) Reset() {
@@ -2274,6 +2277,13 @@ func (x *ProbeFilesystemBackupTargetLocationRequest) GetWriterFencingToken() uin
 	return 0
 }
 
+func (x *ProbeFilesystemBackupTargetLocationRequest) GetResolvePath() bool {
+	if x != nil {
+		return x.ResolvePath
+	}
+	return false
+}
+
 type FilesystemBackupTargetLocationObservation struct {
 	state              protoimpl.MessageState    `protogen:"open.v1"`
 	SchemaVersion      uint32                    `protobuf:"varint,1,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
@@ -2285,8 +2295,12 @@ type FilesystemBackupTargetLocationObservation struct {
 	ObservedAtUnix     int64                     `protobuf:"varint,7,opt,name=observed_at_unix,json=observedAtUnix,proto3" json:"observed_at_unix,omitempty"`
 	FleetId            string                    `protobuf:"bytes,8,opt,name=fleet_id,json=fleetId,proto3" json:"fleet_id,omitempty"`
 	Environment        string                    `protobuf:"bytes,9,opt,name=environment,proto3" json:"environment,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// Nonempty only for resolve_path requests. Missing suffixes can remain:
+	// this is a path comparison observation, never proof of a failed effect.
+	// In this mode state is UNSPECIFIED; existence requires a separate probe.
+	CanonicalPath string `protobuf:"bytes,10,opt,name=canonical_path,json=canonicalPath,proto3" json:"canonical_path,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *FilesystemBackupTargetLocationObservation) Reset() {
@@ -2378,6 +2392,13 @@ func (x *FilesystemBackupTargetLocationObservation) GetFleetId() string {
 func (x *FilesystemBackupTargetLocationObservation) GetEnvironment() string {
 	if x != nil {
 		return x.Environment
+	}
+	return ""
+}
+
+func (x *FilesystemBackupTargetLocationObservation) GetCanonicalPath() string {
+	if x != nil {
+		return x.CanonicalPath
 	}
 	return ""
 }
@@ -2617,13 +2638,14 @@ const file_action_v1_action_proto_rawDesc = "" +
 	"\x0eschema_version\x18\x01 \x01(\rR\rschemaVersion\x12W\n" +
 	"\vobservation\x18\x02 \x01(\v25.deepseek.action.v1.FilesystemBackupTargetObservationR\vobservation\x12\x1c\n" +
 	"\tsignature\x18\x03 \x01(\fR\tsignature\x12*\n" +
-	"\x11signer_public_key\x18\x04 \x01(\tR\x0fsignerPublicKey\"\xf3\x01\n" +
+	"\x11signer_public_key\x18\x04 \x01(\tR\x0fsignerPublicKey\"\x96\x02\n" +
 	"*ProbeFilesystemBackupTargetLocationRequest\x12%\n" +
 	"\x0eschema_version\x18\x01 \x01(\rR\rschemaVersion\x125\n" +
 	"\x05fence\x18\x02 \x01(\v2\x1f.deepseek.common.v1.ActionFenceR\x05fence\x12!\n" +
 	"\foperation_id\x18\x03 \x01(\tR\voperationId\x12\x12\n" +
 	"\x04path\x18\x04 \x01(\tR\x04path\x120\n" +
-	"\x14writer_fencing_token\x18\x05 \x01(\x04R\x12writerFencingToken\"\xb1\x03\n" +
+	"\x14writer_fencing_token\x18\x05 \x01(\x04R\x12writerFencingToken\x12!\n" +
+	"\fresolve_path\x18\x06 \x01(\bR\vresolvePath\"\xd8\x03\n" +
 	")FilesystemBackupTargetLocationObservation\x12%\n" +
 	"\x0eschema_version\x18\x01 \x01(\rR\rschemaVersion\x125\n" +
 	"\x05fence\x18\x02 \x01(\v2\x1f.deepseek.common.v1.ActionFenceR\x05fence\x12!\n" +
@@ -2633,7 +2655,9 @@ const file_action_v1_action_proto_rawDesc = "" +
 	"\x05state\x18\x06 \x01(\x0e2-.deepseek.action.v1.BackupTargetLocationStateR\x05state\x12(\n" +
 	"\x10observed_at_unix\x18\a \x01(\x03R\x0eobservedAtUnix\x12\x19\n" +
 	"\bfleet_id\x18\b \x01(\tR\afleetId\x12 \n" +
-	"\venvironment\x18\t \x01(\tR\venvironment\"\xf9\x01\n" +
+	"\venvironment\x18\t \x01(\tR\venvironment\x12%\n" +
+	"\x0ecanonical_path\x18\n" +
+	" \x01(\tR\rcanonicalPath\"\xf9\x01\n" +
 	"%FilesystemBackupTargetLocationReceipt\x12%\n" +
 	"\x0eschema_version\x18\x01 \x01(\rR\rschemaVersion\x12_\n" +
 	"\vobservation\x18\x02 \x01(\v2=.deepseek.action.v1.FilesystemBackupTargetLocationObservationR\vobservation\x12\x1c\n" +

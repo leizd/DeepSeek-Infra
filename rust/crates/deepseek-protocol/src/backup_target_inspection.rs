@@ -26,10 +26,17 @@ pub fn valid_location_observation_shape(value: &FilesystemBackupTargetLocationOb
         && value.requested_path.len() <= 32768
         && !value.requested_path.contains('\0')
         && std::path::Path::new(&value.requested_path).is_absolute()
-        && matches!(
-            BackupTargetLocationState::try_from(value.state),
-            Ok(BackupTargetLocationState::Exists | BackupTargetLocationState::Missing)
-        )
+        && (if value.canonical_path.is_empty() {
+            matches!(
+                BackupTargetLocationState::try_from(value.state),
+                Ok(BackupTargetLocationState::Exists | BackupTargetLocationState::Missing)
+            )
+        } else {
+            value.state == BackupTargetLocationState::Unspecified as i32
+                && value.canonical_path.len() <= 32768
+                && !value.canonical_path.contains('\0')
+                && std::path::Path::new(&value.canonical_path).is_absolute()
+        })
         && value.observed_at_unix > 0
         && !value.fleet_id.is_empty()
         && !value.environment.is_empty()
