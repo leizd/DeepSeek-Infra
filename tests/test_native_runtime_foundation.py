@@ -60,9 +60,16 @@ def test_ci_has_native_go_and_protocol_gates() -> None:
     workflow = _read(".github/workflows/ci.yml")
     assert "native-go:" in workflow
     assert "native-protocol:" in workflow
-    assert workflow.count("https://go.dev/dl/go1.27.1.linux-amd64.tar.gz") == 3
-    assert workflow.count("63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445") == 3
-    assert workflow.count("GOTOOLCHAIN: local") >= 2
+    # Five jobs install the pinned toolchain: the fast Go gate, the two race suites
+    # that now run concurrently, and the two protocol/S3 jobs. Each copy must be
+    # accompanied by the checksum - a job that installs without verifying would be
+    # worse than one that does not install at all - so the two counts must agree.
+    go_jobs = ("native-go", "native-go-race", "native-go-android")
+    installs = workflow.count("https://go.dev/dl/go1.27.1.linux-amd64.tar.gz")
+    checksums = workflow.count("63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445")
+    assert installs == checksums == 5
+    # And every Go job carries the no-implicit-upgrade setting.
+    assert workflow.count("GOTOOLCHAIN: local") >= len(go_jobs)
     assert "python scripts/native_codegen.py --check" in workflow
     assert "--require-hashes" in workflow
     assert "-r requirements-native-protocol.txt" in workflow
@@ -80,10 +87,13 @@ def test_ci_has_native_go_and_protocol_gates() -> None:
     assert (ROOT / "go/pkg/protocol/canonical.go").is_file()
     assert (ROOT / "scripts/native_codegen.py").is_file()
     assert (ROOT / "scripts/check_native_contract_parity.py").is_file()
-    native_go = yaml.safe_load(workflow)["jobs"]["native-go"]
+    jobs = yaml.safe_load(workflow)["jobs"]
+    # The two race suites live in their own jobs so they run in parallel; each job
+    # carries exactly one variant, and together they still cover both.
     race_commands = [
         line.strip()
-        for step in native_go["steps"]
+        for name in go_jobs
+        for step in jobs[name]["steps"]
         for line in step.get("run", "").splitlines()
         if line.strip().startswith("python ../scripts/run_native_go_race.py ")
     ]
@@ -100,8 +110,12 @@ def test_ci_has_native_go_and_protocol_gates() -> None:
     assert "TEST_CORPUS_INCOMPLETE_OR_FILTER_LEAK" in race_runner
     assert "SUBTEST_TERMINAL_MISSING_OR_DUPLICATED" in race_runner
     assert "UNREVIEWED_TEST_SKIP" in race_runner
-    android = next(step for step in native_go["steps"] if step.get("name") == "Android Go SQLite compatibility checks")
-    assert android["env"]["GOFLAGS"] == "-tags=deepseek_android,sqlite3_flock"
+    android_job = jobs["native-go-android"]
+    assert android_job["env"]["GOFLAGS"] == "-tags=deepseek_android,sqlite3_flock"
+    android = next(
+        step for step in android_job["steps"] if step.get("name") == "Android Go SQLite compatibility checks"
+    )
+    assert "check_go_coverage.py --dir . --min 95.0 --profile android-coverage.out" in android["run"]
     assert "scripts/check_go_coverage.py" in workflow
 
 
