@@ -1431,6 +1431,108 @@ jobs:
       - run: python scripts/native_runtime_evidence.py
       - run: python scripts/control_plane_shadow.py --check --export-report artifacts/control-shadow-report.json
 
+  # The race suites are the entire cost of the Go gate: 87 minutes for the default
+  # variant and 79 for the Android one, against 16 minutes for everything else in
+  # native-go. They are independent - separate build tags, separate store shards,
+  # separate coverage profiles - so they run as their own jobs now instead of
+  # back-to-back inside one 183-minute job.
+  #
+  # Each job still runs the whole suite with the same shard and parallelism settings.
+  # Nothing was dropped, bounded shorter, or run without -race.
+  native-go-race:
+    needs: release-version
+    runs-on: ubuntu-latest
+    env:
+      GOTOOLCHAIN: local
+      GOSUMDB: sum.golang.org
+    defaults:
+      run:
+        working-directory: go
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install checksum-pinned Go 1.27.1
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/go1.27.1.linux-amd64.tar.gz"
+          install_dir="$RUNNER_TEMP/go-1.27.1"
+          curl --fail --location --silent --show-error \
+            --output "$archive" \
+            https://go.dev/dl/go1.27.1.linux-amd64.tar.gz
+          echo "63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445  $archive" | sha256sum --check --strict
+          mkdir -p "$install_dir"
+          tar -xzf "$archive" -C "$install_dir"
+          echo "$install_dir/go/bin" >> "$GITHUB_PATH"
+      - run: test "$(go env GOVERSION)" = "go1.27.1"
+      # The full pure-Go SQLite race suite exceeded 30m while creating its final fixtures.
+      # Keep every test, bound each package at 60m, and preserve per-test timing evidence.
+      - name: Full Go race tests with timing reports
+        run: |
+          mkdir -p ../artifacts/go-race
+          python ../scripts/run_native_go_race.py --variant default --out ../artifacts/go-race/default --store-shards 4 --max-parallel 2
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: go-race-timing-reports-1.27.1
+          path: artifacts/go-race/default/
+          if-no-files-found: warn
+          retention-days: 7
+
+  native-go-android:
+    needs: release-version
+    runs-on: ubuntu-latest
+    env:
+      GOTOOLCHAIN: local
+      GOSUMDB: sum.golang.org
+      # Propagate the connector selection to process tests' child builds.
+      GOFLAGS: "-tags=deepseek_android,sqlite3_flock"
+    defaults:
+      run:
+        working-directory: go
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install checksum-pinned Go 1.27.1
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/go1.27.1.linux-amd64.tar.gz"
+          install_dir="$RUNNER_TEMP/go-1.27.1"
+          curl --fail --location --silent --show-error \
+            --output "$archive" \
+            https://go.dev/dl/go1.27.1.linux-amd64.tar.gz
+          echo "63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445  $archive" | sha256sum --check --strict
+          mkdir -p "$install_dir"
+          tar -xzf "$archive" -C "$install_dir"
+          echo "$install_dir/go/bin" >> "$GITHUB_PATH"
+      - run: test "$(go env GOVERSION)" = "go1.27.1"
+      - run: go vet ./...
+      - name: Android Go SQLite compatibility checks
+        run: |
+          mkdir -p ../artifacts/go-race
+          python ../scripts/run_native_go_race.py --variant android --out ../artifacts/go-race/android --store-shards 4 --max-parallel 2
+          python ../scripts/check_go_coverage.py --dir . --min 95.0 --profile android-coverage.out
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: go-android-coverage-profile-1.27.1
+          path: go/android-coverage.out
+          if-no-files-found: warn
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: go-race-timing-reports-android-1.27.1
+          path: artifacts/go-race/android/
+          if-no-files-found: warn
+          retention-days: 7
+
   native-go:
     needs: release-version
     runs-on: ubuntu-latest
@@ -1471,38 +1573,12 @@ jobs:
         # `select` whose two cases race, a drive-letter rule that only a Windows path can reach —
         # and the gate's whole margin above its 95.0% floor is about two of them.
         run: python ../scripts/check_go_coverage.py --dir . --min 95.0 --profile coverage.out
-      - name: Full Go race tests with timing reports
-        run: |
-          mkdir -p ../artifacts/go-race
-          python ../scripts/run_native_go_race.py --variant default --out ../artifacts/go-race/default --store-shards 4 --max-parallel 2
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: go-coverage-profile-1.27.1
           path: go/coverage.out
           if-no-files-found: warn
-      - name: Android Go SQLite compatibility checks
-        env:
-          # Propagate the same connector selection to process tests' child builds.
-          GOFLAGS: "-tags=deepseek_android,sqlite3_flock"
-        run: |
-          go vet ./...
-          mkdir -p ../artifacts/go-race
-          python ../scripts/run_native_go_race.py --variant android --out ../artifacts/go-race/android --store-shards 4 --max-parallel 2
-          python ../scripts/check_go_coverage.py --dir . --min 95.0 --profile android-coverage.out
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: go-android-coverage-profile-1.27.1
-          path: go/android-coverage.out
-          if-no-files-found: warn
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: go-race-timing-reports-1.27.1
-          path: artifacts/go-race/
-          if-no-files-found: warn
-          retention-days: 7
       - name: Build fail-closed Rust worker boundary
         run: cargo build --locked --manifest-path ../rust/Cargo.toml -p deepseek-worker
       - name: Run real Go-to-Rust worker boundary
@@ -1832,6 +1908,8 @@ jobs:
       - rust-sidecar-performance
       - native-protocol
       - native-go
+      - native-go-race
+      - native-go-android
       - native-s3-transport
       - release-version
     runs-on: ubuntu-latest
