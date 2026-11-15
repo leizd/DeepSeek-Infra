@@ -50,12 +50,12 @@ def test_gate_evidence_artifacts_still_hash_to_their_recorded_digests() -> None:
 def test_gate_evidence_is_exact_head_bound_and_clean() -> None:
     evidence = _evidence()
     provenance = evidence["provenance"]
-    assert provenance["exact_head"] == "69a5a881d6f7ea21eb8905037bd9a0d60f74ffa0"
-    assert provenance["source_tree"] == "48c53522021ac936c5c387583c57451e57280a45"
+    assert provenance["exact_head"] == "42de92499019b8846e1c04203474b0e7367bcc30"
+    assert provenance["source_tree"] == "04e58490436010243025547dd6bd8beb6fb964f0"
     assert provenance["source_tree_dirty"] is False
-    assert provenance["workflow_run"] == 43582666126
-    assert provenance["jobs"]["total"] == 37
-    assert provenance["jobs"]["success"] == 37
+    assert provenance["workflow_run"] == 43594805997
+    assert provenance["jobs"]["total"] == 38
+    assert provenance["jobs"]["success"] == 38
     assert provenance["jobs"]["failure"] == 0
     # Each gate records the revision its own artifact was produced at. They are not
     # required to be identical - an artifact from an earlier run stays valid when the
@@ -294,3 +294,34 @@ def test_evidence_artifacts_are_byte_identical_across_platforms() -> None:
         assert committed, relative
         # The digest a reviewer recomputes from a clean checkout is the committed one.
         assert b"\r\n" not in committed, f"{relative} is committed with CRLF newlines"
+
+
+def test_the_fully_green_run_is_recorded_and_nothing_was_skipped() -> None:
+    """A green run with a skipped job is not a green run.
+
+    This records the exact evidence for the run that passed everything: all 38 jobs
+    succeeded, none failed, none were skipped, and the tree that run tested is the tree
+    this file ships with. Skips are asserted explicitly because a skipped gate looks
+    identical to a passing one in most summaries.
+    """
+    evidence = _evidence()
+    green = evidence["greenRun"]
+
+    assert green["jobs"]["total"] == 38
+    assert green["jobs"]["success"] == 38
+    assert green["jobs"]["failure"] == 0
+    assert green["jobs"]["skipped"] == 0, "a skipped job would make this not a green run"
+
+    # The provenance must describe the same run, or the file would cite two.
+    provenance = evidence["provenance"]
+    assert green["exact_head"] == provenance["exact_head"]
+    assert green["source_tree"] == provenance["source_tree"]
+    assert green["run"] == provenance["workflow_run"]
+
+    # Both coverage floors, and the fuzz gate, were part of that run.
+    assert "95.010592%" in green["goCoverage"]["default"]
+    assert "95.004377%" in green["goCoverage"]["android"]
+    assert green["fuzz"]["findings"] == 0
+    assert green["fuzz"]["executions"] > 1_000_000
+    for gate in ("native-go", "rust-fuzz", "rust-sidecar-performance", "rc-readiness"):
+        assert gate in green["keyGatesGreen"], gate

@@ -5,21 +5,21 @@
   "status": "PARTIAL",
   "purpose": "Records only the release gates that now have exact-head, hash-verified evidence. This is deliberately not release/native_runtime_5_0_evidence_v1.json: that assessment stays NOT_READY because DELIVERED requires all fifteen gates plus workload-measured zero invariants, and claiming otherwise here would be a false release assertion.",
   "provenance": {
-    "exact_head": "69a5a881d6f7ea21eb8905037bd9a0d60f74ffa0",
-    "source_tree": "48c53522021ac936c5c387583c57451e57280a45",
+    "exact_head": "42de92499019b8846e1c04203474b0e7367bcc30",
+    "source_tree": "04e58490436010243025547dd6bd8beb6fb964f0",
     "source_tree_dirty": false,
-    "workflow_run": 43582666126,
+    "workflow_run": 43594805997,
     "workflow": "ci.yml",
     "event": "workflow_dispatch",
     "ref": "refs/heads/codex/native-s0-store-ownership-20261109",
-    "run_url": "https://github.com/leizd/DeepSeek-Infra/actions/runs/43582666126",
+    "run_url": "https://github.com/leizd/DeepSeek-Infra/actions/runs/43594805997",
     "jobs": {
-      "total": 37,
-      "success": 37,
+      "total": 38,
+      "success": 38,
       "failure": 0,
       "skipped": 0
     },
-    "note": "the local tree hashes to the same tree value the run tested, so this evidence describes exactly this content; the first three gates were qualified on run 42786170148 at 7c0713cc and are retained here because the same artifacts remain valid at this revision, which re-passed all 37 jobs",
+    "note": "The fully green run tested exactly this content: the local tree hashes to the same value the run checked out. All 38 jobs succeeded with no failures and no skips.",
     "latestGreen": {
       "run": 43590301053,
       "exact_head": "13a99e29cb1db01718abb89734d6ce75d749a794"
@@ -170,7 +170,7 @@
     },
     "fuzz": {
       "status": "PASS",
-      "exact_head": "13a99e29cb1db01718abb89734d6ce75d749a794",
+      "exact_head": "42de92499019b8846e1c04203474b0e7367bcc30",
       "detail": "Coverage-guided fuzzing is now wired: a standalone fuzz/ crate (deliberately outside the rust/ workspace so production builds never resolve libfuzzer) carries three libFuzzer targets over the frozen parsers - receipt/commit pairing, the restore path sanitiser, and the evidence-proof envelope - each run for 180 seconds in the rust-fuzz CI job on a nightly toolchain installed in its own step. The targets assert contract invariants, not only absence of panics: determinism, idempotent acceptance, that a swapped receipt/commit pair is refused, that no accepted path can escape the restore root, and that an accepted envelope really carries the schema and checks it claims. rc-readiness depends on rust-fuzz, so a finding blocks a release.",
       "artifacts": {
         "manifest": "fuzz/Cargo.toml",
@@ -188,26 +188,26 @@
         "ciJob": "rust-fuzz"
       },
       "observed": {
-        "run": 43590301053,
+        "run": 43594805997,
         "job": "rust-fuzz",
         "conclusion": "success",
         "targets": {
           "transport_frozen_documents": {
-            "executions": 7292449,
+            "executions": 7571714,
             "seconds": 181
           },
           "restore_relative_path": {
-            "executions": 17401786,
+            "executions": 15318532,
             "seconds": 181
           },
           "evidence_proof_envelope": {
-            "executions": 3965733,
+            "executions": 4133357,
             "seconds": 181,
             "finalCoverage": 2015,
             "finalFeatures": 8008
           }
         },
-        "totalExecutions": 28659968,
+        "totalExecutions": 27023603,
         "findings": {
           "crashes": 0,
           "leaks": 0,
@@ -263,5 +263,35 @@
     "whatActuallyRan": "A real deepseekd process was started in shadow mode on an ephemeral port with a scratch root, and driven through 48 iterations of health and status reads plus an unauthenticated mutation attempt per iteration. 48 operations succeeded, 48 mutation attempts were refused, and no Python interpreter appeared in the process tree at any probe.",
     "whyItIsNotVacuous": "The validator refuses a vacuous zero, so the harness refuses to report one: it fails if fewer operations complete than were requested, if no read succeeded, or if no mutation attempt was refused. The first version of this harness reported python.exe as observed and was corrected - the harness is itself Python, so the probe now excludes its own pid and parent.",
     "whatIsStillNotProven": "This is an isolated shadow-mode process, not production traffic. It demonstrates that a native workload runs with zero Python involvement and that the measurement method works; it does not demonstrate that a production deployment under real load makes no Python calls, because no production deployment of this runtime exists yet. That distinction is why the assessment stays NOT_READY rather than being populated with these numbers."
+  },
+  "greenRun": {
+    "run": 43594805997,
+    "exact_head": "42de92499019b8846e1c04203474b0e7367bcc30",
+    "source_tree": "04e58490436010243025547dd6bd8beb6fb964f0",
+    "jobs": {
+      "total": 38,
+      "success": 38,
+      "failure": 0,
+      "skipped": 0
+    },
+    "goCoverage": {
+      "default": "95.010592% (17043/17938)",
+      "android": "95.004377% (17363/18276)"
+    },
+    "fuzz": {
+      "targets": 3,
+      "executions": 27023603,
+      "findings": 0,
+      "secondsPerTarget": 181
+    },
+    "keyGatesGreen": [
+      "release-version",
+      "native-go",
+      "rust-fuzz",
+      "rust-sidecar-performance",
+      "evidence-assembly",
+      "release-package",
+      "rc-readiness"
+    ]
   }
 }
