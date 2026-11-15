@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -85,6 +86,82 @@ func TestBindFailureCannotRecoverAnotherControllersTasks(t *testing.T) {
 	}
 	if _, err := os.Stat(other.StoreDir); !os.IsNotExist(err) {
 		t.Fatalf("bind failure touched store: %v", err)
+	}
+}
+
+// TestServeAfterStopReportsNoError covers the arm that maps grpc.ErrServerStopped
+// to nil.
+//
+// grpc.Server.Serve returns ErrServerStopped only when it is entered *after* Stop has
+// already run - it checks `s.lis == nil` on entry. In StartRPC that happens when the
+// goroutine calling Serve is scheduled after the ctx.Done goroutine has already called
+// Stop, which is a genuine but very narrow scheduling window.
+//
+// That window is why this statement moved the Android coverage figure between
+// 94.998906% and 95.005017% across runs with identical Go sources: no single existing
+// test covered it, but the suite as a whole sometimes did, depending on timing. This
+// drives the ordering directly instead of hoping for it.
+func TestServeAfterStopReportsNoError(t *testing.T) {
+	cfg, _ := testCertificates(t)
+	pair, err := tls.LoadX509KeyPair(cfg.CertFile, cfg.KeyFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caPEM, err := os.ReadFile(cfg.CAFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := x509.NewCertPool()
+	pool.AppendCertsFromPEM(caPEM)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tlsConfig := &tls.Config{Certificates: []tls.Certificate{pair}, ClientCAs: pool,
+		ClientAuth: tls.RequireAndVerifyClientCert, MinVersion: tls.VersionTLS13}
+	tasks, err := Open(filepath.Join(t.TempDir(), "a2a"), time.Now, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	server := grpc.NewServer(grpc.Creds(credentials.NewTLS(tlsConfig)))
+	// Stop before Serve: this is exactly the state in which Serve reports
+	// ErrServerStopped rather than serving and returning nil.
+	server.Stop()
+	served := server.Serve(listener)
+	if !errors.Is(served, grpc.ErrServerStopped) {
+		t.Fatalf("Serve after Stop returned %v, so the arm under test was not reached", served)
+	}
+	// And the mapping the production code applies must turn it into nil.
+	if err := errors.Join(mapServeError(served), tasks.Close()); err != nil {
+		t.Fatalf("a requested shutdown was reported as an error: %v", err)
+	}
+}
+
+// TestCloseSettlesServeWithoutReportingServerStopped covers the ordinary shutdown
+// path: a server that is actually serving is stopped, and the error channel settles
+// cleanly rather than surfacing a cancellation as a failure.
+func TestCloseSettlesServeWithoutReportingServerStopped(t *testing.T) {
+	cfg, clientTLS := testCertificates(t)
+	server, err := StartRPC(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection, dialErr := tls.Dial("tcp", server.Addr(), clientTLS.Clone())
+	if dialErr != nil {
+		server.Close()
+		t.Fatalf("could not reach the listener: %v", dialErr)
+	}
+	_ = connection.Close()
+
+	server.Close()
+	select {
+	case settled := <-server.Done():
+		if settled != nil {
+			t.Fatalf("requested shutdown was reported as an error: %v", settled)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the server did not settle after Close")
 	}
 }
 
