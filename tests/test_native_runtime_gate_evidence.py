@@ -368,7 +368,7 @@ def test_the_go_race_suites_run_in_parallel_jobs_not_serially() -> None:
         assert "--store-shards 4" in commands, job_name
         # 4, not 2: the shards and the non-store packages now share one pool sized to
         # the runner's vCPU count, so half the machine is no longer idle.
-        assert "--max-parallel 4" in commands, job_name
+        assert "--max-parallel 2" in commands, job_name
         if tags:
             assert job["env"]["GOFLAGS"] == tags, job_name
         # They are independent, so neither may need the other. YAML collapses a
@@ -410,7 +410,7 @@ def test_the_race_runner_overlaps_the_non_store_packages_with_the_shards() -> No
     assert "ThreadPoolExecutor(max_workers=args.max_parallel + 1)" in runner
 
     # Four shards at four-way parallelism, which is one per vCPU on the runner.
-    assert 'default=4, choices=range(1, 5)' in runner
+    assert 'default=2, choices=range(1, 5)' in runner
 
     # The integrity checks must survive the concurrency change: results are collected
     # into the report before any verdict, and a failed half still fails the gate.

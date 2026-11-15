@@ -1473,7 +1473,7 @@ jobs:
       - name: Full Go race tests with timing reports
         run: |
           mkdir -p ../artifacts/go-race
-          python ../scripts/run_native_go_race.py --variant default --out ../artifacts/go-race/default --store-shards 4 --max-parallel 4
+          python ../scripts/run_native_go_race.py --variant default --out ../artifacts/go-race/default --store-shards 4 --max-parallel 2
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -1517,7 +1517,7 @@ jobs:
       - name: Android Go SQLite compatibility checks
         run: |
           mkdir -p ../artifacts/go-race
-          python ../scripts/run_native_go_race.py --variant android --out ../artifacts/go-race/android --store-shards 4 --max-parallel 4
+          python ../scripts/run_native_go_race.py --variant android --out ../artifacts/go-race/android --store-shards 4 --max-parallel 2
           python ../scripts/check_go_coverage.py --dir . --min 95.0 --profile android-coverage.out
       - uses: actions/upload-artifact@v4
         if: always()

@@ -227,6 +227,15 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
         # binaries, separate output files, separate corpus checks - so they run in one
         # pool rather than back to back. On the measured runs `other` took 28 minutes
         # and the shards took 59, and the two used to add up.
+        # NOTE on --max-parallel: the workflow pins 2 because the suite tolerates 2.
+        # Raising it to 4 was tried and the Android variant failed with
+        # TestAgentDriverLoopKeepsUnknownAndToolsPendingCustodyWithoutRedispatch: that
+        # test waits a fixed 4300ms for the driver to settle, and four race processes
+        # on four cores slows the loop past that. No DATA RACE was reported, so it is
+        # contention exposing a latency-sensitive test, not a runtime defect. The
+        # ceiling here is 4 so the value can be raised once that test waits on a
+        # condition instead of a duration.
+        #
         # One pool sized to hold every shard plus `other`. Sizing it to the vCPU count
         # instead leaves `other` queued behind the shards, which measurably costs about
         # 20 minutes: with four shards and one `other` job the greedy makespan over 4
@@ -261,7 +270,7 @@ def main() -> int:
     parser.add_argument("--variant", choices=["default", "android"], required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--store-shards", type=int, default=4, choices=range(1, 17))
-    parser.add_argument("--max-parallel", type=int, default=4, choices=range(1, 5))
+    parser.add_argument("--max-parallel", type=int, default=2, choices=range(1, 5))
     args = parser.parse_args()
     args.out = args.out.resolve()
     args.out.mkdir(parents=True, exist_ok=False)
