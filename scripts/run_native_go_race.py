@@ -203,9 +203,10 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
                       storeCatalog=names, storeGroups=groups, testResultCacheUsed=False,
                       maxParallelStoreProcesses=args.max_parallel)
         others = [package for package in packages if package != STORE_PACKAGE]
-        other = execute(["go", "test", "-race", "-json", "-count=1", "-timeout=" + GO_TIMEOUT, *others],
-                        ROOT / "go", args.out / "other.jsonl", min(5460, deadline - time.monotonic()))
-        report["otherExecution"] = other
+
+        def other_packages() -> dict[str, Any]:
+            return execute(["go", "test", "-race", "-json", "-count=1", "-timeout=" + GO_TIMEOUT, *others],
+                           ROOT / "go", args.out / "other.jsonl", min(5460, deadline - time.monotonic()))
 
         def shard(index: int) -> dict[str, Any]:
             path = args.out / f"store-{index}.jsonl"
@@ -222,10 +223,25 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
                     result["verificationFailure"] = str(error)
             return result
 
-        with ThreadPoolExecutor(max_workers=args.max_parallel) as executor:
-            # map preserves group identity; the processes themselves run with a
-            # bounded worker pool. No timed-out or failed group is retried.
-            report["storeExecutions"] = list(executor.map(shard, range(len(groups))))
+        # The other packages and the store shards are independent - separate
+        # binaries, separate output files, separate corpus checks - so they run in one
+        # pool rather than back to back. On the measured runs `other` took 28 minutes
+        # and the shards took 59, and the two used to add up.
+        # One pool sized to hold every shard plus `other`. Sizing it to the vCPU count
+        # instead leaves `other` queued behind the shards, which measurably costs about
+        # 20 minutes: with four shards and one `other` job the greedy makespan over 4
+        # cores is 53 minutes at 4 workers and 32 at 5. The extra slot is not
+        # oversubscription in practice because `other` is a single `go test` process
+        # that spends most of its time waiting on child processes, and because the
+        # scheduler refills a core the moment a shard finishes.
+        with ThreadPoolExecutor(max_workers=args.max_parallel + 1) as executor:
+            other_future = executor.submit(other_packages)
+            shard_futures = [executor.submit(shard, index) for index in range(len(groups))]
+            # map over the futures preserves group identity; no timed-out or failed
+            # group is retried.
+            report["storeExecutions"] = [future.result() for future in shard_futures]
+            other = other_future.result()
+        report["otherExecution"] = other
         if other["exitCode"] != 0 or any(result["exitCode"] != 0 or "corpus" not in result for result in report["storeExecutions"]):
             raise RaceGateError("RACE_COMMAND_FAILED")
         report["otherCorpus"] = inspect_events(args.out / "other.jsonl", set(others),
@@ -245,7 +261,7 @@ def main() -> int:
     parser.add_argument("--variant", choices=["default", "android"], required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--store-shards", type=int, default=4, choices=range(1, 17))
-    parser.add_argument("--max-parallel", type=int, default=2, choices=range(1, 3))
+    parser.add_argument("--max-parallel", type=int, default=4, choices=range(1, 5))
     args = parser.parse_args()
     args.out = args.out.resolve()
     args.out.mkdir(parents=True, exist_ok=False)

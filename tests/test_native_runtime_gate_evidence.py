@@ -366,7 +366,9 @@ def test_the_go_race_suites_run_in_parallel_jobs_not_serially() -> None:
         commands = " ".join(str(step.get("run", "")) for step in job["steps"])
         assert variant in commands, (job_name, variant)
         assert "--store-shards 4" in commands, job_name
-        assert "--max-parallel 2" in commands, job_name
+        # 4, not 2: the shards and the non-store packages now share one pool sized to
+        # the runner's vCPU count, so half the machine is no longer idle.
+        assert "--max-parallel 4" in commands, job_name
         if tags:
             assert job["env"]["GOFLAGS"] == tags, job_name
         # They are independent, so neither may need the other. YAML collapses a
@@ -385,3 +387,34 @@ def test_the_go_race_suites_run_in_parallel_jobs_not_serially() -> None:
     needs = jobs["evidence-assembly"]["needs"]
     for name in ("native-go", "native-go-race", "native-go-android"):
         assert name in needs, f"{name} no longer gates evidence assembly"
+
+
+def test_the_race_runner_overlaps_the_non_store_packages_with_the_shards() -> None:
+    """The two halves of a race variant ran back to back and used to add up.
+
+    Measured on run 43690939742, default variant: the non-store packages took 1693s
+    and the four store shards took 1931/1774/1618/1571s, with two shards at a time.
+    Serialising the halves cost 28 minutes of wall clock for no reason - they use
+    different binaries, different output files and different corpus checks.
+
+    This pins the overlap and the pool sizing, because reverting either one silently
+    restores the slow path without failing anything else.
+    """
+    runner = (ROOT / "scripts" / "run_native_go_race.py").read_text(encoding="utf-8")
+
+    # Both halves are submitted to one pool rather than awaited in sequence.
+    assert "other_future = executor.submit(other_packages)" in runner
+    assert "shard_futures = [executor.submit(shard, index)" in runner
+    # The pool holds every shard plus the other-packages job; sizing it to the vCPU
+    # count instead leaves that job queued behind the shards.
+    assert "ThreadPoolExecutor(max_workers=args.max_parallel + 1)" in runner
+
+    # Four shards at four-way parallelism, which is one per vCPU on the runner.
+    assert 'default=4, choices=range(1, 5)' in runner
+
+    # The integrity checks must survive the concurrency change: results are collected
+    # into the report before any verdict, and a failed half still fails the gate.
+    assert 'report["storeExecutions"] = [future.result() for future in shard_futures]' in runner
+    assert 'report["otherExecution"] = other' in runner
+    assert "AGGREGATE_CORPUS_COUNT_DIFFERS" in runner
+    assert 'raise RaceGateError("RACE_COMMAND_FAILED")' in runner
