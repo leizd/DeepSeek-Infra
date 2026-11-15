@@ -50,10 +50,10 @@ def test_gate_evidence_artifacts_still_hash_to_their_recorded_digests() -> None:
 def test_gate_evidence_is_exact_head_bound_and_clean() -> None:
     evidence = _evidence()
     provenance = evidence["provenance"]
-    assert provenance["exact_head"] == "42de92499019b8846e1c04203474b0e7367bcc30"
-    assert provenance["source_tree"] == "04e58490436010243025547dd6bd8beb6fb964f0"
+    assert provenance["exact_head"] == "3b9c2b9c5e3abd632ceb794583529a9f70d56b14"
+    assert provenance["source_tree"] == "89efaa29245d135fdbef3dd3710848d9b3b252c5"
     assert provenance["source_tree_dirty"] is False
-    assert provenance["workflow_run"] == 43594805997
+    assert provenance["workflow_run"] == 43676254208
     assert provenance["jobs"]["total"] == 38
     assert provenance["jobs"]["success"] == 38
     assert provenance["jobs"]["failure"] == 0
@@ -321,7 +321,10 @@ def test_the_fully_green_run_is_recorded_and_nothing_was_skipped() -> None:
     # Both coverage floors, and the fuzz gate, were part of that run.
     assert "95.010592%" in green["goCoverage"]["default"]
     assert "95.004377%" in green["goCoverage"]["android"]
-    assert green["fuzz"]["findings"] == 0
-    assert green["fuzz"]["executions"] > 1_000_000
+    # `findings` is a mapping of category -> count, so "zero findings" means every
+    # category is zero rather than the mapping being falsy.
+    findings = green["fuzz"]["findings"]
+    assert findings and all(count == 0 for count in findings.values()), findings
+    assert green["fuzz"]["totalExecutions"] > 1_000_000
     for gate in ("native-go", "rust-fuzz", "rust-sidecar-performance", "rc-readiness"):
         assert gate in green["keyGatesGreen"], gate

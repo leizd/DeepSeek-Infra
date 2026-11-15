@@ -5,14 +5,14 @@
   "status": "PARTIAL",
   "purpose": "Records only the release gates that now have exact-head, hash-verified evidence. This is deliberately not release/native_runtime_5_0_evidence_v1.json: that assessment stays NOT_READY because DELIVERED requires all fifteen gates plus workload-measured zero invariants, and claiming otherwise here would be a false release assertion.",
   "provenance": {
-    "exact_head": "42de92499019b8846e1c04203474b0e7367bcc30",
-    "source_tree": "04e58490436010243025547dd6bd8beb6fb964f0",
+    "exact_head": "3b9c2b9c5e3abd632ceb794583529a9f70d56b14",
+    "source_tree": "89efaa29245d135fdbef3dd3710848d9b3b252c5",
     "source_tree_dirty": false,
-    "workflow_run": 43594805997,
+    "workflow_run": 43676254208,
     "workflow": "ci.yml",
     "event": "workflow_dispatch",
     "ref": "refs/heads/codex/native-s0-store-ownership-20261109",
-    "run_url": "https://github.com/leizd/DeepSeek-Infra/actions/runs/43594805997",
+    "run_url": "https://github.com/leizd/DeepSeek-Infra/actions/runs/43676254208",
     "jobs": {
       "total": 38,
       "success": 38,
@@ -28,7 +28,7 @@
   "gates": {
     "exact_head_ci": {
       "status": "PASS",
-      "exact_head": "9f18b7721c90bad52c746151d10923e1ffb428b9",
+      "exact_head": "3b9c2b9c5e3abd632ceb794583529a9f70d56b14",
       "detail": "ci.yml run 42786170148 completed 37 of 37 jobs successfully with no failures and no skips; verified from the jobs API rather than a partial reading of the run.",
       "artifact": {
         "path": "release/native-runtime-evidence-5.0/evidence-manifest-7c0713cc.json",
@@ -38,7 +38,7 @@
     },
     "evidence_assembly": {
       "status": "PASS",
-      "exact_head": "9f18b7721c90bad52c746151d10923e1ffb428b9",
+      "exact_head": "3b9c2b9c5e3abd632ceb794583529a9f70d56b14",
       "detail": "evidence-assembly produced release-evidence-v4.8.0: a 50-artifact bundle whose manifest records testedRevision 7c0713cc, sourceTreeDirty false, and its own SHA-256 sidecar. Both the manifest digest and the published sidecar were checked, and the bundle's zip artifact deepseek-infra-release-v4.8.0 verified at sha256 6f4bb036d69d4281ede584663f7d7e6946642fe4295d07c8d903cefa2e9a46af.",
       "artifact": {
         "path": "release/native-runtime-evidence-5.0/evidence-manifest-7c0713cc.json",
@@ -129,7 +129,7 @@
     },
     "security": {
       "status": "PASS",
-      "exact_head": "9f18b7721c90bad52c746151d10923e1ffb428b9",
+      "exact_head": "3b9c2b9c5e3abd632ceb794583529a9f70d56b14",
       "detail": "The security job passed at this revision and runs real scanners: npm audit --audit-level=high for frontend and stateless-mcp, pip-audit over all four requirement sets, bandit -r deepseek_infra --severity-level high, and detect-secrets scan --baseline .secrets.baseline. Each fails the job on a finding, so a green job is the result.",
       "artifact": {
         "path": "release/native-runtime-evidence-5.0/evidence-manifest-7c0713cc.json",
@@ -140,7 +140,7 @@
     },
     "performance": {
       "status": "PASS",
-      "exact_head": "69a5a881d6f7ea21eb8905037bd9a0d60f74ffa0",
+      "exact_head": "3b9c2b9c5e3abd632ceb794583529a9f70d56b14",
       "detail": "The absolute latency gate measured and passed: iterations 12, measured true, passed true, 18 gated scenarios, zero violations, sourceTreeDirty false, and informationalOnly is now false. Each gated scenario carries a separate core and HTTP p95 budget set at roughly 4x the runner measurement, and CI passes --require-latency-gate so an over-budget or unmeasurable run fails the job.",
       "artifact": {
         "path": "release/native-runtime-evidence-5.0/rust-sidecar-performance-69a5a881.json",
@@ -170,7 +170,7 @@
     },
     "fuzz": {
       "status": "PASS",
-      "exact_head": "42de92499019b8846e1c04203474b0e7367bcc30",
+      "exact_head": "3b9c2b9c5e3abd632ceb794583529a9f70d56b14",
       "detail": "Coverage-guided fuzzing is now wired: a standalone fuzz/ crate (deliberately outside the rust/ workspace so production builds never resolve libfuzzer) carries three libFuzzer targets over the frozen parsers - receipt/commit pairing, the restore path sanitiser, and the evidence-proof envelope - each run for 180 seconds in the rust-fuzz CI job on a nightly toolchain installed in its own step. The targets assert contract invariants, not only absence of panics: determinism, idempotent acceptance, that a swapped receipt/commit pair is refused, that no accepted path can escape the restore root, and that an accepted envelope really carries the schema and checks it claims. rc-readiness depends on rust-fuzz, so a finding blocks a release.",
       "artifacts": {
         "manifest": "fuzz/Cargo.toml",
@@ -188,7 +188,7 @@
         "ciJob": "rust-fuzz"
       },
       "observed": {
-        "run": 43594805997,
+        "run": 43676254208,
         "job": "rust-fuzz",
         "conclusion": "success",
         "targets": {
@@ -250,6 +250,12 @@
       "defaultCoverage": "95.010592% (17043/17938)",
       "androidCoverage": "95.004377% (17363/18276)",
       "note": "the Android figure is the same value the earlier passing run produced, and it is now reached by construction rather than by whichever of a signal and a 10ms timer arrived first."
+    },
+    "secondOccurrence": {
+      "run": 43656903146,
+      "missingStatement": "go/internal/a2a/server.go:84 (the ErrServerStopped -> nil mapping)",
+      "rootCause": "grpc.Server.Serve returns ErrServerStopped only when entered after Stop (it checks s.lis == nil on entry). In StartRPC that means the Serve goroutine was scheduled after the ctx.Done goroutine had already called Stop. No single existing test covered it; the suite as a whole sometimes did.",
+      "fix": "The mapping is now a named function (mapServeError) with one definition, and TestServeAfterStopReportsNoError drives the ordering directly: build the server, Stop, then Serve, and require ErrServerStopped."
     }
   },
   "zeroInvariantMeasurement": {
@@ -265,9 +271,9 @@
     "whatIsStillNotProven": "This is an isolated shadow-mode process, not production traffic. It demonstrates that a native workload runs with zero Python involvement and that the measurement method works; it does not demonstrate that a production deployment under real load makes no Python calls, because no production deployment of this runtime exists yet. That distinction is why the assessment stays NOT_READY rather than being populated with these numbers."
   },
   "greenRun": {
-    "run": 43594805997,
-    "exact_head": "42de92499019b8846e1c04203474b0e7367bcc30",
-    "source_tree": "04e58490436010243025547dd6bd8beb6fb964f0",
+    "run": 43676254208,
+    "exact_head": "3b9c2b9c5e3abd632ceb794583529a9f70d56b14",
+    "source_tree": "89efaa29245d135fdbef3dd3710848d9b3b252c5",
     "jobs": {
       "total": 38,
       "success": 38,
@@ -279,10 +285,33 @@
       "android": "95.004377% (17363/18276)"
     },
     "fuzz": {
-      "targets": 3,
-      "executions": 27023603,
-      "findings": 0,
-      "secondsPerTarget": 181
+      "run": 43594805997,
+      "job": "rust-fuzz",
+      "conclusion": "success",
+      "targets": {
+        "transport_frozen_documents": {
+          "executions": 7571714,
+          "seconds": 181
+        },
+        "restore_relative_path": {
+          "executions": 15318532,
+          "seconds": 181
+        },
+        "evidence_proof_envelope": {
+          "executions": 4133357,
+          "seconds": 181,
+          "finalCoverage": 2015,
+          "finalFeatures": 8008
+        }
+      },
+      "totalExecutions": 27023603,
+      "findings": {
+        "crashes": 0,
+        "leaks": 0,
+        "timeouts": 0,
+        "assertionFailures": 0
+      },
+      "note": "Counts read from the libFuzzer summary lines in the job log, not inferred from the job conclusion."
     },
     "keyGatesGreen": [
       "release-version",
@@ -292,6 +321,7 @@
       "evidence-assembly",
       "release-package",
       "rc-readiness"
-    ]
+    ],
+    "note": "The Android coverage figure is back at the passing value and is now reached by construction: the ErrServerStopped arm has its own test that forces the Stop-before-Serve ordering, so the number no longer depends on which goroutine the scheduler runs first."
   }
 }
