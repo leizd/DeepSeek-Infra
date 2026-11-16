@@ -88,7 +88,7 @@ type driverFixtureWorker struct {
 // caller can wait on it instead of sleeping.
 func (fixture *driverFixtureWorker) recordCall(id string) {
 	fixture.mu.Lock()
-	fixture.recordCall(id)
+	fixture.calls = append(fixture.calls, id)
 	fixture.mu.Unlock()
 }
 
@@ -97,6 +97,20 @@ func (fixture *driverFixtureWorker) callSequence() string {
 	fixture.mu.Lock()
 	defer fixture.mu.Unlock()
 	return strings.Join(fixture.calls, ",")
+}
+
+// putEffect records an effect under the same lock as the rest of the shared state.
+func (fixture *driverFixtureWorker) putEffect(operation string, effect *agentv1.AgentNodeEffectMetadata) {
+	fixture.mu.Lock()
+	fixture.effects[operation] = proto.Clone(effect).(*agentv1.AgentNodeEffectMetadata)
+	fixture.mu.Unlock()
+}
+
+// effect returns the recorded effect for an operation, or nil.
+func (fixture *driverFixtureWorker) effectFor(operation string) *agentv1.AgentNodeEffectMetadata {
+	fixture.mu.Lock()
+	defer fixture.mu.Unlock()
+	return fixture.effects[operation]
 }
 
 // waitForCalls blocks until the recorded sequence equals want, or the deadline
@@ -154,7 +168,7 @@ func (fixture *driverFixtureWorker) execute(ctx context.Context, claim *agentv1.
 	if !admitted.Fresh {
 		fixture.t.Fatal("fixture was asked to dispatch twice", id)
 	}
-	fixture.calls = append(fixture.calls, id)
+	fixture.recordCall(id)
 	effect := &agentv1.AgentNodeEffectMetadata{OperationId: intent.OperationId, Fence: intent.Fence, RunId: intent.RunId, NodeId: id, State: "CONFIRMED",
 		PublicEvent: driverFixtureReference("event:" + id), OutcomeSha256: strings.Repeat("a", 64), OutcomeLength: 50}
 	receipt := &agentv1.AgentNodeOutcomeReceipt{SchemaVersion: 1, SignerPublicKey: fixture.binding.PublicKey, Evidence: &agentv1.AgentNodeOutcomeEvidence{
@@ -175,7 +189,7 @@ func (fixture *driverFixtureWorker) execute(ctx context.Context, claim *agentv1.
 	}
 	receipt.Signature = fixture.signed(receipt.Evidence, agentproof.NodeOutcomeDomain)
 	effect.OutcomeReceipt = receipt
-	fixture.effects[intent.OperationId] = proto.Clone(effect).(*agentv1.AgentNodeEffectMetadata)
+	fixture.putEffect(intent.OperationId, effect)
 	if fixture.fail == "tools" && id == "coder" {
 		effect.State = "AWAITING_TOOLS"
 		effect.OutcomeReceipt = nil
@@ -184,7 +198,7 @@ func (fixture *driverFixtureWorker) execute(ctx context.Context, claim *agentv1.
 		effect.State = "EFFECT_UNKNOWN"
 		effect.OutcomeReceipt = nil
 	}
-	fixture.effects[intent.OperationId] = proto.Clone(effect).(*agentv1.AgentNodeEffectMetadata)
+	fixture.putEffect(intent.OperationId, effect)
 	if fixture.fail == "nil" {
 		return nil, nil
 	}
@@ -210,7 +224,7 @@ func (fixture *driverFixtureWorker) QueryAgentNodeEffect(_ context.Context, inpu
 	if fixture.fail == "query" {
 		return nil, context.DeadlineExceeded
 	}
-	effect := fixture.effects[input.OperationId]
+	effect := fixture.effectFor(input.OperationId)
 	if effect == nil {
 		return nil, errAgentDriverUnknown
 	}
@@ -220,7 +234,7 @@ func (fixture *driverFixtureWorker) ProjectAgentPlan(_ context.Context, input *a
 	if fixture.fail == "plan-projection" {
 		return nil, context.DeadlineExceeded
 	}
-	raw, err := proto.MarshalOptions{Deterministic: true}.Marshal(fixture.effects[input.Source.OperationId].OutcomeReceipt)
+	raw, err := proto.MarshalOptions{Deterministic: true}.Marshal(fixture.effectFor(input.Source.OperationId).OutcomeReceipt)
 	if err != nil {
 		fixture.t.Fatal(err)
 	}
@@ -244,7 +258,7 @@ func (fixture *driverFixtureWorker) ProjectAgentFailure(_ context.Context, input
 	if fixture.fail == "failure-projection" {
 		return nil, context.DeadlineExceeded
 	}
-	effect := fixture.effects[input.Source.OperationId]
+	effect := fixture.effectFor(input.Source.OperationId)
 	raw, err := proto.MarshalOptions{Deterministic: true}.Marshal(effect.OutcomeReceipt)
 	if err != nil {
 		fixture.t.Fatal(err)
@@ -269,7 +283,7 @@ func (fixture *driverFixtureWorker) ProjectAgentSynthesis(_ context.Context, inp
 	if fixture.fail == "synthesis-projection" {
 		return nil, context.DeadlineExceeded
 	}
-	effect := fixture.effects[input.Source.OperationId]
+	effect := fixture.effectFor(input.Source.OperationId)
 	raw, err := proto.MarshalOptions{Deterministic: true}.Marshal(effect.OutcomeReceipt)
 	if err != nil {
 		fixture.t.Fatal(err)
