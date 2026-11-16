@@ -600,9 +600,13 @@ fn parse_payload_ref(value: Option<&Value>) -> Result<(&'static str, String), Ap
     }
 }
 
-fn load_and_verify_pack_index(
-    destination: &Path,
-) -> Result<(BTreeSet<String>, BTreeSet<String>, BTreeMap<String, String>), AppError> {
+struct PackIndexVerification {
+    entry_ids: BTreeSet<String>,
+    indexed_packs: BTreeSet<String>,
+    entry_packs: BTreeMap<String, String>,
+}
+
+fn load_and_verify_pack_index(destination: &Path) -> Result<PackIndexVerification, AppError> {
     let index = read_json_object(
         &target_from_relative(destination, PACK_INDEX_PATH),
         "Delta pack index is invalid",
@@ -745,7 +749,11 @@ fn load_and_verify_pack_index(
 
     let entry_ids: BTreeSet<String> = entry_packs.keys().cloned().collect();
     let pack_paths: BTreeSet<String> = packs.into_keys().collect();
-    Ok((entry_ids, pack_paths, entry_packs))
+    Ok(PackIndexVerification {
+        entry_ids,
+        indexed_packs: pack_paths,
+        entry_packs,
+    })
 }
 
 /// Verify an extracted backup tree (`manifest.json`, `checksums.sha256`, and optional delta packs).
@@ -920,7 +928,11 @@ pub fn verify_manifest_tree(destination: &Path) -> Result<Value, AppError> {
             if !auxiliary.contains(PACK_INDEX_PATH) {
                 return Err(invalid_payload("Backup delta pack index is undeclared"));
             }
-            let (entry_ids, indexed_packs, entry_packs) = load_and_verify_pack_index(destination)?;
+            let PackIndexVerification {
+                entry_ids,
+                indexed_packs,
+                entry_packs,
+            } = load_and_verify_pack_index(destination)?;
             if referenced_blobs != entry_ids {
                 return Err(invalid_payload("Backup delta pack has unreferenced blobs"));
             }
@@ -1313,6 +1325,16 @@ mod tests {
     use zip::write::FileOptions;
     use zip::{CompressionMethod, ZipWriter};
 
+    fn render_sha256_manifest(entries: &[(&str, &[u8])]) -> String {
+        use std::fmt::Write as _;
+
+        let mut text = String::new();
+        for (name, bytes) in entries {
+            let _ = writeln!(text, "{}  {name}", sha256_hex(bytes));
+        }
+        text
+    }
+
     fn write_test_zip(path: &Path, entries: &[(&str, &[u8])]) {
         let file = File::create(path).unwrap();
         let mut writer = ZipWriter::new(file);
@@ -1385,10 +1407,7 @@ mod tests {
             ("manifest.json", manifest.as_slice()),
             ("payload-index.json", payload_index.as_slice()),
         ];
-        let checksum_text = control_map_entries
-            .iter()
-            .map(|(name, bytes)| format!("{}  {name}\n", sha256_hex(bytes)))
-            .collect::<String>();
+        let checksum_text = render_sha256_manifest(&control_map_entries);
 
         let control_zip = dir.path().join("control.zip");
         write_test_zip(
@@ -1479,14 +1498,11 @@ mod tests {
         }))
         .unwrap();
         let comp_map = serde_json::to_vec(&json!({"components": {"../evil": [rel]}})).unwrap();
-        let checksum_text = [
+        let checksum_text = render_sha256_manifest(&[
             ("component-map.json", comp_map.as_slice()),
             ("manifest.json", manifest_bytes.as_slice()),
             ("payload-index.json", p_index.as_slice()),
-        ]
-        .iter()
-        .map(|(n, b)| format!("{}  {n}\n", sha256_hex(b)))
-        .collect::<String>();
+        ]);
         let control_zip = dir.path().join("c.zip");
         write_test_zip(
             &control_zip,

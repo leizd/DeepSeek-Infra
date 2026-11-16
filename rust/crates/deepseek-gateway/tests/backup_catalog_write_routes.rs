@@ -676,10 +676,12 @@ async fn scrub_and_verify_unlock_object_set_with_frontend_mirror_and_lease_conte
         ("manifest.json", &manifest_bytes),
         ("payload-index.json", &payload_index_bytes),
     ];
-    let checksum_text = control_entries
-        .iter()
-        .map(|(name, bytes)| format!("{}  {name}\n", sha256_hex(bytes)))
-        .collect::<String>();
+    let mut checksum_text = String::new();
+    for (name, bytes) in &control_entries {
+        use std::fmt::Write as _;
+
+        let _ = writeln!(checksum_text, "{}  {name}", sha256_hex(bytes));
+    }
     let control_zip = make_zip_bytes(&[
         ("component-map.json", &component_map_bytes),
         ("manifest.json", &manifest_bytes),

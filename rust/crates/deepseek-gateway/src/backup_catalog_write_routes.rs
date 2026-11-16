@@ -540,6 +540,24 @@ fn execute_pin(backup_id: &str, pinned: bool) -> Result<Value, AppError> {
     }))
 }
 
+fn record_scrub_check(
+    checks: &mut Map<String, Value>,
+    ok: &mut bool,
+    name: &str,
+    passed: bool,
+    detail: &str,
+) {
+    *ok = *ok && passed;
+    checks.insert(
+        name.to_string(),
+        Value::String(if passed {
+            "PASS".to_string()
+        } else {
+            format!("FAIL: {detail}")
+        }),
+    );
+}
+
 fn execute_scrub(backup_id: &str) -> Result<Value, AppError> {
     let found = find_backup_target(backup_id)?;
     require_native_store(BACKUP_CATALOG_DOMAIN, BACKUP_CATALOG_WRITE_NOT_OWNED)?;
@@ -548,33 +566,34 @@ fn execute_scrub(backup_id: &str) -> Result<Value, AppError> {
     let mut lease = acquire_target_writer(&found.root, &found.target_id)?;
     let mut checks = Map::<String, Value>::new();
     let mut ok = true;
-    let mut record_check = |name: &str, passed: bool, detail: &str| {
-        ok = ok && passed;
-        checks.insert(
-            name.to_string(),
-            Value::String(if passed {
-                "PASS".to_string()
-            } else {
-                format!("FAIL: {detail}")
-            }),
-        );
-    };
 
-    let members = match ciphertext_members(&found.root, &found.record) {
-        Ok(list) => list,
+    let (members, exists_checked) = match ciphertext_members(&found.root, &found.record) {
+        Ok(list) => (list, false),
         Err(err) => {
-            record_check("exists", false, &truncate_chars(&err.message, 80));
-            Vec::new()
+            record_scrub_check(
+                &mut checks,
+                &mut ok,
+                "exists",
+                false,
+                &truncate_chars(&err.message, 80),
+            );
+            (Vec::new(), true)
         }
     };
-    if !checks.contains_key("exists") {
+    if !exists_checked {
         let missing: Vec<String> = members
             .iter()
             .filter(|(path, _, _)| !path.is_file())
             .map(|(path, _, _)| file_display_name(path))
             .collect();
         let detail = format!("missing {}", join_first_three(&missing));
-        record_check("exists", !members.is_empty() && missing.is_empty(), &detail);
+        record_scrub_check(
+            &mut checks,
+            &mut ok,
+            "exists",
+            !members.is_empty() && missing.is_empty(),
+            &detail,
+        );
     }
 
     if !members.is_empty() && members.iter().all(|(path, _, _)| path.is_file()) {
@@ -583,7 +602,9 @@ fn execute_scrub(backup_id: &str) -> Result<Value, AppError> {
             .filter(|(path, _, _)| is_reparse_or_symlink(path))
             .map(|(path, _, _)| file_display_name(path))
             .collect();
-        record_check(
+        record_scrub_check(
+            &mut checks,
+            &mut ok,
             "not-symlink",
             reparsed.is_empty(),
             &format!("reparse point {}", join_first_three(&reparsed)),
@@ -596,7 +617,9 @@ fn execute_scrub(backup_id: &str) -> Result<Value, AppError> {
             })
             .map(|(path, _, _)| file_display_name(path))
             .collect();
-        record_check(
+        record_scrub_check(
+            &mut checks,
+            &mut ok,
             "size",
             wrong_sizes.is_empty(),
             &format!("size mismatch {}", join_first_three(&wrong_sizes)),
@@ -609,7 +632,9 @@ fn execute_scrub(backup_id: &str) -> Result<Value, AppError> {
             })
             .map(|(path, _, _)| file_display_name(path))
             .collect();
-        record_check(
+        record_scrub_check(
+            &mut checks,
+            &mut ok,
             "sha256",
             wrong_digests.is_empty(),
             &format!("digest mismatch {}", join_first_three(&wrong_digests)),
@@ -629,7 +654,9 @@ fn execute_scrub(backup_id: &str) -> Result<Value, AppError> {
                 }
             }
         }
-        record_check(
+        record_scrub_check(
+            &mut checks,
+            &mut ok,
             "age-header",
             header_failure.is_none(),
             header_failure.as_deref().unwrap_or(""),
@@ -643,8 +670,14 @@ fn execute_scrub(backup_id: &str) -> Result<Value, AppError> {
                 &found.root,
                 target_meta,
             ) {
-                Ok(()) => record_check("target-marker", true, ""),
-                Err(msg) => record_check("target-marker", false, &truncate_chars(&msg, 80)),
+                Ok(()) => record_scrub_check(&mut checks, &mut ok, "target-marker", true, ""),
+                Err(msg) => record_scrub_check(
+                    &mut checks,
+                    &mut ok,
+                    "target-marker",
+                    false,
+                    &truncate_chars(&msg, 80),
+                ),
             }
         }
     }
