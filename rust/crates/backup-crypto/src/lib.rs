@@ -243,15 +243,18 @@ fn read_age_header(input: impl Read) -> io::Result<Vec<u8>> {
     Ok(header)
 }
 
-fn inspect_header(input: impl Read, mut output: impl Write) -> io::Result<()> {
+/// Validate an age stream header within the bounded header budget and report
+/// whether it uses passphrase (`scrypt`) encryption.
+pub fn inspect_age_header<R: Read>(input: R) -> io::Result<bool> {
     let header = read_age_header(input)?;
     let decryptor =
         Decryptor::new(BufReader::new(&header[..])).map_err(|_| invalid("not an age file"))?;
-    writeln!(
-        output,
-        "{{\"age\":true,\"passphrase\":{}}}",
-        decryptor.is_scrypt()
-    )
+    Ok(decryptor.is_scrypt())
+}
+
+fn inspect_header(input: impl Read, mut output: impl Write) -> io::Result<()> {
+    let passphrase = inspect_age_header(input)?;
+    writeln!(output, "{{\"age\":true,\"passphrase\":{passphrase}}}")
 }
 
 fn required_flag_value<'a>(args: &'a [String], flag: &str) -> io::Result<&'a str> {

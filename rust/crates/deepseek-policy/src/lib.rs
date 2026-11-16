@@ -11,6 +11,8 @@ pub mod app_error;
 pub mod attachment_context;
 pub mod audit;
 pub mod backup_mirror;
+pub mod backup_unlock;
+pub mod backup_writer_lease;
 pub mod browser;
 pub mod browser_engine;
 pub mod browser_safety;

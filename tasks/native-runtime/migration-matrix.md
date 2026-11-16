@@ -1,3 +1,15 @@
+<!-- native checkpoint 2026-11-16 S2 writes: writer lease, pin, scrub, and native verify-unlock -->
+
+Whole product Rust/Go migration remains ACTIVE / **NOT_READY**.
+
+**S2 remaining slices implemented locally (awaiting cloud Rust compilation & tests):**
+
+- `rust/crates/backup-crypto/src/lib.rs`: exposed bounded `inspect_age_header` alongside `decrypt_identity`.
+- `rust/crates/deepseek-policy/src/backup_writer_lease.rs`: native `TargetWriterLease`, `probe_atomic_target`, and `active_writer_lease` (`O_EXCL` create, fencing token comparison, same-run & expired takeover, 423 busy/token refusal, 409 lost/expired ownership assertions, `Drop` release cleanup); Python oracle parity checks in `tests/test_native_backup_writer_lease_parity.py`.
+- `rust/crates/deepseek-policy/src/backup_unlock.rs`: native in-process Age decrypt + archive verification (`verify_control_metadata`, `extract_component_archive`, `verify_manifest_tree` incl. incremental pack/delta validation, `unlock_sealed_frontend`, `verify_unlock_object_set`, `verify_unlock_legacy`, zero-scrubbing staging cleanup).
+- `rust/crates/deepseek-gateway/src/backup_catalog_write_routes.rs`: native handlers for `POST|DELETE /api/workspace/backup-catalog/:backup_id/pin`, `POST /api/workspace/backups/:backup_id/scrub`, and `POST /api/workspace/backups/:backup_id/verify-unlock`, stamping `targetGeneration` from `backup_commit`, writing `events/<p>/<hash>.json` via `create_new` + `catalog-v1.jsonl` via default-separators `sort_keys`, persisting `scrub_evidence` to `.backup-dr/evidence.sqlite3` under `backup_dr_ledger_store` (`DECLARED_NATIVE_DATA_DOMAINS` 8 -> 9), and gating mutations behind `DEEPSEEK_RUNTIME_MODE=python_disabled` (`409` otherwise without touching disk).
+- **Still outstanding in backup/DR & full migration**: remote S3 registered-target catalog read/write stores (`503 NATIVE_BACKUP_CATALOG_TARGET_STORE_UNMIGRATED` fail-closed), S3–S8 backup workflows (retention, restore, recovery drills, DR proof), and cloud Rust CI execution (`cargo check`/`cargo test` disabled locally on Windows host per `docs/RUST_BUILD_DISK_POLICY.md`).
+
 <!-- native checkpoint 2026-11-16 S2-prep: native commit-marker reader -->
 
 **S2-prep landed: `rust/crates/deepseek-gateway/src/backup_commit.rs`.**

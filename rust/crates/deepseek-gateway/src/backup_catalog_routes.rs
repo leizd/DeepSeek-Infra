@@ -184,27 +184,26 @@ fn registered_target(target_id: &str) -> Result<Value, AppError> {
     }
 }
 
-fn control_target(target_id: &str) -> Result<Option<Value>, AppError> {
-    let directory = crate::data_routes::workspace_root().join(".backup-control");
-    let database = directory.join("control.sqlite3");
+pub(crate) fn open_readonly_sqlite(database: &Path) -> Result<Option<Connection>, AppError> {
     if !database.is_file() {
         return Ok(None);
     }
-    // Never open the control store read-write: Python's `_connect` creates the
-    // directory, the schema and the WAL. A plain read-only open of a WAL database
-    // that has been cleanly closed *also* creates `-wal`/`-shm`, so read the
-    // database through `immutable=1` in exactly that state. When the writer's
-    // side files are present they are left untouched by a read-only open.
-    let side_files = directory.join("control.sqlite3-wal").exists()
-        || directory.join("control.sqlite3-shm").exists();
+    let parent = database.parent();
+    let name = database
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
+    let side_files = parent.is_some_and(|dir| {
+        dir.join(format!("{name}-wal")).exists() || dir.join(format!("{name}-shm")).exists()
+    });
     let connection = if side_files {
         Connection::open_with_flags(
-            &database,
+            database,
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )
     } else {
         Connection::open_with_flags(
-            sqlite_immutable_uri(&database),
+            sqlite_immutable_uri(database),
             OpenFlags::SQLITE_OPEN_READ_ONLY
                 | OpenFlags::SQLITE_OPEN_NO_MUTEX
                 | OpenFlags::SQLITE_OPEN_URI,
@@ -212,6 +211,93 @@ fn control_target(target_id: &str) -> Result<Option<Value>, AppError> {
     }
     .map_err(|_| unhandled())?;
     let _ = connection.busy_timeout(Duration::from_secs(30));
+    Ok(Some(connection))
+}
+
+pub(crate) fn list_registered_targets() -> Result<Vec<Value>, AppError> {
+    let mut records = Vec::new();
+    let mut seen_ids = HashSet::new();
+    let database = crate::data_routes::workspace_root()
+        .join(".backup-control")
+        .join("control.sqlite3");
+    if let Some(connection) = open_readonly_sqlite(&database)? {
+        let table: Option<String> = connection
+            .query_row(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'control_targets'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|_| unhandled())?;
+        if table.is_some() {
+            let mut stmt = connection
+                .prepare("SELECT payload_json FROM control_targets ORDER BY target_id")
+                .map_err(|_| unhandled())?;
+            let rows = stmt
+                .query_map([], |row| row.get::<_, String>(0))
+                .map_err(|_| unhandled())?;
+            for row in rows {
+                let payload = row.map_err(|_| unhandled())?;
+                let value: Value = serde_json::from_str(&payload).map_err(|_| unhandled())?;
+                if !value.is_object() {
+                    return Err(AppError {
+                        message: "storage control authority contains invalid JSON".to_string(),
+                        code: codes::INTERNAL,
+                        status: 500,
+                    });
+                }
+                if let Some(id) = value.get("targetId").and_then(Value::as_str) {
+                    seen_ids.insert(id.to_string());
+                }
+                records.push(value);
+            }
+        }
+    }
+
+    let targets_dir = crate::data_routes::workspace_root().join(".backup-targets");
+    if targets_dir.is_dir() {
+        let mut files = collect_entries(&targets_dir);
+        files.sort();
+        for path in files {
+            if !has_name_suffix(&path, ".json") {
+                continue;
+            }
+            let unreadable = || AppError {
+                message: "Backup target registry is unreadable".to_string(),
+                code: codes::INTERNAL,
+                status: 500,
+            };
+            let text = std::fs::read_to_string(&path).map_err(|_| unreadable())?;
+            let value: Value = serde_json::from_str(&text).map_err(|_| unreadable())?;
+            if let Value::Object(fields) = value
+                && python_truthy(fields.get("targetId").unwrap_or(&Value::Null))
+            {
+                let tid = fields
+                    .get("targetId")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                if !tid.is_empty() && seen_ids.insert(tid) {
+                    records.push(Value::Object(fields));
+                }
+            }
+        }
+    }
+    Ok(records)
+}
+
+fn control_target(target_id: &str) -> Result<Option<Value>, AppError> {
+    let database = crate::data_routes::workspace_root()
+        .join(".backup-control")
+        .join("control.sqlite3");
+    // Never open the control store read-write: Python's `_connect` creates the
+    // directory, the schema and the WAL. A plain read-only open of a WAL database
+    // that has been cleanly closed *also* creates `-wal`/`-shm`, so read the
+    // database through `immutable=1` in exactly that state. When the writer's
+    // side files are present they are left untouched by a read-only open.
+    let Some(connection) = open_readonly_sqlite(&database)? else {
+        return Ok(None);
+    };
     let table: Option<String> = connection
         .query_row(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'control_targets'",
@@ -266,13 +352,13 @@ fn sqlite_immutable_uri(path: &Path) -> String {
     }
 }
 
-fn unhandled() -> AppError {
+pub(crate) fn unhandled() -> AppError {
     route_support::unhandled_error()
 }
 
 // --- catalog chain -----------------------------------------------------------------
 
-fn catalog_path(root: &Path) -> PathBuf {
+pub(crate) fn catalog_path(root: &Path) -> PathBuf {
     root.join("catalog").join(CATALOG_FILENAME)
 }
 
@@ -285,7 +371,7 @@ fn catalog_payload(entry: &Map<String, Value>) -> Value {
 
 /// `_read_entries`: blank lines are skipped, non-object lines are dropped, and a
 /// line that is not JSON at all is the documented 409 refusal.
-fn read_entries(root: &Path) -> Result<Vec<Map<String, Value>>, AppError> {
+pub(crate) fn read_entries(root: &Path) -> Result<Vec<Map<String, Value>>, AppError> {
     let path = catalog_path(root);
     if !path.is_file() {
         return Ok(Vec::new());
@@ -331,7 +417,7 @@ fn verify_chain(root: &Path) -> Result<bool, AppError> {
 }
 
 /// `_entry_hash`: `sha256(json.dumps(body, ensure_ascii=False, sort_keys=True, separators=(",", ":")))`.
-fn entry_hash(entry_type: &str, payload: &Value, previous: &str) -> String {
+pub(crate) fn entry_hash(entry_type: &str, payload: &Value, previous: &str) -> String {
     let body = json!({
         "type": entry_type,
         "payload": payload,
@@ -351,7 +437,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 /// `catalog_state`: fold the chain into per-backup records, preserving the
 /// insertion order the original dict has.
-fn catalog_state(root: &Path) -> Result<Map<String, Value>, AppError> {
+pub(crate) fn catalog_state(root: &Path) -> Result<Map<String, Value>, AppError> {
     let mut state: Map<String, Value> = Map::new();
     for entry in read_entries(root)? {
         let payload_value = catalog_payload(&entry);
@@ -573,11 +659,11 @@ fn has_name_part(path: &Path, part: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn is_object_set(record: &Value) -> bool {
+pub(crate) fn is_object_set(record: &Value) -> bool {
     python_str_or_empty(record.get("storageProtocol")) == OBJECT_SET_V1
 }
 
-fn object_path(root: &Path, digest: &str) -> PathBuf {
+pub(crate) fn object_path(root: &Path, digest: &str) -> PathBuf {
     // `digest[:2]` is a character slice in the original; build it from chars so a
     // legacy record with 64 multi-byte characters cannot panic here.
     let prefix: String = digest.chars().take(2).collect();
@@ -589,7 +675,7 @@ fn object_path(root: &Path, digest: &str) -> PathBuf {
 
 /// `backup_publish.backup_file_candidates`: the object-set commitment members,
 /// then the legacy ciphertext object plus the legacy package filename.
-fn backup_file_candidates(root: &Path, record: &Value) -> Vec<PathBuf> {
+pub(crate) fn backup_file_candidates(root: &Path, record: &Value) -> Vec<PathBuf> {
     if is_object_set(record) {
         let Ok(inventory) = committed_object_inventory(record) else {
             return Vec::new();
@@ -618,7 +704,7 @@ fn backup_file_candidates(root: &Path, record: &Value) -> Vec<PathBuf> {
 /// `backup_object_set.committed_object_inventory`: the frozen `object-set-v1`
 /// commitment is validated before any member is used, and any rejection makes
 /// the record contribute no candidates at all.
-fn committed_object_inventory(record: &Value) -> Result<Vec<ObjectInventoryEntry>, ()> {
+pub(crate) fn committed_object_inventory(record: &Value) -> Result<Vec<ObjectInventoryEntry>, ()> {
     let Some(Value::Array(raw_objects)) = record.get("objects") else {
         return Err(());
     };

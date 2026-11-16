@@ -1,5 +1,10 @@
 # 继续 Rust/Go 重构的提示词
 
+<!-- docs-language-switcher:start -->
+[中文](../../README.md) / [English](../../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 把下面整段内容交给下一个 agent。它自带全部上下文，不需要读历史对话。
 
 ---

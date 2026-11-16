@@ -420,32 +420,12 @@
     },
     {
       "method": "post",
-      "path": "/api/workspace/backup-catalog/{backup_id}/pin",
-      "file": "deepseek_infra/web/routes/backup_governance.py"
-    },
-    {
-      "method": "delete",
-      "path": "/api/workspace/backup-catalog/{backup_id}/pin",
-      "file": "deepseek_infra/web/routes/backup_governance.py"
-    },
-    {
-      "method": "post",
       "path": "/api/workspace/retention/preview",
       "file": "deepseek_infra/web/routes/backup_governance.py"
     },
     {
       "method": "post",
       "path": "/api/workspace/retention/apply",
-      "file": "deepseek_infra/web/routes/backup_governance.py"
-    },
-    {
-      "method": "post",
-      "path": "/api/workspace/backups/{backup_id}/scrub",
-      "file": "deepseek_infra/web/routes/backup_governance.py"
-    },
-    {
-      "method": "post",
-      "path": "/api/workspace/backups/{backup_id}/verify-unlock",
       "file": "deepseek_infra/web/routes/backup_governance.py"
     },
     {
