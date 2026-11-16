@@ -368,7 +368,7 @@ def test_the_go_race_suites_run_in_parallel_jobs_not_serially() -> None:
         assert "--store-shards 4" in commands, job_name
         # 4, not 2: the shards and the non-store packages now share one pool sized to
         # the runner's vCPU count, so half the machine is no longer idle.
-        assert "--max-parallel 2" in commands, job_name
+        assert "--max-parallel 4" in commands, job_name
         if tags:
             assert job["env"]["GOFLAGS"] == tags, job_name
         # They are independent, so neither may need the other. YAML collapses a
@@ -410,7 +410,7 @@ def test_the_race_runner_overlaps_the_non_store_packages_with_the_shards() -> No
     assert "ThreadPoolExecutor(max_workers=args.max_parallel + 1)" in runner
 
     # Four shards at four-way parallelism, which is one per vCPU on the runner.
-    assert 'default=2, choices=range(1, 5)' in runner
+    assert 'default=4, choices=range(1, 5)' in runner
 
     # The integrity checks must survive the concurrency change: results are collected
     # into the report before any verdict, and a failed half still fails the gate.
@@ -418,3 +418,37 @@ def test_the_race_runner_overlaps_the_non_store_packages_with_the_shards() -> No
     assert 'report["otherExecution"] = other' in runner
     assert "AGGREGATE_CORPUS_COUNT_DIFFERS" in runner
     assert 'raise RaceGateError("RACE_COMMAND_FAILED")' in runner
+
+
+def test_the_race_fixture_waits_on_state_instead_of_a_fixed_sleep() -> None:
+    """Raising race parallelism is only safe if the timing-sensitive test stopped
+    depending on spare CPU.
+
+    Measured: with the store shards running beside it, this test failed on both the
+    Android and default variants with "uncertain custody was redispatched" - on runs
+    that did nothing wrong. The cause was `time.Sleep(4300ms)` standing in for "wait
+    until the driver has dispatched leader then coder"; four race processes on four
+    cores made 4.3 seconds too short.
+
+    It now waits for the recorded call sequence. This asserts the wait exists and the
+    fixed sleep does not come back, because reverting it would silently restore a test
+    whose verdict depends on machine load.
+    """
+    source = (ROOT / "go" / "internal" / "api" / "agent_run_driver_test.go").read_text(encoding="utf-8")
+
+    # A condition-based helper exists and is used by the test under change.
+    assert "func (fixture *driverFixtureWorker) waitForCalls(" in source
+    assert 'fixture.waitForCalls("leader,coder"' in source
+
+    # The old fixed wait is gone from that test.
+    start = source.index("func TestAgentDriverLoopKeepsUnknownAndToolsPendingCustodyWithoutRedispatch")
+    end = source.index("func ", start + 10)
+    body = source[start:end]
+    assert "time.Sleep(4300 * time.Millisecond)" not in body, (
+        "the fixed sleep is back; the test's verdict would depend on machine load again"
+    )
+
+    # And the shared recorder is guarded, because the driver goroutine writes it while
+    # the test reads it - the -race detector is entitled to report it otherwise.
+    assert "func (fixture *driverFixtureWorker) recordCall(" in source
+    assert "fixture.mu.Lock()" in source

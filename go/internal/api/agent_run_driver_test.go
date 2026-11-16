@@ -10,6 +10,7 @@ import (
 	"errors"
 	"log"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -66,16 +67,51 @@ func TestDriverRecoveryKeepsCancellationHistoryAndCompletesOnlySelectedTasks(t *
 // Offline signed worker fixtures qualify Go orchestration and refusal behavior;
 // they never qualify Rust custody, a provider or the public native process path.
 type driverFixtureWorker struct {
-	t          *testing.T
-	nodes      *agentNodeService
-	private    ed25519.PrivateKey
-	binding    worker.ControlSignerBinding
+	t     *testing.T
+	nodes *agentNodeService
+	// mu guards the fields the driver goroutine writes and the test reads. Without it
+	// the recorder is a plain unsynchronised slice shared across goroutines: safe only
+	// while the timing happens to work out, which is exactly the property that made
+	// these tests fail under load.
+	mu         sync.Mutex
 	effects    map[string]*agentv1.AgentNodeEffectMetadata
 	calls      []string
 	fail       string
 	failAfter  string
 	rejectNode string
 	closes     int
+	private    ed25519.PrivateKey
+	binding    worker.ControlSignerBinding
+}
+
+// recordCall appends a dispatched node and reports the resulting sequence, so the
+// caller can wait on it instead of sleeping.
+func (fixture *driverFixtureWorker) recordCall(id string) {
+	fixture.mu.Lock()
+	fixture.recordCall(id)
+	fixture.mu.Unlock()
+}
+
+// callSequence returns a snapshot of the recorded nodes.
+func (fixture *driverFixtureWorker) callSequence() string {
+	fixture.mu.Lock()
+	defer fixture.mu.Unlock()
+	return strings.Join(fixture.calls, ",")
+}
+
+// waitForCalls blocks until the recorded sequence equals want, or the deadline
+// expires. It returns whether the sequence matched.
+func (fixture *driverFixtureWorker) waitForCalls(want string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		if fixture.callSequence() == want {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 func (fixture *driverFixtureWorker) AuthorizeAgentExecution(_ context.Context, claim *agentv1.AgentRunExecutionClaim, id, nonce string, binding worker.ControlSignerBinding) ([]byte, error) {
@@ -775,12 +811,25 @@ func TestAgentDriverLoopKeepsUnknownAndToolsPendingCustodyWithoutRedispatch(t *t
 			driver, fixture, run := newDriverFixture(t, false)
 			fixture.fail = failure
 			cancel, done := driverFixtureLoop(t, driver)
-			time.Sleep(4300 * time.Millisecond)
+			// Wait for the state under test rather than for a duration. A fixed 4300ms
+			// was long enough only when this package ran alone: with the store race
+			// shards running beside it, the driver loop is slow enough that the sleep
+			// expires before `coder` has been dispatched, and the assertion then fails
+			// with "uncertain custody was redispatched" on a run that did nothing wrong.
+			if !fixture.waitForCalls("leader,coder", 60*time.Second) {
+				cancel()
+				<-done
+				t.Fatalf("driver never dispatched leader then coder; calls=%q", fixture.callSequence())
+			}
+			// Hold the state briefly so a redispatch attempt would have time to appear,
+			// then let the driver settle. This is a guard against a late second dispatch,
+			// not the trigger for the assertion.
+			time.Sleep(200 * time.Millisecond)
 			cancel()
 			<-done
 			run = driverFixtureRun(t, driver, run.RunID)
-			if run.Status == "done" || strings.Join(fixture.calls, ",") != "leader,coder" {
-				t.Fatal("uncertain custody was redispatched or fabricated completion", run.Status, fixture.calls)
+			if run.Status == "done" || fixture.callSequence() != "leader,coder" {
+				t.Fatal("uncertain custody was redispatched or fabricated completion", run.Status, fixture.callSequence())
 			}
 			records, err := driver.service.control.ListAuthoritativeRecords("action")
 			if err != nil || len(records) != 2 {
