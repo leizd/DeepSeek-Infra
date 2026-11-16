@@ -576,17 +576,19 @@ fn parse_payload_ref(value: Option<&Value>) -> Result<(&'static str, String), Ap
         Some(Value::String(text)) if !text.is_empty() => Ok(("standalone", text.clone())),
         Some(Value::Object(map)) => {
             let kind = map.get("kind").and_then(Value::as_str).unwrap_or("");
-            if kind == "pack-range"
-                && let Some(blob_id) = map.get("blobId").and_then(Value::as_str)
-                && !blob_id.is_empty()
-            {
-                return Ok(("pack-range", blob_id.to_string()));
+            if kind == "pack-range" {
+                if let Some(blob_id) = map.get("blobId").and_then(Value::as_str) {
+                    if !blob_id.is_empty() {
+                        return Ok(("pack-range", blob_id.to_string()));
+                    }
+                }
             }
-            if kind == "standalone"
-                && let Some(path) = map.get("path").and_then(Value::as_str)
-                && !path.is_empty()
-            {
-                return Ok(("standalone", path.to_string()));
+            if kind == "standalone" {
+                if let Some(path) = map.get("path").and_then(Value::as_str) {
+                    if !path.is_empty() {
+                        return Ok(("standalone", path.to_string()));
+                    }
+                }
             }
             Err(invalid_payload(
                 "Delta payload reference is missing or invalid",
@@ -804,34 +806,34 @@ pub fn verify_manifest_tree(destination: &Path) -> Result<Value, AppError> {
     collect_relative_files(destination, destination, true, &mut actual)?;
 
     let mut auxiliary = BTreeSet::new();
-    if let Some(delta_files) = manifest.get("deltaFiles")
-        && !delta_files.is_null()
-    {
-        let Some(entries) = delta_files.as_array() else {
-            return Err(invalid_payload("Backup delta file inventory is invalid"));
-        };
-        for entry in entries {
-            let Some(obj) = entry.as_object() else {
+    if let Some(delta_files) = manifest.get("deltaFiles") {
+        if !delta_files.is_null() {
+            let Some(entries) = delta_files.as_array() else {
                 return Err(invalid_payload("Backup delta file inventory is invalid"));
             };
-            let relative =
-                validate_archive_path(obj.get("path").and_then(Value::as_str).unwrap_or(""))?;
-            if declared_paths.contains(&relative) || !auxiliary.insert(relative.clone()) {
-                return Err(invalid_payload(
-                    "Backup delta file collides with a restorable path",
-                ));
-            }
-            let path = target_from_relative(destination, &relative);
-            let expected_size = strict_non_negative_int(obj.get("size"));
-            let expected_sha = obj.get("sha256").and_then(Value::as_str);
-            let valid = path.is_file()
-                && fs::metadata(&path).map(|m| m.len()).ok() == expected_size
-                && expected_sha.is_some()
-                && sha256_file(&path).ok().as_deref() == expected_sha;
-            if !valid {
-                return Err(invalid_payload(format!(
-                    "Backup delta checksum mismatch: {relative}"
-                )));
+            for entry in entries {
+                let Some(obj) = entry.as_object() else {
+                    return Err(invalid_payload("Backup delta file inventory is invalid"));
+                };
+                let relative =
+                    validate_archive_path(obj.get("path").and_then(Value::as_str).unwrap_or(""))?;
+                if declared_paths.contains(&relative) || !auxiliary.insert(relative.clone()) {
+                    return Err(invalid_payload(
+                        "Backup delta file collides with a restorable path",
+                    ));
+                }
+                let path = target_from_relative(destination, &relative);
+                let expected_size = strict_non_negative_int(obj.get("size"));
+                let expected_sha = obj.get("sha256").and_then(Value::as_str);
+                let valid = path.is_file()
+                    && fs::metadata(&path).map(|m| m.len()).ok() == expected_size
+                    && expected_sha.is_some()
+                    && sha256_file(&path).ok().as_deref() == expected_sha;
+                if !valid {
+                    return Err(invalid_payload(format!(
+                        "Backup delta checksum mismatch: {relative}"
+                    )));
+                }
             }
         }
     }
@@ -870,45 +872,46 @@ pub fn verify_manifest_tree(destination: &Path) -> Result<Value, AppError> {
             Ok(())
         };
 
-        if let Some(puts_value) = ops.get("put")
-            && !puts_value.is_null()
-        {
-            let Some(puts) = puts_value.as_array() else {
-                return Err(invalid_payload(
-                    "Backup delta operations manifest is invalid",
-                ));
-            };
-            for put in puts {
-                let Some(obj) = put.as_object() else {
+        if let Some(puts_value) = ops.get("put") {
+            if !puts_value.is_null() {
+                let Some(puts) = puts_value.as_array() else {
                     return Err(invalid_payload(
                         "Backup delta operations manifest is invalid",
                     ));
                 };
-                if obj
-                    .get("storage")
-                    .and_then(Value::as_str)
-                    .unwrap_or("whole")
-                    == "cdc"
-                {
-                    let Some(chunks) = obj.get("chunks").and_then(Value::as_array) else {
-                        return Err(invalid_payload("Backup delta CDC file has no chunk list"));
+                for put in puts {
+                    let Some(obj) = put.as_object() else {
+                        return Err(invalid_payload(
+                            "Backup delta operations manifest is invalid",
+                        ));
                     };
-                    for chunk in chunks {
-                        let Some(chunk_obj) = chunk.as_object() else {
-                            return Err(invalid_payload(
-                                "Backup delta CDC file has an invalid chunk",
-                            ));
+                    if obj
+                        .get("storage")
+                        .and_then(Value::as_str)
+                        .unwrap_or("whole")
+                        == "cdc"
+                    {
+                        let Some(chunks) = obj.get("chunks").and_then(Value::as_array) else {
+                            return Err(invalid_payload("Backup delta CDC file has no chunk list"));
                         };
-                        if chunk_obj.get("source").and_then(Value::as_str) == Some("payload") {
-                            record_ref(chunk_obj.get("payloadRef"))?;
+                        for chunk in chunks {
+                            let Some(chunk_obj) = chunk.as_object() else {
+                                return Err(invalid_payload(
+                                    "Backup delta CDC file has an invalid chunk",
+                                ));
+                            };
+                            if chunk_obj.get("source").and_then(Value::as_str) == Some("payload") {
+                                record_ref(chunk_obj.get("payloadRef"))?;
+                            }
+                        }
+                    } else if let Some(raw_ref) = obj.get("payloadRef") {
+                        if !raw_ref.is_null()
+                            && !matches!(raw_ref, Value::String(s) if s.is_empty())
+                            && !matches!(raw_ref, Value::Object(m) if m.is_empty())
+                        {
+                            record_ref(Some(raw_ref))?;
                         }
                     }
-                } else if let Some(raw_ref) = obj.get("payloadRef")
-                    && !raw_ref.is_null()
-                    && !matches!(raw_ref, Value::String(s) if s.is_empty())
-                    && !matches!(raw_ref, Value::Object(m) if m.is_empty())
-                {
-                    record_ref(Some(raw_ref))?;
                 }
             }
         }

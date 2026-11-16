@@ -418,13 +418,14 @@ impl TargetWriterLease {
                         ));
                     }
                     self.write_replace(&payload)?;
-                    if let Some(confirmed) = self.read_existing()
-                        && scalar_text(confirmed.get("ownerRunId")) == self.owner_run_id
-                        && parse_fencing_token(&confirmed, -1) == Some(self.fencing_token)
-                        && !Self::is_expired(&confirmed, (self.clock)())
-                    {
-                        self.acquired = true;
-                        return Ok(());
+                    if let Some(confirmed) = self.read_existing() {
+                        if scalar_text(confirmed.get("ownerRunId")) == self.owner_run_id
+                            && parse_fencing_token(&confirmed, -1) == Some(self.fencing_token)
+                            && !Self::is_expired(&confirmed, (self.clock)())
+                        {
+                            self.acquired = true;
+                            return Ok(());
+                        }
                     }
                 }
                 Err(err) if err.kind() == ErrorKind::PermissionDenied => {
@@ -480,15 +481,16 @@ impl TargetWriterLease {
 
     /// Release `.target-lock/writer.json` only if it still names this `ownerRunId` and `fencingToken`.
     pub fn release(&mut self) {
-        if let Some(existing) = self.read_existing()
-            && scalar_text(existing.get("ownerRunId")) == self.owner_run_id
-            && parse_fencing_token(&existing, -1) == Some(self.fencing_token)
-        {
-            let _ = retry_permission(
-                || remove_file_if_exists(&self.path()),
-                5,
-                StdDuration::from_millis(50),
-            );
+        if let Some(existing) = self.read_existing() {
+            if scalar_text(existing.get("ownerRunId")) == self.owner_run_id
+                && parse_fencing_token(&existing, -1) == Some(self.fencing_token)
+            {
+                let _ = retry_permission(
+                    || remove_file_if_exists(&self.path()),
+                    5,
+                    StdDuration::from_millis(50),
+                );
+            }
         }
         self.acquired = false;
     }

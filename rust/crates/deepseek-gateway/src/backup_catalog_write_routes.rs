@@ -486,11 +486,11 @@ fn record_scrub_evidence_sqlite(
 
     // Legacy databases created before composite PKs may lack `policy_id`.
     let mut has_policy_id = false;
-    if let Ok(mut stmt) = connection.prepare("PRAGMA table_info(scrub_evidence)")
-        && let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(1))
-    {
-        let cols: HashSet<String> = rows.filter_map(Result::ok).collect();
-        has_policy_id = cols.contains("policy_id");
+    if let Ok(mut stmt) = connection.prepare("PRAGMA table_info(scrub_evidence)") {
+        if let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(1)) {
+            let cols: HashSet<String> = rows.filter_map(Result::ok).collect();
+            has_policy_id = cols.contains("policy_id");
+        }
     }
     if !has_policy_id {
         let _ = connection.execute(
@@ -636,12 +636,16 @@ fn execute_scrub(backup_id: &str) -> Result<Value, AppError> {
         );
     }
 
-    if found.target_id != "managed-local"
-        && let Some(target_meta) = &found.target_meta
-    {
-        match verify_registered_target_ready_readonly(&found.target_id, &found.root, target_meta) {
-            Ok(()) => record_check("target-marker", true, ""),
-            Err(msg) => record_check("target-marker", false, &truncate_chars(&msg, 80)),
+    if found.target_id != "managed-local" {
+        if let Some(target_meta) = &found.target_meta {
+            match verify_registered_target_ready_readonly(
+                &found.target_id,
+                &found.root,
+                target_meta,
+            ) {
+                Ok(()) => record_check("target-marker", true, ""),
+                Err(msg) => record_check("target-marker", false, &truncate_chars(&msg, 80)),
+            }
         }
     }
 

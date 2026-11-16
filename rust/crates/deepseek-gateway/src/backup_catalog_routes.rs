@@ -269,16 +269,16 @@ pub(crate) fn list_registered_targets() -> Result<Vec<Value>, AppError> {
             };
             let text = std::fs::read_to_string(&path).map_err(|_| unreadable())?;
             let value: Value = serde_json::from_str(&text).map_err(|_| unreadable())?;
-            if let Value::Object(fields) = value
-                && python_truthy(fields.get("targetId").unwrap_or(&Value::Null))
-            {
-                let tid = fields
-                    .get("targetId")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string();
-                if !tid.is_empty() && seen_ids.insert(tid) {
-                    records.push(Value::Object(fields));
+            if let Value::Object(fields) = value {
+                if python_truthy(fields.get("targetId").unwrap_or(&Value::Null)) {
+                    let tid = fields
+                        .get("targetId")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    if !tid.is_empty() && seen_ids.insert(tid) {
+                        records.push(Value::Object(fields));
+                    }
                 }
             }
         }
