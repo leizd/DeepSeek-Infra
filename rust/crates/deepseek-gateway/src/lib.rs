@@ -741,6 +741,7 @@ pub(crate) const DECLARED_NATIVE_DATA_DOMAINS: [&str; 8] = [
     // denies only under PYTHON_DISABLED - the same condition this function checks.
     // The two halves therefore cannot write at once; verified by driving all three
     // runtime modes through both sides.
+    "backup_catalog_store",
     "reminders_store",
     "project_metadata_store",
     "skills_store",

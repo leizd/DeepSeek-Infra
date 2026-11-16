@@ -239,3 +239,36 @@ def test_declared_writer_entry_points_are_gated_in_python() -> None:
 def test_writer_gate_is_idempotent() -> None:
     """`--check` must report nothing once the gates are installed."""
     assert native_store_writer_gate.main(["--check"]) == 0
+
+def test_declared_native_data_domains_length_matches_its_elements() -> None:
+    """A fixed-size Rust array whose declared length is wrong does not compile.
+
+    That is obvious to rustc and invisible to every local gate on this host, where
+    Cargo cannot build. It has cost a full CI round before: the array was widened from
+    7 to 8 for `backup_catalog_store` while the element itself was left out, and 17
+    jobs failed on one `E0308`. Counting the elements here turns a compile error into
+    a test failure that runs anywhere.
+    """
+    import re
+
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "rust/crates/deepseek-gateway/src/lib.rs").read_text(encoding="utf-8")
+    match = re.search(
+        r"DECLARED_NATIVE_DATA_DOMAINS: \[&str; (\d+)\] = \[(.*?)\n\];", source, re.S
+    )
+    assert match, "DECLARED_NATIVE_DATA_DOMAINS declaration not found"
+    declared = int(match.group(1))
+    elements = [
+        line.strip().strip(",").strip('"')
+        for line in match.group(2).splitlines()
+        if re.fullmatch(r'\s*"[a-z_]+",', line)
+    ]
+    assert declared == len(elements), (
+        f"declared length {declared} but {len(elements)} elements; "
+        "this is an E0308 at compile time: " + ", ".join(elements)
+    )
+    # The catalog domain is the one that was added; keep it pinned.
+    assert "backup_catalog_store" in elements
+
