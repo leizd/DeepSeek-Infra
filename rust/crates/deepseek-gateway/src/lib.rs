@@ -31,7 +31,8 @@ mod authority_retention_routes;
 mod automation_definition_routes;
 mod automation_run_routes;
 mod automation_template_routes;
-mod backup_catalog_routes;
+pub mod backup_catalog_routes;
+pub mod backup_commit;
 mod backup_drill_routes;
 pub mod backup_mirror_routes;
 mod backup_replication_routes;
@@ -731,8 +732,15 @@ const MEMORY_VECTOR_INDEX_NOT_REPRODUCIBLE: &str = "NATIVE_MEMORY_VECTOR_INDEX_N
 ///    4.9.4. A store that is **not** here stays refused whatever the mode says — setting the mode alone
 ///    must not be able to enable a store nobody declared — which is why the list is the second
 ///    condition rather than a detail of the first. A test pins it as a subset of the contract's.
-pub(crate) const DECLARED_NATIVE_DATA_DOMAINS: [&str; 7] = [
+pub(crate) const DECLARED_NATIVE_DATA_DOMAINS: [&str; 8] = [
     "memory_store",
+    // The append-only catalog chain under `.backup-catalog/` and
+    // `.backups/catalog/catalog-v1.jsonl`. Every Python mutation funnels through
+    // `backup_catalog._append_entry`, which calls
+    // `assert_python_writer_allowed("backup_catalog_store")`, and that assertion
+    // denies only under PYTHON_DISABLED - the same condition this function checks.
+    // The two halves therefore cannot write at once; verified by driving all three
+    // runtime modes through both sides.
     "reminders_store",
     "project_metadata_store",
     "skills_store",

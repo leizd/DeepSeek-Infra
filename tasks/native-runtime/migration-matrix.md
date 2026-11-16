@@ -1,3 +1,51 @@
+<!-- native checkpoint 2026-11-16 S2-prep: native commit-marker reader -->
+
+**S2-prep landed: `rust/crates/deepseek-gateway/src/backup_commit.rs`.**
+
+Every catalog append records the target generation it was written at, and that value
+comes from the newest published commit under `<root>/commits/`. The native reader that
+decides "newest" is now in place, and it is the shared prerequisite for the S2 writes
+and for S3-S8: retention, restores, drills and DR all read the commit chain before
+they write.
+
+Three behaviours are reproduced exactly rather than approximated, because getting any
+of them wrong would stamp a different `targetGeneration` into a new entry and diverge
+the two chains permanently:
+
+1. **Discovery order** - `sorted(commits/*/*.json)`, lexicographic by full path.
+2. **Tie-break** - Python's `max()` keeps the *first* maximal element, so a tie at the
+   highest generation resolves to the lexicographically smallest path. A `>=` scan
+   picks the other one; verified that the parity test distinguishes them
+   (`aa/bbb.json` vs `zz/aaa.json`).
+3. **Tolerant reads** - unparsable, non-object, or empty-`commitHash` files are
+   skipped rather than fatal, and `int(marker.get("targetGeneration") or 0)` treats
+   `"7"` as 7 while `null`/`0`/`""` collapse to 0.
+
+`tests/test_native_backup_commit_parity.py` drives the real Python functions over
+generated layouts (17 cases) so the oracle itself is the reference, not a transcription
+of it. Rust-side unit tests in the module cover the same invariants natively.
+
+**Still not done in S2, stated plainly:**
+
+- `POST|DELETE /api/workspace/backup-catalog/{backup_id}/pin` - the write needs a
+  writer lease (`backup_writer_lease`, 396 lines: O_EXCL acquisition, fencing token,
+  expiry, takeover) and `backup_publish._create_exclusive` for the event file. The
+  commit reader above is one prerequisite; the lease is the other, and it is not
+  implemented natively yet.
+- `POST /api/workspace/backups/{backup_id}/scrub` - `backup_scrub.scrub_backup` reads
+  every committed ciphertext member, rejects reparse points, compares sizes and
+  recomputes per-member sha256 (`_managed_ciphertext_sha256`). Needs the object layout,
+  not just the catalog.
+- `POST /api/workspace/backups/{backup_id}/verify-unlock` - requires an
+  `AGE-SECRET-KEY-` recovery identity and runs a real `verify_unlock_drill` against
+  `RESTORE_DIR/drills`. Native Age decryption plus drill staging do not exist.
+
+`backup_catalog_store` was added to `DECLARED_NATIVE_DATA_DOMAINS` (7 -> 8). The gate
+is symmetric with Python's, which was verified by driving all three runtime modes
+through both sides: Python writes the domain under `python_authoritative` and
+`go_authoritative`, and is mechanically denied under `python_disabled` - the same
+condition `may_write_native_store` checks. Neither side can write it alone.
+
 <!-- native checkpoint 2026-11-10 full ci.yml runs green except a pre-existing Go floor -->
 
 Whole product Rust/Go migration remains ACTIVE / **NOT_READY**.
