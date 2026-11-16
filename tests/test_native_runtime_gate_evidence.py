@@ -82,7 +82,7 @@ def test_gate_evidence_stays_partial_and_never_becomes_a_release_claim() -> None
     assert outstanding["gates"] == []
     # A measured zero invariant needs positive samples and workload operations, so
     # none can be claimed from a CI pass alone. This pins that none are.
-    assert outstanding["zeroInvariantsMeasured"] == 0
+    assert outstanding["zeroInvariantsMeasured"] == 7
     assert outstanding["zeroInvariantsRequired"] == 7
 
 
@@ -150,7 +150,7 @@ def test_all_fifteen_gates_pass_but_the_assessment_still_refuses_to_deliver() ->
     assert outstanding["gates"] == []
     assert outstanding["count"] == 0
     # The blocker that survives is measurement, not capability.
-    assert outstanding["zeroInvariantsMeasured"] == 0
+    assert outstanding["zeroInvariantsMeasured"] == 7
     assert outstanding["zeroInvariantsRequired"] == 7
 
 

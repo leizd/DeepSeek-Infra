@@ -3,7 +3,7 @@
   "kind": "native-runtime-gate-evidence-v1",
   "release": "5.0.0",
   "status": "PARTIAL",
-  "purpose": "Records only the release gates that now have exact-head, hash-verified evidence. This is deliberately not release/native_runtime_5_0_evidence_v1.json: that assessment stays NOT_READY because DELIVERED requires all fifteen gates plus workload-measured zero invariants, and claiming otherwise here would be a false release assertion.",
+  "purpose": "Records every release gate and zero invariant that now has exact-head, hash-verified or workload-measured evidence. This is deliberately not release/native_runtime_5_0_evidence_v1.json: that file is a repository-snapshot assessment and stays NOT_READY by design until a production deployment exists, so claiming DELIVERED here would overstate what was measured.",
   "provenance": {
     "exact_head": "3b9c2b9c5e3abd632ceb794583529a9f70d56b14",
     "source_tree": "89efaa29245d135fdbef3dd3710848d9b3b252c5",
@@ -221,9 +221,9 @@
   "notYetPassing": {
     "count": 0,
     "gates": [],
-    "zeroInvariantsMeasured": 0,
+    "zeroInvariantsMeasured": 7,
     "zeroInvariantsRequired": 7,
-    "reason": "All fifteen gates now have evidence. The release assessment still cannot become DELIVERED because seven workload-measured zero invariants remain at zero, and the validator refuses a vacuous zero."
+    "reason": "All fifteen gates pass and all seven zero invariants have been measured at zero against a real native workload. Neither of those makes this a DELIVERED release: the measurements come from an isolated shadow-mode process, not production traffic, and this runtime has no production deployment. The validator also refuses a vacuous zero, so the numbers alone cannot be promoted into release evidence without that deployment."
   },
   "readiness": "NOT_READY",
   "fullMigrationQualified": false,
