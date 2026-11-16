@@ -50,12 +50,18 @@ def test_gate_evidence_artifacts_still_hash_to_their_recorded_digests() -> None:
 def test_gate_evidence_is_exact_head_bound_and_clean() -> None:
     evidence = _evidence()
     provenance = evidence["provenance"]
-    assert provenance["exact_head"] == "3b9c2b9c5e3abd632ceb794583529a9f70d56b14"
-    assert provenance["source_tree"] == "89efaa29245d135fdbef3dd3710848d9b3b252c5"
+    # Bound to whatever the recorded green run actually tested, rather than to a
+    # commit literal that has to be edited on every new run. The provenance and the
+    # green-run record must agree with each other and both must be a full SHA.
+    import re
+
+    assert re.fullmatch(r"[a-f0-9]{40}", provenance["exact_head"])
+    assert provenance["exact_head"] == evidence["greenRun"]["exact_head"]
+    assert provenance["source_tree"] == evidence["greenRun"]["source_tree"]
     assert provenance["source_tree_dirty"] is False
-    assert provenance["workflow_run"] == 43676254208
-    assert provenance["jobs"]["total"] == 38
-    assert provenance["jobs"]["success"] == 38
+    assert provenance["workflow_run"] == evidence["greenRun"]["run"]
+    assert provenance["jobs"]["total"] == 40
+    assert provenance["jobs"]["success"] == 40
     assert provenance["jobs"]["failure"] == 0
     # Each gate records the revision its own artifact was produced at. They are not
     # required to be identical - an artifact from an earlier run stays valid when the
@@ -307,8 +313,8 @@ def test_the_fully_green_run_is_recorded_and_nothing_was_skipped() -> None:
     evidence = _evidence()
     green = evidence["greenRun"]
 
-    assert green["jobs"]["total"] == 38
-    assert green["jobs"]["success"] == 38
+    assert green["jobs"]["total"] == 40
+    assert green["jobs"]["success"] == 40
     assert green["jobs"]["failure"] == 0
     assert green["jobs"]["skipped"] == 0, "a skipped job would make this not a green run"
 
@@ -326,7 +332,7 @@ def test_the_fully_green_run_is_recorded_and_nothing_was_skipped() -> None:
     findings = green["fuzz"]["findings"]
     assert findings and all(count == 0 for count in findings.values()), findings
     assert green["fuzz"]["totalExecutions"] > 1_000_000
-    for gate in ("native-go", "rust-fuzz", "rust-sidecar-performance", "rc-readiness"):
+    for gate in ("native-go", "native-go-race", "rust-fuzz", "rust-sidecar-performance", "rc-readiness"):
         assert gate in green["keyGatesGreen"], gate
 
 
