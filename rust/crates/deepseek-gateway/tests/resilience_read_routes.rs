@@ -63,10 +63,7 @@ fn build_app(root: &std::path::Path) -> (tempfile::TempDir, EnvGuard, axum::Rout
     std::fs::create_dir_all(&ui).unwrap();
     std::fs::write(ui.join("index.html"), "<main>ui</main>").unwrap();
     let env = EnvGuard::set(&[
-        (
-            "DEEPSEEK_INFRA_ROOT",
-            root.path().to_string_lossy().into_owned(),
-        ),
+        ("DEEPSEEK_INFRA_ROOT", root.to_string_lossy().into_owned()),
         ("AUTH_TOKEN", TEST_TOKEN.to_string()),
         ("AUTH_DISABLED", String::new()),
         ("AUTH_ALLOWED_HOSTS", String::new()),

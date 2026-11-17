@@ -48,7 +48,7 @@ async fn dispatch(method: Method) -> Response {
     }
 }
 
-fn now_utc_iso() -> String {
+pub(crate) fn now_utc_iso() -> String {
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
@@ -56,7 +56,7 @@ fn now_utc_iso() -> String {
     utc_iso_from_unix(secs)
 }
 
-fn round2(value: f64) -> f64 {
+pub(crate) fn round2(value: f64) -> f64 {
     (value * 100.0).round() / 100.0
 }
 
@@ -303,11 +303,21 @@ fn target_capacity_observation(
         .filter(Value::is_object))
 }
 
-fn probe_target_capacity_readonly(
+pub(crate) fn probe_target_capacity_readonly(
     target: &Value,
     target_id: &str,
     control_conn: Option<&Connection>,
     dr_conn: Option<&Connection>,
+) -> Result<Value, AppError> {
+    probe_target_capacity_with_probe(target, target_id, control_conn, dr_conn, true)
+}
+
+pub(crate) fn probe_target_capacity_with_probe(
+    target: &Value,
+    target_id: &str,
+    control_conn: Option<&Connection>,
+    dr_conn: Option<&Connection>,
+    probe: bool,
 ) -> Result<Value, AppError> {
     let now = now_utc_iso();
     let kind = target
@@ -321,7 +331,7 @@ fn probe_target_capacity_readonly(
         .map(value_str)
         .unwrap_or_default();
 
-    if kind == "filesystem" || !path_str.is_empty() {
+    if probe && (kind == "filesystem" || !path_str.is_empty()) {
         let dir = Path::new(&path_str);
         if dir.is_dir() {
             if let Some((total, used, free)) = filesystem_disk_usage(dir) {
@@ -449,7 +459,7 @@ fn growth_observations_from_control(
     Ok(points)
 }
 
-fn estimate_horizon_readonly(
+pub(crate) fn estimate_horizon_readonly(
     target_id: &str,
     cap: &Value,
     control_conn: Option<&Connection>,

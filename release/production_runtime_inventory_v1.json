@@ -424,16 +424,6 @@
       "file": "deepseek_infra/web/routes/backup_governance.py"
     },
     {
-      "method": "get",
-      "path": "/api/workspace/resilience/forecast",
-      "file": "deepseek_infra/web/routes/backup_governance.py"
-    },
-    {
-      "method": "get",
-      "path": "/api/workspace/resilience/optimizer",
-      "file": "deepseek_infra/web/routes/backup_governance.py"
-    },
-    {
       "method": "post",
       "path": "/api/workspace/resilience/waves/admit",
       "file": "deepseek_infra/web/routes/backup_governance.py"

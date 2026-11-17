@@ -90,7 +90,7 @@ fn parse_dr_time(value: Option<&Value>) -> Option<i64> {
     }
 }
 
-fn load_drill_items(root: &Path) -> Result<Vec<Value>, AppError> {
+pub(crate) fn load_drill_items(root: &Path) -> Result<Vec<Value>, AppError> {
     let mut results = Vec::new();
     let dr_db = root.join(".backup-dr").join("evidence.sqlite3");
     if let Some(conn) = open_readonly_sqlite(&dr_db)? {
