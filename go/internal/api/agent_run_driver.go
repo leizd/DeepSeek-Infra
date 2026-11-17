@@ -112,7 +112,7 @@ func (driver *agentRunDriver) run(ctx context.Context) {
 				}
 				if err == nil {
 					delete(prior, run.RunID)
-				} else if prior[run.RunID] != err.Error() {
+				} else if ctx.Err() == nil && prior[run.RunID] != err.Error() {
 					// Never log bodies, grants, bearer tokens or claim tokens.
 					log.Printf("agent driver run=%s waiting: %s", run.RunID, driverErrorCode(err))
 					prior[run.RunID] = err.Error()

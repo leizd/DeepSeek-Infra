@@ -333,57 +333,68 @@ func TestInternalRPCOccupiedPortCannotClaimWriterOrStopItsExistingOwner(t *testi
 func TestInternalRPCStartupFailureReleasesPrivateEndpointWithoutClaimingAnotherWriter(t *testing.T) {
 	for _, fault := range []string{"public-port-busy", "writer-held", "partial-direct-config", "conflicting-store-mode"} {
 		t.Run(fault, func(t *testing.T) {
-			cfg := runtimeRPCConfig(t, runtimeRPCPKI(t))
-			reserved, err := net.Listen("tcp", "127.0.0.1:0")
-			if err != nil {
-				t.Fatal(err)
-			}
-			cfg.InternalRPCListen = reserved.Addr().String()
-			_ = reserved.Close()
-			var held *store.Control
-			switch fault {
-			case "public-port-busy":
-				occupied, err := net.Listen("tcp", "127.0.0.1:0")
+			var probeErr error
+			for attempt := 0; attempt < 3; attempt++ {
+				cfg := runtimeRPCConfig(t, runtimeRPCPKI(t))
+				reserved, err := net.Listen("tcp", "127.0.0.1:0")
 				if err != nil {
 					t.Fatal(err)
 				}
-				defer occupied.Close()
-				cfg.Listen = occupied.Addr().String()
-			case "writer-held":
-				held, err = store.OpenControl(store.OpenOptions{Path: cfg.ProductionStoreDir, Owner: "original-owner"})
-				if err != nil {
-					t.Fatal(err)
+				cfg.InternalRPCListen = reserved.Addr().String()
+				_ = reserved.Close()
+				var held *store.Control
+				switch fault {
+				case "public-port-busy":
+					occupied, err := net.Listen("tcp", "127.0.0.1:0")
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer occupied.Close()
+					cfg.Listen = occupied.Addr().String()
+				case "writer-held":
+					held, err = store.OpenControl(store.OpenOptions{Path: cfg.ProductionStoreDir, Owner: "original-owner"})
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer held.Close()
+				case "partial-direct-config":
+					cfg.InternalRPCTLSKeyFile = ""
+				case "conflicting-store-mode":
+					cfg.ShadowStoreDir = t.TempDir()
 				}
-				defer held.Close()
-			case "partial-direct-config":
-				cfg.InternalRPCTLSKeyFile = ""
-			case "conflicting-store-mode":
-				cfg.ShadowStoreDir = t.TempDir()
-			}
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-			runtime, startErr := Start(ctx, cfg)
-			if runtime != nil {
+				ctx, cancel := context.WithCancel(context.Background())
+				runtime, startErr := Start(ctx, cfg)
+				if runtime != nil {
+					cancel()
+					_ = awaitStopped(t, runtime)
+				}
 				cancel()
-				_ = awaitStopped(t, runtime)
-			}
-			if startErr == nil || runtime != nil {
-				t.Fatal("failed startup returned a live authoritative runtime", fault)
-			}
-			probe, err := net.Listen("tcp", cfg.InternalRPCListen)
-			if err != nil {
-				t.Fatal("failed startup leaked its private TLS listener", err)
-			}
-			_ = probe.Close()
-			if held != nil {
-				if !errors.Is(startErr, store.ErrWriterFenceHeld) || held.Writer().FencingToken != 1 {
-					t.Fatal("failed TLS startup replaced the existing writer", startErr)
+				if startErr == nil || runtime != nil {
+					t.Fatal("failed startup returned a live authoritative runtime", fault)
 				}
-				if err := held.RenewWriter(context.Background()); err != nil {
-					t.Fatal("failed startup invalidated the original writer", err)
+				probe, err := net.Listen("tcp", cfg.InternalRPCListen)
+				if err != nil {
+					probeErr = err
+					// Parallel race suites allocate ephemeral ports concurrently; a real leak
+					// repeats on every fresh ephemeral port, whereas external theft will not.
+					continue
 				}
-			} else if _, err := os.Stat(cfg.ProductionStoreDir); !os.IsNotExist(err) {
-				t.Fatal("failed startup created a durable writer", err)
+				_ = probe.Close()
+				probeErr = nil
+				if held != nil {
+					if !errors.Is(startErr, store.ErrWriterFenceHeld) || held.Writer().FencingToken != 1 {
+						t.Fatal("failed TLS startup replaced the existing writer", startErr)
+					}
+					if err := held.RenewWriter(context.Background()); err != nil {
+						t.Fatal("failed startup invalidated the original writer", err)
+					}
+				} else if _, err := os.Stat(cfg.ProductionStoreDir); !os.IsNotExist(err) {
+					t.Fatal("failed startup created a durable writer", err)
+				}
+				break
+			}
+			if probeErr != nil {
+				t.Fatal("failed startup leaked its private TLS listener", probeErr)
 			}
 		})
 	}

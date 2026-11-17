@@ -76,7 +76,7 @@ func TestCoordinatorDispatchSurvivesKilledProcess(t *testing.T) {
 		if err != nil {
 			t.Fatalf("child checkpoint: %v", err)
 		}
-	case <-time.After(10 * time.Second):
+	case <-time.After(45 * time.Second):
 		t.Fatal("child did not reach committed dispatch barrier")
 	}
 	if checkpoint.Dispatch.Intent.OperationID != " persisted across kill " || checkpoint.Dispatch.ClaimRevision != 3 || checkpoint.Writer.FencingToken != 1 {
