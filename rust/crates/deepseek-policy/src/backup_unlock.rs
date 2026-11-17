@@ -366,7 +366,7 @@ pub fn write_zip_tree(staging: &Path, target: &Path) -> Result<(), AppError> {
             "Failed to publish backup archive: {err}"
         )));
     }
-    let _ = crate::backup_mirror::fsync_dir(parent);
+    crate::backup_mirror::fsync_dir(parent);
     Ok(())
 }
 
@@ -442,7 +442,7 @@ pub fn encrypt_tree_zip_native(
             "Failed to publish encrypted backup: {err}"
         )));
     }
-    let _ = crate::backup_mirror::fsync_dir(parent);
+    crate::backup_mirror::fsync_dir(parent);
     Ok(())
 }
 
@@ -1807,7 +1807,7 @@ mod tests {
 
         let pass_age = dir.path().join("out/pass.dsibackup.age");
         encrypt_tree_zip_native(&staging, &pass_age, "passphrase", Some("hunter2"), &[]).unwrap();
-        assert_eq!(inspect_age_file_protection(&pass_age).unwrap(), true);
+        assert!(inspect_age_file_protection(&pass_age).unwrap());
         let pass_zip = dir.path().join("out/pass.zip");
         decrypt_passphrase_file_native(&pass_age, &pass_zip, "hunter2").unwrap();
         let verified_pass =
@@ -1817,7 +1817,7 @@ mod tests {
         let (secret, recipient) = ephemeral_identity();
         let key_age = dir.path().join("out/key.dsibackup.age");
         encrypt_tree_zip_native(&staging, &key_age, "age-recipient", None, &[recipient]).unwrap();
-        assert_eq!(inspect_age_file_protection(&key_age).unwrap(), false);
+        assert!(!inspect_age_file_protection(&key_age).unwrap());
         let key_zip = dir.path().join("out/key.zip");
         decrypt_file_native(&key_age, &key_zip, &secret).unwrap();
         let verified_key = safe_extract_and_verify(&key_zip, &dir.path().join("ex-key")).unwrap();

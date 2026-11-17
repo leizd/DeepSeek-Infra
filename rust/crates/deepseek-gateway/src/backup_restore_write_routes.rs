@@ -352,7 +352,7 @@ pub(crate) fn write_atomic_json(path: &Path, value: &Value) -> Result<(), AppErr
             file.sync_all()?;
         }
         fs::rename(&temp, path)?;
-        let _ = fsync_dir(parent);
+        fsync_dir(parent);
         Ok(())
     })();
     if result.is_err() {

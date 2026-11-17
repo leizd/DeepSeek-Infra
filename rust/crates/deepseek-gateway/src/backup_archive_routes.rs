@@ -147,10 +147,8 @@ async fn dispatch_inspect_restore(method: Method, headers: HeaderMap, body: Body
     };
 
     let joined = tokio::task::spawn_blocking(move || {
-        let guard = UploadFileGuard(staged.path.clone());
-        let outcome = inspect_staged_archive(&root, &staged.path, &staged.filename, &staged.sha256);
-        drop(guard);
-        outcome
+        let _guard = FileCleanupGuard::new(staged.path.clone());
+        inspect_staged_archive(&root, &staged.path, &staged.filename, &staged.sha256)
     })
     .await;
     finish_json(joined)
@@ -178,14 +176,6 @@ struct StagedUpload {
     path: PathBuf,
     filename: String,
     sha256: String,
-}
-
-struct UploadFileGuard(PathBuf);
-
-impl Drop for UploadFileGuard {
-    fn drop(&mut self) {
-        scrub_plaintext_file(&self.0);
-    }
 }
 
 struct DirCleanupGuard {
@@ -294,7 +284,7 @@ async fn stage_inspect_upload(
         fs::create_dir_all(&upload_dir).map_err(|_| route_support::unhandled_error())?;
         let seq = TEMP_ARCHIVE_SEQ.fetch_add(1, Ordering::Relaxed);
         let temp_path = upload_dir.join(format!("upload-{}-{seq}.part", std::process::id()));
-        let guard = UploadFileGuard(temp_path.clone());
+        let mut guard = FileCleanupGuard::new(temp_path.clone());
         let mut hasher = Sha256::new();
         hasher.update(&data);
         let digest = hex_digest(&hasher.finalize());
@@ -309,9 +299,7 @@ async fn stage_inspect_upload(
                 .and_then(|()| file.flush())
                 .map_err(|_| route_support::unhandled_error())?;
         }
-        let final_path = guard.0.clone();
-        // Keep path intact by transferring responsibility to the caller's guard.
-        std::mem::forget(guard);
+        guard.disarm();
         let chosen_name = if part_name.is_empty() {
             if header_filename.is_empty() {
                 "workspace.dsibackup".to_string()
@@ -322,7 +310,7 @@ async fn stage_inspect_upload(
             part_name
         };
         return Ok(StagedUpload {
-            path: final_path,
+            path: temp_path,
             filename: chosen_name,
             sha256: digest,
         });
@@ -332,7 +320,7 @@ async fn stage_inspect_upload(
     fs::create_dir_all(&upload_dir).map_err(|_| route_support::unhandled_error())?;
     let seq = TEMP_ARCHIVE_SEQ.fetch_add(1, Ordering::Relaxed);
     let temp_path = upload_dir.join(format!("upload-{}-{seq}.part", std::process::id()));
-    let guard = UploadFileGuard(temp_path.clone());
+    let mut guard = FileCleanupGuard::new(temp_path.clone());
     let mut writer = BufWriter::new(
         OpenOptions::new()
             .write(true)
@@ -369,15 +357,14 @@ async fn stage_inspect_upload(
         drop(guard);
         return Err(AppError::invalid_payload("Backup archive is empty"));
     }
-    let final_path = guard.0.clone();
-    std::mem::forget(guard);
+    guard.disarm();
     let chosen_name = if header_filename.is_empty() {
         "workspace.dsibackup".to_string()
     } else {
         header_filename.to_string()
     };
     Ok(StagedUpload {
-        path: final_path,
+        path: temp_path,
         filename: chosen_name,
         sha256: hex_digest(&hasher.finalize()),
     })
@@ -572,20 +559,19 @@ fn copy_sqlite_consistent(src: &Path, dst: &Path) -> Result<(), AppError> {
     if let Some(parent) = dst.parent() {
         fs::create_dir_all(parent).map_err(|_| route_support::unhandled_error())?;
     }
+    if dst.exists() {
+        let _ = fs::remove_file(dst);
+    }
     let flags =
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
     let src_conn = rusqlite::Connection::open_with_flags(src, flags).map_err(|err| {
         AppError::invalid_payload(format!("Failed to take consistent SQLite snapshot: {err}"))
     })?;
-    let mut dst_conn = rusqlite::Connection::open(dst).map_err(|err| {
-        AppError::invalid_payload(format!("Failed to take consistent SQLite snapshot: {err}"))
-    })?;
-    let backup = rusqlite::backup::Backup::new(&src_conn, &mut dst_conn).map_err(|err| {
-        AppError::invalid_payload(format!("Failed to take consistent SQLite snapshot: {err}"))
-    })?;
-    backup
-        .run_to_completion(256, Duration::from_millis(5), None)
+    let dst_str = dst.to_string_lossy().into_owned();
+    src_conn
+        .execute("VACUUM INTO ?1", [&dst_str])
         .map_err(|err| {
+            let _ = fs::remove_file(dst);
             AppError::invalid_payload(format!("Failed to take consistent SQLite snapshot: {err}"))
         })?;
     Ok(())
@@ -801,7 +787,7 @@ fn build_archive(
     fs::create_dir_all(&staging).map_err(|_| route_support::unhandled_error())?;
     let _staging_guard = DirCleanupGuard::new(staging.clone());
     let _verify_dir_guard = DirCleanupGuard::new(verify_dir.clone());
-    let _verify_dec_guard = UploadFileGuard(verify_decrypted.clone());
+    let _verify_dec_guard = FileCleanupGuard::new(verify_decrypted.clone());
 
     let selected_ids: BTreeSet<String> = session
         .get("contributorPlan")
@@ -1243,16 +1229,20 @@ fn count_relative_conflicts(source_dir: &Path, dest_dir: &Path) -> usize {
     conflicts
 }
 
+struct InspectMeta<'a> {
+    restore_id: &'a str,
+    archive_sha256: String,
+    encrypted: bool,
+    ciphertext_sha256: Option<String>,
+    protection: &'a str,
+}
+
 fn inspect_verified_tree(
     root: &Path,
     manifest: Value,
     extracted: &Path,
     restore_dir: &Path,
-    restore_id: &str,
-    archive_sha256: String,
-    encrypted: bool,
-    ciphertext_sha256: Option<String>,
-    protection: &str,
+    meta: InspectMeta<'_>,
 ) -> Result<Value, AppError> {
     let source_version = manifest
         .get("source")
@@ -1390,7 +1380,7 @@ fn inspect_verified_tree(
     let manifest_digest = sha256_file(&extracted.join("manifest.json"))
         .map_err(|_| route_support::unhandled_error())?;
     let extracted_tree_digest = tree_digest(extracted)?;
-    let warnings = if encrypted {
+    let warnings = if meta.encrypted {
         Vec::new()
     } else {
         vec![Value::String(
@@ -1399,7 +1389,10 @@ fn inspect_verified_tree(
     };
 
     let mut plan = Map::new();
-    plan.insert("restoreId".into(), Value::String(restore_id.to_string()));
+    plan.insert(
+        "restoreId".into(),
+        Value::String(meta.restore_id.to_string()),
+    );
     plan.insert(
         "sourceVersion".into(),
         Value::String(source_version.to_string()),
@@ -1429,16 +1422,19 @@ fn inspect_verified_tree(
         "requiresExternalMcp".into(),
         Value::Bool(requires_external_mcp),
     );
-    plan.insert("archiveSha256".into(), Value::String(archive_sha256));
+    plan.insert("archiveSha256".into(), Value::String(meta.archive_sha256));
     plan.insert(
         "ciphertextSha256".into(),
-        match ciphertext_sha256 {
+        match meta.ciphertext_sha256 {
             Some(sha) => Value::String(sha),
             None => Value::Null,
         },
     );
-    plan.insert("encrypted".into(), Value::Bool(encrypted));
-    plan.insert("protection".into(), Value::String(protection.to_string()));
+    plan.insert("encrypted".into(), Value::Bool(meta.encrypted));
+    plan.insert(
+        "protection".into(),
+        Value::String(meta.protection.to_string()),
+    );
     plan.insert(
         "coverage".into(),
         manifest
@@ -1453,7 +1449,7 @@ fn inspect_verified_tree(
         Value::String(extracted_tree_digest),
     );
     plan.insert("phase".into(), Value::String("inspected".to_string()));
-    if encrypted {
+    if meta.encrypted {
         plan.insert("secretArmedAt".into(), json!(now_unix_secs_f64()));
     }
 
@@ -1546,17 +1542,19 @@ fn inspect_staged_archive(
 
     let extracted = restore_dir.join("extracted");
     let manifest = safe_extract_and_verify(&archive_path, &extracted)?;
-    let _ = fsync_dir(&restore_dir);
+    fsync_dir(&restore_dir);
     let result = inspect_verified_tree(
         root,
         manifest,
         &extracted,
         &restore_dir,
-        &restore_id,
-        actual_sha,
-        false,
-        None,
-        "none",
+        InspectMeta {
+            restore_id: &restore_id,
+            archive_sha256: actual_sha,
+            encrypted: false,
+            ciphertext_sha256: None,
+            protection: "none",
+        },
     )?;
     dir_guard.disarm();
     Ok(result)
@@ -1631,7 +1629,7 @@ fn unlock_restore(root: &Path, restore_id: &str) -> Result<Value, AppError> {
 
     let unlocked = dir.join("unlocked.dsibackup");
     let extracted = dir.join("extracted");
-    let _unlocked_guard = UploadFileGuard(unlocked.clone());
+    let _unlocked_guard = FileCleanupGuard::new(unlocked.clone());
 
     let unlock_attempt = (|| -> Result<Value, AppError> {
         let secret_str = secret.as_str()?;
@@ -1647,11 +1645,13 @@ fn unlock_restore(root: &Path, restore_id: &str) -> Result<Value, AppError> {
             manifest,
             &extracted,
             &dir,
-            restore_id,
-            archive_sha,
-            true,
-            Some(actual_cipher),
-            &protection,
+            InspectMeta {
+                restore_id,
+                archive_sha256: archive_sha,
+                encrypted: true,
+                ciphertext_sha256: Some(actual_cipher),
+                protection: &protection,
+            },
         )?;
         if kind == "age-identity" {
             if let Some(sealed) = unlock_sealed_frontend(&dir, secret_str)? {
@@ -1718,7 +1718,7 @@ fn reattach_restore_secret(
     let (_slot_kind, secret) = consume_secret(restore_id, Some(kind))?;
 
     let reattach_tmp = dir.join("reattach.dsibackup");
-    let _tmp_guard = UploadFileGuard(reattach_tmp.clone());
+    let _tmp_guard = FileCleanupGuard::new(reattach_tmp.clone());
     let verified = (|| -> Result<(), AppError> {
         let secret_str = secret.as_str()?;
         if kind == "passphrase" {

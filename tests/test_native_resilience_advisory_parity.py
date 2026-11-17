@@ -139,3 +139,9 @@ def test_rust_gateway_sources_avoid_path_ref_bug_and_unstable_let_chains() -> No
             assert ".json::<" not in line and ".json()" not in line, (
                 f"{path}:{idx} calls reqwest::Response::json without reqwest/json feature"
             )
+            assert "rusqlite::backup" not in line, (
+                f"{path}:{idx} uses rusqlite::backup without backup feature enabled"
+            )
+            assert not re.search(r"let\s+_\s*=.*fsync_dir\(", line), (
+                f"{path}:{idx} binds unit-returning fsync_dir with let _"
+            )
