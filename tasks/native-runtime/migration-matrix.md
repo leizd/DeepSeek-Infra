@@ -1,3 +1,18 @@
+<!-- native checkpoint 2026-11-17 S4 cloud-verified: policies, targets, drain, continuity, rebalances, recovery-identities -->
+
+**S4 (`backup-policies/{policy_id}` PATCH/DELETE/promote-primary/continuity, `backup-targets/register-new`, `backup-targets/{target_id}` probe/adopt/drain/drain-cancel/activate/DELETE, `backup-rebalances` GET/POST, `backups/recovery-identities`, `authority/retention/policy` POST) is now cloud-verified on exact remote commit `28ec08c80bdef22152379550e64238f4ea5ab6ca` (local `70557f5b55b82792d7a274b186bbe42a3e261146` after `9fa23a36`, tree `698bffaaab86da3d3a3e975d6f33d847db33f18e`):**
+
+- `ci.yml` run [44043989640](https://github.com/leizd/DeepSeek-Infra/actions/runs/44043989640) completed **40/40 jobs `success`** (`0` failure, `0` skipped) and assembled `release-evidence-v4.8.0` (`testedRevision: 28ec08c80bdef22152379550e64238f4ea5ab6ca`) + `4-0-rc-readiness` (`29` passed, `0` blocked, `2` advisories, `31` total).
+- Exact numbers read from downloaded artifacts (`D:/deepseek-worktree-evidence/44043989640`):
+  - `rust` (`133905167875`): `tests/backup_continuity_routes.rs`, `tests/backup_drain_routes.rs` (`2 passed; 0 failed`), `tests/backup_rebalance_routes.rs` (`2 passed; 0 failed`), `tests/backup_recovery_identity_routes.rs`, and `tests/backup_target_routes.rs` all passed.
+  - `rust-coverage`: `PASS` — **82.687277%** lines (`110304/133399`, floor `80.0%`), `75.3980%` functions (`9424/12499`), `73.3227%` regions (`59156/80679`), `rustTestCount: 1913`.
+  - Go statement coverage: default **95.085714%** (`17472/18375`, floor `95.0%`), Android **95.078288%** (`17792/18713`, floor `95.0%`).
+  - Python 3.12 coverage: **95.60%** (`95.596708%`, `63292/65318` statements, `91.76%` branch `20336/22162`, floor `95.0%`).
+  - `rust-fuzz` (`133905167802`): `35,449,919` executions across three libFuzzer targets (`10,593,271 + 20,164,453 + 4,692,195`), `0` findings.
+- Inventory progress at `70557f5b`: `http_routes_only_on_python` decreased `88 -> 72` (`16` routes migrated, incl. removing `authority/retention/policy` from `NATIVE_METHOD_LIMITS`).
+- Prior-failure evidence retained for S4:
+  - `44039343974` at `6af88c9f` (`9fa23a36`): failed `rust` (`cargo clippy --all-targets -- -D warnings` on type alias in `backup_target_routes` test) and `native-go` (`Go coverage` below `95.0%`); superseded by `70557f5b` -> `28ec08c8`.
+
 <!-- native checkpoint 2026-11-17 S3 cloud-verified: scheduled backup retention + authority retention -->
 
 **S3 (`retention/preview`, `retention/apply`, `authority/history-snapshot`, `authority/retention/{policy POST,explain,plan,compact}`) is now cloud-verified on exact remote commit `2c59f4a11975ba90c9de087857f6c21ffb5f8bef` (local `30b5f44e` tip after `20cfe0f7`/`9aa62de1`/`30b5f44e`, tree `eef06467`):**
