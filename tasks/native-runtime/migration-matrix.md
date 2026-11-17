@@ -1,3 +1,23 @@
+<!-- native checkpoint 2026-11-17 S3 cloud-verified: scheduled backup retention + authority retention -->
+
+**S3 (`retention/preview`, `retention/apply`, `authority/history-snapshot`, `authority/retention/{policy POST,explain,plan,compact}`) is now cloud-verified on exact remote commit `2c59f4a11975ba90c9de087857f6c21ffb5f8bef` (local `30b5f44e` tip after `20cfe0f7`/`9aa62de1`/`30b5f44e`, tree `eef06467`):**
+
+- `ci.yml` run [44008118056](https://github.com/leizd/DeepSeek-Infra/actions/runs/44008118056) completed **40/40 jobs `success`** (`0` failure, `0` skipped) and assembled `release-evidence-v4.8.0` (`testedRevision: 2c59f4a11975ba90c9de087857f6c21ffb5f8bef`) + `4-0-rc-readiness` (`29` passed, `0` blocked, `2` advisories, `31` total).
+- Exact numbers read from downloaded artifacts (`D:/deepseek-worktree-evidence/44008118056`):
+  - `rust` (`133788400325`): `tests/backup_retention_routes.rs` (`6 passed; 0 failed`), `tests/authority_retention_routes.rs` (`6 passed; 0 failed`), `tests/backup_catalog_write_routes.rs` (`5 passed; 0 failed`), `tests/backup_catalog_routes.rs` (`3 passed; 0 failed`), `deepseek-policy` (`tzif`, `backup_retention`, `authority_retention` included in `322 passed; 0 failed`).
+  - `rust-coverage`: `PASS` — **82.761341%** lines (`109120/131849`, floor `80.0%`), `75.6345%` functions (`9328/12333`), `73.4318%` regions (`58440/79584`), `rustTestCount: 1905`.
+  - Go statement coverage: default **95.010592%** (`17043/17938`, floor `95.0%`), Android **95.004377%** (`17363/18276`, floor `95.0%`).
+  - Python 3.12 coverage: **95.59%** (`95.588706%`, `63290/65318` statements, `91.74%` branch `20331/22162`, floor `95.0%`).
+  - `rust-fuzz` (`133788400314`): `22,983,438` executions across three libFuzzer targets (`6,389,414 + 12,557,898 + 4,036,126`), `0` findings.
+- Native store ownership & remaining gaps for S3:
+  - `backup_retention_store` and `authority_retention_store` added to `DECLARED_NATIVE_DATA_DOMAINS` (`9 -> 11` domains in `rust/crates/deepseek-gateway/src/lib.rs`) with Python-vs-Rust symmetric `python_disabled` refusal (`tests/test_native_retention_parity.py`).
+  - Remote S3 registered targets in `backup_retention_routes.rs` stay fail-closed `503 NATIVE_BACKUP_CATALOG_TARGET_STORE_UNMIGRATED`.
+  - Follow-up note for S4: `POST /api/workspace/authority/retention/policy` is now implemented natively in `authority_retention_routes.rs`, while `scripts/production_runtime_inventory.py` (`NATIVE_METHOD_LIMITS`) still caps `/api/workspace/authority/retention/policy` to `{"get"}` until removed alongside S4 inventory refresh.
+- Prior-failure evidence retained for S3:
+  - `44002866423` at `08e175fa` (tree `5918dde4`): failed `deepseek-gateway` compile (`IntoResponse` import, `HashMap<String, CommitMarker>` annotation, `HeaderMap` argument to `read_json_object`); superseded/cancelled.
+  - `44004145697` at `fcb1a55d` (tree `b3223ec1`): failed `clippy::type_complexity` on 3-tuple in `authority_retention_routes.rs` (`rust`) and `EnvGuard::set_extra` `&'static str` mismatch (`rust-coverage`), while `gateway-request-parity`, `native-s3-transport`, `rust-docker`, and RAG parity passed; superseded/cancelled.
+  - `44005712495` at `9738e036` (tree `c2a81ee9`): failed `tests/authority_retention_routes.rs` (`5` failed due to missing `Content-Length` header in `call_json` and missing `EnvLock::acquire()` in `s3_authority_tests`), while `deepseek-policy` (`322/322`), `native-go`, and `rust-fuzz` passed; superseded/cancelled.
+
 <!-- native checkpoint 2026-11-17 S2 cloud-verified: S2a read + S2 writes + Go race timing fixes -->
 
 Whole product Rust/Go migration remains ACTIVE / **NOT_READY**.

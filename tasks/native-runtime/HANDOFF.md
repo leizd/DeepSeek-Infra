@@ -14,9 +14,9 @@ remains. Nothing below should be read as completion of the objective.
 | :--- | :--- |
 | Active worktree | `D:\deepseek-worktrees\tip20261106` |
 | Branch | `codex/native-s0-store-ownership-20261109` |
-| Local HEAD | `88cf877bd8c3bfeef92ae2cd02d884767d9e8417` |
-| Remote HEAD | `c5c92165cb03bc9c712764d81495303b634259f9` (identical tree) |
-| Tree | `b0d3be456ddef4e8b30d10b46de83fb41bafd1c6` |
+| Local HEAD | `30b5f44e9615815934b1a0a4297e4057c2adbf19` |
+| Remote HEAD | `2c59f4a11975ba90c9de087857f6c21ffb5f8bef` (identical tree) |
+| Tree | `eef06467` |
 | Root checkout | `D:\deepseek` — branch `codex/native-runtime-pr/20261014`, HEAD `b0316d09`, **~184 preserved dirty/untracked user files; do not touch** |
 | Evidence (outside repo) | `D:/deepseek-worktree-evidence/` |
 
@@ -34,9 +34,9 @@ responses fail to decode as `gbk`.
 
 ## 2. Current verified state
 
-**`ci.yml` run [43985425796](https://github.com/leizd/DeepSeek-Infra/actions/runs/43985425796)
-at `c5c92165`: 40 jobs, 40 success, 0 failure, 0 skipped.** The local tree hashes to
-the same value the run tested (`b0d3be456ddef4e8b30d10b46de83fb41bafd1c6`).
+**`ci.yml` run [44008118056](https://github.com/leizd/DeepSeek-Infra/actions/runs/44008118056)
+at `2c59f4a1`: 40 jobs, 40 success, 0 failure, 0 skipped.** The local tree hashes to
+the same value the run tested (`eef06467`).
 
 Read from the artifacts, not from the job conclusion:
 
@@ -44,9 +44,9 @@ Read from the artifacts, not from the job conclusion:
 | :--- | :--- |
 | Go statement coverage (default) | 95.010592% (17043/17938), floor 95.0 |
 | Go statement coverage (Android) | 95.004377% (17363/18276), floor 95.0 |
-| Rust line coverage | 83.022321% (106154/127862), `rustTestCount: 1888`, floor 80.0 |
-| Python coverage | 95.59%, floor 95.0 |
-| Fuzz executions | 25,822,880 across three libFuzzer targets (`7,963,657 + 14,250,229 + 3,608,994`), 0 findings |
+| Rust line coverage | 82.761341% (109120/131849), `rustTestCount: 1905`, floor 80.0 |
+| Python coverage | 95.59% (95.588706%, 63290/65318), floor 95.0 |
+| Fuzz executions | 22,983,438 across three libFuzzer targets (`6,389,414 + 12,557,898 + 4,036,126`), 0 findings |
 | 4.0 RC readiness | 29 passed, 0 blocked, 2 advisories (31 total) |
 
 **Release gates: 15 of 15 have evidence.** See
@@ -105,9 +105,9 @@ Counted from **route registrations** — Python `@router.<verb>("...")` decorato
 Rust `.route("...")` calls — because a grep for the path string also matches test
 fixtures and helper constants, which inflates the native side:
 
-- Python registers **106** unique `/api/workspace/*` shapes; Rust registers **30**.
-  **76 are not yet in Rust.**
-- The same basis gives **85** Rust `/api` shapes in total (30 workspace, 55 non-workspace).
+- Python registers **106** unique `/api/workspace/*` shapes; Rust registers **36**.
+  **70 are not yet in Rust.**
+- The same basis gives **91** Rust `/api` shapes in total (36 workspace, 55 non-workspace).
 - An earlier count of 109/95/76 used bare string matching and overstated both sides;
   use the registration basis when re-auditing.
 - Traces: **4 of 4 already migrated** — `GET /api/traces`, `GET /api/traces/{trace_id}`,
@@ -135,6 +135,7 @@ Qualification status, stated exactly as the matrix records it:
 | S2a (`GET /api/workspace/backup-catalog`) | **cloud-qualified** — `ci.yml` run `43985425796` at `c5c92165` (`tests/backup_catalog_routes.rs` 3/3 pass, local `managed-local` scope) |
 | S2-prep (commit reader) | cloud-qualified at `d8ea1d5f` and re-verified at `c5c92165` |
 | S2 writes (`pin`, `scrub`, `verify-unlock`, writer lease, Age unlock) | **cloud-qualified** — `ci.yml` run `43985425796` at `c5c92165` (`tests/backup_catalog_write_routes.rs` 5/5 pass; `deepseek-policy` `backup_writer_lease` & `backup_unlock` pass; local filesystem scope, remote S3 catalog stores stay `503 NATIVE_BACKUP_CATALOG_TARGET_STORE_UNMIGRATED`) |
+| S3 retention (`preview`, `apply`, `history-snapshot`, `policy POST`, `explain`, `plan`, `compact`, `tzif`) | **cloud-qualified** — `ci.yml` run `44008118056` at `2c59f4a1` (`40/40` jobs `success`; `tests/backup_retention_routes.rs` 6/6, `tests/authority_retention_routes.rs` 6/6, `deepseek-policy` 322/322, `rust-coverage` `82.7613%` / `1905` tests; `backup_retention_store` + `authority_retention_store` gated `9 -> 11` domains; remote S3 target catalog stores stay `503 NATIVE_BACKUP_CATALOG_TARGET_STORE_UNMIGRATED`) |
 
 ### 4.2 Ownership inversion
 
@@ -205,13 +206,16 @@ These are not style preferences; each one cost a CI round or a wrong report.
 
 Ordered so each is completable and verifiable on its own.
 
-1. **S3 retention** (5 routes: `POST /api/workspace/retention/apply`,
-   `GET|POST /api/workspace/authority/retention/policy`,
-   `POST /api/workspace/authority/retention/explain`,
-   `POST /api/workspace/authority/retention/compact`,
-   `GET /api/workspace/authority/history-snapshot`).
-2. **S4 policies/targets** (12 routes), **S5 restores** (5 routes),
-   **S6 DR** (10 routes), **S7 resilience** (18 routes), **S8 artifacts/exports**.
+1. **S4 policies + targets (Go control plane)** (`GET|POST /api/workspace/backup-policies`,
+   `PATCH|DELETE .../{policy_id}`, `POST .../{policy_id}/promote-primary|run`,
+   `GET .../{policy_id}/continuity`, `GET|POST /api/workspace/backup-targets`,
+   `POST .../register-new`, `POST .../{target_id}/probe|adopt|drain|activate|drain/cancel`,
+   `GET .../{target_id}/drain`, `DELETE .../{target_id}`,
+   `GET|POST /api/workspace/backup-rebalances`,
+   `POST /api/workspace/backups/recovery-identities`) plus removing
+   `/api/workspace/authority/retention/policy` from `NATIVE_METHOD_LIMITS` in
+   `scripts/production_runtime_inventory.py` now that `POST` is native.
+2. **S5 restores** (5 routes), **S6 DR** (10 routes), **S7 resilience** (18 routes), **S8 artifacts/exports**.
 3. **Go control-domain promotion** against a genuinely stopped-and-fenced Python source,
    then move `current_production_authority` off `python`.
 
