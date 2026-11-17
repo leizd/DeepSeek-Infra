@@ -121,7 +121,7 @@ fn read_runs(automation_id: &str, limit: RouteLimit) -> Result<Value, AppError> 
     Ok(json!({"ok": true, "runs": runs}))
 }
 
-fn started_at_ms(run: &Value) -> i64 {
+pub(crate) fn started_at_ms(run: &Value) -> i64 {
     // After normalisation this is an int. `0` is falsy, so the sort key is 0.
     match run.get("startedAtMs") {
         Some(value) if python_truthy(value) => value.as_i64().unwrap_or(0),
@@ -512,7 +512,7 @@ fn classify_header_int(text: &str) -> HeaderInt {
     }
 }
 
-fn execute_run(automation_id: &str, payload: &Value) -> Result<Value, AppError> {
+pub(crate) fn execute_run(automation_id: &str, payload: &Value) -> Result<Value, AppError> {
     // `_now_payload` is evaluated before `run_once`, so a bad `now` is 400
     // with no registry read and no history write.
     let now = parse_now(payload)?;
@@ -548,7 +548,7 @@ fn payload_bool(payload: &Value, key: &str) -> bool {
 }
 
 /// `http_utils.truthy`: `str(value or "").strip().lower()` in the four words.
-fn http_truthy(value: &Value) -> bool {
+pub(crate) fn http_truthy(value: &Value) -> bool {
     let rendered = match value {
         Value::Null => String::new(),
         Value::Bool(flag) => {
@@ -582,7 +582,7 @@ fn http_truthy(value: &Value) -> bool {
     )
 }
 
-fn parse_now(payload: &Value) -> Result<Option<i64>, AppError> {
+pub(crate) fn parse_now(payload: &Value) -> Result<Option<i64>, AppError> {
     match payload.get("now") {
         None => Ok(None),
         Some(value) => parse_now_value(value),
@@ -827,7 +827,7 @@ fn cron_weekday(millis: i64) -> i64 {
     (days.rem_euclid(7) + 4).rem_euclid(7)
 }
 
-fn run_once(
+pub(crate) fn run_once(
     automation: &Value,
     trigger: &Value,
     event: Option<&Value>,
@@ -1103,7 +1103,7 @@ fn runs_today(automation_id: &str, now: Option<i64>) -> Result<i64, AppError> {
     Ok(total)
 }
 
-fn trigger_matches(
+pub(crate) fn trigger_matches(
     automation: &Value,
     trigger: &Value,
     event: Option<&Value>,
@@ -1252,7 +1252,7 @@ fn cron_part_matches(part: &str, value: i64, minimum: i64, maximum: i64) -> bool
     start <= value && value <= end && (value - start) % step == 0
 }
 
-fn condition_matches(
+pub(crate) fn condition_matches(
     automation: &Value,
     event: Option<&Value>,
 ) -> Result<(bool, String), AppError> {

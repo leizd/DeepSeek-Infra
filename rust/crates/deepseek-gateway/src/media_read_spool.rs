@@ -137,6 +137,24 @@ impl PublicIndex {
         Ok((values, self.count))
     }
 
+    pub(super) fn filter_values(
+        &self,
+        include: impl FnMut(&MediaRecord) -> bool,
+    ) -> Result<Vec<Value>, AppError> {
+        let public = self.selected_public(include)?;
+        let mut values = Vec::new();
+        public.visit_sorted(-1, |record| {
+            let mut buf = Vec::new();
+            record
+                .write_response(&mut buf)
+                .map_err(|_| server_error())?;
+            let parsed: Value = serde_json::from_slice(&buf).map_err(|_| server_error())?;
+            values.push(parsed);
+            Ok(())
+        })?;
+        Ok(values)
+    }
+
     pub(super) fn collection(
         &self,
         include: impl FnMut(&MediaRecord) -> bool,

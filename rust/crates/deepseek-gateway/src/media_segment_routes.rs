@@ -342,6 +342,11 @@ pub(crate) fn media_window(limit: usize) -> Result<(Vec<MediaRecord>, usize), Ap
     media_read_spool::PublicIndex::load(&library_path())?.window(limit)
 }
 
+pub(crate) fn project_media_items(project_id: &str) -> Result<Vec<Value>, AppError> {
+    media_read_spool::PublicIndex::load(&library_path())?
+        .filter_values(|item| item.field_equals("projectId", project_id))
+}
+
 #[cfg(test)]
 fn media_sort_key(row: &Value) -> String {
     match row.get("updatedAt") {

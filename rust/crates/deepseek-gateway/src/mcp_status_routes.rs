@@ -128,7 +128,7 @@ fn hub_capability() -> String {
 /// `(name, url)` list and once for the per-server timeout overrides. Invalid
 /// items are skipped by both readers; a duplicate name keeps the list entry but
 /// the timeout map's last value, matching Python's dict assignment order.
-fn parse_client_servers() -> (Vec<(String, String)>, HashMap<String, i64>) {
+pub(crate) fn parse_client_servers() -> (Vec<(String, String)>, HashMap<String, i64>) {
     let mut servers = Vec::new();
     let mut timeouts = HashMap::new();
     let raw = env::var("MCP_CLIENT_SERVERS").unwrap_or_default();
@@ -192,7 +192,7 @@ fn python_int(text: &str) -> Option<i64> {
     cleaned.parse::<i64>().ok()
 }
 
-fn env_bool(name: &str, default: bool) -> bool {
+pub(crate) fn env_bool(name: &str, default: bool) -> bool {
     let Ok(raw) = env::var(name) else {
         return default;
     };
@@ -205,7 +205,7 @@ fn env_bool(name: &str, default: bool) -> bool {
     )
 }
 
-fn env_int_clamped(name: &str, default: i64, minimum: i64, maximum: i64) -> i64 {
+pub(crate) fn env_int_clamped(name: &str, default: i64, minimum: i64, maximum: i64) -> i64 {
     let Ok(raw) = env::var(name) else {
         return default;
     };
@@ -218,7 +218,7 @@ fn env_int_clamped(name: &str, default: i64, minimum: i64, maximum: i64) -> i64 
         .clamp(minimum, maximum)
 }
 
-fn env_float_clamped(name: &str, default: f64, minimum: f64, maximum: f64) -> f64 {
+pub(crate) fn env_float_clamped(name: &str, default: f64, minimum: f64, maximum: f64) -> f64 {
     let Ok(raw) = env::var(name) else {
         return default;
     };

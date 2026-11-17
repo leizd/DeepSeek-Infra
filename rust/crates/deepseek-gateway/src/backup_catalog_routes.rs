@@ -854,7 +854,7 @@ fn civil_from_days(mut z: i64) -> (i64, u32, u32) {
 /// are not accepted; they classify as `unlock-verification-missing` where the
 /// original would parse them. That narrowing is recorded in the slice manifest
 /// because no writer emits those shapes.
-fn parse_python_iso(text: &str) -> Result<Option<i64>, ()> {
+pub(crate) fn parse_python_iso(text: &str) -> Result<Option<i64>, ()> {
     let bytes = text.as_bytes();
     let (year, month, day, rest) = parse_date(bytes)?;
     let (hour, minute, second, offset) = if rest.is_empty() {

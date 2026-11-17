@@ -29,12 +29,15 @@ mod auth;
 mod auth_logout_route;
 mod authority_retention_routes;
 mod automation_definition_routes;
+mod automation_root_routes;
 mod automation_run_routes;
 mod automation_template_routes;
+pub mod backup_capacity_routes;
 pub mod backup_catalog_routes;
 pub mod backup_catalog_write_routes;
 pub mod backup_commit;
 mod backup_continuity_routes;
+mod backup_dr_slo_routes;
 mod backup_drain_routes;
 mod backup_drill_routes;
 pub mod backup_mirror_routes;
@@ -42,6 +45,7 @@ mod backup_policy_routes;
 mod backup_rebalance_routes;
 mod backup_recovery_identity_routes;
 mod backup_replication_routes;
+mod backup_restore_read_routes;
 pub mod backup_retention_routes;
 mod backup_retirement_routes;
 mod backup_run_routes;
@@ -59,7 +63,9 @@ mod conversation_search;
 pub mod data_routes;
 pub mod download_route;
 mod download_save_route;
+mod edge_action_routes;
 mod edge_status_routes;
+mod external_mcp_routes;
 pub mod fetch_provider;
 mod fetch_url_route;
 pub mod file_reader_route;
@@ -75,16 +81,21 @@ pub mod openai_facade;
 pub mod policy_routes;
 pub mod project_files_route;
 pub mod project_routes;
+mod rag_action_routes;
 pub mod request_assembly;
 pub mod request_preparation;
 mod resilience_federation_routes;
+mod resilience_read_routes;
 mod route_support;
 mod rust_status_routes;
 mod scheduler_routes;
 pub mod search_provider;
+mod semantic_cache_routes;
 mod skills_routes;
 mod workspace_backup_routes;
+mod workspace_export_routes;
 mod workspace_home_routes;
+mod workspace_provenance_routes;
 /// The Skill actions the oracle serves and this edge does not, kept reachable so the route test can
 /// assert that the action it pins as "refused by name" is still on this list — otherwise
 /// implementing that action would silently change what the assertion means.
@@ -225,21 +236,32 @@ fn create_routes() -> Router {
         .merge(transfer_budget_routes::router())
         .merge(backup_replication_routes::router())
         .merge(backup_drill_routes::router())
+        .merge(backup_dr_slo_routes::router())
+        .merge(backup_restore_read_routes::router())
         .merge(automation_template_routes::router())
         .merge(automation_run_routes::router())
         .merge(automation_definition_routes::router())
+        .merge(automation_root_routes::router())
         .merge(media_segment_routes::router())
         .merge(resilience_federation_routes::router())
+        .merge(resilience_read_routes::router())
         .merge(artifact_preview_routes::router())
+        .merge(workspace_export_routes::router())
+        .merge(workspace_provenance_routes::router())
         .merge(agent_run_routes::router())
         .merge(scheduler_routes::router())
+        .merge(rag_action_routes::router())
         .merge(edge_status_routes::router())
+        .merge(edge_action_routes::router())
         .merge(rust_status_routes::router())
         .merge(fetch_url_route::router())
         .merge(auth_logout_route::router())
         .merge(trace_routes::router())
         .merge(download_save_route::router())
         .merge(mcp_status_routes::router())
+        .merge(external_mcp_routes::router())
+        .merge(semantic_cache_routes::router())
+        .merge(backup_capacity_routes::router())
         .route("/api/*path", any(control_proxy::proxy_api_to_go))
         // Private control handlers must not fall through to either proxy or SPA.
         .route("/internal", any(|| async { StatusCode::NOT_FOUND }))
