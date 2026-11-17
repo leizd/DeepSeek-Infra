@@ -850,16 +850,22 @@ fn plan_json(
     })
 }
 
+struct ParsedAuthorityRequest {
+    policy: Value,
+    target_generation: Option<i64>,
+    body: Map<String, Value>,
+}
+
 fn parse_optional_policy_and_target(
     headers: &HeaderMap,
     body_bytes: &[u8],
-) -> Result<(Value, Option<i64>, Map<String, Value>), AppError> {
+) -> Result<ParsedAuthorityRequest, AppError> {
     let body = route_support::read_json_object(headers, body_bytes, 64_000)?;
     let policy = match body.get("policy") {
         None | Some(Value::Null) => policy_body()?,
         Some(override_val) => normalize_retention_policy(override_val)?,
     };
-    let target_gen = match body.get("targetGeneration") {
+    let target_generation = match body.get("targetGeneration") {
         None | Some(Value::Null) => None,
         Some(val) => {
             let Some(target) = python_exact_int(val) else {
@@ -872,7 +878,11 @@ fn parse_optional_policy_and_target(
             Some(target)
         }
     };
-    Ok((policy, target_gen, body))
+    Ok(ParsedAuthorityRequest {
+        policy,
+        target_generation,
+        body,
+    })
 }
 
 fn handle_history_snapshot() -> Result<Value, AppError> {
@@ -917,30 +927,30 @@ fn handle_history_snapshot() -> Result<Value, AppError> {
 }
 
 fn handle_explain(headers: &HeaderMap, body_bytes: &[u8]) -> Result<Value, AppError> {
-    let (policy, target_gen, _) = parse_optional_policy_and_target(headers, body_bytes)?;
+    let req = parse_optional_policy_and_target(headers, body_bytes)?;
     let state = load_control_state()?;
-    let eval = evaluate_retention(&state, &policy, target_gen);
+    let eval = evaluate_retention(&state, &req.policy, req.target_generation);
     Ok(explanation_json(&state, &eval))
 }
 
 fn handle_plan(headers: &HeaderMap, body_bytes: &[u8]) -> Result<Value, AppError> {
-    let (policy, target_gen, _) = parse_optional_policy_and_target(headers, body_bytes)?;
+    let req = parse_optional_policy_and_target(headers, body_bytes)?;
     let state = load_control_state()?;
-    let eval = evaluate_retention(&state, &policy, target_gen);
-    Ok(plan_json(&state, &policy, &eval))
+    let eval = evaluate_retention(&state, &req.policy, req.target_generation);
+    Ok(plan_json(&state, &req.policy, &eval))
 }
 
 fn handle_compact(headers: &HeaderMap, body_bytes: &[u8]) -> Result<Value, AppError> {
-    let (policy, target_gen, body) = parse_optional_policy_and_target(headers, body_bytes)?;
+    let req = parse_optional_policy_and_target(headers, body_bytes)?;
     route_support::require_native_store(
         AUTHORITY_RETENTION_DOMAIN,
         AUTHORITY_RETENTION_WRITE_NOT_OWNED,
     )?;
 
-    let dry_run = body.get("dryRun").map(python_truthy).unwrap_or(false);
+    let dry_run = req.body.get("dryRun").map(python_truthy).unwrap_or(false);
     let state = load_control_state()?;
-    let eval = evaluate_retention(&state, &policy, target_gen);
-    let plan = plan_json(&state, &policy, &eval);
+    let eval = evaluate_retention(&state, &req.policy, req.target_generation);
+    let plan = plan_json(&state, &req.policy, &eval);
 
     if !eval.allowed {
         let msgs: Vec<String> = eval

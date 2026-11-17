@@ -73,10 +73,9 @@ impl Drop for EnvGuard {
 }
 
 impl EnvGuard {
-    fn set_extra(&mut self, name: &str, value: &str) {
-        if !self.saved.iter().any(|(existing, _)| existing == name) {
-            self.saved
-                .push((name.to_string(), std::env::var(name).ok()));
+    fn set_extra(&mut self, name: &'static str, value: &str) {
+        if !self.saved.iter().any(|(existing, _)| *existing == name) {
+            self.saved.push((name, std::env::var(name).ok()));
         }
         if value.is_empty() {
             unsafe { std::env::remove_var(name) };
