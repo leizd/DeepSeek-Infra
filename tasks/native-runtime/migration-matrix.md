@@ -1,8 +1,28 @@
+<!-- native checkpoint 2026-11-17 S2 cloud-verified: S2a read + S2 writes + Go race timing fixes -->
+
+Whole product Rust/Go migration remains ACTIVE / **NOT_READY**.
+
+**S2 (`GET /api/workspace/backup-catalog`, writer lease, `pin`, `scrub`, `verify-unlock`) is now cloud-verified on exact remote commit `c5c92165cb03bc9c712764d81495303b634259f9` (local `88cf877bd8c3bfeef92ae2cd02d884767d9e8417`, tree `b0d3be456ddef4e8b30d10b46de83fb41bafd1c6`):**
+
+- `ci.yml` run [43985425796](https://github.com/leizd/DeepSeek-Infra/actions/runs/43985425796) completed **40/40 jobs `success`** (`0` failure, `0` skipped) and assembled `release-evidence-v4.8.0` (`testedRevision: c5c92165cb03bc9c712764d81495303b634259f9`) + `4-0-rc-readiness` (`29` passed, `0` blocked, `2` advisories, `31` total).
+- Verified artifact measurements at `c5c92165`:
+  - `rust` (`133712403759`): S2a `tests/backup_catalog_routes.rs` (`3 passed; 0 failed`), S2 writes `tests/backup_catalog_write_routes.rs` (`5 passed; 0 failed`), plus `backup_writer_lease::tests::*` and `backup_unlock::tests::*` all passed.
+  - `rust-coverage`: `PASS` — **83.022321%** lines (`106154/127862`, floor `80.0%`), `76.0020%` functions (`9083/11951`), `73.7610%` regions (`56658/76813`), `rustTestCount: 1888`.
+  - Go statement coverage: default **95.010592%** (`17043/17938`), Android **95.004377%** (`17363/18276`, floor `95.0%`).
+  - Python 3.12 coverage: **95.59%** (`95.592135%`, floor `95.0%`).
+  - `rust-fuzz`: `25,822,880` executions across three libFuzzer targets (`7,963,657 + 14,250,229 + 3,608,994`), `0` findings.
+- Load-sensitive Go `-race` fixes included in `88cf877b` -> `c5c92165`: `go/internal/api/agent_run_driver.go` (skip `waiting: AGENT_DRIVER_CANCELLED` log when `ctx.Err() != nil`, zero extra Go statements), `go/internal/action/storage_dispatch_process_test.go` (`10s -> 45s` child barrier wait inside existing `75s` ctx), `go/internal/api/control_rpc_test.go` (`10s -> 30s` RPC test ctx timeout), `go/internal/lifecycle/internal_rpc_tls_test.go` (ephemeral-port collision retry).
+- Prior-failure evidence retained for S2:
+  - `43844682012` at `74d864af` (tree `f7e60271`): cancelled on `rustc 1.85.0` unstable `let_chains` (`E0658`).
+  - `43846640221` at `c1004e44` (tree `2c956ac0`): cancelled on `clippy::type_complexity` / `clippy::format_collect` `-D warnings` and `E0502` borrow conflict in `backup_catalog_write_routes.rs`.
+  - `43848284080` at `a1e492da` (tree `9e7e57aa`): `rust` (`1888` tests, `83.0223%` line coverage), `rust-coverage`, `native-go`, `test (3.10/3.11/3.12)`, `docker`, `hybrid-runtime-e2e`, and `native-go-android` (attempt 2, `95.004377%`) passed; `native-go-race` hit pre-existing `-race` load timeouts in `other.jsonl`.
+- Registered remote S3 target catalog stores remain `503 NATIVE_BACKUP_CATALOG_TARGET_STORE_UNMIGRATED` fail-closed; S3–S8 backup/DR/resilience workflows, ownership cutover, and production deployment remain open.
+
 <!-- native checkpoint 2026-11-16 S2 writes: writer lease, pin, scrub, and native verify-unlock -->
 
 Whole product Rust/Go migration remains ACTIVE / **NOT_READY**.
 
-**S2 remaining slices implemented locally (awaiting cloud Rust compilation & tests):**
+**S2 remaining slices implemented (`9446056f`, cloud-verified at `c5c92165` above):**
 
 - `rust/crates/backup-crypto/src/lib.rs`: exposed bounded `inspect_age_header` alongside `decrypt_identity`.
 - `rust/crates/deepseek-policy/src/backup_writer_lease.rs`: native `TargetWriterLease`, `probe_atomic_target`, and `active_writer_lease` (`O_EXCL` create, fencing token comparison, same-run & expired takeover, 423 busy/token refusal, 409 lost/expired ownership assertions, `Drop` release cleanup); Python oracle parity checks in `tests/test_native_backup_writer_lease_parity.py`.
@@ -253,8 +273,9 @@ slice — a missing `regex` dependency in the lock file and then two clippy erro
 prior-failure evidence.
 
 Above this qualified source, S2a (`GET /api/workspace/backup-catalog` for the
-local `managed-local` catalog) is implemented locally and awaits its own
-exact-source run. Full migration **NOT_READY**.
+local `managed-local` catalog) is now cloud-verified together with S2 writes in
+`ci.yml` run [43985425796](https://github.com/leizd/DeepSeek-Infra/actions/runs/43985425796)
+at `c5c92165` (40/40 success). Full migration **NOT_READY**.
 
 <!-- native checkpoint 2026-11-08 S2a backup catalog read -->
 

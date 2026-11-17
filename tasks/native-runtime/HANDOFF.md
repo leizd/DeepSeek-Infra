@@ -14,9 +14,9 @@ remains. Nothing below should be read as completion of the objective.
 | :--- | :--- |
 | Active worktree | `D:\deepseek-worktrees\tip20261106` |
 | Branch | `codex/native-s0-store-ownership-20261109` |
-| Local HEAD | `588a485c54309ad572b58ea8c6e2fa266fda22ff` |
-| Remote HEAD | `d8ea1d5fd20ca145680f9112ee7309eb9be5e575` (identical tree) |
-| Tree | `4a06cabba67114e3d54d299851d5b838af7eaa1e` |
+| Local HEAD | `88cf877bd8c3bfeef92ae2cd02d884767d9e8417` |
+| Remote HEAD | `c5c92165cb03bc9c712764d81495303b634259f9` (identical tree) |
+| Tree | `b0d3be456ddef4e8b30d10b46de83fb41bafd1c6` |
 | Root checkout | `D:\deepseek` — branch `codex/native-runtime-pr/20261014`, HEAD `b0316d09`, **~184 preserved dirty/untracked user files; do not touch** |
 | Evidence (outside repo) | `D:/deepseek-worktree-evidence/` |
 
@@ -34,9 +34,9 @@ responses fail to decode as `gbk`.
 
 ## 2. Current verified state
 
-**`ci.yml` run [43816807364](https://github.com/leizd/DeepSeek-Infra/actions/runs/43816807364)
-at `d8ea1d5f`: 40 jobs, 40 success, 0 failure, 0 skipped.** The local tree hashes to
-the same value the run tested.
+**`ci.yml` run [43985425796](https://github.com/leizd/DeepSeek-Infra/actions/runs/43985425796)
+at `c5c92165`: 40 jobs, 40 success, 0 failure, 0 skipped.** The local tree hashes to
+the same value the run tested (`b0d3be456ddef4e8b30d10b46de83fb41bafd1c6`).
 
 Read from the artifacts, not from the job conclusion:
 
@@ -44,10 +44,10 @@ Read from the artifacts, not from the job conclusion:
 | :--- | :--- |
 | Go statement coverage (default) | 95.010592% (17043/17938), floor 95.0 |
 | Go statement coverage (Android) | 95.004377% (17363/18276), floor 95.0 |
-| Rust line coverage | 83.2749% (103967/124848), floor 80.0 |
+| Rust line coverage | 83.022321% (106154/127862), `rustTestCount: 1888`, floor 80.0 |
 | Python coverage | 95.59%, floor 95.0 |
-| Fuzz executions | 27,023,603 across three libFuzzer targets, 0 findings |
-| Go gate wall clock | ~70 min, down from 183 |
+| Fuzz executions | 25,822,880 across three libFuzzer targets (`7,963,657 + 14,250,229 + 3,608,994`), 0 findings |
+| 4.0 RC readiness | 29 passed, 0 blocked, 2 advisories (31 total) |
 
 **Release gates: 15 of 15 have evidence.** See
 `release/native_runtime_gate_evidence_v1.json` (status `PARTIAL`, readiness
@@ -78,6 +78,12 @@ In order, newest first:
 
 | Commit | What it did |
 | :--- | :--- |
+| `88cf877b` | **Go race stability**: prevent shutdown `AGENT_DRIVER_CANCELLED` log (`agent_run_driver.go`), raise process/RPC test waits (`storage_dispatch_process_test.go`, `control_rpc_test.go`), retry ephemeral port theft (`internal_rpc_tls_test.go`) |
+| `5bd49929` | Satisfy `rustc 1.85` borrow checker (`E0502`) & `-D clippy::warnings` (`type_complexity`, `format_collect`) for S2 |
+| `df395cd8` | Replace Rust `let_chains` for `rustc 1.85.0` compatibility |
+| `9446056f` | **S2 writes**: native `TargetWriterLease`, `backup_unlock` (Age decrypt + drill staging), `pin`/`scrub`/`verify-unlock` routes, `backup_dr_ledger_store` (`8 -> 9` native domains) |
+| `bbf45e12` | Docs: self-contained continuation prompt |
+| `c15eea5f` | Docs: rewrite `HANDOFF.md` against current state |
 | `588a485c` | Fix `E0308`: array declared 8 but held 7 elements; adds a test asserting declared length == element count |
 | `ca310ab3` | **S2-prep**: native commit-marker reader (`backup_commit.rs`) + 17-case Python parity test |
 | `1e1e109c` | Record that all seven zero invariants are measured (file said 0 of 7) |
@@ -99,9 +105,9 @@ Counted from **route registrations** — Python `@router.<verb>("...")` decorato
 Rust `.route("...")` calls — because a grep for the path string also matches test
 fixtures and helper constants, which inflates the native side:
 
-- Python registers **106** unique `/api/workspace/*` shapes; Rust registers **27**.
-  **79 are not yet in Rust.**
-- The same basis gives 82 Rust `/api` shapes in total (27 workspace, 55 non-workspace).
+- Python registers **106** unique `/api/workspace/*` shapes; Rust registers **30**.
+  **76 are not yet in Rust.**
+- The same basis gives **85** Rust `/api` shapes in total (30 workspace, 55 non-workspace).
 - An earlier count of 109/95/76 used bare string matching and overstated both sides;
   use the registration basis when re-auditing.
 - Traces: **4 of 4 already migrated** — `GET /api/traces`, `GET /api/traces/{trace_id}`,
@@ -126,31 +132,17 @@ Qualification status, stated exactly as the matrix records it:
 | S1a | cloud-qualified (`e3aa9e22`) |
 | S1b | cloud-qualified (`2a0f1ef9`), re-qualified by the trace run below |
 | S1c (read-only traces) | cloud-qualified — `rust-cloud.yml` run 42459534356 at `aed5d99f`, Rust checks + coverage success, `sourceTreeDirty: false` |
-| S2a (`GET /api/workspace/backup-catalog`) | **implemented and locally verified only — no cloud run recorded** |
-| S2-prep (commit reader) | landed this session; verified by the 40/40 `ci.yml` run at `d8ea1d5f` |
-
-Do not describe S2a as cloud-qualified without a run URL; the matrix has none for it.
-
-**S2 still open, and each is a real dependency rather than a route stub:**
-
-- `POST|DELETE /api/workspace/backup-catalog/{backup_id}/pin` — needs a native writer
-  lease (`backup_writer_lease`, 396 lines: `O_EXCL` acquisition, fencing token, expiry,
-  takeover) and `backup_publish._create_exclusive` for the event file.
-- `POST /api/workspace/backups/{backup_id}/scrub` — `scrub_backup` reads every committed
-  ciphertext member, rejects reparse points, compares sizes and recomputes per-member
-  sha256. Needs the object layout.
-- `POST /api/workspace/backups/{backup_id}/verify-unlock` — needs an
-  `AGE-SECRET-KEY-` recovery identity and a real `verify_unlock_drill` against
-  `RESTORE_DIR/drills`; native Age decryption and drill staging do not exist.
+| S2a (`GET /api/workspace/backup-catalog`) | **cloud-qualified** — `ci.yml` run `43985425796` at `c5c92165` (`tests/backup_catalog_routes.rs` 3/3 pass, local `managed-local` scope) |
+| S2-prep (commit reader) | cloud-qualified at `d8ea1d5f` and re-verified at `c5c92165` |
+| S2 writes (`pin`, `scrub`, `verify-unlock`, writer lease, Age unlock) | **cloud-qualified** — `ci.yml` run `43985425796` at `c5c92165` (`tests/backup_catalog_write_routes.rs` 5/5 pass; `deepseek-policy` `backup_writer_lease` & `backup_unlock` pass; local filesystem scope, remote S3 catalog stores stay `503 NATIVE_BACKUP_CATALOG_TARGET_STORE_UNMIGRATED`) |
 
 ### 4.2 Ownership inversion
 
 - `current_production_authority` in `release/native_runtime_ownership_v1.json` is still
   `python`.
-- `backup_catalog_store` was added to `DECLARED_NATIVE_DATA_DOMAINS` (7 → 8). The gate is
-  symmetric with Python's, verified across all three runtime modes: both sides may write
-  under `python_authoritative` and `go_authoritative`, and both are denied under
-  `python_disabled`.
+- `backup_catalog_store` (7 → 8) and `backup_dr_ledger_store` (8 → 9) are in
+  `DECLARED_NATIVE_DATA_DOMAINS`. The gates are symmetric with Python's, verified across
+  all three runtime modes (`python_authoritative`, `go_authoritative`, `python_disabled`).
 - Go control authority for policies/targets/DR still needs a real promotion against a
   genuinely stopped-and-fenced Python source.
 
@@ -213,15 +205,14 @@ These are not style preferences; each one cost a CI round or a wrong report.
 
 Ordered so each is completable and verifiable on its own.
 
-1. **Native writer lease** (`backup_writer_lease` equivalent): `O_EXCL` acquisition,
-   fencing token, expiry, takeover, and the same 423 refusals. This is the other half of
-   the S2 write path and is reused by every later write slice. Verify with a Python
-   oracle over the lease file and a `python_disabled` write test.
-2. **`pin` POST/DELETE** on top of (1) plus the commit reader already landed.
-3. **`scrub`**, then **`verify-unlock`** (the latter needs native Age decryption).
-4. **S3 retention** (5 routes), then S4 policies/targets (12), S5 restores (5),
-   S6 DR (10), S7 resilience (18), S8 artifacts/exports.
-5. **Go control-domain promotion** against a genuinely stopped-and-fenced Python source,
+1. **S3 retention** (5 routes: `POST /api/workspace/retention/apply`,
+   `GET|POST /api/workspace/authority/retention/policy`,
+   `POST /api/workspace/authority/retention/explain`,
+   `POST /api/workspace/authority/retention/compact`,
+   `GET /api/workspace/authority/history-snapshot`).
+2. **S4 policies/targets** (12 routes), **S5 restores** (5 routes),
+   **S6 DR** (10 routes), **S7 resilience** (18 routes), **S8 artifacts/exports**.
+3. **Go control-domain promotion** against a genuinely stopped-and-fenced Python source,
    then move `current_production_authority` off `python`.
 
 ## 8. Reference: the push helper
