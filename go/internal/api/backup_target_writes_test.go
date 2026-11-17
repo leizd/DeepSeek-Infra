@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -323,6 +324,10 @@ func TestBackupTargetCreateRefusalsAndValidation(t *testing.T) {
 	if code != http.StatusServiceUnavailable || shProbe["code"] != CodeControlNotAuthoritative {
 		t.Fatalf("shadow probe: %d %v", code, shProbe)
 	}
+	code, shReg := sendTargetReq(t, shCli, http.MethodPost, shSrv.URL+"/api/workspace/backup-targets/register-new", `{"path":`+mustJSON(goodDir)+`}`)
+	if code != http.StatusServiceUnavailable || shReg["code"] != CodeControlNotAuthoritative {
+		t.Fatalf("shadow register-new: %d %v", code, shReg)
+	}
 }
 
 func TestBackupTargetDeleteAdoptActivateAndProbe(t *testing.T) {
@@ -339,10 +344,22 @@ func TestBackupTargetDeleteAdoptActivateAndProbe(t *testing.T) {
 	}
 	targetID := created["targetId"].(string)
 
-	// Missing target responses.
+	// Missing target responses and auth failure on loadAuthoritativeTarget.
+	code, _ = sendTargetReqWith(t, client, http.MethodDelete, server.URL+"/api/workspace/backup-targets/target_missing", "127.0.0.1", "wrong", "")
+	if code != http.StatusUnauthorized {
+		t.Fatalf("delete unauthorized: %d", code)
+	}
 	code, _ = sendTargetReq(t, client, http.MethodDelete, server.URL+"/api/workspace/backup-targets/target_missing", "")
 	if code != http.StatusNotFound {
 		t.Fatalf("delete missing: %d", code)
+	}
+	code, _ = sendTargetReq(t, client, http.MethodPost, server.URL+"/api/workspace/backup-targets/target_missing/adopt", "")
+	if code != http.StatusNotFound {
+		t.Fatalf("adopt missing: %d", code)
+	}
+	code, _ = sendTargetReq(t, client, http.MethodPost, server.URL+"/api/workspace/backup-targets/target_missing/activate", "")
+	if code != http.StatusNotFound {
+		t.Fatalf("activate missing: %d", code)
 	}
 	code, missingProbe := sendTargetReq(t, client, http.MethodPost, server.URL+"/api/workspace/backup-targets/target_missing/probe", "")
 	if code != http.StatusOK || missingProbe["ready"] != false || missingProbe["detail"] != "Backup target not found" {
@@ -530,6 +547,99 @@ func TestBackupTargetDeleteAdoptActivateAndProbe(t *testing.T) {
 	t.Cleanup(func() { _ = inferredCtrl.Close() })
 	if gotRoot := configuredRuntimeRoot(inferredCtrl); gotRoot != dbParent {
 		t.Fatalf("configuredRuntimeRoot = %q, want %q", gotRoot, dbParent)
+	}
+
+	// Create target when non-filesystem S3 record exists in store, and test v1 marker defaults + write error.
+	usbV1 := filepath.Join(base, "usb-v1")
+	if err := os.MkdirAll(usbV1, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	v1Marker := `{"schemaVersion":1,"targetId":"target_v1leg","targetNonce":"0123456789abcdef0123456789abcdef"}`
+	if err := os.WriteFile(filepath.Join(usbV1, targetMarkerName), []byte(v1Marker), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, v1Created := sendTargetReq(t, client, http.MethodPost, server.URL+"/api/workspace/backup-targets", `{"path":`+mustJSON(usbV1)+`}`)
+	if code != http.StatusOK || v1Created["targetId"] != "target_v1leg" || v1Created["lastSeenCommitHash"] != targetGenesisHash {
+		t.Fatalf("v1 marker create failed: %d %v", code, v1Created)
+	}
+	writeMarkerUpdates(t, usbV1, map[string]any{"incarnationId": "inc_v1backfill00"})
+	code, v1Probe := sendTargetReq(t, client, http.MethodPost, server.URL+"/api/workspace/backup-targets/target_v1leg/probe", "")
+	if code != http.StatusOK || v1Probe["ready"] != true {
+		t.Fatalf("v1 backfill probe failed: %d %v", code, v1Probe)
+	}
+
+	failWriteDir := filepath.Join(base, "fail-marker-dir")
+	if err := os.MkdirAll(filepath.Join(failWriteDir, targetMarkerName), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	code, _ = sendTargetReq(t, client, http.MethodPost, server.URL+"/api/workspace/backup-targets/register-new", `{"path":`+mustJSON(failWriteDir)+`}`)
+	if code != http.StatusInternalServerError {
+		t.Fatalf("register-new with directory at marker path expected 500, got %d", code)
+	}
+
+	// Non-existent DEEPSEEK_INFRA_ROOT falls back to filepath.Clean.
+	t.Setenv("DEEPSEEK_INFRA_ROOT", filepath.Join(base, "does-not-exist-yet"))
+	if got := configuredRuntimeRoot(control); !strings.HasSuffix(got, "does-not-exist-yet") {
+		t.Fatalf("configuredRuntimeRoot fallback mismatch: %q", got)
+	}
+	t.Setenv("DEEPSEEK_INFRA_ROOT", filepath.Join(base, "runtime"))
+
+	// Unreadable marker directory (covers non-ENOENT read error) & decodeTargetRecord error check.
+	dirAsMarker := filepath.Join(usbV1, "marker-is-dir")
+	if err := os.MkdirAll(filepath.Join(dirAsMarker, targetMarkerName), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, rErr := readFilesystemTargetMarker(dirAsMarker); rErr == nil || !strings.Contains(rErr.Error(), "unreadable") {
+		t.Fatalf("directory marker expected unreadable, got %v", rErr)
+	}
+	if _, _, _, rErr := readFilesystemTargetMarker(filepath.Join(base, "no-such-dir")); rErr == nil {
+		t.Fatalf("missing dir expected error")
+	}
+	if _, decErr := decodeTargetRecord(store.Record{Payload: []byte("{bad")}); decErr == nil {
+		t.Fatal("expected decodeTargetRecord error")
+	}
+
+	// atomicWriteTargetMarker failure when tmp is an existing directory & pre-existing marker inside runtimeRoot.
+	failOpenDir := filepath.Join(base, "fail-open-tmp")
+	tmpBlock := filepath.Join(failOpenDir, "."+targetMarkerName+"."+strings.TrimSpace(fmt.Sprintf("%d", os.Getpid()))+".tmp")
+	if err := os.MkdirAll(tmpBlock, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	code, _ = sendTargetReq(t, client, http.MethodPost, server.URL+"/api/workspace/backup-targets/register-new", `{"path":`+mustJSON(failOpenDir)+`}`)
+	if code != http.StatusInternalServerError {
+		t.Fatalf("register-new with dir at tmp expected 500, got %d", code)
+	}
+	markerInsideRoot := filepath.Join(base, "runtime", "inside-marked")
+	if err := os.MkdirAll(markerInsideRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(markerInsideRoot, targetMarkerName), []byte(v1Marker), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, _ = sendTargetReq(t, client, http.MethodPost, server.URL+"/api/workspace/backup-targets", `{"path":`+mustJSON(markerInsideRoot)+`}`)
+	if code != http.StatusBadRequest {
+		t.Fatalf("marked target inside runtime root expected 400, got %d", code)
+	}
+	shRegCode, _ := sendTargetReq(t, client, http.MethodPost, server.URL+"/api/workspace/backup-targets/register-new", `{"path":`+mustJSON(usbV1)+`,"maxConcurrentTransfers":0}`)
+	if shRegCode != http.StatusBadRequest {
+		t.Fatalf("register-new bad maxConcurrentTransfers expected 400, got %d", shRegCode)
+	}
+
+	// Inject filesystem record without path and non-filesystem S3 record, then register a new target to hit containment skips.
+	noPathPayload, _ := json.Marshal(map[string]any{"targetId": "target_nopath", "kind": "filesystem", "topologyGeneration": 1})
+	_, _ = control.ApplyOperatorMutation(store.OperatorMutation{
+		OperationID: newOperationID(),
+		ActionID:    newActionID(),
+		Actor:       "test",
+		Record:      store.Record{Domain: "target", ID: "target_nopath", Revision: 1, State: "ACTIVE", Payload: noPathPayload},
+	})
+	usbAfterNoPath := filepath.Join(base, "usb-after-nopath")
+	if err := os.MkdirAll(usbAfterNoPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	code, _ = sendTargetReq(t, client, http.MethodPost, server.URL+"/api/workspace/backup-targets", `{"path":`+mustJSON(usbAfterNoPath)+`}`)
+	if code != http.StatusOK {
+		t.Fatalf("create after noPath failed: %d", code)
 	}
 
 	// Delete target and confirm tombstones do not block re-creating a target at the same path.

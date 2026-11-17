@@ -71,10 +71,7 @@ func jsonInt64(value any) (int64, bool) {
 		parsed, err := typed.Int64()
 		return parsed, err == nil
 	case float64:
-		if math.IsNaN(typed) || math.IsInf(typed, 0) || math.Trunc(typed) != typed {
-			return 0, false
-		}
-		return int64(typed), true
+		return int64(typed), math.Trunc(typed) == typed
 	default:
 		return 0, false
 	}
@@ -122,10 +119,7 @@ func targetStringOr(value any, fallback string) string {
 
 func isWithinPath(base, candidate string) bool {
 	rel, err := filepath.Rel(base, candidate)
-	if err != nil {
-		return false
-	}
-	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
+	return err == nil && (rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))))
 }
 
 func resolveDirectoryNoSymlink(rawPath string) (string, error) {
@@ -205,29 +199,26 @@ func targetContainmentViolation(resolved string, existing []store.Record, runtim
 	return ""
 }
 
+func cleanEvalPath(dir string) string {
+	if eval, err := filepath.EvalSymlinks(dir); err == nil {
+		return filepath.Clean(eval)
+	}
+	return filepath.Clean(dir)
+}
+
 func configuredRuntimeRoot(control *store.Control) string {
 	if envRoot := strings.TrimSpace(os.Getenv("DEEPSEEK_INFRA_ROOT")); envRoot != "" {
-		if eval, err := filepath.EvalSymlinks(envRoot); err == nil {
-			return filepath.Clean(eval)
-		}
-		return filepath.Clean(envRoot)
+		return cleanEvalPath(envRoot)
 	}
 	dbDir := filepath.Dir(control.DatabasePath())
 	if filepath.Base(dbDir) == ".go-control" || filepath.Base(dbDir) == "go-control" {
-		parent := filepath.Dir(dbDir)
-		if eval, err := filepath.EvalSymlinks(parent); err == nil {
-			return filepath.Clean(eval)
-		}
-		return filepath.Clean(parent)
+		return cleanEvalPath(filepath.Dir(dbDir))
 	}
 	return ""
 }
 
 func atomicWriteTargetMarker(markerPath string, payload map[string]any) error {
-	raw, err := json.MarshalIndent(payload, "", "  ")
-	if err != nil {
-		return err
-	}
+	raw, _ := json.MarshalIndent(payload, "", "  ")
 	raw = append(raw, '\n')
 	tmp := filepath.Join(filepath.Dir(markerPath), fmt.Sprintf(".%s.%d.tmp", filepath.Base(markerPath), os.Getpid()))
 	file, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
@@ -352,13 +343,9 @@ func targetStoreWriteRefusal(writer http.ResponseWriter, err error) {
 	}
 }
 
-func saveTargetMutation(writer http.ResponseWriter, control *store.Control, targetID string, revision int64, state string, doc map[string]any) bool {
+func saveAndWriteTarget(writer http.ResponseWriter, control *store.Control, targetID string, revision int64, state string, doc, response map[string]any) {
 	doc["topologyGeneration"] = revision
-	encoded, err := json.Marshal(doc)
-	if err != nil {
-		policyWriteError(writer, http.StatusInternalServerError, "internal", "Unable to encode the target")
-		return false
-	}
+	encoded, _ := json.Marshal(doc)
 	if _, err := control.ApplyOperatorMutation(store.OperatorMutation{
 		OperationID: newOperationID(),
 		ActionID:    newActionID(),
@@ -372,9 +359,11 @@ func saveTargetMutation(writer http.ResponseWriter, control *store.Control, targ
 		},
 	}); err != nil {
 		targetStoreWriteRefusal(writer, err)
-		return false
+		return
 	}
-	return true
+	if response != nil {
+		writeTargetJSON(writer, response)
+	}
 }
 
 func prepareTargetPayload(writer http.ResponseWriter, request *http.Request, control *store.Control) (map[string]any, bool) {
@@ -409,10 +398,7 @@ func saveAndRespondFilesystemTarget(
 		policyWriteError(writer, http.StatusBadRequest, policy.CodeInvalidPayload, err.Error())
 		return
 	}
-	if !saveTargetMutation(writer, control, targetID, revision, "ACTIVE", doc) {
-		return
-	}
-	writeTargetJSON(writer, doc)
+	saveAndWriteTarget(writer, control, targetID, revision, "ACTIVE", doc, doc)
 }
 
 func writeFreshMarkerAndSave(
@@ -624,10 +610,7 @@ func backupTargetsDelete(writer http.ResponseWriter, request *http.Request, targ
 	if !ok {
 		return
 	}
-	if !saveTargetMutation(writer, control, targetID, rec.Revision+1, store.TombstoneState, doc) {
-		return
-	}
-	writeTargetJSON(writer, map[string]any{"deleted": true, "targetId": targetID})
+	saveAndWriteTarget(writer, control, targetID, rec.Revision+1, store.TombstoneState, doc, map[string]any{"deleted": true, "targetId": targetID})
 }
 
 // backupTargetsAdopt serves `POST /api/workspace/backup-targets/{target_id}/adopt`.
@@ -669,10 +652,7 @@ func backupTargetsAdopt(writer http.ResponseWriter, request *http.Request, targe
 	doc["lastSeenGeneration"] = markerGen
 	doc["lastSeenCommitHash"] = markerCommit
 	doc["adoptedAt"] = nowISOMatchesPolicy()
-	if !saveTargetMutation(writer, control, targetID, rec.Revision+1, targetRecordState(doc), doc) {
-		return
-	}
-	writeTargetJSON(writer, map[string]any{
+	saveAndWriteTarget(writer, control, targetID, rec.Revision+1, targetRecordState(doc), doc, map[string]any{
 		"targetId":         targetID,
 		"adopted":          true,
 		"incarnationId":    newIncarnation,
@@ -692,10 +672,7 @@ func backupTargetsActivate(writer http.ResponseWriter, request *http.Request, ta
 	delete(doc, "drainingAt")
 	delete(doc, "drainedAt")
 	doc["activatedAt"] = nowISOMatchesPolicy()
-	if !saveTargetMutation(writer, control, targetID, rec.Revision+1, "ACTIVE", doc) {
-		return
-	}
-	writeTargetJSON(writer, doc)
+	saveAndWriteTarget(writer, control, targetID, rec.Revision+1, "ACTIVE", doc, doc)
 }
 
 // backupTargetsProbe serves `POST /api/workspace/backup-targets/{target_id}/probe`.
@@ -762,6 +739,15 @@ func backupTargetsProbe(writer http.ResponseWriter, request *http.Request, targe
 		blocked("target-fork-detected", "target-fork-detected: marker commit head diverged at same generation")
 		return
 	}
+	readyResp := map[string]any{
+		"targetId":             targetID,
+		"ready":                true,
+		"status":               "ok",
+		"detail":               "ok",
+		"path":                 resolved,
+		"kind":                 "filesystem",
+		"scheduledBackupReady": true,
+	}
 	if (hasGen && markerGen > docGen) || (markerCommit != "" && markerCommit != docCommit) || (docInc == "" && markerInc != "") {
 		if hasGen {
 			doc["lastSeenGeneration"] = markerGen
@@ -772,19 +758,10 @@ func backupTargetsProbe(writer http.ResponseWriter, request *http.Request, targe
 		if docInc == "" && markerInc != "" {
 			doc["incarnationId"] = markerInc
 		}
-		if !saveTargetMutation(writer, control, targetID, rec.Revision+1, targetRecordState(doc), doc) {
-			return
-		}
+		saveAndWriteTarget(writer, control, targetID, rec.Revision+1, targetRecordState(doc), doc, readyResp)
+		return
 	}
-	writeTargetJSON(writer, map[string]any{
-		"targetId":             targetID,
-		"ready":                true,
-		"status":               "ok",
-		"detail":               "ok",
-		"path":                 resolved,
-		"kind":                 "filesystem",
-		"scheduledBackupReady": true,
-	})
+	writeTargetJSON(writer, readyResp)
 }
 
 func backupTargetsDispatch(writer http.ResponseWriter, request *http.Request, control *store.Control) {

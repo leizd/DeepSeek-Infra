@@ -64,14 +64,16 @@ impl Drop for EnvGuard {
     }
 }
 
-async fn start_stub_go() -> (String, Arc<Mutex<Vec<(String, String)>>>) {
+type RecordedRequests = Arc<Mutex<Vec<(String, String)>>>;
+
+async fn start_stub_go() -> (String, RecordedRequests) {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let state = Arc::clone(&seen);
     let stub = Router::new()
         .route(
             "/api/*rest",
             any(
-                |State(log): State<Arc<Mutex<Vec<(String, String)>>>>,
+                |State(log): State<RecordedRequests>,
                  method: Method,
                  OriginalUri(uri): OriginalUri| async move {
                     log.lock()
