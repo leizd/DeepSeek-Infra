@@ -155,7 +155,7 @@ fn catalog_root(target_id: &str) -> Result<PathBuf, AppError> {
 /// `backup_targets.get_target`: the authoritative control row, then the JSON
 /// projection, then the original 404. Both reads are read-only; the original
 /// additionally rewrites a diverged projection, which this port must not do.
-fn registered_target(target_id: &str) -> Result<Value, AppError> {
+pub(crate) fn registered_target(target_id: &str) -> Result<Value, AppError> {
     if let Some(record) = control_target(target_id)? {
         return Ok(record);
     }
@@ -397,7 +397,7 @@ pub(crate) fn read_entries(root: &Path) -> Result<Vec<Map<String, Value>>, AppEr
     Ok(entries)
 }
 
-fn verify_chain(root: &Path) -> Result<bool, AppError> {
+pub(crate) fn verify_chain(root: &Path) -> Result<bool, AppError> {
     let mut previous = GENESIS_HASH.to_string();
     for entry in read_entries(root)? {
         // The original compares the raw values, so a non-string
@@ -513,7 +513,7 @@ pub(crate) fn catalog_state(root: &Path) -> Result<Map<String, Value>, AppError>
 }
 
 /// `state_sorted`: stable descending sort on `str(createdAt or "")`.
-fn state_sorted(state: &Map<String, Value>) -> Vec<Value> {
+pub(crate) fn state_sorted(state: &Map<String, Value>) -> Vec<Value> {
     let mut records: Vec<Value> = state.values().cloned().collect();
     records.sort_by_key(|record| std::cmp::Reverse(sort_key(record)));
     records
@@ -523,7 +523,7 @@ fn sort_key(record: &Value) -> String {
     python_str_or_empty(record.get("createdAt"))
 }
 
-fn list_backups(root: &Path, policy_id: Option<&str>) -> Result<Vec<Value>, AppError> {
+pub(crate) fn list_backups(root: &Path, policy_id: Option<&str>) -> Result<Vec<Value>, AppError> {
     let state = catalog_state(root)?;
     let records = state_sorted(&state);
     let mut result = Vec::with_capacity(records.len());
@@ -806,7 +806,7 @@ fn backup_health(records: &[Value]) -> Result<Value, AppError> {
     }))
 }
 
-fn unix_seconds() -> u64 {
+pub(crate) fn unix_seconds() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|elapsed| elapsed.as_secs())
@@ -814,7 +814,7 @@ fn unix_seconds() -> u64 {
 }
 
 /// `datetime.now(timezone.utc).isoformat(timespec="seconds")` with `Z`.
-fn utc_iso_from_unix(unix_secs: u64) -> String {
+pub(crate) fn utc_iso_from_unix(unix_secs: u64) -> String {
     let days = (unix_secs / 86_400) as i64;
     let second_of_day = unix_secs % 86_400;
     let (year, month, day) = civil_from_days(days);

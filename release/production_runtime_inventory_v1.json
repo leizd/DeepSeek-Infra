@@ -420,16 +420,6 @@
     },
     {
       "method": "post",
-      "path": "/api/workspace/retention/preview",
-      "file": "deepseek_infra/web/routes/backup_governance.py"
-    },
-    {
-      "method": "post",
-      "path": "/api/workspace/retention/apply",
-      "file": "deepseek_infra/web/routes/backup_governance.py"
-    },
-    {
-      "method": "post",
       "path": "/api/workspace/restores/from-target/preview",
       "file": "deepseek_infra/web/routes/backup_governance.py"
     },
@@ -469,28 +459,8 @@
       "file": "deepseek_infra/web/routes/backup_governance.py"
     },
     {
-      "method": "get",
-      "path": "/api/workspace/authority/history-snapshot",
-      "file": "deepseek_infra/web/routes/backup_governance.py"
-    },
-    {
       "method": "post",
       "path": "/api/workspace/authority/retention/policy",
-      "file": "deepseek_infra/web/routes/backup_governance.py"
-    },
-    {
-      "method": "post",
-      "path": "/api/workspace/authority/retention/explain",
-      "file": "deepseek_infra/web/routes/backup_governance.py"
-    },
-    {
-      "method": "post",
-      "path": "/api/workspace/authority/retention/plan",
-      "file": "deepseek_infra/web/routes/backup_governance.py"
-    },
-    {
-      "method": "post",
-      "path": "/api/workspace/authority/retention/compact",
       "file": "deepseek_infra/web/routes/backup_governance.py"
     },
     {

@@ -37,6 +37,7 @@ pub mod backup_commit;
 mod backup_drill_routes;
 pub mod backup_mirror_routes;
 mod backup_replication_routes;
+pub mod backup_retention_routes;
 mod backup_retirement_routes;
 mod backup_run_routes;
 pub mod browser_engine_client;
@@ -207,6 +208,7 @@ fn create_routes() -> Router {
         .merge(backup_run_routes::router())
         .merge(backup_catalog_routes::router())
         .merge(backup_catalog_write_routes::router())
+        .merge(backup_retention_routes::router())
         .merge(authority_retention_routes::router())
         .merge(transfer_budget_routes::router())
         .merge(backup_replication_routes::router())
@@ -734,7 +736,7 @@ const MEMORY_VECTOR_INDEX_NOT_REPRODUCIBLE: &str = "NATIVE_MEMORY_VECTOR_INDEX_N
 ///    4.9.4. A store that is **not** here stays refused whatever the mode says — setting the mode alone
 ///    must not be able to enable a store nobody declared — which is why the list is the second
 ///    condition rather than a detail of the first. A test pins it as a subset of the contract's.
-pub(crate) const DECLARED_NATIVE_DATA_DOMAINS: [&str; 9] = [
+pub(crate) const DECLARED_NATIVE_DATA_DOMAINS: [&str; 11] = [
     "memory_store",
     // The append-only catalog chain under `.backup-catalog/` and
     // `.backups/catalog/catalog-v1.jsonl`. Every Python mutation funnels through
@@ -749,6 +751,10 @@ pub(crate) const DECLARED_NATIVE_DATA_DOMAINS: [&str; 9] = [
     // likewise denies only under PYTHON_DISABLED; scrub evidence lands here under
     // `python_disabled`.
     "backup_dr_ledger_store",
+    // Scheduled backup retention policies, scheduler retention_runs & trash journals.
+    "backup_retention_store",
+    // Authority history retention policies, checkpoints and compaction jobs.
+    "authority_retention_store",
     "reminders_store",
     "project_metadata_store",
     "skills_store",

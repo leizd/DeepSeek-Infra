@@ -139,6 +139,37 @@ pub(crate) fn method_not_allowed() -> Response {
     response
 }
 
+pub(crate) fn store_not_owned(domain: &str, code: &'static str) -> AppError {
+    AppError {
+        message: format!(
+            "The {domain} is still written by the Python runtime, so this gateway refuses to mutate it."
+        ),
+        code,
+        status: 409,
+    }
+}
+
+pub(crate) fn require_native_store(domain: &str, code: &'static str) -> Result<(), AppError> {
+    if crate::may_write_native_store(domain) {
+        Ok(())
+    } else {
+        Err(store_not_owned(domain, code))
+    }
+}
+
+pub(crate) fn unallowed_api_method(
+    method: axum::http::Method,
+    not_found_method: axum::http::Method,
+) -> Response {
+    if method == axum::http::Method::OPTIONS {
+        return options_response();
+    }
+    if method == not_found_method {
+        return route_not_found();
+    }
+    method_not_allowed()
+}
+
 #[cfg(test)]
 mod tests {
     use super::parse_content_length;

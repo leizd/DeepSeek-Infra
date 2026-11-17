@@ -73,34 +73,10 @@ pub fn router() -> Router {
 }
 
 fn unallowed_method_response(method: Method) -> Response {
-    if method == Method::OPTIONS {
-        return route_support::options_response();
-    }
-    // Python's `@api.api_route("/api/{path:path}", methods=["GET", "POST"])`
-    // turns unmatched `GET /api/...` requests into JSON 404 instead of 405.
-    if method == Method::GET {
-        return route_support::route_not_found();
-    }
-    route_support::method_not_allowed()
+    route_support::unallowed_api_method(method, Method::GET)
 }
 
-fn store_not_owned(domain: &str, code: &'static str) -> AppError {
-    AppError {
-        message: format!(
-            "The {domain} is still written by the Python runtime, so this gateway refuses to mutate it."
-        ),
-        code,
-        status: 409,
-    }
-}
-
-fn require_native_store(domain: &str, code: &'static str) -> Result<(), AppError> {
-    if crate::may_write_native_store(domain) {
-        Ok(())
-    } else {
-        Err(store_not_owned(domain, code))
-    }
-}
+use crate::route_support::require_native_store;
 
 struct ResolvedBackup {
     root: PathBuf,
@@ -241,7 +217,10 @@ fn instance_id_from_environment() -> String {
     format!("local-{}", std::process::id())
 }
 
-fn acquire_target_writer(root: &Path, target_id: &str) -> Result<TargetWriterLease, AppError> {
+pub(crate) fn acquire_target_writer(
+    root: &Path,
+    target_id: &str,
+) -> Result<TargetWriterLease, AppError> {
     let hex16 = SystemEntropy.new_id()?;
     let run_id = format!("adhoc-{}", hex16.chars().take(12).collect::<String>());
     let instance_id = instance_id_from_environment();
@@ -283,7 +262,7 @@ fn write_event_file(root: &Path, entry: &Value) -> Result<(), AppError> {
     }
 }
 
-fn append_catalog_entry(
+pub(crate) fn append_catalog_entry(
     root: &Path,
     entry_type: &str,
     payload: &Value,
@@ -405,7 +384,7 @@ fn ciphertext_members(
     )])
 }
 
-fn verify_registered_target_ready_readonly(
+pub(crate) fn verify_registered_target_ready_readonly(
     target_id: &str,
     root: &Path,
     target_meta: &Value,
