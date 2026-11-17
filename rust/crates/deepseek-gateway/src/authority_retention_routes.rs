@@ -96,7 +96,7 @@ pub fn router() -> Router {
 
 async fn policy_response(
     method: Method,
-    _headers: HeaderMap,
+    headers: HeaderMap,
     _uri: OriginalUri,
     body: Bytes,
 ) -> Response {
@@ -117,7 +117,7 @@ async fn policy_response(
         // (`put_authority_retention_policy`), which this slice does not
         // implement. Forwarding keeps the pre-existing fail-closed behaviour
         // instead of impersonating a write with the catch-all 404.
-        Method::POST => post_policy_response(&body).await,
+        Method::POST => post_policy_response(&headers, &body).await,
         Method::OPTIONS => route_support::options_response(),
         _ => route_support::method_not_allowed(),
     }
@@ -181,9 +181,10 @@ fn atomic_write_json(path: &Path, payload: &Value) -> Result<(), AppError> {
     Ok(())
 }
 
-async fn post_policy_response(body: &[u8]) -> Response {
+async fn post_policy_response(headers: &HeaderMap, body: &[u8]) -> Response {
+    let headers = headers.clone();
     let bytes = body.to_vec();
-    let joined = tokio::task::spawn_blocking(move || handle_post_policy(&bytes)).await;
+    let joined = tokio::task::spawn_blocking(move || handle_post_policy(&headers, &bytes)).await;
     match joined {
         Ok(Ok(value)) => Json(value).into_response(),
         Ok(Err(error)) => route_support::app_error_response(error),
@@ -191,8 +192,8 @@ async fn post_policy_response(body: &[u8]) -> Response {
     }
 }
 
-fn handle_post_policy(body_bytes: &[u8]) -> Result<Value, AppError> {
-    let obj = route_support::read_json_object(body_bytes, 64_000)?;
+fn handle_post_policy(headers: &HeaderMap, body_bytes: &[u8]) -> Result<Value, AppError> {
+    let obj = route_support::read_json_object(headers, body_bytes, 64_000)?;
     let normalized = normalize_retention_policy(&Value::Object(obj))?;
     route_support::require_native_store(
         AUTHORITY_RETENTION_DOMAIN,
@@ -216,11 +217,11 @@ async fn history_snapshot_response(method: Method) -> Response {
     }
 }
 
-async fn explain_response(method: Method, body: Bytes) -> Response {
+async fn explain_response(method: Method, headers: HeaderMap, body: Bytes) -> Response {
     if method != Method::POST {
         return route_support::unallowed_api_method(method, Method::GET);
     }
-    let joined = tokio::task::spawn_blocking(move || handle_explain(&body)).await;
+    let joined = tokio::task::spawn_blocking(move || handle_explain(&headers, &body)).await;
     match joined {
         Ok(Ok(value)) => Json(value).into_response(),
         Ok(Err(error)) => route_support::app_error_response(error),
@@ -228,11 +229,11 @@ async fn explain_response(method: Method, body: Bytes) -> Response {
     }
 }
 
-async fn plan_response(method: Method, body: Bytes) -> Response {
+async fn plan_response(method: Method, headers: HeaderMap, body: Bytes) -> Response {
     if method != Method::POST {
         return route_support::unallowed_api_method(method, Method::GET);
     }
-    let joined = tokio::task::spawn_blocking(move || handle_plan(&body)).await;
+    let joined = tokio::task::spawn_blocking(move || handle_plan(&headers, &body)).await;
     match joined {
         Ok(Ok(value)) => Json(value).into_response(),
         Ok(Err(error)) => route_support::app_error_response(error),
@@ -240,11 +241,11 @@ async fn plan_response(method: Method, body: Bytes) -> Response {
     }
 }
 
-async fn compact_response(method: Method, body: Bytes) -> Response {
+async fn compact_response(method: Method, headers: HeaderMap, body: Bytes) -> Response {
     if method != Method::POST {
         return route_support::unallowed_api_method(method, Method::GET);
     }
-    let joined = tokio::task::spawn_blocking(move || handle_compact(&body)).await;
+    let joined = tokio::task::spawn_blocking(move || handle_compact(&headers, &body)).await;
     match joined {
         Ok(Ok(value)) => Json(value).into_response(),
         Ok(Err(error)) => route_support::app_error_response(error),
@@ -850,9 +851,10 @@ fn plan_json(
 }
 
 fn parse_optional_policy_and_target(
+    headers: &HeaderMap,
     body_bytes: &[u8],
 ) -> Result<(Value, Option<i64>, Map<String, Value>), AppError> {
-    let body = route_support::read_json_object(body_bytes, 64_000)?;
+    let body = route_support::read_json_object(headers, body_bytes, 64_000)?;
     let policy = match body.get("policy") {
         None | Some(Value::Null) => policy_body()?,
         Some(override_val) => normalize_retention_policy(override_val)?,
@@ -914,22 +916,22 @@ fn handle_history_snapshot() -> Result<Value, AppError> {
     }))
 }
 
-fn handle_explain(body_bytes: &[u8]) -> Result<Value, AppError> {
-    let (policy, target_gen, _) = parse_optional_policy_and_target(body_bytes)?;
+fn handle_explain(headers: &HeaderMap, body_bytes: &[u8]) -> Result<Value, AppError> {
+    let (policy, target_gen, _) = parse_optional_policy_and_target(headers, body_bytes)?;
     let state = load_control_state()?;
     let eval = evaluate_retention(&state, &policy, target_gen);
     Ok(explanation_json(&state, &eval))
 }
 
-fn handle_plan(body_bytes: &[u8]) -> Result<Value, AppError> {
-    let (policy, target_gen, _) = parse_optional_policy_and_target(body_bytes)?;
+fn handle_plan(headers: &HeaderMap, body_bytes: &[u8]) -> Result<Value, AppError> {
+    let (policy, target_gen, _) = parse_optional_policy_and_target(headers, body_bytes)?;
     let state = load_control_state()?;
     let eval = evaluate_retention(&state, &policy, target_gen);
     Ok(plan_json(&state, &policy, &eval))
 }
 
-fn handle_compact(body_bytes: &[u8]) -> Result<Value, AppError> {
-    let (policy, target_gen, body) = parse_optional_policy_and_target(body_bytes)?;
+fn handle_compact(headers: &HeaderMap, body_bytes: &[u8]) -> Result<Value, AppError> {
+    let (policy, target_gen, body) = parse_optional_policy_and_target(headers, body_bytes)?;
     route_support::require_native_store(
         AUTHORITY_RETENTION_DOMAIN,
         AUTHORITY_RETENTION_WRITE_NOT_OWNED,

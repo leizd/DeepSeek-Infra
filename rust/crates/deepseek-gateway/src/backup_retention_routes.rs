@@ -12,8 +12,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use axum::body::Bytes;
-use axum::http::Method;
-use axum::response::Response;
+use axum::http::{HeaderMap, Method};
+use axum::response::{IntoResponse, Response};
 use axum::routing::any;
 use axum::{Json, Router};
 use deepseek_policy::app_error::{AppError, codes};
@@ -71,11 +71,11 @@ pub fn router() -> Router {
         .route("/api/workspace/retention/apply", any(apply_response))
 }
 
-async fn preview_response(method: Method, body: Bytes) -> Response {
+async fn preview_response(method: Method, headers: HeaderMap, body: Bytes) -> Response {
     if method != Method::POST {
         return route_support::unallowed_api_method(method, Method::GET);
     }
-    let joined = tokio::task::spawn_blocking(move || handle_preview(&body)).await;
+    let joined = tokio::task::spawn_blocking(move || handle_preview(&headers, &body)).await;
     match joined {
         Ok(Ok(payload)) => Json(payload).into_response(),
         Ok(Err(error)) => route_support::app_error_response(error),
@@ -83,11 +83,11 @@ async fn preview_response(method: Method, body: Bytes) -> Response {
     }
 }
 
-async fn apply_response(method: Method, body: Bytes) -> Response {
+async fn apply_response(method: Method, headers: HeaderMap, body: Bytes) -> Response {
     if method != Method::POST {
         return route_support::unallowed_api_method(method, Method::GET);
     }
-    let joined = tokio::task::spawn_blocking(move || handle_apply(&body)).await;
+    let joined = tokio::task::spawn_blocking(move || handle_apply(&headers, &body)).await;
     match joined {
         Ok(Ok(payload)) => Json(payload).into_response(),
         Ok(Err(error)) => route_support::app_error_response(error),
@@ -325,7 +325,7 @@ fn is_symlink_path(path: &Path) -> bool {
 }
 
 fn valid_commit_markers_by_backup(root: &Path) -> HashMap<String, CommitMarker> {
-    let mut map = HashMap::new();
+    let mut map: HashMap<String, CommitMarker> = HashMap::new();
     for marker in read_commit_markers(root) {
         if !commit_marker_valid(&marker.document) {
             continue;
@@ -532,8 +532,8 @@ fn compute_target_preview(ctx: &ResolvedRetentionContext) -> Result<Value, AppEr
     }))
 }
 
-fn handle_preview(body_bytes: &[u8]) -> Result<Value, AppError> {
-    let body = route_support::read_json_object(body_bytes, 64_000)?;
+fn handle_preview(headers: &HeaderMap, body_bytes: &[u8]) -> Result<Value, AppError> {
+    let body = route_support::read_json_object(headers, body_bytes, 64_000)?;
     let ctx = resolve_retention_context(&body)?;
     let mut preview = compute_target_preview(&ctx)?;
     if let Some(obj) = preview.as_object_mut() {
@@ -1207,8 +1207,8 @@ fn apply_response_envelope(
     })
 }
 
-fn handle_apply(body_bytes: &[u8]) -> Result<Value, AppError> {
-    let body = route_support::read_json_object(body_bytes, 64_000)?;
+fn handle_apply(headers: &HeaderMap, body_bytes: &[u8]) -> Result<Value, AppError> {
+    let body = route_support::read_json_object(headers, body_bytes, 64_000)?;
     let ctx = resolve_retention_context(&body)?;
 
     route_support::require_native_store(BACKUP_RETENTION_DOMAIN, BACKUP_RETENTION_WRITE_NOT_OWNED)?;
