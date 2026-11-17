@@ -69,7 +69,7 @@ fn read_secret(raw_handle: &str) -> io::Result<String> {
     Ok(value)
 }
 
-fn encrypt_passphrase<R: Read, W: Write>(
+pub fn encrypt_passphrase<R: Read, W: Write>(
     input: R,
     output: W,
     passphrase: String,
@@ -131,7 +131,7 @@ fn parse_identities(value: &str) -> io::Result<Vec<age::x25519::Identity>> {
     Ok(parsed)
 }
 
-fn decrypt_passphrase<R: Read, W: Write>(
+pub fn decrypt_passphrase<R: Read, W: Write>(
     input: R,
     mut output: W,
     passphrase: String,
@@ -186,11 +186,20 @@ pub fn generate_identity(mut output: impl Write) -> io::Result<()> {
     )
 }
 
+/// Derive X25519 recipient strings for every identity in `secret`.
+pub fn derive_recipients(secret: &str) -> io::Result<Vec<String>> {
+    let identities = parse_identities(secret)?;
+    Ok(identities
+        .into_iter()
+        .map(|identity| identity.to_public().to_string())
+        .collect())
+}
+
 fn derive_recipient(secret: String, mut output: impl Write) -> io::Result<()> {
-    let identities = parse_identities(&secret)?;
-    let values = identities
+    let recipients = derive_recipients(&secret)?;
+    let values = recipients
         .iter()
-        .map(|identity| format!("\"{}\"", identity.to_public()))
+        .map(|recipient| format!("\"{recipient}\""))
         .collect::<Vec<_>>()
         .join(",");
     writeln!(output, "{{\"recipients\":[{values}]}}")

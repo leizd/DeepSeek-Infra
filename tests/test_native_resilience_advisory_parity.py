@@ -136,3 +136,6 @@ def test_rust_gateway_sources_avoid_path_ref_bug_and_unstable_let_chains() -> No
             assert not re.search(r"\b(if|while)\s+let\b.*&&", line), (
                 f"{path}:{idx} uses unstable rustc 1.85 let_chains syntax"
             )
+            assert ".json::<" not in line and ".json()" not in line, (
+                f"{path}:{idx} calls reqwest::Response::json without reqwest/json feature"
+            )

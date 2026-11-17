@@ -587,6 +587,8 @@
         "backups.generate_recovery_identity",
         "backups.put_frontend_state",
         "backups.finalize_session",
+        "backups.inspect_archive",
+        "backups.unlock_restore",
         "backups.prepare_restore",
         "backups.commit_restore",
         "backups.complete_restore",

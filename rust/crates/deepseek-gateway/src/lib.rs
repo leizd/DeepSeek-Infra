@@ -32,6 +32,7 @@ mod automation_definition_routes;
 mod automation_root_routes;
 mod automation_run_routes;
 mod automation_template_routes;
+mod backup_archive_routes;
 pub mod backup_capacity_routes;
 pub mod backup_catalog_routes;
 pub mod backup_catalog_write_routes;
@@ -242,6 +243,7 @@ fn create_routes() -> Router {
         .merge(backup_dr_slo_routes::router())
         .merge(backup_restore_read_routes::router())
         .merge(backup_restore_write_routes::router())
+        .merge(backup_archive_routes::router())
         .merge(automation_template_routes::router())
         .merge(automation_run_routes::router())
         .merge(automation_definition_routes::router())

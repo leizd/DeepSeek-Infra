@@ -470,21 +470,6 @@
     },
     {
       "method": "post",
-      "path": "/api/workspace/backups/{backup_id}/finalize",
-      "file": "deepseek_infra/web/routes/workspace.py"
-    },
-    {
-      "method": "post",
-      "path": "/api/workspace/restores/inspect",
-      "file": "deepseek_infra/web/routes/workspace.py"
-    },
-    {
-      "method": "post",
-      "path": "/api/workspace/restores/{restore_id}/unlock",
-      "file": "deepseek_infra/web/routes/workspace.py"
-    },
-    {
-      "method": "post",
       "path": "/api/workspace/restores/{restore_id}/prepare",
       "file": "deepseek_infra/web/routes/workspace.py"
     },

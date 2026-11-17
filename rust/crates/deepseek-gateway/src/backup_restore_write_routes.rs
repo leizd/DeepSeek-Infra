@@ -76,14 +76,14 @@ const SECRET_NAMES: [&str; 9] = [
 
 const EPHEMERAL_SUFFIXES: [&str; 4] = [".lock", ".pid", ".tmp", ".part"];
 
-struct ContributorSpec {
-    id: &'static str,
-    schema_version: i64,
-    data_class: &'static str,
-    dir_name: &'static str,
+pub(crate) struct ContributorSpec {
+    pub(crate) id: &'static str,
+    pub(crate) schema_version: i64,
+    pub(crate) data_class: &'static str,
+    pub(crate) dir_name: &'static str,
 }
 
-const LOCAL_CONTRIBUTORS: [ContributorSpec; 11] = [
+pub(crate) const LOCAL_CONTRIBUTORS: [ContributorSpec; 11] = [
     ContributorSpec {
         id: "projects",
         schema_version: 1,
@@ -305,11 +305,13 @@ async fn dispatch_cleanup_restores(method: Method) -> Response {
     finish_json(joined)
 }
 
-fn require_write_authority() -> Result<(), AppError> {
+pub(crate) fn require_write_authority() -> Result<(), AppError> {
     route_support::require_native_store(RESTORE_STAGING_DOMAIN, RESTORE_STAGING_WRITE_NOT_OWNED)
 }
 
-fn finish_json(joined: Result<Result<Value, AppError>, tokio::task::JoinError>) -> Response {
+pub(crate) fn finish_json(
+    joined: Result<Result<Value, AppError>, tokio::task::JoinError>,
+) -> Response {
     match joined {
         Ok(Ok(value)) => Json(value).into_response(),
         Ok(Err(error)) => route_support::app_error_response(error),
@@ -317,7 +319,7 @@ fn finish_json(joined: Result<Result<Value, AppError>, tokio::task::JoinError>) 
     }
 }
 
-fn sha256_compact_json(value: &Value) -> String {
+pub(crate) fn sha256_compact_json(value: &Value) -> String {
     let encoded = dumps_compact(value);
     let digest = Sha256::digest(encoded.as_bytes());
     let mut out = String::with_capacity(64);
@@ -327,7 +329,7 @@ fn sha256_compact_json(value: &Value) -> String {
     out
 }
 
-fn write_atomic_json(path: &Path, value: &Value) -> Result<(), AppError> {
+pub(crate) fn write_atomic_json(path: &Path, value: &Value) -> Result<(), AppError> {
     let parent = path.parent().ok_or_else(route_support::unhandled_error)?;
     fs::create_dir_all(parent).map_err(|_| route_support::unhandled_error())?;
     let seq = TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
@@ -359,18 +361,18 @@ fn write_atomic_json(path: &Path, value: &Value) -> Result<(), AppError> {
     result.map_err(|_| route_support::unhandled_error())
 }
 
-struct BackupContext {
-    mode: String,
-    project_ids: Vec<String>,
-    include_history: bool,
-    include_drafts: bool,
-    include_rebuildable_indexes: bool,
-    coverage_policy: String,
-    include_external_state: bool,
+pub(crate) struct BackupContext {
+    pub(crate) mode: String,
+    pub(crate) project_ids: Vec<String>,
+    pub(crate) include_history: bool,
+    pub(crate) include_drafts: bool,
+    pub(crate) include_rebuildable_indexes: bool,
+    pub(crate) coverage_policy: String,
+    pub(crate) include_external_state: bool,
 }
 
 impl BackupContext {
-    fn to_json(&self) -> Value {
+    pub(crate) fn to_json(&self) -> Value {
         json!({
             "mode": self.mode,
             "projectIds": self.project_ids,
@@ -382,7 +384,7 @@ impl BackupContext {
         })
     }
 
-    fn exclusions(&self) -> Vec<String> {
+    pub(crate) fn exclusions(&self) -> Vec<String> {
         let mut items = vec![
             "credentials and auth tokens".to_string(),
             "ephemeral locks and process state".to_string(),
@@ -399,7 +401,7 @@ impl BackupContext {
     }
 }
 
-fn parse_context(payload: &Map<String, Value>) -> Result<BackupContext, AppError> {
+pub(crate) fn parse_context(payload: &Map<String, Value>) -> Result<BackupContext, AppError> {
     let mode = payload
         .get("mode")
         .filter(|value| python_truthy(value))
@@ -544,7 +546,10 @@ fn probe_stateless_mcp_capabilities(base_url: &str) -> Value {
     if !resp.status().is_success() {
         return fallback();
     }
-    let Ok(body) = resp.json::<Value>() else {
+    let Ok(raw) = resp.text() else {
+        return fallback();
+    };
+    let Ok(body) = serde_json::from_str::<Value>(&raw) else {
         return fallback();
     };
     let available = body.get("contributorId").and_then(Value::as_str) == Some("stateless-mcp")
@@ -556,7 +561,7 @@ fn probe_stateless_mcp_capabilities(base_url: &str) -> Value {
     })
 }
 
-fn excluded_path(relative: &Path) -> bool {
+pub(crate) fn excluded_path(relative: &Path) -> bool {
     for component in relative.components() {
         if let Component::Normal(part) = component {
             if let Some(text) = part.to_str() {
@@ -574,7 +579,7 @@ fn excluded_path(relative: &Path) -> bool {
         .is_some_and(|dot_ext| EPHEMERAL_SUFFIXES.iter().any(|suf| *suf == dot_ext))
 }
 
-fn collect_files_recursive(dir: &Path, base: &Path, out: &mut Vec<PathBuf>) {
+pub(crate) fn collect_files_recursive(dir: &Path, base: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
@@ -595,7 +600,7 @@ fn collect_files_recursive(dir: &Path, base: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-fn project_artifact_paths(root: &Path, project_ids: &[String]) -> BTreeSet<String> {
+pub(crate) fn project_artifact_paths(root: &Path, project_ids: &[String]) -> BTreeSet<String> {
     let generated_dir = root.join(".generated");
     let canonical_gen = fs::canonicalize(&generated_dir).unwrap_or(generated_dir);
     let mut allowed = BTreeSet::new();
@@ -659,13 +664,17 @@ fn project_artifact_paths(root: &Path, project_ids: &[String]) -> BTreeSet<Strin
     allowed
 }
 
-fn estimate_contributor_bytes(root: &Path, spec: &ContributorSpec, context: &BackupContext) -> u64 {
+pub(crate) fn collect_contributor_files(
+    root: &Path,
+    spec: &ContributorSpec,
+    context: &BackupContext,
+) -> Vec<(String, PathBuf)> {
     let contributor_root = root.join(spec.dir_name);
     if !contributor_root.exists() {
-        return 0;
+        return Vec::new();
     }
     if context.mode == "project" && spec.id == "project-files" {
-        return 0;
+        return Vec::new();
     }
     let allowed_artifacts = if context.mode == "project" && spec.id == "artifacts" {
         Some(project_artifact_paths(root, &context.project_ids))
@@ -674,7 +683,7 @@ fn estimate_contributor_bytes(root: &Path, spec: &ContributorSpec, context: &Bac
     };
     let mut files = Vec::new();
     collect_files_recursive(&contributor_root, &contributor_root, &mut files);
-    let mut total = 0u64;
+    let mut out = Vec::new();
     for path in files {
         let Ok(rel) = path.strip_prefix(&contributor_root) else {
             continue;
@@ -707,6 +716,15 @@ fn estimate_contributor_bytes(root: &Path, spec: &ContributorSpec, context: &Bac
         if excluded_path(rel) {
             continue;
         }
+        out.push((posix_rel, path));
+    }
+    out.sort_by(|left, right| left.0.cmp(&right.0));
+    out
+}
+
+fn estimate_contributor_bytes(root: &Path, spec: &ContributorSpec, context: &BackupContext) -> u64 {
+    let mut total = 0u64;
+    for (_, path) in collect_contributor_files(root, spec, context) {
         if let Ok(meta) = fs::metadata(&path) {
             total = total.saturating_add(meta.len());
         }
@@ -857,7 +875,7 @@ fn coverage_from_plan(plan: &Value) -> Value {
     })
 }
 
-fn create_session(root: &Path, payload: &Map<String, Value>) -> Result<Value, AppError> {
+pub(crate) fn create_session(root: &Path, payload: &Map<String, Value>) -> Result<Value, AppError> {
     let context = parse_context(payload)?;
     let protection = parse_protection(payload)?;
     let created_at = now_utc_iso();
@@ -978,7 +996,9 @@ fn check_json_depth(value: &Value, depth: usize) -> Result<(), AppError> {
     Ok(())
 }
 
-fn validate_frontend_envelope(envelope: &Map<String, Value>) -> Result<String, AppError> {
+pub(crate) fn validate_frontend_envelope(
+    envelope: &Map<String, Value>,
+) -> Result<String, AppError> {
     let version_ok = envelope.get("schemaVersion").and_then(|value| match value {
         Value::Number(num) => num.as_i64(),
         _ => None,

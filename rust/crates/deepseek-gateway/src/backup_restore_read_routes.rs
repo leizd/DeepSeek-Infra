@@ -180,8 +180,7 @@ pub(crate) fn load_session(root: &Path, backup_id: &str) -> Result<Map<String, V
     read_json_object(&path)
 }
 
-fn get_session(root: &Path, backup_id: &str) -> Result<Value, AppError> {
-    let session = load_session(root, backup_id)?;
+pub(crate) fn public_session(session: Map<String, Value>) -> Value {
     let mut out = Map::new();
     out.insert("ok".into(), Value::Bool(true));
     for (key, value) in session {
@@ -189,7 +188,11 @@ fn get_session(root: &Path, backup_id: &str) -> Result<Value, AppError> {
             out.insert(key, value);
         }
     }
-    Ok(Value::Object(out))
+    Value::Object(out)
+}
+
+fn get_session(root: &Path, backup_id: &str) -> Result<Value, AppError> {
+    Ok(public_session(load_session(root, backup_id)?))
 }
 
 fn resolve_backup_file(root: &Path, session: &Map<String, Value>) -> Result<PathBuf, AppError> {

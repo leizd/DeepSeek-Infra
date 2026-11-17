@@ -940,6 +940,7 @@ def delete_backup(backup_id: str) -> bool:
 
 
 def inspect_archive(source: Path | bytes, *, filename: str = "workspace.dsibackup") -> dict[str, Any]:
+    assert_python_writer_allowed("restore_staging_store")
     RESTORE_DIR.mkdir(parents=True, exist_ok=True)
     restore_id = f"restore_{uuid.uuid4().hex[:16]}"
     restore_root = RESTORE_DIR / restore_id
@@ -1024,6 +1025,7 @@ def _unlock_sealed_frontend(root: Path, kind: backup_crypto.SecretKind, secret: 
 
 
 def unlock_restore(restore_id: str) -> dict[str, Any]:
+    assert_python_writer_allowed("restore_staging_store")
     root = _restore_root(restore_id)
     plan_path = root / "plan.json"
     upload_path = root / "upload.json"

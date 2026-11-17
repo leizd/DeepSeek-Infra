@@ -35,13 +35,20 @@ def test_s5_write_routes_registered_and_removed_from_inventory() -> None:
     write_src = (RUST_GATEWAY_SRC / "backup_restore_write_routes.rs").read_text(
         encoding="utf-8"
     )
+    archive_src = (RUST_GATEWAY_SRC / "backup_archive_routes.rs").read_text(
+        encoding="utf-8"
+    )
     inventory = json.loads(INVENTORY_SNAPSHOT.read_text(encoding="utf-8"))
 
     assert ".merge(backup_restore_write_routes::router())" in lib_src
+    assert ".merge(backup_archive_routes::router())" in lib_src
     assert '"restore_staging_store"' in lib_src
     assert '"/api/workspace/backups"' in write_src
     assert '"/api/workspace/backups/:backup_id/secret"' in write_src
     assert '"/api/workspace/backups/:backup_id/frontend-state"' in write_src
+    assert '"/api/workspace/backups/:backup_id/finalize"' in archive_src
+    assert '"/api/workspace/restores/inspect"' in archive_src
+    assert '"/api/workspace/restores/:restore_id/unlock"' in archive_src
     assert '"/api/workspace/restores/:restore_id/secret"' in write_src
     assert '"/api/workspace/restores/cleanup"' in write_src
     assert "dispatch_delete_backup" in read_src
@@ -55,7 +62,10 @@ def test_s5_write_routes_registered_and_removed_from_inventory() -> None:
         ("post", "/api/workspace/backups"),
         ("put", "/api/workspace/backups/{backup_id}/secret"),
         ("put", "/api/workspace/backups/{backup_id}/frontend-state"),
+        ("post", "/api/workspace/backups/{backup_id}/finalize"),
         ("delete", "/api/workspace/backups/{backup_id}"),
+        ("post", "/api/workspace/restores/inspect"),
+        ("post", "/api/workspace/restores/{restore_id}/unlock"),
         ("put", "/api/workspace/restores/{restore_id}/secret"),
         ("delete", "/api/workspace/restores/{restore_id}"),
         ("post", "/api/workspace/restores/cleanup"),
@@ -101,6 +111,16 @@ def test_python_restore_staging_store_writers_denied_under_python_disabled(
         PythonWriterMechanicallyDeniedError, match="restore_staging_store"
     ):
         backups.cleanup_restores()
+
+    with pytest.raises(
+        PythonWriterMechanicallyDeniedError, match="restore_staging_store"
+    ):
+        backups.inspect_archive(b"dummy")
+
+    with pytest.raises(
+        PythonWriterMechanicallyDeniedError, match="restore_staging_store"
+    ):
+        backups.unlock_restore("restore_missing")
 
     assert not (tmp_settings / ".backups").exists()
 
@@ -193,3 +213,65 @@ def test_s5_write_python_oracle_responses(tmp_settings: Path) -> None:
     del_r = client.delete("/api/workspace/restores/restore_cur1", headers=headers)
     assert del_r.status_code == 200
     assert del_r.json() == {"ok": True, "deleted": True}
+
+
+def test_s5_archive_finalize_inspect_unlock_oracle(tmp_settings: Path) -> None:
+    proj_dir = tmp_settings / ".projects" / "p1"
+    proj_dir.mkdir(parents=True, exist_ok=True)
+    (proj_dir / "project.json").write_text('{"id":"p1","name":"Oracle"}', encoding="utf-8")
+
+    client = TestClient(create_app(), base_url="http://127.0.0.1")
+    headers = _auth_headers()
+
+    created = client.post(
+        "/api/workspace/backups",
+        json={"mode": "full", "requiresFrontendState": False, "coveragePolicy": "best-effort"},
+        headers=headers,
+    )
+    assert created.status_code == 200
+    backup_id = created.json()["backupId"]
+
+    finalized = client.post(
+        f"/api/workspace/backups/{backup_id}/finalize",
+        json={},
+        headers=headers,
+    )
+    assert finalized.status_code == 200
+    fin = finalized.json()
+    assert fin["ok"] is True
+    assert fin["phase"] == "ready"
+    assert fin["filename"].endswith(".dsibackup")
+    assert fin["protection"] == {"mode": "none"}
+
+    # Idempotent finalize.
+    second = client.post(
+        f"/api/workspace/backups/{backup_id}/finalize",
+        json={},
+        headers=headers,
+    )
+    assert second.status_code == 200
+    assert second.json()["phase"] == "ready"
+
+    dl = client.get(f"/api/workspace/backups/{backup_id}/download", headers=headers)
+    assert dl.status_code == 200
+
+    inspected = client.post(
+        "/api/workspace/restores/inspect",
+        content=dl.content,
+        headers={**headers, "Content-Type": "application/vnd.deepseek-infra.backup+zip"},
+    )
+    assert inspected.status_code == 200
+    plan = inspected.json()
+    assert plan["ok"] is True
+    assert plan["phase"] == "inspected"
+    assert plan["encrypted"] is False
+    assert plan["compatible"] is True
+    restore_id = plan["restoreId"]
+
+    unlocked = client.post(f"/api/workspace/restores/{restore_id}/unlock", headers=headers)
+    assert unlocked.status_code == 200
+    assert unlocked.json()["phase"] == "inspected"
+
+    # Non-existent restore unlock returns 404.
+    missing = client.post("/api/workspace/restores/restore_missing/unlock", headers=headers)
+    assert missing.status_code == 404

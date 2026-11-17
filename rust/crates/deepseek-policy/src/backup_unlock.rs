@@ -151,14 +151,24 @@ impl Drop for StagedDrillGuard {
 
 /// Inspect an Age ciphertext header within `backup_crypto`'s bounded header budget.
 pub fn inspect_age_file_header(path: &Path) -> Result<bool, String> {
+    inspect_age_file_protection(path).map(|_| true)
+}
+
+/// Inspect an Age ciphertext header and return whether it uses passphrase (`scrypt`) encryption.
+pub fn inspect_age_file_protection(path: &Path) -> Result<bool, String> {
     let file = File::open(path).map_err(|err| err.to_string())?;
-    backup_crypto::inspect_age_header(BufReader::new(file)).map_err(|err| err.to_string())?;
-    Ok(true)
+    backup_crypto::inspect_age_header(BufReader::new(file)).map_err(|err| err.to_string())
 }
 
 /// Generate a fresh X25519 identity pair `(secret_key, public_recipient)`.
 pub fn ephemeral_identity() -> (String, String) {
     backup_crypto::ephemeral_identity()
+}
+
+/// Derive X25519 public recipients from an `AGE-SECRET-KEY-` identity string.
+pub fn derive_recipients(secret: &str) -> Result<Vec<String>, AppError> {
+    backup_crypto::derive_recipients(secret)
+        .map_err(|err| invalid_payload(format!("Recovery key is invalid: {err}")))
 }
 
 /// Encrypt `plaintext` to `recipients` using `backup_crypto`.
@@ -172,28 +182,33 @@ pub fn encrypt_bytes_to_recipients(
     Ok(out)
 }
 
-/// Decrypt `src` to `dst` using the in-process `backup_crypto` Age backend.
-pub fn decrypt_file_native(src: &Path, dst: &Path, identity_secret: &str) -> Result<(), AppError> {
-    let trimmed = identity_secret.trim();
-    if !trimmed.starts_with("AGE-SECRET-KEY-") {
-        return Err(invalid_payload(
-            "Recovery unlock requires an AGE-SECRET-KEY- identity",
-        ));
-    }
+fn decrypt_file_inner(
+    src: &Path,
+    dst: &Path,
+    use_passphrase: bool,
+    secret: &str,
+) -> Result<(), AppError> {
     if let Some(parent) = dst.parent() {
         fs::create_dir_all(parent).map_err(|err| internal_error(err.to_string()))?;
     }
     let input =
         File::open(src).map_err(|err| invalid_payload(format!("Backup file is missing: {err}")))?;
-    let output = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
+    let mut options = OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let output = options
         .open(dst)
         .map_err(|err| internal_error(format!("Failed to stage decrypted payload: {err}")))?;
     let mut writer = BufWriter::new(output);
-    let decrypted =
-        backup_crypto::decrypt_identity(BufReader::new(input), &mut writer, trimmed.to_string());
+    let decrypted = if use_passphrase {
+        backup_crypto::decrypt_passphrase(BufReader::new(input), &mut writer, secret.to_string())
+    } else {
+        backup_crypto::decrypt_identity(BufReader::new(input), &mut writer, secret.to_string())
+    };
     if let Err(err) = decrypted {
         drop(writer);
         scrub_plaintext_file(dst);
@@ -210,6 +225,224 @@ pub fn decrypt_file_native(src: &Path, dst: &Path, identity_secret: &str) -> Res
             "Failed to persist decrypted payload: {err}"
         )));
     }
+    Ok(())
+}
+
+/// Decrypt `src` to `dst` using the in-process `backup_crypto` X25519 Age backend.
+pub fn decrypt_file_native(src: &Path, dst: &Path, identity_secret: &str) -> Result<(), AppError> {
+    let trimmed = identity_secret.trim();
+    if !trimmed.starts_with("AGE-SECRET-KEY-") {
+        return Err(invalid_payload(
+            "Recovery unlock requires an AGE-SECRET-KEY- identity",
+        ));
+    }
+    decrypt_file_inner(src, dst, false, trimmed)
+}
+
+/// Decrypt `src` to `dst` using the in-process `backup_crypto` passphrase (`scrypt`) backend.
+pub fn decrypt_passphrase_file_native(
+    src: &Path,
+    dst: &Path,
+    passphrase: &str,
+) -> Result<(), AppError> {
+    if passphrase.is_empty() || passphrase.as_bytes().contains(&0) {
+        return Err(invalid_payload("Backup passphrase is invalid"));
+    }
+    decrypt_file_inner(src, dst, true, passphrase)
+}
+
+struct PlaintextTempGuard(PathBuf);
+
+impl Drop for PlaintextTempGuard {
+    fn drop(&mut self) {
+        scrub_plaintext_file(&self.0);
+    }
+}
+
+fn collect_sorted_staging_files(staging: &Path) -> Result<Vec<(String, PathBuf)>, AppError> {
+    fn walk(root: &Path, dir: &Path, out: &mut Vec<(String, PathBuf)>) -> Result<(), AppError> {
+        let entries = fs::read_dir(dir).map_err(|err| internal_error(err.to_string()))?;
+        for entry in entries {
+            let entry = entry.map_err(|err| internal_error(err.to_string()))?;
+            let path = entry.path();
+            let meta =
+                fs::symlink_metadata(&path).map_err(|err| internal_error(err.to_string()))?;
+            if meta.file_type().is_symlink() {
+                continue;
+            }
+            if meta.is_dir() {
+                walk(root, &path, out)?;
+            } else if meta.is_file() {
+                let rel = path
+                    .strip_prefix(root)
+                    .map_err(|err| internal_error(err.to_string()))?
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                out.push((rel, path));
+            }
+        }
+        Ok(())
+    }
+    let mut files = Vec::new();
+    walk(staging, staging, &mut files)?;
+    files.sort_by(|left, right| left.0.cmp(&right.0));
+    Ok(files)
+}
+
+fn write_zip_to_path(
+    staging: &Path,
+    destination: &Path,
+    private_mode: bool,
+) -> Result<(), AppError> {
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent).map_err(|err| internal_error(err.to_string()))?;
+    }
+    let files = collect_sorted_staging_files(staging)?;
+    let mut open_opts = OpenOptions::new();
+    open_opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    if private_mode {
+        use std::os::unix::fs::OpenOptionsExt;
+        open_opts.mode(0o600);
+    }
+    #[cfg(not(unix))]
+    let _ = private_mode;
+
+    let file = open_opts
+        .open(destination)
+        .map_err(|err| internal_error(format!("Failed to create backup archive: {err}")))?;
+    let mut writer = zip::ZipWriter::new(BufWriter::new(file));
+    let mtime = zip::DateTime::from_date_and_time(1980, 1, 1, 0, 0, 0)
+        .expect("1980-01-01 DOS timestamp is valid");
+    let options = zip::write::FileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated)
+        .compression_level(Some(6))
+        .unix_permissions(0o100600)
+        .last_modified_time(mtime);
+    for (rel, path) in files {
+        writer
+            .start_file(&rel, options)
+            .map_err(|err| internal_error(format!("Failed to write zip header: {err}")))?;
+        let mut src = BufReader::new(
+            File::open(&path)
+                .map_err(|err| internal_error(format!("Failed to read staged file: {err}")))?,
+        );
+        std::io::copy(&mut src, &mut writer).map_err(|err| {
+            internal_error(format!("Failed to stream staged file into zip: {err}"))
+        })?;
+    }
+    let buffered = writer
+        .finish()
+        .map_err(|err| internal_error(format!("Failed to finalize zip archive: {err}")))?;
+    let mut inner = buffered
+        .into_inner()
+        .map_err(|err| internal_error(format!("Failed to flush zip archive: {err}")))?;
+    inner
+        .flush()
+        .and_then(|()| inner.sync_all())
+        .map_err(|err| internal_error(format!("Failed to sync backup archive: {err}")))?;
+    Ok(())
+}
+
+/// Write an uncompressed/deflated `.dsibackup` ZIP archive atomically from `staging` to `target`.
+pub fn write_zip_tree(staging: &Path, target: &Path) -> Result<(), AppError> {
+    let parent = target
+        .parent()
+        .ok_or_else(|| internal_error("Backup target path has no parent"))?;
+    fs::create_dir_all(parent).map_err(|err| internal_error(err.to_string()))?;
+    let name = target
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("backup.dsibackup");
+    let temporary = parent.join(format!(".{name}.{}.tmp", std::process::id()));
+    let write_res = write_zip_to_path(staging, &temporary, false);
+    if write_res.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    write_res?;
+    if let Err(err) = fs::rename(&temporary, target) {
+        let _ = fs::remove_file(&temporary);
+        return Err(internal_error(format!(
+            "Failed to publish backup archive: {err}"
+        )));
+    }
+    let _ = crate::backup_mirror::fsync_dir(parent);
+    Ok(())
+}
+
+/// Package `staging` into a `.dsibackup` (plain) or `.dsibackup.age` (encrypted) archive atomically.
+pub fn encrypt_tree_zip_native(
+    staging: &Path,
+    target: &Path,
+    protection_mode: &str,
+    secret: Option<&str>,
+    recipients: &[String],
+) -> Result<(), AppError> {
+    if protection_mode == "none" {
+        return write_zip_tree(staging, target);
+    }
+    let parent = target
+        .parent()
+        .ok_or_else(|| internal_error("Backup target path has no parent"))?;
+    fs::create_dir_all(parent).map_err(|err| internal_error(err.to_string()))?;
+    let name = target
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("backup.dsibackup.age");
+    let pid = std::process::id();
+    let plain_tmp = parent.join(format!(".{name}.{pid}.plain.zip.tmp"));
+    let _plain_guard = PlaintextTempGuard(plain_tmp.clone());
+    write_zip_to_path(staging, &plain_tmp, true)?;
+
+    let cipher_tmp = parent.join(format!(".{name}.{pid}.age.tmp"));
+    let encrypt_result = (|| -> Result<(), AppError> {
+        let input = BufReader::new(
+            File::open(&plain_tmp)
+                .map_err(|err| internal_error(format!("Failed to open staged zip: {err}")))?,
+        );
+        let output = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&cipher_tmp)
+            .map_err(|err| internal_error(format!("Failed to create encrypted backup: {err}")))?;
+        let mut buffered_out = BufWriter::new(output);
+        match protection_mode {
+            "passphrase" => {
+                let passphrase = secret
+                    .filter(|s| !s.is_empty())
+                    .ok_or_else(|| conflict_error("Backup secret is required or expired"))?;
+                backup_crypto::encrypt_passphrase(input, &mut buffered_out, passphrase.to_string())
+                    .map_err(|err| internal_error(format!("Backup encryption failed: {err}")))?;
+            }
+            "age-recipient" => {
+                backup_crypto::encrypt_recipients(input, &mut buffered_out, recipients)
+                    .map_err(|err| internal_error(format!("Backup encryption failed: {err}")))?;
+            }
+            _ => {
+                return Err(invalid_payload("Unsupported backup protection mode"));
+            }
+        }
+        let mut inner = buffered_out
+            .into_inner()
+            .map_err(|err| internal_error(format!("Failed to flush encrypted backup: {err}")))?;
+        inner
+            .flush()
+            .and_then(|()| inner.sync_all())
+            .map_err(|err| internal_error(format!("Failed to sync encrypted backup: {err}")))?;
+        Ok(())
+    })();
+    if let Err(err) = encrypt_result {
+        let _ = fs::remove_file(&cipher_tmp);
+        return Err(err);
+    }
+    if let Err(err) = fs::rename(&cipher_tmp, target) {
+        let _ = fs::remove_file(&cipher_tmp);
+        return Err(internal_error(format!(
+            "Failed to publish encrypted backup: {err}"
+        )));
+    }
+    let _ = crate::backup_mirror::fsync_dir(parent);
     Ok(())
 }
 
@@ -1539,5 +1772,57 @@ mod tests {
         .unwrap_err();
         assert_eq!(err.status, 400);
         assert!(err.message.contains("component id is invalid"));
+    }
+
+    #[test]
+    fn encrypt_tree_zip_native_round_trips_passphrase_and_age_recipient() {
+        let dir = tempdir().unwrap();
+        let staging = dir.path().join("staging");
+        fs::create_dir_all(staging.join("payload/projects/p1")).unwrap();
+        let project_bytes = br#"{"id":"p1"}"#;
+        fs::write(
+            staging.join("payload/projects/p1/project.json"),
+            project_bytes,
+        )
+        .unwrap();
+        let mut manifest_obj = json!({
+            "schemaVersion": BACKUP_SCHEMA,
+            "purpose": PACKAGE_PURPOSE,
+            "files": [
+                {
+                    "contributorId": "projects",
+                    "path": "payload/projects/p1/project.json",
+                    "size": project_bytes.len(),
+                    "sha256": sha256_hex(project_bytes),
+                }
+            ],
+        });
+        let manifest_bytes = crate::python_json::dumps_compact(&manifest_obj).into_bytes();
+        fs::write(staging.join("manifest.json"), &manifest_bytes).unwrap();
+        let checksum_text = render_sha256_manifest(&[
+            ("payload/projects/p1/project.json", project_bytes),
+            ("manifest.json", manifest_bytes.as_slice()),
+        ]);
+        fs::write(staging.join("checksums.sha256"), checksum_text).unwrap();
+
+        let pass_age = dir.path().join("out/pass.dsibackup.age");
+        encrypt_tree_zip_native(&staging, &pass_age, "passphrase", Some("hunter2"), &[]).unwrap();
+        assert_eq!(inspect_age_file_protection(&pass_age).unwrap(), true);
+        let pass_zip = dir.path().join("out/pass.zip");
+        decrypt_passphrase_file_native(&pass_age, &pass_zip, "hunter2").unwrap();
+        let verified_pass =
+            safe_extract_and_verify(&pass_zip, &dir.path().join("ex-pass")).unwrap();
+        assert_eq!(verified_pass["schemaVersion"], BACKUP_SCHEMA);
+
+        let (secret, recipient) = ephemeral_identity();
+        let key_age = dir.path().join("out/key.dsibackup.age");
+        encrypt_tree_zip_native(&staging, &key_age, "age-recipient", None, &[recipient]).unwrap();
+        assert_eq!(inspect_age_file_protection(&key_age).unwrap(), false);
+        let key_zip = dir.path().join("out/key.zip");
+        decrypt_file_native(&key_age, &key_zip, &secret).unwrap();
+        let verified_key = safe_extract_and_verify(&key_zip, &dir.path().join("ex-key")).unwrap();
+        assert_eq!(verified_key["purpose"], PACKAGE_PURPOSE);
+        manifest_obj["verified"] = Value::Bool(true);
+        assert_eq!(manifest_obj["verified"], Value::Bool(true));
     }
 }
