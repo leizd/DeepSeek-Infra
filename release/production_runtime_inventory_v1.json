@@ -319,68 +319,8 @@
       "file": "deepseek_infra/web/routes/automation.py"
     },
     {
-      "method": "patch",
-      "path": "/api/workspace/backup-policies/{policy_id}",
-      "file": "deepseek_infra/web/routes/backup_governance.py"
-    },
-    {
-      "method": "delete",
-      "path": "/api/workspace/backup-policies/{policy_id}",
-      "file": "deepseek_infra/web/routes/backup_governance.py"
-    },
-    {
-      "method": "post",
-      "path": "/api/workspace/backup-policies/{policy_id}/promote-primary",
-      "file": "deepseek_infra/web/routes/backup_governance.py"
-    },
-    {
-      "method": "get",
-      "path": "/api/workspace/backup-policies/{policy_id}/continuity",
-      "file": "deepseek_infra/web/routes/backup_governance.py"
-    },
-    {
       "method": "post",
       "path": "/api/workspace/backup-policies/{policy_id}/run",
-      "file": "deepseek_infra/web/routes/backup_governance.py"
-    },
-    {
-      "method": "post",
-      "path": "/api/workspace/backup-targets/register-new",
-      "file": "deepseek_infra/web/routes/backup_governance.py"
-    },
-    {
-      "method": "post",
-      "path": "/api/workspace/backup-targets/{target_id}/probe",
-      "file": "deepseek_infra/web/routes/backup_governance.py"
-    },
-    {
-      "method": "delete",
-      "path": "/api/workspace/backup-targets/{target_id}",
-      "file": "deepseek_infra/web/routes/backup_governance.py"
-    },
-    {
-      "method": "post",
-      "path": "/api/workspace/backup-targets/{target_id}/adopt",
-      "file": "deepseek_infra/web/routes/backup_governance.py"
-    },
-    {
-      "method": "post",
-      "path": "/api/workspace/backup-targets/{target_id}/drain",
-      "file": "deepseek_infra/web/routes/backup_governance.py"
-    },
-    {
-      "method": "post",
-      "path": "/api/workspace/backup-targets/{target_id}/activate",
-      "file": "deepseek_infra/web/routes/backup_governance.py"
-    },
-    {
-      "method": "get",
-      "path": "/api/workspace/backup-rebalances",
-      "file": "deepseek_infra/web/routes/backup_governance.py"
-    },
-    {
-      "method": "post",
-      "path": "/api/workspace/backup-rebalances",
       "file": "deepseek_infra/web/routes/backup_governance.py"
     },
     {
@@ -444,23 +384,8 @@
       "file": "deepseek_infra/web/routes/backup_governance.py"
     },
     {
-      "method": "post",
-      "path": "/api/workspace/backup-targets/{target_id}/drain/cancel",
-      "file": "deepseek_infra/web/routes/backup_governance.py"
-    },
-    {
-      "method": "get",
-      "path": "/api/workspace/backup-targets/{target_id}/drain",
-      "file": "deepseek_infra/web/routes/backup_governance.py"
-    },
-    {
       "method": "get",
       "path": "/api/workspace/backup-capacity/summary",
-      "file": "deepseek_infra/web/routes/backup_governance.py"
-    },
-    {
-      "method": "post",
-      "path": "/api/workspace/authority/retention/policy",
       "file": "deepseek_infra/web/routes/backup_governance.py"
     },
     {
@@ -636,11 +561,6 @@
     {
       "method": "post",
       "path": "/api/workspace/backups",
-      "file": "deepseek_infra/web/routes/workspace.py"
-    },
-    {
-      "method": "post",
-      "path": "/api/workspace/backups/recovery-identities",
       "file": "deepseek_infra/web/routes/workspace.py"
     },
     {

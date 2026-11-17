@@ -170,6 +170,38 @@ pub(crate) fn unallowed_api_method(
     method_not_allowed()
 }
 
+pub(crate) fn write_json_atomic(
+    path: &std::path::Path,
+    value: &serde_json::Value,
+) -> Result<(), AppError> {
+    use std::io::Write as _;
+
+    let parent = path.parent().ok_or_else(unhandled_error)?;
+    std::fs::create_dir_all(parent).map_err(|_| unhandled_error())?;
+    let serialized = serde_json::to_string_pretty(value).map_err(|_| unhandled_error())? + "\n";
+    let file_name = path
+        .file_name()
+        .and_then(|v| v.to_str())
+        .ok_or_else(unhandled_error)?;
+    let tmp = parent.join(format!(".{file_name}.{}.tmp", std::process::id()));
+    {
+        let mut handle = std::fs::File::create(&tmp).map_err(|_| unhandled_error())?;
+        handle
+            .write_all(serialized.as_bytes())
+            .map_err(|_| unhandled_error())?;
+        handle.sync_all().map_err(|_| unhandled_error())?;
+    }
+    if let Err(err) = std::fs::rename(&tmp, path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(AppError {
+            status: 500,
+            code: codes::INTERNAL,
+            message: format!("Atomic write failed: {err}"),
+        });
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::parse_content_length;

@@ -138,7 +138,7 @@ fn extract_policy_id(body: &Map<String, Value>) -> Result<String, AppError> {
     Ok(raw)
 }
 
-fn load_backup_policy(policy_id: &str) -> Result<Value, AppError> {
+pub(crate) fn load_backup_policy(policy_id: &str) -> Result<Value, AppError> {
     let workspace = crate::data_routes::workspace_root();
     let control_db = workspace.join(".backup-control").join("control.sqlite3");
     if let Some(conn) = open_readonly_sqlite(&control_db)? {

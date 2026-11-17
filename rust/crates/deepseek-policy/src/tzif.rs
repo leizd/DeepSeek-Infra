@@ -6,7 +6,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use chrono::{DateTime, Datelike, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, Utc};
+use chrono::{DateTime, Datelike, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 
 use crate::app_error::{AppError, codes};
 
@@ -539,6 +539,13 @@ impl IanaTimeZone {
             .unwrap_or_else(|| FixedOffset::east_opt(0).expect("utc offset"));
         utc.with_timezone(&offset)
     }
+
+    pub fn local_hour_minute(&self, unix_seconds: i64) -> (u32, u32) {
+        let utc = DateTime::<Utc>::from_timestamp(unix_seconds, 0)
+            .unwrap_or_else(|| DateTime::<Utc>::from_timestamp(0, 0).expect("unix epoch"));
+        let local = self.to_local(utc);
+        (local.hour(), local.minute())
+    }
 }
 
 #[cfg(test)]
@@ -558,6 +565,7 @@ mod tests {
         assert_eq!(utc.offset_seconds_at(instant), 0);
 
         let plus_eight = load_iana_timezone("Etc/GMT-8").unwrap();
+        assert_eq!(plus_eight.local_hour_minute(1_700_000_000), (6, 13));
         assert_eq!(plus_eight.offset_seconds_at(instant), 8 * 3600);
         assert_eq!(plus_eight.to_local(instant).format("%H").to_string(), "20");
 
