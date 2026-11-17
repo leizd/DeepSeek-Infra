@@ -9,6 +9,7 @@ use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode, header};
 use deepseek_gateway::backup_commit::commit_marker_valid;
 use deepseek_gateway::create_production_app;
+use deepseek_policy::backup_unlock::{encrypt_bytes_to_recipients, ephemeral_identity};
 use deepseek_policy::python_json::dumps_compact;
 use rusqlite::Connection;
 use serde_json::{Map, Value, json};
@@ -116,15 +117,20 @@ impl Fixture {
         body: Option<Value>,
         auth: bool,
     ) -> (StatusCode, Value) {
-        let raw_body = match body {
-            Some(v) => Body::from(serde_json::to_vec(&v).unwrap()),
-            None => Body::empty(),
-        };
         let mut builder = Request::builder()
             .method(method)
             .uri(uri)
-            .header(header::HOST, "127.0.0.1")
-            .header(header::CONTENT_TYPE, "application/json");
+            .header(header::HOST, "127.0.0.1");
+        let raw_body = match body {
+            Some(v) => {
+                let bytes = serde_json::to_vec(&v).unwrap();
+                builder = builder
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(header::CONTENT_LENGTH, bytes.len().to_string());
+                Body::from(bytes)
+            }
+            None => Body::empty(),
+        };
         if auth {
             builder = builder.header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"));
         }
@@ -145,6 +151,11 @@ fn sha256_bytes(data: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(data);
     format!("{:x}", hasher.finalize())
+}
+
+fn sample_age_ciphertext() -> Vec<u8> {
+    let (_identity, recipient) = ephemeral_identity();
+    encrypt_bytes_to_recipients(b"retention-test-payload", &[recipient]).unwrap()
 }
 
 fn append_catalog_entry(root: &Path, entry_type: &str, payload: Value) {
@@ -363,10 +374,10 @@ async fn apply_refuses_in_default_mode_without_mutating_disk() {
         }),
     );
 
-    let valid_age = b"age-encryption.org/v1\n-> scrypt\n--- deadbeef\npayload";
+    let valid_age = sample_age_ciphertext();
     let root = fix.path().join(".backups");
-    let old_file = seed_backup(&root, "p1", "bak_old", "2025-01-01T00:00:00Z", valid_age);
-    let _new_file = seed_backup(&root, "p1", "bak_new", "2026-11-16T00:00:00Z", valid_age);
+    let old_file = seed_backup(&root, "p1", "bak_old", "2025-01-01T00:00:00Z", &valid_age);
+    let _new_file = seed_backup(&root, "p1", "bak_new", "2026-11-16T00:00:00Z", &valid_age);
 
     let (status, body) = fix
         .call(
@@ -403,11 +414,11 @@ async fn apply_executes_lifecycle_and_fail_closed_checks_under_python_disabled()
         }),
     );
 
-    let valid_age = b"age-encryption.org/v1\n-> scrypt\n--- deadbeef\npayload";
+    let valid_age = sample_age_ciphertext();
     let root = fix.path().join(".backups");
-    let old_file = seed_backup(&root, "p1", "bak_old", "2024-01-01T00:00:00Z", valid_age);
-    let mid_file = seed_backup(&root, "p1", "bak_mid", "2024-06-01T00:00:00Z", valid_age);
-    let new_file = seed_backup(&root, "p1", "bak_new", "2026-11-16T00:00:00Z", valid_age);
+    let old_file = seed_backup(&root, "p1", "bak_old", "2024-01-01T00:00:00Z", &valid_age);
+    let mid_file = seed_backup(&root, "p1", "bak_mid", "2024-06-01T00:00:00Z", &valid_age);
+    let new_file = seed_backup(&root, "p1", "bak_new", "2026-11-16T00:00:00Z", &valid_age);
 
     // Pin mid backup so it is protected
     append_catalog_entry(&root, "pin", json!({"backupId": "bak_mid", "pinned": true}));
@@ -501,16 +512,16 @@ async fn apply_recovers_crash_journals_finalizes_expired_trash_and_rescues_pinne
             "keepWeekly": 0,
             "keepMonthly": 0,
             "minimumHealthyCopies": 1,
-            "trashGraceHours": 1,
+            "trashGraceHours": 720,
         }),
     );
 
-    let valid_age = b"age-encryption.org/v1\n-> scrypt\n--- deadbeef\npayload";
+    let valid_age = sample_age_ciphertext();
     let root = fix.path().join(".backups");
-    let _keep = seed_backup(&root, "p1", "bak_keep", "2026-11-16T00:00:00Z", valid_age);
+    let _keep = seed_backup(&root, "p1", "bak_keep", "2026-11-16T00:00:00Z", &valid_age);
 
     // 1. Expired trashed backup -> should be permanently deleted during finalize
-    let _exp_file = seed_backup(&root, "p1", "bak_exp", "2024-01-01T00:00:00Z", valid_age);
+    let _exp_file = seed_backup(&root, "p1", "bak_exp", "2024-01-01T00:00:00Z", &valid_age);
     let exp_trash_dir = root.join(".trash/bak_exp");
     std::fs::create_dir_all(&exp_trash_dir).unwrap();
     std::fs::rename(
@@ -525,7 +536,13 @@ async fn apply_recovers_crash_journals_finalizes_expired_trash_and_rescues_pinne
     );
 
     // 2. Pinned while in trash -> should be rescued back to backups/
-    let _pin_file = seed_backup(&root, "p1", "bak_rescue", "2024-01-02T00:00:00Z", valid_age);
+    let _pin_file = seed_backup(
+        &root,
+        "p1",
+        "bak_rescue",
+        "2024-01-02T00:00:00Z",
+        &valid_age,
+    );
     let pin_trash_dir = root.join(".trash/bak_rescue");
     std::fs::create_dir_all(&pin_trash_dir).unwrap();
     std::fs::rename(
@@ -545,7 +562,7 @@ async fn apply_recovers_crash_journals_finalizes_expired_trash_and_rescues_pinne
     );
 
     // 3. Interrupted trash journal in intent phase -> should finish move & catalog append
-    let _crash_file = seed_backup(&root, "p1", "bak_crash", "2024-01-03T00:00:00Z", valid_age);
+    let _crash_file = seed_backup(&root, "p1", "bak_crash", "2024-01-03T00:00:00Z", &valid_age);
     let crash_dir = root.join(".trash/bak_crash");
     std::fs::create_dir_all(&crash_dir).unwrap();
     std::fs::write(
@@ -617,8 +634,10 @@ async fn apply_refuses_corrupt_catalog_and_lease_contention() {
 
     // Fix catalog, place active writer lease -> expect 423 Locked
     std::fs::remove_file(catalog_dir.join("catalog-v1.jsonl")).unwrap();
+    let lock_dir = root.join(".target-lock");
+    std::fs::create_dir_all(&lock_dir).unwrap();
     std::fs::write(
-        root.join(".writer-lease.json"),
+        lock_dir.join("writer.json"),
         json!({
             "schemaVersion": 1,
             "targetId": "managed-local",
@@ -626,7 +645,7 @@ async fn apply_refuses_corrupt_catalog_and_lease_contention() {
             "ownerInstanceId": "other-inst",
             "fencingToken": 99,
             "acquiredAt": "2026-01-01T00:00:00Z",
-            "leaseUntil": "2099-01-01T00:00:00Z",
+            "expiresAt": "2099-01-01T00:00:00Z",
         })
         .to_string(),
     )

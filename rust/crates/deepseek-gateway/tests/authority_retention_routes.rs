@@ -595,15 +595,20 @@ mod s3_authority_tests {
         payload: Option<Value>,
         auth: bool,
     ) -> (StatusCode, Value) {
-        let raw_body = match payload {
-            Some(v) => Body::from(serde_json::to_vec(&v).unwrap()),
-            None => Body::empty(),
-        };
         let mut builder = Request::builder()
             .method(method)
             .uri(uri)
-            .header(header::HOST, "127.0.0.1")
-            .header(header::CONTENT_TYPE, "application/json");
+            .header(header::HOST, "127.0.0.1");
+        let raw_body = match payload {
+            Some(v) => {
+                let bytes = serde_json::to_vec(&v).unwrap();
+                builder = builder
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(header::CONTENT_LENGTH, bytes.len().to_string());
+                Body::from(bytes)
+            }
+            None => Body::empty(),
+        };
         if auth {
             builder = builder.header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"));
         }
@@ -708,6 +713,7 @@ mod s3_authority_tests {
 
     #[tokio::test]
     async fn s3_read_routes_are_read_only_and_enforce_method_guards() {
+        let _lock = EnvLock::acquire();
         let fix = Fixture::new();
 
         // Method guards
@@ -790,6 +796,7 @@ mod s3_authority_tests {
 
     #[tokio::test]
     async fn s3_write_routes_refuse_in_default_mode_without_creating_files() {
+        let _lock = EnvLock::acquire();
         let fix = Fixture::new();
         let (post_pol_s, post_pol_b) = call_json(
             &fix,
@@ -831,6 +838,7 @@ mod s3_authority_tests {
 
     #[tokio::test]
     async fn s3_policy_plan_and_compact_lifecycle_under_python_disabled() {
+        let _lock = EnvLock::acquire();
         let fix = Fixture::new_with_mode("python_disabled");
         let _items = seed_control_history(fix.path(), 120, Some((10, "target-change")));
 
@@ -913,6 +921,7 @@ mod s3_authority_tests {
 
     #[tokio::test]
     async fn s3_explain_blocks_active_restore_unknown_kind_lag_and_fork() {
+        let _lock = EnvLock::acquire();
         let mut fix = Fixture::new_with_mode("python_disabled");
         let _items = seed_control_history(fix.path(), 120, Some((15, "mystery-kind")));
 
