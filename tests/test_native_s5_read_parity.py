@@ -41,8 +41,8 @@ def test_s5_read_routes_registered_and_removed_from_inventory() -> None:
     assert ("get", "/api/workspace/backups/{backup_id}/download") not in python_only
     assert ("get", "/api/workspace/restores") not in python_only
     assert ("get", "/api/workspace/restores/{restore_id}") not in python_only
-    assert ("delete", "/api/workspace/backups/{backup_id}") in python_only
-    assert ("delete", "/api/workspace/restores/{restore_id}") in python_only
+    assert ("delete", "/api/workspace/backups/{backup_id}") not in python_only
+    assert ("delete", "/api/workspace/restores/{restore_id}") not in python_only
 
 
 def test_s5_read_python_oracle_responses(tmp_settings: Path) -> None:

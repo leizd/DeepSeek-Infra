@@ -470,27 +470,7 @@
     },
     {
       "method": "post",
-      "path": "/api/workspace/backups",
-      "file": "deepseek_infra/web/routes/workspace.py"
-    },
-    {
-      "method": "put",
-      "path": "/api/workspace/backups/{backup_id}/secret",
-      "file": "deepseek_infra/web/routes/workspace.py"
-    },
-    {
-      "method": "put",
-      "path": "/api/workspace/backups/{backup_id}/frontend-state",
-      "file": "deepseek_infra/web/routes/workspace.py"
-    },
-    {
-      "method": "post",
       "path": "/api/workspace/backups/{backup_id}/finalize",
-      "file": "deepseek_infra/web/routes/workspace.py"
-    },
-    {
-      "method": "delete",
-      "path": "/api/workspace/backups/{backup_id}",
       "file": "deepseek_infra/web/routes/workspace.py"
     },
     {
@@ -500,22 +480,7 @@
     },
     {
       "method": "post",
-      "path": "/api/workspace/restores/cleanup",
-      "file": "deepseek_infra/web/routes/workspace.py"
-    },
-    {
-      "method": "put",
-      "path": "/api/workspace/restores/{restore_id}/secret",
-      "file": "deepseek_infra/web/routes/workspace.py"
-    },
-    {
-      "method": "post",
       "path": "/api/workspace/restores/{restore_id}/unlock",
-      "file": "deepseek_infra/web/routes/workspace.py"
-    },
-    {
-      "method": "delete",
-      "path": "/api/workspace/restores/{restore_id}",
       "file": "deepseek_infra/web/routes/workspace.py"
     },
     {

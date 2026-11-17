@@ -46,6 +46,9 @@ pub fn router() -> Router {
 }
 
 async fn dispatch_get_backup(method: Method, AxumPath(backup_id): AxumPath<String>) -> Response {
+    if method == Method::DELETE {
+        return crate::backup_restore_write_routes::dispatch_delete_backup(backup_id).await;
+    }
     if method != Method::GET && method != Method::HEAD {
         return route_support::unallowed_api_method(method, Method::GET);
     }
@@ -97,6 +100,9 @@ async fn dispatch_list_restores(method: Method) -> Response {
 }
 
 async fn dispatch_get_restore(method: Method, AxumPath(restore_id): AxumPath<String>) -> Response {
+    if method == Method::DELETE {
+        return crate::backup_restore_write_routes::dispatch_delete_restore(restore_id).await;
+    }
     if method != Method::GET && method != Method::HEAD {
         return route_support::unallowed_api_method(method, Method::GET);
     }
@@ -124,7 +130,7 @@ fn json_or_head_response(
     }
 }
 
-fn validate_backup_id(backup_id: &str) -> Result<(), AppError> {
+pub(crate) fn validate_backup_id(backup_id: &str) -> Result<(), AppError> {
     let Some(rest) = backup_id.strip_prefix("backup_") else {
         return Err(AppError::invalid_payload("Invalid backup id"));
     };
@@ -134,7 +140,7 @@ fn validate_backup_id(backup_id: &str) -> Result<(), AppError> {
     Ok(())
 }
 
-fn validate_restore_id(restore_id: &str) -> Result<(), AppError> {
+pub(crate) fn validate_restore_id(restore_id: &str) -> Result<(), AppError> {
     let Some(rest) = restore_id.strip_prefix("restore_") else {
         return Err(AppError::invalid_payload("Invalid restore id"));
     };
@@ -144,7 +150,7 @@ fn validate_restore_id(restore_id: &str) -> Result<(), AppError> {
     Ok(())
 }
 
-fn read_json_object(path: &Path) -> Result<Map<String, Value>, AppError> {
+pub(crate) fn read_json_object(path: &Path) -> Result<Map<String, Value>, AppError> {
     let file_name = path
         .file_name()
         .and_then(|value| value.to_str())
@@ -161,7 +167,7 @@ fn read_json_object(path: &Path) -> Result<Map<String, Value>, AppError> {
     }
 }
 
-fn load_session(root: &Path, backup_id: &str) -> Result<Map<String, Value>, AppError> {
+pub(crate) fn load_session(root: &Path, backup_id: &str) -> Result<Map<String, Value>, AppError> {
     validate_backup_id(backup_id)?;
     let path = root
         .join(".backups")
@@ -245,7 +251,7 @@ fn download_payload(root: &Path, backup_id: &str) -> Result<(String, String, Vec
     Ok((media_type, disposition, bytes))
 }
 
-fn restore_root(root: &Path, restore_id: &str) -> Result<PathBuf, AppError> {
+pub(crate) fn restore_root(root: &Path, restore_id: &str) -> Result<PathBuf, AppError> {
     validate_restore_id(restore_id)?;
     let dir = root.join(".restore-staging").join(restore_id);
     if !dir.is_dir() {
@@ -254,14 +260,14 @@ fn restore_root(root: &Path, restore_id: &str) -> Result<PathBuf, AppError> {
     Ok(dir)
 }
 
-fn now_unix_secs_f64() -> f64 {
+pub(crate) fn now_unix_secs_f64() -> f64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs_f64())
         .unwrap_or(0.0)
 }
 
-fn restore_secret_state(metadata: &Map<String, Value>) -> &'static str {
+fn restore_secret_state(metadata: &Map<String, Value>, restore_id: &str) -> &'static str {
     if !metadata.get("encrypted").is_some_and(python_truthy) {
         return "not-required";
     }
@@ -272,6 +278,9 @@ fn restore_secret_state(metadata: &Map<String, Value>) -> &'static str {
         .unwrap_or_default();
     if phase == "locked" {
         return "not-required";
+    }
+    if !restore_id.is_empty() && crate::backup_secret_slots::has_secret(restore_id) {
+        return "available";
     }
     if phase == "inspected" {
         if let Some(armed) = metadata.get("secretArmedAt").and_then(Value::as_f64) {
@@ -339,10 +348,10 @@ fn public_restore(
         .map(value_str)
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| dir_name.to_string());
-    out.insert("restoreId".into(), Value::String(restore_id));
+    out.insert("restoreId".into(), Value::String(restore_id.clone()));
     out.insert(
         "secretState".into(),
-        Value::String(restore_secret_state(secret_source).to_string()),
+        Value::String(restore_secret_state(secret_source, &restore_id).to_string()),
     );
 
     let applied = metadata
@@ -411,7 +420,13 @@ fn get_restore(root: &Path, restore_id: &str) -> Result<Value, AppError> {
     let Some(meta_path) = meta_path else {
         if remote_path.is_file() {
             let remote = read_json_object(&remote_path)?;
-            let secret_state = restore_secret_state(&remote);
+            let resolved_id = remote
+                .get("restoreId")
+                .filter(|value| python_truthy(value))
+                .map(value_str)
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| restore_id.to_string());
+            let secret_state = restore_secret_state(&remote, &resolved_id);
             let mut out = Map::new();
             out.insert("ok".into(), Value::Bool(true));
             for (key, value) in remote {
@@ -441,7 +456,7 @@ fn get_restore(root: &Path, restore_id: &str) -> Result<Value, AppError> {
     Ok(result)
 }
 
-fn list_restores(root: &Path) -> Result<Value, AppError> {
+pub(crate) fn list_restores(root: &Path) -> Result<Value, AppError> {
     let staging = root.join(".restore-staging");
     if !staging.is_dir() {
         return Ok(json!({"ok": true, "restores": []}));

@@ -359,14 +359,17 @@ async fn artifact_preview_matches_the_oracle_without_creating_a_store() {
     assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED, "{denied}");
     assert_eq!(denied, json!({"detail": "Method Not Allowed"}));
 
+    // The download route is served natively (it was Go-proxied before): an empty
+    // workspace answers the oracle's 404 and still creates no store.
     let (status, download, _, _) = fixture
         .request("GET", "/api/workspace/artifacts/art-note/download", true)
         .await;
-    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{download}");
-    assert_eq!(download["error"]["code"], "GO_CONTROL_PROXY_NOT_READY");
+    assert_eq!(status, StatusCode::NOT_FOUND, "{download}");
+    assert_eq!(download["error"], "Artifact not found");
+    assert_eq!(download["code"], "not_found");
     assert!(
         tree(root).is_empty(),
-        "proxy created {}",
+        "download created {}",
         tree(root).join(", ")
     );
 

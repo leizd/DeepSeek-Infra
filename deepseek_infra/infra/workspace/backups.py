@@ -930,6 +930,7 @@ def backup_path(backup_id: str) -> Path:
 
 
 def delete_backup(backup_id: str) -> bool:
+    assert_python_writer_allowed("restore_staging_store")
     session = _load_session(backup_id)
     path = Path(str(session.get("path") or ""))
     if path.is_file() and path.parent.resolve() == BACKUP_DIR.resolve():

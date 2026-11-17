@@ -31,8 +31,6 @@ PARAM_RE = re.compile(r"\{([A-Za-z0-9_]+)\}")
 NATIVE_METHOD_LIMITS: dict[str, frozenset[str]] = {
     "/api/media": frozenset({"get", "head"}),
     "/api/media/:media_id": frozenset({"get", "head"}),
-    "/api/workspace/backups/:backup_id": frozenset({"get", "head"}),
-    "/api/workspace/restores/:restore_id": frozenset({"get", "head"}),
 }
 
 # Live production entry points. ``marker`` is a source string that proves the
