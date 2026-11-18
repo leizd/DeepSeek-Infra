@@ -38,7 +38,7 @@ def test_production_runtime_inventory_matches_sources() -> None:
     assert inventory["ownership_domains_current_owner_python"] == python_ids
     assert inventory["ownership_domains_current_owner_rust"] == rust_ids
     assert inventory["ownership_domains_current_owner_go"] == []
-    assert inventory["http_routes_only_on_python"]
+    assert isinstance(inventory["http_routes_only_on_python"], list)
     legacy_ids = {item["id"] for item in inventory["legacy_production_entries"]}
     assert {
         "python_http_server",
@@ -57,14 +57,21 @@ def test_production_runtime_inventory_matches_sources() -> None:
     assert android["packaged_native_binary"] is False
 
 
-def test_native_media_read_registration_does_not_hide_unported_writes() -> None:
+def test_native_media_routes_and_proxy_writes_are_complete() -> None:
     generator = runpy.run_path(str(ROOT / "scripts" / "production_runtime_inventory.py"))
     inventory = generator["build_inventory"]()
     remaining = {(row["method"], row["path"]) for row in inventory["http_routes_only_on_python"]}
-    assert {
+    assert not ({
+        ("get", "/api/media"),
         ("post", "/api/media"),
+        ("get", "/api/media/{media_id}"),
         ("patch", "/api/media/{media_id}"),
         ("delete", "/api/media/{media_id}"),
-    } <= remaining
-    assert ("get", "/api/media") not in remaining
-    assert ("get", "/api/media/{media_id}") not in remaining
+        ("get", "/api/media/{media_id}/segments"),
+        ("post", "/api/media/{media_id}/process"),
+    } & remaining)
+    rust_media = (ROOT / "rust/crates/deepseek-gateway/src/media_segment_routes.rs").read_text(encoding="utf-8")
+    go_public = (ROOT / "go/internal/api/public.go").read_text(encoding="utf-8")
+    assert '"/api/media/:media_id/process"' in rust_media
+    assert "control_proxy::proxy_api_to_go" in rust_media
+    assert "mediaCreate(" in go_public and "mediaPatch(" in go_public and "mediaProcess(" in go_public

@@ -693,12 +693,17 @@ async fn media_reads_keep_missing_stores_auth_and_existing_mutation_routing() {
     let (proxy_status, proxy_body, _) =
         fixture.request("POST", "/api/unported-control", true).await;
     assert!(proxy_status.is_server_error());
-    for (method, uri) in [("POST", "/api/media"), ("PATCH", "/api/media/media_keep")] {
+    for (method, uri) in [
+        ("POST", "/api/media"),
+        ("PATCH", "/api/media/media_keep"),
+        ("DELETE", "/api/media/media_keep"),
+        ("POST", "/api/media/media_keep/process"),
+    ] {
         let (status, body, _) = fixture.request(method, uri, true).await;
-        assert_eq!(status, proxy_status, "unported mutation changed routing");
+        assert_eq!(status, proxy_status, "mutation changed routing");
         assert_eq!(
             body, proxy_body,
-            "unported mutation changed the existing control refusal"
+            "mutation changed the existing control refusal"
         );
     }
     assert!(!fixture.media_dir().exists(), "reads created runtime state");

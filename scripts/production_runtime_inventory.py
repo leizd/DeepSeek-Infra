@@ -24,14 +24,12 @@ RUST_ROUTE_RE = re.compile(r'\.route\(\s*"([^"]+)"')
 GO_ROUTE_RE = re.compile(r'HandleFunc\("([^"]+)"')
 PARAM_RE = re.compile(r"\{([A-Za-z0-9_]+)\}")
 
-# These dispatchers register `any(...)`, but implement only native reads. A
-# registered path alone must not remove their unported writes from the inventory.
-# Other registrations remain a source inventory, not proof of method parity or
-# production authority; runtime qualification lives in the exact-source reports.
-NATIVE_METHOD_LIMITS: dict[str, frozenset[str]] = {
-    "/api/media": frozenset({"get", "head"}),
-    "/api/media/:media_id": frozenset({"get", "head"}),
-}
+# Method limits for dispatchers that register `any(...)` while leaving a subset
+# of HTTP verbs unported. Media write verbs (`POST /api/media`,
+# `PATCH/DELETE /api/media/:media_id`, `POST /api/media/:media_id/process`) are
+# now explicitly routed via `control_proxy::proxy_api_to_go` to Go (`mediaCreate`,
+# `mediaUpload`, `mediaPatch`, `mediaProcess`) + `deepseek-worker`.
+NATIVE_METHOD_LIMITS: dict[str, frozenset[str]] = {}
 
 # Live production entry points. ``marker`` is a source string that proves the
 # entry still executes Python or server-side TypeScript. Native packaging

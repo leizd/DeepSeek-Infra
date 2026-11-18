@@ -25,6 +25,7 @@ use deepseek_core::version_info;
 use deepseek_policy::app_error::{AppError, codes};
 use deepseek_policy::backup_mirror::{fsync_dir, sha256_file};
 use deepseek_policy::backup_projection::{FileRecord, snapshot_root};
+use deepseek_policy::backup_retention::chrono;
 use deepseek_policy::backup_unlock::{
     BACKUP_SCHEMA, PACKAGE_PURPOSE, encrypt_tree_zip_native,
     encrypt_tree_zip_native_with_plain_metrics, scrub_plaintext_file,
@@ -263,7 +264,7 @@ fn unix_secs_plus(offset_secs: i64) -> i64 {
 }
 
 fn utc_iso_from_unix_secs(secs: i64) -> String {
-    backup_retention::chrono::DateTime::<backup_retention::chrono::Utc>::from_timestamp(secs, 0)
+    chrono::DateTime::<chrono::Utc>::from_timestamp(secs, 0)
         .map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string())
         .unwrap_or_else(now_utc_iso)
 }
@@ -729,14 +730,10 @@ fn build_object_set_once(
     let mut seen_rel = BTreeSet::new();
 
     for spec in LOCAL_CONTRIBUTORS {
-        let collected = match collect_contributor_files(root, backup_id, spec, context) {
-            Ok(list) => list,
-            Err(err) if context.coverage_policy == "strict" => return Err(err),
-            Err(_) => continue,
-        };
+        let collected = collect_contributor_files(root, spec, context);
         let mut c_files: u64 = 0;
         let mut c_bytes: u64 = 0;
-        for (src_path, rel_path) in collected {
+        for (rel_path, src_path) in collected {
             let archive_rel = format!("payload/{}/{rel_path}", spec.id);
             if !seen_rel.insert(archive_rel.clone()) {
                 continue;

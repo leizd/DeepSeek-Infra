@@ -307,26 +307,5 @@
     "migration_release_tooling",
     "browser_ui"
   ],
-  "http_routes_only_on_python": [
-    {
-      "method": "post",
-      "path": "/api/media",
-      "file": "deepseek_infra/web/routes/media.py"
-    },
-    {
-      "method": "patch",
-      "path": "/api/media/{media_id}",
-      "file": "deepseek_infra/web/routes/media.py"
-    },
-    {
-      "method": "post",
-      "path": "/api/media/{media_id}/process",
-      "file": "deepseek_infra/web/routes/media.py"
-    },
-    {
-      "method": "delete",
-      "path": "/api/media/{media_id}",
-      "file": "deepseek_infra/web/routes/media.py"
-    }
-  ]
+  "http_routes_only_on_python": []
 }

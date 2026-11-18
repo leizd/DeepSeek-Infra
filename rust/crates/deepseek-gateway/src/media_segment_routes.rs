@@ -54,6 +54,16 @@ pub fn router() -> Router {
         .route("/api/media", any(collection_dispatch))
         .route("/api/media/:media_id", any(item_dispatch))
         .route("/api/media/:media_id/segments", any(dispatch))
+        .route("/api/media/:media_id/process", any(process_dispatch))
+}
+
+async fn process_dispatch(
+    method: Method,
+    headers: HeaderMap,
+    uri: OriginalUri,
+    body: Bytes,
+) -> Response {
+    crate::control_proxy::proxy_api_to_go(method, headers, uri, body).await
 }
 
 async fn collection_dispatch(
