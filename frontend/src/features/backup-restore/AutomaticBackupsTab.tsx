@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   createBackupPolicy,
@@ -22,6 +22,13 @@ interface Props {
   onMessage: (message: string) => void;
 }
 
+function filesystemOperationId() {
+  if (!globalThis.crypto?.getRandomValues) return undefined;
+  const bytes = globalThis.crypto.getRandomValues(new Uint8Array(16));
+  const id = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `target-inspect-public-v1-${id}`;
+}
+
 export default function AutomaticBackupsTab({ onError, onMessage }: Props) {
   const [policies, setPolicies] = useState<BackupPolicyV1[]>([]);
   const [nextRuns, setNextRuns] = useState<Record<string, BackupNextRun | null>>({});
@@ -42,6 +49,7 @@ export default function AutomaticBackupsTab({ onError, onMessage }: Props) {
   const [targetKind, setTargetKind] = useState<"filesystem" | "s3">("filesystem");
   const [targetPath, setTargetPath] = useState("");
   const [targetLabel, setTargetLabel] = useState("");
+  const pendingFilesystemTarget = useRef<{ path: string; label: string; operationId?: string } | null>(null);
   const [s3Bucket, setS3Bucket] = useState("");
   const [s3Prefix, setS3Prefix] = useState("");
   const [s3Region, setS3Region] = useState("");
@@ -176,7 +184,15 @@ export default function AutomaticBackupsTab({ onError, onMessage }: Props) {
         setS3Endpoint("");
         setS3Profile("");
       } else {
-        await createBackupTarget({ path: targetPath.trim(), label: targetLabel.trim() });
+        const path = targetPath.trim();
+        const label = targetLabel.trim();
+        const pending = pendingFilesystemTarget.current;
+        const attempt = pending?.path === path && pending.label === label
+          ? pending
+          : { path, label, operationId: filesystemOperationId() };
+        pendingFilesystemTarget.current = attempt;
+        await createBackupTarget(attempt);
+        pendingFilesystemTarget.current = null;
         setTargetPath("");
       }
       setTargetLabel("");

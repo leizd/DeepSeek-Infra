@@ -59,6 +59,16 @@ jobs:
           tree=subprocess.check_output(['git','rev-parse','HEAD^{tree}'],text=True).strip()
           assert source==os.environ['GITHUB_SHA'] and not subprocess.check_output(['git','status','--porcelain=v1','--untracked-files=all'])
           required={
+              'TestTargetRegistrationPublicBodyAndClosedStoreCannotStartInspection',
+              'TestTargetRegistrationPublicHistoryRejectsConflictingScopeAndProof',
+              'TestTargetRegistrationPublicInvalidLegacyPathDoesNotDisappearFromSnapshot',
+              'TestTargetRegistrationPublicPathsUseOnlyActiveFilesystemRecords',
+              'TestTargetRegistrationPublicPreparationDoesNotPublishPartialRegistryRead',
+              'TestTargetRegistrationPublicPreservesReservedContextAndRejectsMalformedFrames',
+              'TestTargetRegistrationPublicReplayCannotTreatDatabaseFaultAsAbsence',
+              'TestTargetRegistrationPublicTCPDoesNotInferUnavailableLocations',
+              'TestTargetRegistrationPublicTCPRefusesWorkerAndMetadataFailuresBeforePublication',
+              'TestTargetRegistrationPublicTCPRejectsRelocationOfAnUnlocatableLegacyIdentity',
               'TestBackupTargetsFailClosedAtThePublicReadBoundary',
               'TestTargetRegistrationNativeBirthListsEmptyHealthAndRejectsUnboundRows',
               'TestTargetRegistrationPublicTCPRequiresOldLocationProofWhenMoving',
@@ -147,7 +157,7 @@ jobs:
           good=good and all(e['Action']=='pass' for e in top if e['Action'] in {'pass','fail','skip'}) and len(package)==4 and all(e['Action']=='pass' for e in package) and {e['Package'] for e in package}=={'github.com/leizd/DeepSeek-Infra/go/internal/'+p for p in ('store','worker','api','targets')}
           good=good and not any(e['Action']=='fail' or 'WARNING: DATA RACE' in e.get('Output','') for e in events)
           report=dict(status='PASS' if good else 'FAIL',sourceCommit=source,sourceTree=tree,runId=os.environ['GITHUB_RUN_ID'],event=os.environ['GITHUB_EVENT_NAME'],attempt=os.environ['GITHUB_RUN_ATTEMPT'],
-              expectedTests=sorted(required),command=args,exitCode=run.returncode,raceEnabled=True,timeout='8m',retainedOriginalTests=58,addedPublicAndMetadataTests=5,rawEventsSha256=hashlib.sha256(raw).hexdigest(),parseErrors=parse_errors,
+              expectedTests=sorted(required),command=args,exitCode=run.returncode,raceEnabled=True,timeout='8m',retainedOriginalTests=63,addedPublicAndMetadataTests=10,rawEventsSha256=hashlib.sha256(raw).hexdigest(),parseErrors=parse_errors,
               passed=sum(e['Action']=='pass' for e in top),failed=sum(e['Action']=='fail' for e in top),skipped=sum(e['Action']=='skip' for e in top),
               physicalRustInspectionQualified=False,publicRegistrationQualified=False,fullGoSuiteQualified=False,original95PercentCoverageQualified=False,fullMigrationQualified=False,readiness='NOT_READY')
           (out/'result.json').write_text(json.dumps(report,indent=2)+'\n')
@@ -257,7 +267,7 @@ jobs:
         run: |
           set -o pipefail
           npm ci --prefix frontend
-          npm run build --prefix frontend
+          npm run check --prefix frontend
           python -m pip install -r requirements-browser.txt
           python -m playwright install --with-deps chromium
           cargo build --locked --manifest-path rust/Cargo.toml -p deepseek-worker -p deepseek-gateway --bins --all-features

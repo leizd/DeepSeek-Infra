@@ -45,6 +45,9 @@ identical request bytes. Go returns the originally committed document after a
 lost response, deletion or writer restart, without reading an expired filesystem
 receipt or issuing another write. A different body under that operation is a
 conflict. Concurrent identical requests recover the same committed result.
+The automatic backup form allocates an operation ID when the user submits a
+filesystem target. If the response is lost, another click with the same path and
+label can recover it. Editing those fields starts a separate request.
 
 The offline metadata oracle executes the retained HTTP conversion function and
 `backup_targets._register`, replacing authentication and filesystem effects only
@@ -63,11 +66,11 @@ Go/Rust/platform coverage gates. Marker absence currently returns an explicit
 503; S3 registration remains unavailable and the retained WebDAV reservation is
 501. These refusals are unfinished functionality, not migration completion.
 
-The development workflow preserves 58 Go test families and checks five more
-public admission, relocation, replay and native-profile cases. It runs the retained
-CPython oracle, the Rust containment cases, the full Go coverage gate and a
-Chromium test that registers existing targets, moves one, and reopens the list
-and original operation after launcher restart. The Go fixture signatures qualify
+The development workflow preserves 63 Go test families and adds ten cases for
+stored evidence, interrupted reads, unavailable location proofs and malformed
+metadata. It runs the retained CPython oracle, the Rust containment cases, the
+full Go coverage gate and a Chromium test for registration, a lost response,
+relocation and launcher restart. The Go fixture signatures qualify
 the admission and transport tests. The physical tests exercise Rust filesystem
 reads and separately verify public browser behavior. Workflow results identify
 the tested source and event. The original coverage floors still apply.

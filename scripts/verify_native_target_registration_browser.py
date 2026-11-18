@@ -15,7 +15,7 @@ import tempfile
 from typing import Any
 from urllib.parse import urlencode
 
-from playwright.sync_api import APIResponse, BrowserContext, Page, Response, sync_playwright
+from playwright.sync_api import APIResponse, BrowserContext, Page, Response, Route, sync_playwright
 
 from verify_native_default_bootstrap import ROOT, process_roles, require_loopback_ports_available, stop, wait_public
 
@@ -68,6 +68,39 @@ def browser_register(page: Page, origin: str, directory: Path, label: str, targe
     if not operation or not operation.startswith("target-inspect-public-v1-") or not request_bytes:
         raise TargetCheckFailed("TARGET_OPERATION_RECEIPT")
     return operation, request_bytes, response.body()
+
+
+def register_after_lost_response(page: Page, origin: str, directory: Path, label: str, target_id: str) -> tuple[str, bytes, bytes]:
+    committed: list[tuple[str, bytes, bytes]] = []
+    endpoint = origin + TARGETS
+
+    def lose_response(route: Route) -> None:
+        if route.request.method != "POST":
+            route.continue_()
+            return
+        # This sends the original request to the real runtime. Only delivery of
+        # its already-committed response to the browser is interrupted.
+        upstream = route.fetch(max_retries=0)
+        body = json_response(upstream, 200, "TARGET_COMMIT_BEFORE_LOSS")
+        operation = route.request.headers.get("x-deepseek-operation-id")
+        raw = route.request.post_data_buffer
+        if not operation or not raw or body.get("targetId") != target_id or upstream.headers.get("x-deepseek-operation-id") != operation:
+            raise TargetCheckFailed("ORIGINAL_BROWSER_OPERATION_BINDING")
+        committed.append((operation, raw, upstream.body()))
+        route.abort("failed")
+
+    page.route(endpoint, lose_response)
+    page.get_by_placeholder(re.compile("^目标目录绝对路径")).fill(str(directory))
+    page.get_by_placeholder("标签（可选）", exact=True).fill(label)
+    register = page.get_by_role("button", name="注册目标", exact=True)
+    with page.expect_event("requestfailed", predicate=lambda request: request.url == endpoint and request.method == "POST"):
+        register.click()
+    page.unroute(endpoint, lose_response)
+    require(len(committed) == 1, "LOST_RESPONSE_AFTER_DURABLE_COMMIT")
+    require(page.get_by_placeholder(re.compile("^目标目录绝对路径")).input_value() == str(directory), "FORM_RETAINED_AFTER_LOSS")
+    recovered = browser_register(page, origin, directory, label, target_id)
+    require(recovered == committed[0], "BROWSER_RETRY_RETURNED_ORIGINAL_RESPONSE")
+    return recovered
 
 
 def fixture_target(directory: Path, target_id: str) -> bytes:
@@ -165,7 +198,7 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
                     report["stage"] = "browser-register"
                     page, initial = open_automatic_tab(context, origin, token)
                     require(initial.get("targets") == [] and initial.get("health") == [], "INITIAL_NATIVE_LIST")
-                    op_one, original_body, original_reply = browser_register(page, origin, first, "Isolated disk one", "target_one")
+                    op_one, original_body, original_reply = register_after_lost_response(page, origin, first, "Isolated disk one", "target_one")
                     op_two, _, _ = browser_register(page, origin, second, "Isolated disk two", "target_two")
                     report["stage"] = "filesystem-denials"
                     for directory, status, code in ((nested, 400, "invalid_payload"), (clone, 409, "invalid_request"),
@@ -210,7 +243,7 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
         report.update(status="PASS", stage="completed", chromium=True, authenticatedExistingForm=True,
                       activeTargetsAfterRestart=2, durableJournal=after, previousWriterFence=before["writerFence"],
                       originalMarkerBytesRetained=True, originalHTTPResponseReplayed=True, overlapAndCloneRefused=True,
-                      existingMarkerRegistrationQualified=True)
+                      existingMarkerRegistrationQualified=True, browserLostCommittedResponseRecovered=True)
 
 
 def main() -> int:

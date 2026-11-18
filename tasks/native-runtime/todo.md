@@ -3917,3 +3917,13 @@ signing-key inspection, store seeding, relaxed assertion or success is implied.
 This is an integration-fixture correction; public registration, canonical proof
 persistence, initialization/recovery and every whole-product requirement remain
 open until independently qualified. Retain NOT_READY and exact-source gates.
+
+<!-- native checkpoint 2026-11-18 target recovery -->
+
+- [x] Verify existing-marker registration, overlap and clone refusal, relocation
+  and original operation replay through Chromium and the real native launcher
+  on d8e94e2 (Actions run 44226775618).
+- [ ] Qualify the form retry after a response is lost and restore the original
+  full Go and Android Go 95% gates on the resulting exact revision.
+- [ ] Implement marker initialization with durable Go admission and Rust
+  filesystem effect reconciliation, then complete the other target lifecycles.

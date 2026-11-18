@@ -478,7 +478,7 @@ export function listBackupTargets(client: HttpClient = httpClient) {
 }
 
 export function createBackupTarget(
-  request:
+  request: (
     | { kind?: "filesystem"; path: string; label?: string }
     | {
         kind: "s3" | "s3-compatible";
@@ -490,10 +490,14 @@ export function createBackupTarget(
         label?: string;
         credentialProvider?: { type: string; profile?: string };
         probe?: boolean;
-      },
+      }
+  ) & { operationId?: string },
   client: HttpClient = httpClient,
 ) {
-  return client.postJson<BackupTargetRecord>("/api/workspace/backup-targets", request);
+  const { operationId, ...payload } = request;
+  return client.postJson<BackupTargetRecord>("/api/workspace/backup-targets", payload, {
+    headers: operationId ? { "X-DeepSeek-Operation-Id": operationId } : undefined,
+  });
 }
 
 export function probeBackupTarget(targetId: string, client: HttpClient = httpClient) {

@@ -56,12 +56,20 @@ func (p *publicTargetPeer) Inspect(ctx context.Context, r *actionv1.InspectFiles
 	if !r.RequireFullContainment {
 		return nil, status.Error(codes.InvalidArgument, "complete containment was not requested")
 	}
-	if p.mode == "denied" {
+	switch p.mode {
+	case "denied":
 		return nil, status.Error(codes.InvalidArgument, "Unsafe backup target: isolated containment refusal")
+	case "worker-fenced":
+		return nil, status.Error(codes.FailedPrecondition, "isolated writer fence mismatch")
+	case "worker-unavailable":
+		return nil, status.Error(codes.Unavailable, "isolated worker unavailable")
 	}
 	marker := []byte(`{"targetId":"target_public","targetNonce":"retained","createdAt":"2000-01-01T00:00:00Z"}`)
-	if p.mode == "two-targets" && filepath.Base(r.Path) == "other" {
+	if (p.mode == "two-targets" || p.mode == "location-unavailable") && filepath.Base(r.Path) == "other" {
 		marker = []byte(`{"targetId":"target_other","targetNonce":"retained","createdAt":"2000-01-01T00:00:00Z"}`)
+	}
+	if p.mode == "invalid-marker" {
+		marker = []byte(`{"targetId":"not-a-target","targetNonce":"retained"}`)
 	}
 	digest := sha256.Sum256(marker)
 	o := &actionv1.FilesystemBackupTargetObservation{SchemaVersion: 1, Fence: r.Fence, OperationId: r.OperationId,
@@ -83,6 +91,9 @@ func (p *publicTargetPeer) Inspect(ctx context.Context, r *actionv1.InspectFiles
 }
 func (p *publicTargetPeer) ProbeLocation(_ context.Context, r *actionv1.ProbeFilesystemBackupTargetLocationRequest) (*actionv1.FilesystemBackupTargetLocationReceipt, error) {
 	p.calls.Add(1)
+	if p.mode == "location-unavailable" {
+		return nil, status.Error(codes.Unavailable, "isolated path observation unavailable")
+	}
 	o := &actionv1.FilesystemBackupTargetLocationObservation{SchemaVersion: 1, Fence: r.Fence, OperationId: r.OperationId, WriterFencingToken: r.WriterFencingToken,
 		RequestedPath: r.Path, ObservedAtUnix: time.Now().Unix(), FleetId: p.binding.FleetID, Environment: p.binding.Environment,
 		State: actionv1.BackupTargetLocationState_BACKUP_TARGET_LOCATION_STATE_MISSING}
@@ -213,6 +224,55 @@ func TestTargetRegistrationPublicTCPRejectsAbsentForgedDowngradedAndDeniedReads(
 	}
 }
 
+func TestTargetRegistrationPublicTCPRefusesWorkerAndMetadataFailuresBeforePublication(t *testing.T) {
+	for _, failure := range []struct {
+		mode, code string
+		status     int
+	}{
+		{"worker-fenced", "BACKUP_TARGET_INSPECTION_DENIED", 503},
+		{"worker-unavailable", "BACKUP_TARGET_INSPECTION_UNAVAILABLE", 503},
+		{"no-worker-tls", "BACKUP_TARGET_INSPECTION_UNAVAILABLE", 503},
+		{"invalid-marker", "invalid_payload", 400},
+		{"invalid-metadata", "invalid_payload", 400},
+	} {
+		t.Run(failure.mode, func(t *testing.T) {
+			control, _, server, _ := publicTargetTLSFixture(t, failure.mode)
+			if failure.mode == "no-worker-tls" {
+				t.Setenv(worker.EnvWorkerTLSCAFile, "")
+			}
+			payload := map[string]any{"path": filepath.Join(t.TempDir(), "target")}
+			if failure.mode == "invalid-metadata" {
+				payload["maxReadBytesPerSecond"] = false
+			}
+			raw, _ := json.Marshal(payload)
+			code, body, _ := publicTargetHTTPRequest(t, server, http.MethodPost, "/api/workspace/backup-targets", string(raw), "")
+			if code != failure.status || !strings.Contains(string(body), failure.code) {
+				t.Fatalf("refusal changed: %d %s", code, body)
+			}
+			if count, err := control.OperatorJournalSize(); err != nil || count != 0 {
+				t.Fatal("unverified request left an operator receipt", count, err)
+			}
+		})
+	}
+}
+
+func TestTargetRegistrationPublicTCPDoesNotInferUnavailableLocations(t *testing.T) {
+	control, peer, server, _ := publicTargetTLSFixture(t, "location-unavailable")
+	root := t.TempDir()
+	for index, path := range []string{filepath.Join(root, "first"), filepath.Join(root, "other"), filepath.Join(root, "moved")} {
+		raw, _ := json.Marshal(map[string]string{"path": path})
+		code, body, _ := publicTargetHTTPRequest(t, server, http.MethodPost, "/api/workspace/backup-targets", string(raw), "")
+		if index == 0 && code != http.StatusOK || index > 0 && (code != http.StatusServiceUnavailable ||
+			!strings.Contains(string(body), "BACKUP_TARGET_INSPECTION_UNAVAILABLE")) {
+			t.Fatalf("location read refusal changed: %d %s", code, body)
+		}
+	}
+	records, _, err := control.ListAuthoritativeTargets()
+	if err != nil || len(records) != 1 || records[0].ID != "target_public" || records[0].Revision != 1 || peer.calls.Load() != 5 {
+		t.Fatalf("missing read evidence changed the registered registry: %d records, %d calls, %v", len(records), peer.calls.Load(), err)
+	}
+}
+
 func TestTargetRegistrationPublicTCPRequiresOldLocationProofWhenMoving(t *testing.T) {
 	for _, oldExists := range []bool{true, false} {
 		name := "removed-original"
@@ -274,8 +334,26 @@ func TestTargetRegistrationPublicTCPResolvesOtherTargetBeforePublishing(t *testi
 }
 
 func TestTargetRegistrationPublicTCPRecoversWhenSnapshotChangesDuringFirstInspection(t *testing.T) {
+	for _, test := range []struct {
+		name, winnerOperation, winnerLabel, code string
+		status                                   int
+	}{
+		{"same request", "stale-snapshot", "", "", http.StatusOK},
+		{"different operation", "separate-operation", "", "revision_conflict", http.StatusConflict},
+		{"changed body", "stale-snapshot", "changed", "mutation_request_replay_conflict", http.StatusConflict},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			assertTargetRegistrationSnapshotRace(t, test.winnerOperation, test.winnerLabel, test.status, test.code)
+		})
+	}
+}
+
+func assertTargetRegistrationSnapshotRace(t *testing.T, winnerOperation, winnerLabel string, wantStatus int, wantCode string) {
+	t.Helper()
 	control, peer, server, _ := publicTargetTLSFixture(t, "stalled-first")
-	raw, _ := json.Marshal(map[string]any{"path": filepath.Join(t.TempDir(), "target")})
+	path := filepath.Join(t.TempDir(), "target")
+	raw, _ := json.Marshal(map[string]any{"path": path, "label": ""})
+	winnerBody, _ := json.Marshal(map[string]any{"path": path, "label": winnerLabel})
 	operation := store.PublicTargetOperationPrefix + "stale-snapshot"
 	request, err := http.NewRequest(http.MethodPost, server.URL+"/api/workspace/backup-targets", strings.NewReader(string(raw)))
 	if err != nil {
@@ -306,17 +384,67 @@ func TestTargetRegistrationPublicTCPRecoversWhenSnapshotChangesDuringFirstInspec
 	case <-time.After(5 * time.Second):
 		t.Fatal("the original request did not reach its inspection")
 	}
-	code, body, _ := publicTargetHTTPRequest(t, server, http.MethodPost, "/api/workspace/backup-targets", string(raw), operation)
+	code, body, _ := publicTargetHTTPRequest(t, server, http.MethodPost, "/api/workspace/backup-targets", string(winnerBody), store.PublicTargetOperationPrefix+winnerOperation)
 	if code != http.StatusOK {
 		t.Fatalf("concurrent identical request did not commit: %d %s", code, body)
 	}
 	release.Do(func() { close(peer.resume) })
 	replay := <-first
-	if replay.err != nil || replay.status != http.StatusOK || replay.body != string(body) {
-		t.Fatalf("stale snapshot did not recover the committed reply: %+v", replay)
+	if replay.err != nil || replay.status != wantStatus ||
+		wantStatus == http.StatusOK && replay.body != string(body) ||
+		wantStatus != http.StatusOK && !strings.Contains(replay.body, wantCode) {
+		t.Fatalf("stale snapshot returned the wrong reply: %+v expected %d %s", replay, wantStatus, wantCode)
 	}
 	if count, err := control.OperatorJournalSize(); err != nil || count != 1 || peer.calls.Load() != 2 {
 		t.Fatalf("recovery created duplicate work: %d mutations, %d calls, %v", count, peer.calls.Load(), err)
+	}
+}
+
+type interruptedTargetBody struct{}
+
+func (interruptedTargetBody) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }
+
+func TestTargetRegistrationPublicBodyAndClosedStoreCannotStartInspection(t *testing.T) {
+	control, peer, _, _ := publicTargetTLSFixture(t, "normal")
+	view := PublicView{Mode: config.ModeAuthoritative, MutationAuthority: config.MutationAuthorityGo}
+	call := func(body io.Reader) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPost, "/api/workspace/backup-targets", body)
+		request.Host = "127.0.0.1"
+		request.Header.Set("Authorization", "Bearer public-target-test-token")
+		recorder := httptest.NewRecorder()
+		backupTargetRegister(recorder, request, control, view)
+		return recorder
+	}
+	truncated := call(interruptedTargetBody{})
+	if truncated.Code != http.StatusBadRequest || !strings.Contains(truncated.Body.String(), "Request body is unreadable") {
+		t.Fatal("incomplete request body was processed", truncated.Code, truncated.Body.String())
+	}
+	if err := control.Close(); err != nil {
+		t.Fatal(err)
+	}
+	closed := call(strings.NewReader(`{}`))
+	if closed.Code != http.StatusServiceUnavailable || !strings.Contains(closed.Body.String(), "GO_CONTROL_UNAVAILABLE") || peer.calls.Load() != 0 {
+		t.Fatal("closed store could send an inspection", closed.Code, closed.Body.String(), peer.calls.Load())
+	}
+}
+
+func TestTargetRegistrationPublicTCPRejectsRelocationOfAnUnlocatableLegacyIdentity(t *testing.T) {
+	control, peer, server, _ := publicTargetTLSFixture(t, "normal")
+	legacy := store.Record{Domain: "target", ID: "target_public", State: "ACTIVE", Revision: 1,
+		Payload: json.RawMessage(`{"targetId":"target_public","kind":"s3","topologyGeneration":1}`)}
+	if _, err := control.ApplyOperatorMutation(store.OperatorMutation{
+		OperationID: "legacy-s3-registration", ActionID: "legacy-s3-action", Actor: "operator:test", Record: legacy,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(map[string]string{"path": filepath.Join(t.TempDir(), "candidate")})
+	code, body, _ := publicTargetHTTPRequest(t, server, http.MethodPost, "/api/workspace/backup-targets", string(raw), "")
+	if code != http.StatusConflict || !strings.Contains(string(body), "target-clone-detected") || peer.calls.Load() != 1 {
+		t.Fatalf("filesystem registration rebound a non-filesystem identity: %d %s (%d calls)", code, body, peer.calls.Load())
+	}
+	record, found, err := control.Get("target", legacy.ID)
+	if err != nil || !found || record.Revision != 1 || !strings.Contains(string(record.Payload), `"kind":"s3"`) {
+		t.Fatal("refused registration lost the existing provider identity", err)
 	}
 }
 

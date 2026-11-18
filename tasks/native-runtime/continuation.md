@@ -15229,3 +15229,21 @@ signing-key inspection, store seeding, relaxed assertion or success is implied.
 This is an integration-fixture correction; public registration, canonical proof
 persistence, initialization/recovery and every whole-product requirement remain
 open until independently qualified. Retain NOT_READY and exact-source gates.
+
+<!-- native checkpoint 2026-11-18 active target recovery -->
+
+The last physically qualified browser source was d8e94e2 on
+`codex/native-target-registration-store-admission-coverage-20261114`. Actions
+run 44226775618 retained 63 Go race families, 74 CPython metadata cases, six Rust
+resolution cases, two containment cases and the authenticated native Chromium
+scenario. Go full coverage failed at 94.638610%. The archived report contains the
+original 18305/19342 counts.
+
+This successor adds client operation reuse after a lost reply and keeps the
+configured signer pin in the Go replay path. The browser exercise interrupts
+delivery only after an observed committed response and then submits the same
+form, verifying the original bytes and a single journal entry. The existing
+full Go and Python/Rust/platform gates still determine source qualification.
+Solve missing marker initialization with a Go-owned durable claim, a Rust-owned
+filesystem effect and retained exact-result reconciliation. Keep the full
+migration ACTIVE / NOT_READY.

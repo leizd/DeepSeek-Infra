@@ -391,6 +391,9 @@ func (store *Control) ReplayPublicBackupTargetRegistration(operation, actor, bod
 		return Record{}, OperatorMutationResult{}, false, err
 	}
 	defer tx.Rollback()
+	if err := store.verifyTargetRegistrationIdentityTx(tx); err != nil {
+		return Record{}, OperatorMutationResult{}, false, err
+	}
 	result, found, err := readOperatorMutationTx(tx, operation)
 	if err != nil {
 		return Record{}, OperatorMutationResult{}, false, err
@@ -403,16 +406,6 @@ func (store *Control) ReplayPublicBackupTargetRegistration(operation, actor, bod
 	}
 	if result.Actor != actor || result.Domain != "target" || result.ActionID != operation {
 		return Record{}, OperatorMutationResult{}, false, ErrMutationRequestReplayConflict
-	}
-	current, found, err := readTargetMetadataTx(tx, result.RecordID)
-	if err != nil {
-		return Record{}, OperatorMutationResult{}, false, err
-	}
-	if !found {
-		return Record{}, OperatorMutationResult{}, false, ErrCorruptRecord
-	}
-	if err := validateControlHistory(tx, current); err != nil {
-		return Record{}, OperatorMutationResult{}, false, err
 	}
 	record, err := readTargetMutationResultTx(tx, result)
 	if err != nil {

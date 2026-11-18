@@ -3297,3 +3297,16 @@ Media PATCH crash/restart: actual retained-publication RED at df26c547/run404734
 
 
 Media recovery performance: diagnostic94bcb486 exposed active-claim payload decoding contention at the largest legal input. Store-level metadata filtering now precedes decoding and preserves original pending reads, writer fencing and selected-claim digest validation. Cloud qualification remains pending; no media/all-product completion or power-loss claim.
+
+<!-- native checkpoint 2026-11-18 target registration -->
+
+The native launcher, Rust gateway and worker, and Go control process passed the
+Chromium existing-marker filesystem scenario on d8e94e2. The form registered two
+targets, retained both marker files, rejected an overlapping path and a live
+clone, moved a target after the old path vanished, and recovered the original
+operation after a writer restart. The Go race selection passed 63 families and
+the CPython 3.12 oracle passed 74 metadata cases. The full Go gate measured
+18305/19342 (94.638610%) against 95%, keeping the whole source at NOT_READY.
+
+Marker initialization and effect reconciliation, S3, the rest of the target
+lifecycle and platform and release qualification remain open.
