@@ -66,7 +66,7 @@ async fn dispatch(method: Method) -> Response {
     }
 }
 
-fn budget_body() -> Result<Value, AppError> {
+pub(crate) fn budget_body() -> Result<Value, AppError> {
     let transfers = list_active_qos_transfers()?;
 
     let mut p0_count = 0_i64;

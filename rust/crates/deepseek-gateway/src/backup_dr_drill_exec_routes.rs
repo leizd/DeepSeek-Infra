@@ -755,7 +755,7 @@ fn execute_scheduled_drill(root: &Path, policy_id: &str) -> Result<Value, AppErr
     } else {
         (None, None)
     };
-    if let (Some(slot), Some((ref k, ref sec))) = (used_slot_key, &acquired) {
+    if let (Some(slot), Some((k, sec))) = (used_slot_key, &acquired) {
         let _ = put_secret_bytes(&slot, k, sec.as_slice());
     }
 

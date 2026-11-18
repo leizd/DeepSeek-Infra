@@ -133,7 +133,7 @@ async fn dispatch_journal(method: Method, RawQuery(raw): RawQuery) -> Response {
     run_get(method, move || list_journal(state, action_type, limit)).await
 }
 
-fn list_journal(
+pub(crate) fn list_journal(
     state: Option<String>,
     action_type: Option<String>,
     limit: i64,
