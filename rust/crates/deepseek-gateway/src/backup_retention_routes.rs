@@ -109,7 +109,7 @@ fn json_str_or(obj: &Value, key: &str, default: &str) -> String {
     }
 }
 
-fn is_valid_safe_id(raw: &str) -> bool {
+pub(crate) fn is_valid_safe_id(raw: &str) -> bool {
     let bytes = raw.as_bytes();
     if bytes.is_empty() || bytes.len() > 64 {
         return false;
@@ -1270,6 +1270,59 @@ fn handle_apply(headers: &HeaderMap, body_bytes: &[u8]) -> Result<Value, AppErro
     let apply_result = apply_with_lease(&ctx, &writer, supplied_preview.as_ref());
     writer.release();
     apply_result
+}
+
+pub(crate) fn apply_retention_for_policy(
+    policy: &Value,
+    writer: &TargetWriterLease,
+) -> Result<Value, AppError> {
+    let policy_id = json_str_or(policy, "policyId", "");
+    if !is_valid_safe_id(&policy_id) {
+        return Err(AppError {
+            message: "Backup policy field policyId has an invalid identifier".to_string(),
+            code: codes::INVALID_PAYLOAD,
+            status: 400,
+        });
+    }
+    let policy_timezone = policy
+        .get("schedule")
+        .and_then(|s| s.get("timezone"))
+        .filter(|v| python_truthy(v))
+        .map(value_str)
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| json_str_or(policy, "timezone", "UTC"));
+    let tz = load_iana_timezone(&policy_timezone)?;
+    let retention_policy_id = json_str_or(policy, "retentionPolicyId", "default");
+    let retention = get_retention_policy(
+        &crate::data_routes::workspace_root().join(".backup-retention"),
+        &retention_policy_id,
+    )?;
+    if retention.get("dryRun").map(python_truthy).unwrap_or(false) {
+        return Ok(json!({
+            "applied": {
+                "retentionRunId": Value::Null,
+                "trashed": [],
+                "recoveredTrash": [],
+                "preview": {"keep": [], "protected": []},
+            },
+            "finalized": {
+                "deleted": [],
+                "kept": [],
+                "recoveredTrash": [],
+            },
+        }));
+    }
+    let (target_root, target_id_display) = resolve_target_root(policy)?;
+    fs::create_dir_all(&target_root).map_err(|_| route_support::unhandled_error())?;
+    let ctx = ResolvedRetentionContext {
+        policy_id,
+        retention,
+        target_root,
+        target_id_display,
+        policy_timezone,
+        tz,
+    };
+    apply_with_lease(&ctx, writer, None)
 }
 
 fn apply_with_lease(

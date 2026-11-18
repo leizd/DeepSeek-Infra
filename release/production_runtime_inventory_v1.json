@@ -310,11 +310,6 @@
   "http_routes_only_on_python": [
     {
       "method": "post",
-      "path": "/api/workspace/backup-policies/{policy_id}/run",
-      "file": "deepseek_infra/web/routes/backup_governance.py"
-    },
-    {
-      "method": "post",
       "path": "/api/media",
       "file": "deepseek_infra/web/routes/media.py"
     },

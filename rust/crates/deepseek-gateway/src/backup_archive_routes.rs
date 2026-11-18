@@ -592,7 +592,7 @@ fn is_sqlite_path(path: &Path) -> bool {
         .is_some_and(|ext| matches!(ext.as_str(), "sqlite3" | "sqlite" | "db"))
 }
 
-fn copy_staged_file(src: &Path, dst: &Path) -> Result<(), AppError> {
+pub(crate) fn copy_staged_file(src: &Path, dst: &Path) -> Result<(), AppError> {
     if let Some(parent) = dst.parent() {
         fs::create_dir_all(parent).map_err(|_| route_support::unhandled_error())?;
     }
@@ -752,7 +752,7 @@ fn snapshot_external_contributor(
     Ok((summary, entry))
 }
 
-fn build_revision() -> String {
+pub(crate) fn build_revision() -> String {
     if let Ok(val) = std::env::var("DEEPSEEK_BUILD_REVISION") {
         let trimmed = val.trim();
         if !trimmed.is_empty() {

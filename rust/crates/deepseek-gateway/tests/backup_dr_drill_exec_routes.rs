@@ -120,8 +120,11 @@ impl Fixture {
             .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"));
         let req_body = match body {
             Some(val) => {
-                builder = builder.header(header::CONTENT_TYPE, "application/json");
-                Body::from(serde_json::to_vec(&val).unwrap())
+                let bytes = serde_json::to_vec(&val).unwrap();
+                builder = builder
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(header::CONTENT_LENGTH, bytes.len().to_string());
+                Body::from(bytes)
             }
             None => Body::empty(),
         };

@@ -378,8 +378,25 @@ pub fn encrypt_tree_zip_native(
     secret: Option<&str>,
     recipients: &[String],
 ) -> Result<(), AppError> {
+    encrypt_tree_zip_native_with_plain_metrics(staging, target, protection_mode, secret, recipients)
+        .map(|_| ())
+}
+
+/// Encrypt `staging` as a deterministic zip into `target`, returning the plaintext `(size, sha256)`.
+pub fn encrypt_tree_zip_native_with_plain_metrics(
+    staging: &Path,
+    target: &Path,
+    protection_mode: &str,
+    secret: Option<&str>,
+    recipients: &[String],
+) -> Result<(u64, String), AppError> {
     if protection_mode == "none" {
-        return write_zip_tree(staging, target);
+        write_zip_tree(staging, target)?;
+        let size = fs::metadata(target)
+            .map(|m| m.len())
+            .map_err(|err| internal_error(err.to_string()))?;
+        let sha = sha256_file(target).map_err(|err| internal_error(err.to_string()))?;
+        return Ok((size, sha));
     }
     let parent = target
         .parent()
@@ -393,6 +410,10 @@ pub fn encrypt_tree_zip_native(
     let plain_tmp = parent.join(format!(".{name}.{pid}.plain.zip.tmp"));
     let _plain_guard = PlaintextTempGuard(plain_tmp.clone());
     write_zip_to_path(staging, &plain_tmp, true)?;
+    let plain_size = fs::metadata(&plain_tmp)
+        .map(|m| m.len())
+        .map_err(|err| internal_error(err.to_string()))?;
+    let plain_sha = sha256_file(&plain_tmp).map_err(|err| internal_error(err.to_string()))?;
 
     let cipher_tmp = parent.join(format!(".{name}.{pid}.age.tmp"));
     let encrypt_result = (|| -> Result<(), AppError> {
@@ -443,7 +464,7 @@ pub fn encrypt_tree_zip_native(
         )));
     }
     crate::backup_mirror::fsync_dir(parent);
-    Ok(())
+    Ok((plain_size, plain_sha))
 }
 
 /// Validate a POSIX relative archive path without traversal, drive letters, or control bytes.
