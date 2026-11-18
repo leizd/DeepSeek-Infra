@@ -147,7 +147,7 @@ pub fn artifact_filename(artifact: &Value) -> String {
     let title = truthy_opt(artifact.get("title"))
         .map(|v| python_str(Some(v)))
         .filter(|s| !s.is_empty())
-        .or_else(|| if stem.is_empty() { None } else { Some(stem) })
+        .or(if stem.is_empty() { None } else { Some(stem) })
         .unwrap_or_else(|| "artifact".to_string());
     format!("{}{}", safe_filename(&title, "file"), ext)
 }

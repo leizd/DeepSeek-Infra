@@ -68,7 +68,7 @@ async fn dispatch_create_export(method: Method, headers: HeaderMap, body: Bytes)
     match joined {
         Ok(Ok(value)) => (StatusCode::OK, Json(value)).into_response(),
         Ok(Err(err)) => route_support::app_error_response(err),
-        Err(_) => server_error(),
+        Err(_) => error_response(server_error()),
     }
 }
 

@@ -315,26 +315,6 @@
     },
     {
       "method": "post",
-      "path": "/api/workspace/disaster-recovery/audit",
-      "file": "deepseek_infra/web/routes/backup_governance.py"
-    },
-    {
-      "method": "post",
-      "path": "/api/workspace/disaster-recovery/audit/{audit_id}/resume",
-      "file": "deepseek_infra/web/routes/backup_governance.py"
-    },
-    {
-      "method": "post",
-      "path": "/api/workspace/disaster-recovery/plan",
-      "file": "deepseek_infra/web/routes/backup_governance.py"
-    },
-    {
-      "method": "post",
-      "path": "/api/workspace/disaster-recovery/failover/{restore_id}",
-      "file": "deepseek_infra/web/routes/backup_governance.py"
-    },
-    {
-      "method": "post",
       "path": "/api/workspace/disaster-recovery/drills",
       "file": "deepseek_infra/web/routes/backup_governance.py"
     },

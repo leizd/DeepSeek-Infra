@@ -65,7 +65,7 @@ async fn dispatch(method: Method) -> Response {
     }
 }
 
-fn table_columns(conn: &Connection, table: &str) -> Result<HashSet<String>, AppError> {
+pub(crate) fn table_columns(conn: &Connection, table: &str) -> Result<HashSet<String>, AppError> {
     if !table_exists(conn, table)? {
         return Ok(HashSet::new());
     }
@@ -215,7 +215,7 @@ fn resolve_recoverable_chain(
     Ok(Some(chain))
 }
 
-fn latest_recoverable_point(
+pub(crate) fn latest_recoverable_point(
     dr_conn: Option<&Connection>,
     target_id: &str,
     policy_id: &str,
@@ -297,7 +297,7 @@ fn latest_recoverable_point(
     Ok(None)
 }
 
-fn latest_scrub_outcome(
+pub(crate) fn latest_scrub_outcome(
     dr_conn: Option<&Connection>,
     target_id: &str,
     policy_id: &str,
@@ -350,7 +350,7 @@ fn latest_scrub_outcome(
     })))
 }
 
-fn latest_drill_outcome(
+pub(crate) fn latest_drill_outcome(
     dr_conn: Option<&Connection>,
     target_id: &str,
     policy_id: &str,
@@ -401,7 +401,7 @@ fn latest_drill_outcome(
     })))
 }
 
-fn target_evidence_row(
+pub(crate) fn target_evidence_row(
     dr_conn: Option<&Connection>,
     target_id: &str,
 ) -> Result<Option<Value>, AppError> {
@@ -428,7 +428,7 @@ fn target_evidence_row(
     Ok(row)
 }
 
-fn classify_and_calibrate_rto(
+pub(crate) fn classify_and_calibrate_rto(
     dr_conn: Option<&Connection>,
     target_id: &str,
     target_kind: &str,
@@ -631,7 +631,7 @@ fn map_stage_sample(row: &rusqlite::Row<'_>) -> rusqlite::Result<(Value, String,
     Ok((rc, row.get(1)?, row.get(2)?, row.get::<_, f64>(3)?))
 }
 
-fn list_logical_recovery_copies(
+pub(crate) fn list_logical_recovery_copies(
     dr_conn: Option<&Connection>,
     policy_id: Option<&str>,
     backup_id: Option<&str>,
@@ -649,6 +649,21 @@ fn list_logical_recovery_copies(
         "COALESCE(NULLIF(state, ''), 'healthy')"
     } else {
         "'healthy'"
+    };
+    let osd_col = if cols.contains("object_set_digest") {
+        "object_set_digest"
+    } else {
+        "NULL"
+    };
+    let role_col = if cols.contains("role") {
+        "COALESCE(NULLIF(role, ''), 'primary')"
+    } else {
+        "'primary'"
+    };
+    let meta_col = if cols.contains("metadata_json") {
+        "metadata_json"
+    } else {
+        "NULL"
     };
     let mut clauses = Vec::new();
     let mut params: Vec<String> = Vec::new();
@@ -670,7 +685,7 @@ fn list_logical_recovery_copies(
         format!(" WHERE {}", clauses.join(" AND "))
     };
     let sql = format!(
-        "SELECT target_id, policy_id, backup_id, committed_at, recoverable, {state_col} \
+        "SELECT target_id, policy_id, backup_id, committed_at, recoverable, {state_col}, {osd_col}, {role_col}, {meta_col} \
          FROM recovery_point_copies{where_sql} ORDER BY committed_at DESC, logical_id DESC LIMIT ?"
     );
     let mut stmt = conn.prepare(&sql).map_err(|_| unhandled_error())?;
@@ -679,6 +694,14 @@ fn list_logical_recovery_copies(
     dyn_params.push(&limit);
     let rows = stmt
         .query_map(dyn_params.as_slice(), |row| {
+            let osd: Option<String> = row.get(6)?;
+            let role: String = row.get(7)?;
+            let meta_raw: Option<String> = row.get(8)?;
+            let metadata = meta_raw
+                .as_deref()
+                .and_then(|s| serde_json::from_str::<Value>(s).ok())
+                .filter(|v| v.is_object())
+                .unwrap_or_else(|| json!({}));
             Ok(json!({
                 "targetId": row.get::<_, String>(0)?,
                 "policyId": row.get::<_, String>(1)?,
@@ -686,6 +709,9 @@ fn list_logical_recovery_copies(
                 "committedAt": row.get::<_, String>(3)?,
                 "recoverable": row.get::<_, i64>(4)? != 0,
                 "state": row.get::<_, String>(5)?,
+                "objectSetDigest": osd.filter(|s| !s.is_empty()),
+                "role": role,
+                "metadata": metadata,
             }))
         })
         .map_err(|_| unhandled_error())?;

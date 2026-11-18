@@ -74,7 +74,7 @@ fn json_number_as_f64(value: &Value) -> Option<f64> {
     }
 }
 
-fn parse_dr_time(value: Option<&Value>) -> Option<i64> {
+pub(crate) fn parse_dr_time(value: Option<&Value>) -> Option<i64> {
     let raw = value?.as_str()?;
     if raw.is_empty() || raw == "not-a-time" {
         return None;

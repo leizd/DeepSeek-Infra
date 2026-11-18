@@ -29,11 +29,11 @@ use deepseek_policy::backup_mirror::{fsync_dir, sha256_file};
 use deepseek_policy::backup_unlock::{
     derive_recipients, safe_extract_and_verify, scrub_plaintext_file, verify_manifest_tree,
 };
-use deepseek_policy::core_utils::{python_truthy, value_str};
+use deepseek_policy::core_utils::python_truthy;
 use deepseek_policy::entropy::{Entropy, SystemEntropy};
 use deepseek_policy::file_lock::FileLockGuard;
 use deepseek_policy::mutation_gate;
-use deepseek_policy::python_json::dumps_compact;
+use deepseek_policy::python_json::{dumps_compact, value_str};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
@@ -2479,7 +2479,7 @@ pub(crate) fn apply_restore(root: &Path, restore_id: &str, mode: &str) -> Result
     Ok(Value::Object(out))
 }
 
-fn remote_session_path(root: &Path, restore_id: &str) -> Result<PathBuf, AppError> {
+pub(crate) fn remote_session_path(root: &Path, restore_id: &str) -> Result<PathBuf, AppError> {
     safe_restore_session_id(restore_id)?;
     Ok(root
         .join(".restore-staging")
@@ -2487,7 +2487,7 @@ fn remote_session_path(root: &Path, restore_id: &str) -> Result<PathBuf, AppErro
         .join("remote-fetch.json"))
 }
 
-fn read_remote_restore_session(
+pub(crate) fn read_remote_restore_session(
     root: &Path,
     restore_id: &str,
 ) -> Result<Option<Map<String, Value>>, AppError> {
@@ -2630,7 +2630,7 @@ fn update_telemetry_for_persist(existing: &Map<String, Value>, payload: &mut Map
     );
 }
 
-fn write_atomic_remote_session(
+pub(crate) fn write_atomic_remote_session(
     path: &Path,
     payload: &mut Map<String, Value>,
     clear_pause: bool,
@@ -2783,25 +2783,28 @@ fn release_session_holds(root: &Path, session: &Map<String, Value>) {
         return;
     }
 
-    let Ok(targets) = list_registered_targets(root) else {
-        return;
-    };
-    let Some(target) = targets.into_iter().find(|t| t.target_id == target_id) else {
-        return;
-    };
-    let base_dir: Option<PathBuf> = if target.target_id == "managed-local" {
-        Some(root.join(".backups").join("publish"))
-    } else if target.kind == "filesystem" {
-        target.path.clone().map(|p| {
-            let trimmed = target.prefix.trim_matches('/');
-            if trimmed.is_empty() {
-                p
-            } else {
-                p.join(trimmed)
-            }
-        })
+    let base_dir: Option<PathBuf> = if target_id == "managed-local" {
+        Some(root.join(".backups"))
     } else {
-        None
+        let Ok(targets) = list_registered_targets() else {
+            return;
+        };
+        let Some(target) = targets
+            .into_iter()
+            .find(|t| t.get("targetId").and_then(Value::as_str) == Some(target_id))
+        else {
+            return;
+        };
+        let kind = target.get("kind").and_then(Value::as_str).unwrap_or("");
+        if kind == "filesystem" {
+            target
+                .get("path")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+                .map(PathBuf::from)
+        } else {
+            None
+        }
     };
     if let Some(dir) = base_dir {
         for key in keys {
