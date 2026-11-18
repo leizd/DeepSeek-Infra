@@ -15281,3 +15281,24 @@ generation before activation or deletion. The original 76-family selection and
 95% gate still apply. Verify the same source in the cloud before recording a
 coverage pass. Initialization, reconciliation and the rest of the product
 matrix remain open.
+
+### 2026-11-18 source workflow failures and repair
+
+Development run 44236721554 on e5ea2aa passed 76 Go race test families,
+74 retained CPython cases, the physical Rust/Go and Chromium workload, and
+the original Go floor with 18373/19337 statements (95.014739%). Separate
+source runs 44237761199, 44237776475 and 44237792300 passed the Rust, Android
+and Windows workloads they ran.
+
+Full source run 44237745473 recorded Linux mypy failures for the Windows-only
+Python stat name and a frontend audit failure. The Windows verifier now uses
+the specified reparse tag value. The Vitest 4.1.12 toolchain removes both
+reported mocker advisories and passes the retained frontend build, bundle
+check and 639 tests. A fresh audit still fails on Picomatch and its dependent
+packages. The registry's latest Picomatch version is within the advisory
+range. Keep the security gate failing until a verified remedy is available.
+
+Proceed with Go-owned durable admission and Rust-owned marker creation for
+uninitialized filesystem targets. Verify the original operation, directory
+identity, and marker bytes after an interrupted response or worker restart
+before publishing the registry record. The complete product stays NOT_READY.

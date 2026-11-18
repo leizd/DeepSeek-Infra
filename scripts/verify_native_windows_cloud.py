@@ -17,7 +17,6 @@ from pathlib import Path
 import re
 import socket
 import sqlite3
-import stat
 import subprocess
 import sys
 import tempfile
@@ -36,6 +35,8 @@ TARGETS = "/api/workspace/backup-targets"
 TARGET_MARKER = ".deepseek-infra-backup-target.json"
 TARGET_OPERATION_HEADER = "X-DeepSeek-Operation-Id"
 TARGET_ID = "target_windows_fixture"
+# Windows assigns this tag to junctions. The Python stat name is Windows-only.
+IO_REPARSE_TAG_MOUNT_POINT = 0xA0000003
 
 
 @dataclass(frozen=True)
@@ -280,7 +281,7 @@ def verify_windows_target_registration(origin: str, token: str, root: Path) -> R
         env=dict(os.environ, DEEPSEEK_TEST_TARGET_JUNCTION=str(junction), DEEPSEEK_TEST_TARGET_DESTINATION=str(target)),
         capture_output=True, check=False, timeout=15,
     )
-    if (created.returncode or getattr(junction.lstat(), "st_reparse_tag", 0) != stat.IO_REPARSE_TAG_MOUNT_POINT
+    if (created.returncode or getattr(junction.lstat(), "st_reparse_tag", 0) != IO_REPARSE_TAG_MOUNT_POINT
             or not junction.samefile(target)):
         raise RuntimeError("WINDOWS_TARGET_JUNCTION_FIXTURE_INVALID")
     status, payload, _ = post_target(origin, token, target_body(junction))
