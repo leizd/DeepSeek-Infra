@@ -247,10 +247,12 @@ fn read_baseline_readonly(root: &Path, policy: &Value) -> Result<Value, AppError
     let targets: HashMap<String, Value> = target_list
         .into_iter()
         .filter_map(|t| {
-            t.get("targetId")
+            let id = t
+                .get("targetId")
                 .and_then(Value::as_str)
-                .filter(|s| !s.is_empty())
-                .map(|id| (id.to_string(), t))
+                .filter(|s| !s.is_empty())?
+                .to_string();
+            Some((id, t))
         })
         .collect();
 

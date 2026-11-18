@@ -96,6 +96,7 @@ pub mod request_assembly;
 pub mod request_preparation;
 mod resilience_advisory_routes;
 mod resilience_federation_routes;
+mod resilience_plan_routes;
 mod resilience_read_routes;
 mod resilience_state_support;
 mod resilience_whatif_routes;
@@ -267,6 +268,7 @@ fn create_routes() -> Router {
         .merge(media_segment_routes::router())
         .merge(resilience_federation_routes::router())
         .merge(resilience_advisory_routes::router())
+        .merge(resilience_plan_routes::router())
         .merge(resilience_read_routes::router())
         .merge(resilience_whatif_routes::router())
         .merge(artifact_preview_routes::router())

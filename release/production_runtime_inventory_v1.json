@@ -314,31 +314,6 @@
       "file": "deepseek_infra/web/routes/backup_governance.py"
     },
     {
-      "method": "get",
-      "path": "/api/workspace/resilience/snapshot",
-      "file": "deepseek_infra/web/routes/backup_governance.py"
-    },
-    {
-      "method": "post",
-      "path": "/api/workspace/resilience/assess",
-      "file": "deepseek_infra/web/routes/backup_governance.py"
-    },
-    {
-      "method": "post",
-      "path": "/api/workspace/resilience/plan",
-      "file": "deepseek_infra/web/routes/backup_governance.py"
-    },
-    {
-      "method": "get",
-      "path": "/api/workspace/resilience/coordination-plan",
-      "file": "deepseek_infra/web/routes/backup_governance.py"
-    },
-    {
-      "method": "post",
-      "path": "/api/workspace/resilience/coordination-plan",
-      "file": "deepseek_infra/web/routes/backup_governance.py"
-    },
-    {
       "method": "post",
       "path": "/api/workspace/resilience/execute",
       "file": "deepseek_infra/web/routes/backup_governance.py"
