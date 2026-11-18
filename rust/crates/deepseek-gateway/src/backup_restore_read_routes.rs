@@ -296,7 +296,7 @@ fn restore_secret_state(metadata: &Map<String, Value>, restore_id: &str) -> &'st
     "not-required"
 }
 
-fn public_restore(
+pub(crate) fn public_restore(
     metadata: &Map<String, Value>,
     restore_dir: &Path,
     include_frontend: bool,

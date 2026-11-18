@@ -207,3 +207,134 @@ async fn optimizer_computes_percentiles_and_preferred_target_advisories() {
     let (post_status, _) = call_raw(&app, "POST", "/api/workspace/resilience/optimizer").await;
     assert_eq!(post_status, StatusCode::METHOD_NOT_ALLOWED);
 }
+
+async fn call_post_json(app: &axum::Router, uri: &str, payload: &Value) -> (StatusCode, Value) {
+    let encoded = serde_json::to_vec(payload).unwrap();
+    let req = Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header(header::HOST, "127.0.0.1:8080")
+        .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::CONTENT_LENGTH, encoded.len().to_string())
+        .body(Body::from(encoded))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let status = resp.status();
+    let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let val = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+    (status, val)
+}
+
+#[tokio::test]
+async fn simulate_and_explain_evaluate_topology_and_action_reasons() {
+    let _lock = EnvLock::acquire();
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(root.path().join(".backup-dr")).unwrap();
+    std::fs::create_dir_all(root.path().join(".backup-control")).unwrap();
+    std::fs::create_dir_all(root.path().join(".backup-policies")).unwrap();
+    std::fs::create_dir_all(root.path().join(".resilience-journal")).unwrap();
+
+    let dr_conn =
+        Connection::open(root.path().join(".backup-dr").join("evidence.sqlite3")).unwrap();
+    dr_conn
+        .execute_batch(
+            "CREATE TABLE recovery_points (
+                target_id TEXT, policy_id TEXT, backup_id TEXT, committed_at TEXT
+             );
+             CREATE TABLE recovery_point_copies (
+                target_id TEXT, policy_id TEXT, backup_id TEXT, committed_at TEXT, state TEXT
+             );
+             INSERT INTO recovery_points VALUES ('target-a', 'pol1', 'bk1', '2026-11-18T00:00:00Z');
+             INSERT INTO recovery_point_copies VALUES
+                ('target-a', 'pol1', 'bk1', '2026-11-18T00:00:00Z', 'committed'),
+                ('target-b', 'pol1', 'bk1', '2026-11-18T00:00:00Z', 'healthy');",
+        )
+        .unwrap();
+
+    let ctrl_conn =
+        Connection::open(root.path().join(".backup-control").join("control.sqlite3")).unwrap();
+    ctrl_conn
+        .execute_batch(
+            "CREATE TABLE control_targets (target_id TEXT PRIMARY KEY, payload_json TEXT NOT NULL);
+             INSERT INTO control_targets VALUES
+                ('target-a', '{\"targetId\":\"target-a\",\"kind\":\"filesystem\",\"status\":\"active\"}'),
+                ('target-b', '{\"targetId\":\"target-b\",\"kind\":\"filesystem\",\"status\":\"active\"}');
+             CREATE TABLE backup_target_capacity (
+                observation_id TEXT, target_id TEXT, observed_at TEXT,
+                total_bytes INTEGER, used_bytes INTEGER, free_bytes INTEGER, payload_json TEXT
+             );
+             INSERT INTO backup_target_capacity VALUES
+                ('o1', 'target-a', '2026-11-18T00:00:00Z', 1000, 900, 100,
+                 '{\"targetId\":\"target-a\",\"totalBytes\":1000,\"usedBytes\":900,\"freeBytes\":100,\"freePercent\":10.0}'),
+                ('o2', 'target-b', '2026-11-18T00:00:00Z', 1000, 100, 900,
+                 '{\"targetId\":\"target-b\",\"totalBytes\":1000,\"usedBytes\":100,\"freeBytes\":900,\"freePercent\":90.0}');",
+        )
+        .unwrap();
+
+    std::fs::write(
+        root.path().join(".backup-policies").join("pol1.json"),
+        serde_json::to_vec(&json!({"policyId": "pol1", "targetId": "target-a"})).unwrap(),
+    )
+    .unwrap();
+
+    let j_conn = Connection::open(
+        root.path()
+            .join(".resilience-journal")
+            .join("journal.sqlite3"),
+    )
+    .unwrap();
+    j_conn
+        .execute_batch(
+            "CREATE TABLE resilience_actions (
+                action_id TEXT PRIMARY KEY, plan_id TEXT, action_type TEXT, created_by TEXT,
+                input_risk_digest TEXT, plan_digest TEXT, state TEXT, parameters_json TEXT,
+                owner_instance_id TEXT, lease_until TEXT, claim_token TEXT, execution_epoch INTEGER,
+                effect_class TEXT, compensation_state TEXT, effect_handle_json TEXT,
+                risk_subject_json TEXT, expected_effect TEXT, severity_before TEXT,
+                coordination_plan_id TEXT, execution_result_json TEXT, verification_result_json TEXT,
+                decision_proof_json TEXT, risk_before_digest TEXT, risk_after_digest TEXT,
+                error_message TEXT, created_at TEXT, updated_at TEXT
+             );
+             INSERT INTO resilience_actions VALUES (
+                'act-1', 'plan-1', 'REBALANCE', 'planner', NULL, NULL, 'PENDING',
+                '{\"sourceTargetId\":\"target-a\",\"reason\":\"low free space\"}',
+                NULL, NULL, NULL, 1, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+                NULL, NULL, NULL, NULL, NULL, NULL,
+                '2026-11-18T00:00:00Z', '2026-11-18T00:00:00Z'
+             );",
+        )
+        .unwrap();
+
+    let (_static_root, _env, app) = build_app(root.path());
+
+    let (sim_st, sim_val) = call_post_json(
+        &app,
+        "/api/workspace/resilience/simulate",
+        &json!({"scenario": "AZ_FAILURE", "excludedTargets": ["target-a"], "policyId": "pol1"}),
+    )
+    .await;
+    assert_eq!(sim_st, StatusCode::OK, "simulate failed: {sim_val}");
+    assert_eq!(sim_val["survivable"], json!(true));
+    assert_eq!(sim_val["lostCopies"], 1);
+    assert_eq!(sim_val["survivingCopies"], 1);
+    assert_eq!(sim_val["viableTargets"], json!(["target-b"]));
+    assert_eq!(sim_val["simulationPassed"], json!(true));
+
+    let (exp_st, exp_val) = call_post_json(
+        &app,
+        "/api/workspace/resilience/explain",
+        &json!({"actionId": "act-1"}),
+    )
+    .await;
+    assert_eq!(exp_st, StatusCode::OK, "explain failed: {exp_val}");
+    assert_eq!(exp_val["targetId"], "target-a");
+    let reasons = exp_val["reasons"].as_array().unwrap();
+    assert!(reasons.contains(&json!("REBALANCE")));
+    assert!(reasons.contains(&json!("low free space")));
+    assert!(reasons.contains(&json!("capacity watermark exceeded")));
+    assert!(reasons.contains(&json!("destination satisfies topology")));
+
+    let (get_s, _) = call_raw(&app, "GET", "/api/workspace/resilience/simulate").await;
+    assert_eq!(get_s, StatusCode::NOT_FOUND);
+}

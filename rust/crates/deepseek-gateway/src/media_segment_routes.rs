@@ -347,6 +347,25 @@ pub(crate) fn project_media_items(project_id: &str) -> Result<Vec<Value>, AppErr
         .filter_values(|item| item.field_equals("projectId", project_id))
 }
 
+pub(crate) fn ready_media_with_segments() -> Result<Vec<(Value, Vec<Value>)>, AppError> {
+    let items = media_read_spool::PublicIndex::load(&library_path())?
+        .filter_values(|item| item.field_equals("status", "ready"))?;
+    let mut out = Vec::new();
+    for media in items {
+        let Some(media_id) = media.get("mediaId").and_then(Value::as_str) else {
+            continue;
+        };
+        let Ok(safe_id) = validate_workspace_id(media_id, "media id") else {
+            continue;
+        };
+        let segments = load_segments(&safe_id)?;
+        if !segments.is_empty() {
+            out.push((media, segments));
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 fn media_sort_key(row: &Value) -> String {
     match row.get("updatedAt") {

@@ -243,7 +243,7 @@ pub fn project_bundle(
 ) -> Result<Value, AppError> {
     let safe_project_id = validate_project_id(project_id)?;
     let project = workspace_projects::get_project(&safe_project_id, root, entropy)?;
-    let saved_items = workspace_projects::list_saved_items(&safe_project_id, root, "")?;
+    let saved_items = workspace_projects::list_saved_items(&safe_project_id, root, "", &[])?;
     let artifacts = workspace_projects::list_artifacts(&safe_project_id, root)?;
     let media_items = list_media_for_project(root, &safe_project_id)?;
     let conversations = project
@@ -778,7 +778,7 @@ where
     let download_suffix = if safe_project_id.is_empty() {
         String::new()
     } else {
-        format!("projectId={safe_project_id}")
+        format!("?projectId={safe_project_id}")
     };
     let export = json!({
         "exportId": export_id,
@@ -1073,7 +1073,7 @@ fn export_saved_items(
     let safe_project_id = validate_project_id(project_id)?;
     let fmt = normalize_export_format(Some(&Value::String(export_format.to_string())))?;
     let ids: HashSet<&str> = saved_ids.iter().map(String::as_str).collect();
-    let mut items = workspace_projects::list_saved_items(&safe_project_id, root, "")?;
+    let mut items = workspace_projects::list_saved_items(&safe_project_id, root, "", &[])?;
     if !ids.is_empty() {
         items.retain(|item| {
             let sid = item.get("savedId").and_then(Value::as_str).unwrap_or("");
@@ -1510,7 +1510,7 @@ mod tests {
             ex["downloadUrl"]
                 .as_str()
                 .unwrap()
-                .ends_with(&format!("/downloadprojectId={pid}"))
+                .ends_with(&format!("/download?projectId={pid}"))
         );
         let html_body = fs::read_to_string(ex["path"].as_str().unwrap()).unwrap();
         assert!(html_body.contains("# Alpha &lt;script&gt;Project"));

@@ -370,7 +370,7 @@ async fn stage_inspect_upload(
     })
 }
 
-fn gate_to_app_error(err: deepseek_policy::mutation_gate::GateError) -> AppError {
+pub(crate) fn gate_to_app_error(err: deepseek_policy::mutation_gate::GateError) -> AppError {
     AppError {
         message: err.message,
         code: err.code.unwrap_or(codes::INVALID_REQUEST),
@@ -378,7 +378,7 @@ fn gate_to_app_error(err: deepseek_policy::mutation_gate::GateError) -> AppError
     }
 }
 
-fn hex_digest(bytes: &[u8]) -> String {
+pub(crate) fn hex_digest(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
         out.push_str(&format!("{byte:02x}"));
@@ -392,8 +392,16 @@ fn context_from_object(raw: Option<&Value>) -> Result<BackupContext, AppError> {
 }
 
 fn finalize_session(root: &Path, backup_id: &str) -> Result<Value, AppError> {
+    finalize_session_with_owner(root, backup_id, None)
+}
+
+pub(crate) fn finalize_session_with_owner(
+    root: &Path,
+    backup_id: &str,
+    owner_restore_id: Option<&str>,
+) -> Result<Value, AppError> {
     validate_backup_id(backup_id)?;
-    mutation_gate::assert_mutation_allowed(None, root).map_err(gate_to_app_error)?;
+    mutation_gate::assert_mutation_allowed(owner_restore_id, root).map_err(gate_to_app_error)?;
 
     let mut session = load_session(root, backup_id)?;
     if session.get("phase").and_then(Value::as_str) == Some("ready") {
@@ -1059,7 +1067,7 @@ fn is_age_archive(path: &Path) -> bool {
     prefix[..read_len].starts_with(b"age-encryption.org/v1")
 }
 
-fn tree_digest(root: &Path) -> Result<String, AppError> {
+pub(crate) fn tree_digest(root: &Path) -> Result<String, AppError> {
     fn collect(base: &Path, dir: &Path, out: &mut Vec<(String, PathBuf)>) -> Result<(), AppError> {
         let entries = fs::read_dir(dir).map_err(|_| route_support::unhandled_error())?;
         for entry in entries {
@@ -1126,11 +1134,14 @@ fn version_compatible(source: &str, target: &str) -> bool {
     }
 }
 
-fn known_contributor(id: &str) -> Option<&'static ContributorSpec> {
+pub(crate) fn known_contributor(id: &str) -> Option<&'static ContributorSpec> {
     LOCAL_CONTRIBUTORS.iter().find(|spec| spec.id == id)
 }
 
-fn validate_staged_contributor(contributor_id: &str, source_dir: &Path) -> Result<usize, AppError> {
+pub(crate) fn validate_staged_contributor(
+    contributor_id: &str,
+    source_dir: &Path,
+) -> Result<usize, AppError> {
     if contributor_id == "stateless-mcp" {
         let state_file = source_dir.join("state.jsonl");
         if !state_file.is_file() {

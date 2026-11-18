@@ -1,31 +1,39 @@
-//! Read-only resilience capacity forecast and RPO/RTO optimizer routes:
+//! Read-only resilience capacity forecast, RPO/RTO optimizer, recovery
+//! simulator, and action explanation routes:
 //! - `GET|HEAD /api/workspace/resilience/forecast` (`capacity_forecaster.forecast_all_targets`)
 //! - `GET|HEAD /api/workspace/resilience/optimizer` (`rpo_rto_optimizer.generate_placement_recommendations`)
+//! - `POST     /api/workspace/resilience/simulate` (`recovery_simulator.simulate_recovery`)
+//! - `POST     /api/workspace/resilience/explain` (`resilience_explain`)
 //!
 //! Reads `.backup-targets/`, `.backup-policies/`, `.backup-control/control.sqlite3`,
-//! `.backup-dr/evidence.sqlite3`, and `.restore-staging/*/drill-result.json` cleanly
-//! without creating directories or writing store records.
+//! `.backup-dr/evidence.sqlite3`, `.resilience-journal/journal.sqlite3`, and
+//! `.restore-staging/*/drill-result.json` cleanly without creating directories
+//! or writing store records.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::Path;
 
 use axum::Json;
 use axum::Router;
-use axum::http::{Method, StatusCode};
+use axum::body::Bytes;
+use axum::http::{HeaderMap, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::any;
 use deepseek_policy::app_error::AppError;
 use deepseek_policy::core_utils::python_truthy;
 use deepseek_policy::python_json::value_str;
-use rusqlite::OptionalExtension;
-use serde_json::{Value, json};
+use rusqlite::{Connection, OptionalExtension};
+use serde_json::{Map, Value, json};
 
 use crate::backup_capacity_routes::{
     estimate_horizon_readonly, now_utc_iso, probe_target_capacity_with_probe, round2,
 };
 use crate::backup_catalog_routes::{list_registered_targets, open_readonly_sqlite};
 use crate::backup_dr_slo_routes::load_drill_items;
+use crate::resilience_read_routes::{get_journal_action, table_exists};
 use crate::route_support::{self, unhandled_error};
+
+const MAX_ADVISORY_BODY_BYTES: i64 = 2_000_000;
 
 pub fn router() -> Router {
     Router::new()
@@ -34,6 +42,40 @@ pub fn router() -> Router {
             "/api/workspace/resilience/optimizer",
             any(dispatch_optimizer),
         )
+        .route("/api/workspace/resilience/simulate", any(dispatch_simulate))
+        .route("/api/workspace/resilience/explain", any(dispatch_explain))
+}
+
+async fn dispatch_simulate(method: Method, headers: HeaderMap, body: Bytes) -> Response {
+    if method != Method::POST {
+        return route_support::unallowed_api_method(method, Method::GET);
+    }
+    let payload = match route_support::read_json_object(&headers, &body, MAX_ADVISORY_BODY_BYTES) {
+        Ok(map) => map,
+        Err(err) => return route_support::app_error_response(err),
+    };
+    let joined = tokio::task::spawn_blocking(move || build_simulate_body(&payload)).await;
+    match joined {
+        Ok(Ok(val)) => Json(val).into_response(),
+        Ok(Err(err)) => route_support::app_error_response(err),
+        Err(_) => route_support::app_error_response(unhandled_error()),
+    }
+}
+
+async fn dispatch_explain(method: Method, headers: HeaderMap, body: Bytes) -> Response {
+    if method != Method::POST {
+        return route_support::unallowed_api_method(method, Method::GET);
+    }
+    let payload = match route_support::read_json_object(&headers, &body, MAX_ADVISORY_BODY_BYTES) {
+        Ok(map) => map,
+        Err(err) => return route_support::app_error_response(err),
+    };
+    let joined = tokio::task::spawn_blocking(move || build_explain_body(&payload)).await;
+    match joined {
+        Ok(Ok(val)) => Json(val).into_response(),
+        Ok(Err(err)) => route_support::app_error_response(err),
+        Err(_) => route_support::app_error_response(unhandled_error()),
+    }
 }
 
 async fn dispatch_forecast(method: Method) -> Response {
@@ -423,5 +465,372 @@ fn build_optimizer_body() -> Result<Value, AppError> {
         "generatedAt": generated_at,
         "recommendations": recommendations,
         "targetPerformance": Value::Object(performance),
+    }))
+}
+
+fn format_duration_human(seconds: f64) -> String {
+    if seconds < 60.0 {
+        return format!("{}s", seconds as i64);
+    }
+    let minutes = (seconds / 60.0).floor() as i64;
+    let remaining = (seconds % 60.0) as i64;
+    if remaining == 0 {
+        format!("{minutes}m")
+    } else {
+        format!("{minutes}m {remaining}s")
+    }
+}
+
+fn build_simulate_body(payload: &Map<String, Value>) -> Result<Value, AppError> {
+    let root = crate::data_routes::workspace_root();
+    let scenario = payload
+        .get("scenario")
+        .filter(|v| python_truthy(v))
+        .map(value_str)
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "AZ_FAILURE".to_string());
+    let policy_filter = payload
+        .get("policyId")
+        .filter(|v| python_truthy(v))
+        .map(value_str)
+        .filter(|s| !s.is_empty());
+
+    let registered = list_registered_targets()?;
+    let mut all_target_ids = vec!["managed-local".to_string()];
+    for target in &registered {
+        let tid = target
+            .get("targetId")
+            .filter(|v| python_truthy(v))
+            .map(value_str)
+            .unwrap_or_default();
+        if !tid.is_empty() && tid != "managed-local" {
+            all_target_ids.push(tid);
+        }
+    }
+
+    let raw_excluded: Vec<String> = payload
+        .get("excludedTargets")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter(|v| !v.is_null())
+                .map(value_str)
+                .collect()
+        })
+        .unwrap_or_default();
+    let excluded = if raw_excluded.is_empty() {
+        if all_target_ids.len() > 1 {
+            vec![all_target_ids[1].clone()]
+        } else {
+            vec![all_target_ids[0].clone()]
+        }
+    } else {
+        raw_excluded
+    };
+
+    let surviving_targets: Vec<String> = all_target_ids
+        .into_iter()
+        .filter(|t| !t.is_empty() && !excluded.contains(t))
+        .collect();
+
+    let policies = list_policies_readonly(&root)?;
+    let dr_db = root.join(".backup-dr").join("evidence.sqlite3");
+    let dr_conn = open_readonly_sqlite(&dr_db)?;
+    let has_rp = match dr_conn.as_ref() {
+        Some(c) => table_exists(c, "recovery_points")?,
+        None => false,
+    };
+    let has_copies = match dr_conn.as_ref() {
+        Some(c) => table_exists(c, "recovery_point_copies")?,
+        None => false,
+    };
+
+    let mut lost_copies_count = 0usize;
+    let mut surviving_copies_count = 0usize;
+    let mut survivable = true;
+    let mut viable_targets = BTreeSet::new();
+    let mut bottlenecks = Vec::new();
+
+    for pol in policies {
+        let pid = pol
+            .get("policyId")
+            .filter(|v| python_truthy(v))
+            .map(value_str)
+            .unwrap_or_default();
+        if let Some(ref pf) = policy_filter {
+            if pid != *pf {
+                continue;
+            }
+        }
+        let latest_backup: Option<String> = if has_rp {
+            if let Some(conn) = dr_conn.as_ref() {
+                conn.query_row(
+                    "SELECT backup_id FROM recovery_points WHERE policy_id = ?1 ORDER BY committed_at DESC LIMIT 1",
+                    [&pid],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(|_| unhandled_error())?
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let Some(backup_id) = latest_backup else {
+            continue;
+        };
+
+        let mut copies: Vec<(String, String)> = Vec::new();
+        if has_copies {
+            if let Some(conn) = dr_conn.as_ref() {
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT target_id, state FROM recovery_point_copies \
+                         WHERE policy_id = ?1 AND backup_id = ?2 \
+                         ORDER BY committed_at DESC LIMIT 100",
+                    )
+                    .map_err(|_| unhandled_error())?;
+                let rows = stmt
+                    .query_map([&pid, &backup_id], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                    })
+                    .map_err(|_| unhandled_error())?;
+                for row in rows {
+                    copies.push(row.map_err(|_| unhandled_error())?);
+                }
+            }
+        }
+
+        let mut surviving_committed = Vec::new();
+        for (tid, state) in copies {
+            let lowered = state.to_ascii_lowercase();
+            if !matches!(lowered.as_str(), "committed" | "active" | "healthy") {
+                continue;
+            }
+            if surviving_targets.contains(&tid) {
+                surviving_committed.push(tid);
+            } else if excluded.contains(&tid) {
+                lost_copies_count += 1;
+            }
+        }
+        surviving_copies_count += surviving_committed.len();
+        let any_surviving_committed = !surviving_committed.is_empty();
+        for tid in surviving_committed {
+            if !tid.is_empty() {
+                viable_targets.insert(tid);
+            }
+        }
+        if !any_surviving_committed {
+            let primary_target = pol
+                .get("targetId")
+                .filter(|v| python_truthy(v))
+                .map(value_str)
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "managed-local".to_string());
+            if excluded.contains(&primary_target) {
+                survivable = false;
+                bottlenecks.push(format!("policy-{pid}-has-no-surviving-copies"));
+            }
+        }
+    }
+
+    let (estimated_rto_seconds, human_rto) =
+        if surviving_targets.is_empty() || viable_targets.is_empty() {
+            if !survivable || surviving_targets.is_empty() {
+                survivable = false;
+                (0.0, "unavailable".to_string())
+            } else {
+                (600.0, format_duration_human(600.0))
+            }
+        } else {
+            let secs = 300.0 + (surviving_targets.len() as f64) * 30.0;
+            (secs, format_duration_human(secs))
+        };
+
+    let target_excluded = if excluded.len() == 1 {
+        Value::String(excluded[0].clone())
+    } else {
+        Value::Array(excluded.iter().cloned().map(Value::String).collect())
+    };
+    let simulation_passed = survivable && bottlenecks.is_empty();
+
+    Ok(json!({
+        "scenario": scenario,
+        "targetExcluded": target_excluded,
+        "excludedTargets": excluded,
+        "survivable": survivable,
+        "estimatedRTO": human_rto,
+        "estimatedRTOSeconds": estimated_rto_seconds as i64,
+        "lostCopies": lost_copies_count,
+        "survivingCopies": surviving_copies_count,
+        "viableTargets": viable_targets.into_iter().collect::<Vec<_>>(),
+        "bottlenecks": bottlenecks,
+        "simulationPassed": simulation_passed,
+        "generatedAt": now_utc_iso(),
+    }))
+}
+
+fn select_rebalance_destination_readonly(
+    source_target_id: &str,
+    registered: &[Value],
+    control_conn: Option<&Connection>,
+    dr_conn: Option<&Connection>,
+) -> Result<Option<String>, AppError> {
+    let mut candidates: Vec<(f64, i64, String)> = Vec::new();
+    for target in registered {
+        let tid = target
+            .get("targetId")
+            .filter(|v| python_truthy(v))
+            .map(value_str)
+            .unwrap_or_default();
+        if tid.is_empty() || tid == source_target_id {
+            continue;
+        }
+        let status = target
+            .get("status")
+            .filter(|v| python_truthy(v))
+            .map(value_str)
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if status == "draining" {
+            continue;
+        }
+        let cap = probe_target_capacity_with_probe(target, &tid, control_conn, dr_conn, false)?;
+        let free_bytes = cap.get("freeBytes").and_then(Value::as_i64);
+        let free_pct = cap.get("freePercent").and_then(Value::as_f64);
+        if let Some(fb) = free_bytes {
+            if fb < 0 {
+                continue;
+            }
+        }
+        let effective_pct = free_pct.unwrap_or(100.0);
+        let effective_free = free_bytes.unwrap_or(1_000_000_000_000);
+        if effective_pct <= 20.0 {
+            continue;
+        }
+        candidates.push((effective_pct, effective_free, tid));
+    }
+    candidates.sort_by(|a, b| {
+        b.0.total_cmp(&a.0)
+            .then_with(|| b.1.cmp(&a.1))
+            .then_with(|| b.2.cmp(&a.2))
+    });
+    Ok(candidates.into_iter().next().map(|c| c.2))
+}
+
+fn build_explain_body(payload: &Map<String, Value>) -> Result<Value, AppError> {
+    let root = crate::data_routes::workspace_root();
+    let action_id = payload
+        .get("actionId")
+        .filter(|v| python_truthy(v))
+        .map(value_str)
+        .filter(|s| !s.is_empty());
+    let mut target_id = payload
+        .get("targetId")
+        .filter(|v| python_truthy(v))
+        .map(value_str)
+        .filter(|s| !s.is_empty());
+    let policy_id = payload
+        .get("policyId")
+        .filter(|v| python_truthy(v))
+        .map(value_str)
+        .filter(|s| !s.is_empty());
+
+    let mut reasons: Vec<String> = Vec::new();
+    let mut details = Map::new();
+
+    if let Some(ref aid) = action_id {
+        if let Some(act) = get_journal_action(aid)? {
+            let typ = act
+                .get("type")
+                .filter(|v| !v.is_null())
+                .map(value_str)
+                .unwrap_or_default();
+            reasons.push(typ);
+            let params = act.get("parameters").and_then(Value::as_object);
+            if let Some(r) = params
+                .and_then(|m| m.get("reason"))
+                .filter(|v| python_truthy(v))
+            {
+                reasons.push(value_str(r));
+            }
+            if target_id.is_none() {
+                target_id = params
+                    .and_then(|m| {
+                        m.get("sourceTargetId")
+                            .filter(|v| python_truthy(v))
+                            .or_else(|| m.get("target").filter(|v| python_truthy(v)))
+                    })
+                    .map(value_str)
+                    .filter(|s| !s.is_empty());
+            }
+            details.insert("action".into(), act.clone());
+            if let Some(state) = act.get("state").cloned() {
+                details.insert("state".into(), state);
+            }
+        }
+    }
+
+    if let Some(ref tid) = target_id {
+        let control_db = root.join(".backup-control").join("control.sqlite3");
+        let dr_db = root.join(".backup-dr").join("evidence.sqlite3");
+        let control_conn = open_readonly_sqlite(&control_db)?;
+        let dr_conn = open_readonly_sqlite(&dr_db)?;
+        let registered = list_registered_targets()?;
+        let empty_target = Value::Object(Map::new());
+        let target = registered
+            .iter()
+            .find(|t| t.get("targetId").and_then(Value::as_str) == Some(tid.as_str()))
+            .unwrap_or(&empty_target);
+        let cap = probe_target_capacity_with_probe(
+            target,
+            tid,
+            control_conn.as_ref(),
+            dr_conn.as_ref(),
+            false,
+        )?;
+        let horizon = estimate_horizon_readonly(tid, &cap, control_conn.as_ref())?;
+        if let Some(free_pct) = cap.get("freePercent").and_then(Value::as_f64) {
+            if free_pct <= 20.0 {
+                reasons.push("capacity watermark exceeded".to_string());
+            }
+        }
+        if let Some(days) = horizon
+            .get("estimatedDaysToFull")
+            .and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|f| f as i64)))
+        {
+            if days < 30 {
+                reasons.push("target exhaustion horizon critical".to_string());
+            }
+        }
+        if select_rebalance_destination_readonly(
+            tid,
+            &registered,
+            control_conn.as_ref(),
+            dr_conn.as_ref(),
+        )?
+        .is_some()
+        {
+            reasons.push("destination satisfies topology".to_string());
+        }
+        details.insert("targetCapacity".into(), cap);
+        details.insert("targetHorizon".into(), horizon);
+    }
+
+    if reasons.is_empty() {
+        reasons.push("system topology and resilience criteria satisfied".to_string());
+    }
+
+    let reasons_arr: Vec<Value> = reasons.into_iter().map(Value::String).collect();
+    Ok(json!({
+        "actionId": action_id,
+        "targetId": target_id,
+        "policyId": policy_id,
+        "reasons": reasons_arr.clone(),
+        "reason": reasons_arr,
+        "evidence": [],
+        "details": Value::Object(details),
     }))
 }

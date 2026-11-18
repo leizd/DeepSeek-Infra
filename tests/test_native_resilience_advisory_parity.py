@@ -46,6 +46,8 @@ def test_resilience_advisory_routes_registered_and_removed_from_inventory() -> N
     assert ("get", "/api/workspace/resilience/optimizer") not in python_only
     assert ("get", "/api/workspace/resilience/readiness") not in python_only
     assert ("get", "/api/workspace/disaster-recovery/status") not in python_only
+    assert ("post", "/api/workspace/resilience/simulate") not in python_only
+    assert ("post", "/api/workspace/resilience/explain") not in python_only
 
 
 def test_resilience_advisory_python_oracle_responses(
@@ -116,6 +118,28 @@ def test_resilience_advisory_python_oracle_responses(
     assert opt_body["recommendations"][0]["policyId"] == "pol_slow"
     assert opt_body["recommendations"][0]["currentPrimaryTarget"] == slow_id
     assert opt_body["recommendations"][0]["recommendedTarget"] == fast_id
+
+    sim = client.post(
+        "/api/workspace/resilience/simulate",
+        headers=headers,
+        json={"scenario": "AZ_FAILURE", "excludedTargets": [slow_id]},
+    )
+    assert sim.status_code == 200
+    sim_body = sim.json()
+    assert sim_body["scenario"] == "AZ_FAILURE"
+    assert sim_body["survivable"] is True
+    assert sim_body["simulationPassed"] is True
+
+    exp = client.post(
+        "/api/workspace/resilience/explain",
+        headers=headers,
+        json={"targetId": fast_id},
+    )
+    assert exp.status_code == 200
+    exp_body = exp.json()
+    assert exp_body["targetId"] == fast_id
+    assert exp_body["reasons"] == exp_body["reason"]
+    assert "details" in exp_body
 
 
 def test_rust_gateway_sources_avoid_path_ref_bug_and_unstable_let_chains() -> None:

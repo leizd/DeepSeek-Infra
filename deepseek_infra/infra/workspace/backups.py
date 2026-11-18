@@ -1563,6 +1563,7 @@ def prepare_restore(
 
 
 def frontend_prepared(restore_id: str, *, digest: str) -> dict[str, Any]:
+    assert_python_writer_allowed("restore_staging_store")
     root = _restore_root(restore_id)
     journal_path = root / "transaction.json"
     transaction = _read_json(journal_path)

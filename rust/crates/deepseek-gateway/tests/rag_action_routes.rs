@@ -207,3 +207,86 @@ async fn rag_verify_citation_and_eval_work_against_readonly_sqlite() {
     assert_eq!(eval_b["eval"]["recallAtK"], 1.0);
     assert_eq!(eval_b["eval"]["mrr"], 1.0);
 }
+
+#[tokio::test]
+async fn rag_reindex_rebuilds_files_memories_and_media_and_rejects_bad_action() {
+    let _lock = EnvLock::acquire();
+    let root = tempfile::tempdir().unwrap();
+    let (_static_root, _env, app) = build_app(root.path());
+
+    let (get_s, _) = call_rag(&app, "GET", "/api/rag/reindex", None).await;
+    assert_eq!(get_s, StatusCode::NOT_FOUND);
+    let (bad_s, _) = call_rag(
+        &app,
+        "POST",
+        "/api/rag/reindex",
+        Some(json!({"action": "drop-all"})),
+    )
+    .await;
+    assert_eq!(bad_s, StatusCode::BAD_REQUEST);
+
+    std::fs::create_dir_all(root.path().join(".file-cache")).unwrap();
+    std::fs::write(
+        root.path().join(".file-cache").join("f1.json"),
+        serde_json::to_vec(&json!({
+            "id": "f1",
+            "name": "guide.md",
+            "kind": "markdown",
+            "chunks": [{"index": 0, "text": "FastCDC content-defined chunking deduplicates backup blobs", "lineStart": 1, "lineEnd": 3}]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::create_dir_all(root.path().join(".memory")).unwrap();
+    std::fs::write(
+        root.path().join(".memory").join("memories.json"),
+        serde_json::to_vec(&json!([
+            {"id": "mem1", "content": "Always run clippy before pushing Rust edits", "category": "workflow", "scope": "global"}
+        ]))
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::create_dir_all(root.path().join(".media").join("segments")).unwrap();
+    std::fs::write(
+        root.path().join(".media").join("library.json"),
+        serde_json::to_vec(&json!([
+            {"mediaId": "media_one", "type": "pdf", "title": "Spec", "status": "ready", "path": "objects/media_one/source.pdf", "createdAt": "2026-11-18T00:00:00Z", "updatedAt": "2026-11-18T00:00:00Z"}
+        ]))
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        root.path().join(".media").join("segments").join("media_one.json"),
+        serde_json::to_vec(&json!({
+            "segments": [{"segmentId": "seg_1", "type": "page_text", "text": "Ed25519 keys remain in Rust custody", "page": 2}]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let (ok_s, ok_b) = call_rag(
+        &app,
+        "POST",
+        "/api/rag/reindex",
+        Some(json!({"action": "rebuild"})),
+    )
+    .await;
+    assert_eq!(ok_s, StatusCode::OK, "reindex failed: {ok_b}");
+    assert_eq!(ok_b["files"], 1);
+    assert_eq!(ok_b["chunks"], 1);
+    assert_eq!(ok_b["memories"], 1);
+    assert_eq!(ok_b["media"], 1);
+    assert_eq!(ok_b["mediaChunks"], 1);
+    assert_eq!(ok_b["localRag"]["enabled"], json!(true));
+    assert_eq!(ok_b["localRag"]["indexedItems"], json!(3));
+
+    let (cit_s, cit_b) = call_rag(
+        &app,
+        "POST",
+        "/api/rag/verify-citation",
+        Some(json!({"itemId": "file:_:f1:0", "snippet": "FastCDC content-defined chunking"})),
+    )
+    .await;
+    assert_eq!(cit_s, StatusCode::OK);
+    assert_eq!(cit_b["citation"]["grounded"], json!(true));
+}

@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from deepseek_infra.core.errors import AppError, ErrorCode
+from deepseek_infra.infra.native_runtime.authority import assert_python_writer_allowed
 from deepseek_infra.infra.workspace import (
     backup_catalog,
     backup_component_cache,
@@ -84,6 +85,7 @@ def _atomic_write_json(
     allow_control_transition: bool = False,
 ) -> None:
     """Atomically persist a session without losing concurrent job intents."""
+    assert_python_writer_allowed("restore_staging_store")
     path.parent.mkdir(parents=True, exist_ok=True)
     with backup_recovery_job.session_lock(path):
         existing: dict[str, Any] = {}
@@ -2408,6 +2410,7 @@ def advance_federated_phase(restore_id: str, phase: str) -> None:
     hold the session created; ``recovery-required`` intentionally keeps them so
     the chain cannot be garbage-collected before the operator recovers.
     """
+    assert_python_writer_allowed("restore_staging_store")
     session = read_restore_session(restore_id)
     if session is not None:
         _set_phase(session, phase)

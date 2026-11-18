@@ -27,6 +27,7 @@ def test_rag_action_routes_registered_and_removed_from_inventory() -> None:
     inventory = json.loads(INVENTORY_SNAPSHOT.read_text(encoding="utf-8"))
 
     assert ".merge(rag_action_routes::router())" in lib_src
+    assert '"/api/rag/reindex"' in rag_src
     assert '"/api/rag/verify-citation"' in rag_src
     assert '"/api/rag/eval"' in rag_src
 
@@ -34,6 +35,7 @@ def test_rag_action_routes_registered_and_removed_from_inventory() -> None:
         (item["method"], item["path"])
         for item in inventory.get("http_routes_only_on_python", [])
     }
+    assert ("post", "/api/rag/reindex") not in python_only
     assert ("post", "/api/rag/verify-citation") not in python_only
     assert ("post", "/api/rag/eval") not in python_only
 
@@ -81,3 +83,16 @@ def test_rag_verify_citation_and_eval_python_oracle_parity(tmp_settings: Path) -
     assert ev_body["ok"] is True
     assert ev_body["eval"]["recallAtK"] == 1.0
     assert ev_body["eval"]["mrr"] == 1.0
+
+    re = client.post(
+        "/api/rag/reindex",
+        headers=headers,
+        json={"action": "rebuild"},
+    )
+    assert re.status_code == 200
+    re_body = re.json()
+    assert re_body["ok"] is True
+    assert re_body["files"] == 0
+    assert re_body["chunks"] == 0
+    assert re_body["localRag"]["enabled"] is True
+    assert re_body["localRag"]["indexedItems"] == 0

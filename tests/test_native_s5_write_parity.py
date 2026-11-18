@@ -12,7 +12,7 @@ from deepseek_infra.infra.native_runtime.authority import (
     RUST_DATA_DOMAINS,
     PythonWriterMechanicallyDeniedError,
 )
-from deepseek_infra.infra.workspace import backups
+from deepseek_infra.infra.workspace import backup_remote_restore, backups
 from deepseek_infra.web.server import create_app
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -38,9 +38,13 @@ def test_s5_write_routes_registered_and_removed_from_inventory() -> None:
     archive_src = (RUST_GATEWAY_SRC / "backup_archive_routes.rs").read_text(
         encoding="utf-8"
     )
+    tx_src = (RUST_GATEWAY_SRC / "backup_restore_tx_routes.rs").read_text(
+        encoding="utf-8"
+    )
     inventory = json.loads(INVENTORY_SNAPSHOT.read_text(encoding="utf-8"))
 
     assert ".merge(backup_restore_write_routes::router())" in lib_src
+    assert ".merge(backup_restore_tx_routes::router())" in lib_src
     assert ".merge(backup_archive_routes::router())" in lib_src
     assert '"restore_staging_store"' in lib_src
     assert '"/api/workspace/backups"' in write_src
@@ -49,6 +53,14 @@ def test_s5_write_routes_registered_and_removed_from_inventory() -> None:
     assert '"/api/workspace/backups/:backup_id/finalize"' in archive_src
     assert '"/api/workspace/restores/inspect"' in archive_src
     assert '"/api/workspace/restores/:restore_id/unlock"' in archive_src
+    assert '"/api/workspace/restores/:restore_id/prepare"' in tx_src
+    assert '"/api/workspace/restores/:restore_id/frontend-prepared"' in tx_src
+    assert '"/api/workspace/restores/:restore_id/commit"' in tx_src
+    assert '"/api/workspace/restores/:restore_id/complete"' in tx_src
+    assert '"/api/workspace/restores/:restore_id/abort"' in tx_src
+    assert '"/api/workspace/restores/:restore_id/pause"' in tx_src
+    assert '"/api/workspace/restores/:restore_id/resume"' in tx_src
+    assert '"/api/workspace/restores/:restore_id/apply"' in tx_src
     assert '"/api/workspace/restores/:restore_id/secret"' in write_src
     assert '"/api/workspace/restores/cleanup"' in write_src
     assert "dispatch_delete_backup" in read_src
@@ -66,6 +78,14 @@ def test_s5_write_routes_registered_and_removed_from_inventory() -> None:
         ("delete", "/api/workspace/backups/{backup_id}"),
         ("post", "/api/workspace/restores/inspect"),
         ("post", "/api/workspace/restores/{restore_id}/unlock"),
+        ("post", "/api/workspace/restores/{restore_id}/prepare"),
+        ("put", "/api/workspace/restores/{restore_id}/frontend-prepared"),
+        ("post", "/api/workspace/restores/{restore_id}/commit"),
+        ("post", "/api/workspace/restores/{restore_id}/complete"),
+        ("post", "/api/workspace/restores/{restore_id}/abort"),
+        ("post", "/api/workspace/restores/{restore_id}/pause"),
+        ("post", "/api/workspace/restores/{restore_id}/resume"),
+        ("post", "/api/workspace/restores/{restore_id}/apply"),
         ("put", "/api/workspace/restores/{restore_id}/secret"),
         ("delete", "/api/workspace/restores/{restore_id}"),
         ("post", "/api/workspace/restores/cleanup"),
@@ -121,6 +141,30 @@ def test_python_restore_staging_store_writers_denied_under_python_disabled(
         PythonWriterMechanicallyDeniedError, match="restore_staging_store"
     ):
         backups.unlock_restore("restore_missing")
+
+    for action in (
+        lambda: backups.prepare_restore("restore_missing"),
+        lambda: backups.frontend_prepared("restore_missing", digest="a" * 64),
+        lambda: backups.commit_restore("restore_missing"),
+        lambda: backups.complete_restore("restore_missing"),
+        lambda: backups.abort_restore("restore_missing"),
+    ):
+        with pytest.raises(
+            PythonWriterMechanicallyDeniedError, match="restore_staging_store"
+        ):
+            action()
+
+    remote_dir = tmp_settings / ".restore-staging" / "restore_remote"
+    remote_dir.mkdir(parents=True, exist_ok=True)
+    remote_path = remote_dir / "remote-fetch.json"
+    with pytest.raises(
+        PythonWriterMechanicallyDeniedError, match="restore_staging_store"
+    ):
+        backup_remote_restore.advance_federated_phase("restore_remote", "committing")
+    with pytest.raises(
+        PythonWriterMechanicallyDeniedError, match="restore_staging_store"
+    ):
+        backup_remote_restore._atomic_write_json(remote_path, {"restoreId": "restore_remote"})
 
     assert not (tmp_settings / ".backups").exists()
 

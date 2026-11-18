@@ -405,16 +405,6 @@
     },
     {
       "method": "post",
-      "path": "/api/workspace/resilience/simulate",
-      "file": "deepseek_infra/web/routes/backup_governance.py"
-    },
-    {
-      "method": "post",
-      "path": "/api/workspace/resilience/explain",
-      "file": "deepseek_infra/web/routes/backup_governance.py"
-    },
-    {
-      "method": "post",
       "path": "/api/workspace/resilience/waves/admit",
       "file": "deepseek_infra/web/routes/backup_governance.py"
     },
@@ -447,51 +437,6 @@
       "method": "delete",
       "path": "/api/media/{media_id}",
       "file": "deepseek_infra/web/routes/media.py"
-    },
-    {
-      "method": "post",
-      "path": "/api/rag/reindex",
-      "file": "deepseek_infra/web/routes/rag.py"
-    },
-    {
-      "method": "post",
-      "path": "/api/workspace/restores/{restore_id}/prepare",
-      "file": "deepseek_infra/web/routes/workspace.py"
-    },
-    {
-      "method": "put",
-      "path": "/api/workspace/restores/{restore_id}/frontend-prepared",
-      "file": "deepseek_infra/web/routes/workspace.py"
-    },
-    {
-      "method": "post",
-      "path": "/api/workspace/restores/{restore_id}/commit",
-      "file": "deepseek_infra/web/routes/workspace.py"
-    },
-    {
-      "method": "post",
-      "path": "/api/workspace/restores/{restore_id}/complete",
-      "file": "deepseek_infra/web/routes/workspace.py"
-    },
-    {
-      "method": "post",
-      "path": "/api/workspace/restores/{restore_id}/abort",
-      "file": "deepseek_infra/web/routes/workspace.py"
-    },
-    {
-      "method": "post",
-      "path": "/api/workspace/restores/{restore_id}/pause",
-      "file": "deepseek_infra/web/routes/workspace.py"
-    },
-    {
-      "method": "post",
-      "path": "/api/workspace/restores/{restore_id}/resume",
-      "file": "deepseek_infra/web/routes/workspace.py"
-    },
-    {
-      "method": "post",
-      "path": "/api/workspace/restores/{restore_id}/apply",
-      "file": "deepseek_infra/web/routes/workspace.py"
     }
   ]
 }

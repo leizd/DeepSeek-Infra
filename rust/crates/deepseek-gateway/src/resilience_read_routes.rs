@@ -176,43 +176,71 @@ fn list_journal(
     let mut stmt = conn.prepare(&sql).map_err(|_| unhandled_error())?;
     let params = rusqlite::params_from_iter(bind_vals.iter());
     let rows = stmt
-        .query_map(params, |row| {
-            Ok(json!({
-                "actionId": row.get::<_, String>(0)?,
-                "planId": row.get::<_, Option<String>>(1)?,
-                "type": row.get::<_, String>(2)?,
-                "createdBy": row.get::<_, String>(3)?,
-                "inputRiskDigest": row.get::<_, Option<String>>(4)?,
-                "planDigest": row.get::<_, Option<String>>(5)?,
-                "state": row.get::<_, String>(6)?,
-                "parameters": json_col(row.get::<_, Option<String>>(7)?, json!({})),
-                "ownerInstanceId": row.get::<_, Option<String>>(8)?,
-                "leaseUntil": row.get::<_, Option<String>>(9)?,
-                "claimToken": row.get::<_, Option<String>>(10)?,
-                "executionEpoch": row.get::<_, Option<i64>>(11)?.unwrap_or(0),
-                "effectClass": row.get::<_, Option<String>>(12)?,
-                "compensationState": row.get::<_, Option<String>>(13)?,
-                "effectHandle": json_col(row.get::<_, Option<String>>(14)?, Value::Null),
-                "riskSubject": json_col(row.get::<_, Option<String>>(15)?, Value::Null),
-                "expectedEffect": row.get::<_, Option<String>>(16)?,
-                "severityBefore": row.get::<_, Option<String>>(17)?,
-                "coordinationPlanId": row.get::<_, Option<String>>(18)?,
-                "executionResult": json_col(row.get::<_, Option<String>>(19)?, Value::Null),
-                "verificationResult": json_col(row.get::<_, Option<String>>(20)?, Value::Null),
-                "decisionProof": json_col(row.get::<_, Option<String>>(21)?, Value::Null),
-                "riskBeforeDigest": row.get::<_, Option<String>>(22)?,
-                "riskAfterDigest": row.get::<_, Option<String>>(23)?,
-                "error": row.get::<_, Option<String>>(24)?,
-                "createdAt": row.get::<_, String>(25)?,
-                "updatedAt": row.get::<_, String>(26)?,
-            }))
-        })
+        .query_map(params, row_to_action_json)
         .map_err(|_| unhandled_error())?;
     let mut results = Vec::new();
     for row in rows {
         results.push(row.map_err(|_| unhandled_error())?);
     }
     Ok(Value::Array(results))
+}
+
+fn row_to_action_json(row: &rusqlite::Row<'_>) -> Result<Value, rusqlite::Error> {
+    Ok(json!({
+        "actionId": row.get::<_, String>(0)?,
+        "planId": row.get::<_, Option<String>>(1)?,
+        "type": row.get::<_, String>(2)?,
+        "createdBy": row.get::<_, String>(3)?,
+        "inputRiskDigest": row.get::<_, Option<String>>(4)?,
+        "planDigest": row.get::<_, Option<String>>(5)?,
+        "state": row.get::<_, String>(6)?,
+        "parameters": json_col(row.get::<_, Option<String>>(7)?, json!({})),
+        "ownerInstanceId": row.get::<_, Option<String>>(8)?,
+        "leaseUntil": row.get::<_, Option<String>>(9)?,
+        "claimToken": row.get::<_, Option<String>>(10)?,
+        "executionEpoch": row.get::<_, Option<i64>>(11)?.unwrap_or(0),
+        "effectClass": row.get::<_, Option<String>>(12)?,
+        "compensationState": row.get::<_, Option<String>>(13)?,
+        "effectHandle": json_col(row.get::<_, Option<String>>(14)?, Value::Null),
+        "riskSubject": json_col(row.get::<_, Option<String>>(15)?, Value::Null),
+        "expectedEffect": row.get::<_, Option<String>>(16)?,
+        "severityBefore": row.get::<_, Option<String>>(17)?,
+        "coordinationPlanId": row.get::<_, Option<String>>(18)?,
+        "executionResult": json_col(row.get::<_, Option<String>>(19)?, Value::Null),
+        "verificationResult": json_col(row.get::<_, Option<String>>(20)?, Value::Null),
+        "decisionProof": json_col(row.get::<_, Option<String>>(21)?, Value::Null),
+        "riskBeforeDigest": row.get::<_, Option<String>>(22)?,
+        "riskAfterDigest": row.get::<_, Option<String>>(23)?,
+        "error": row.get::<_, Option<String>>(24)?,
+        "createdAt": row.get::<_, String>(25)?,
+        "updatedAt": row.get::<_, String>(26)?,
+    }))
+}
+
+pub(crate) fn get_journal_action(action_id: &str) -> Result<Option<Value>, AppError> {
+    let db = crate::data_routes::workspace_root()
+        .join(".resilience-journal")
+        .join("journal.sqlite3");
+    let Some(conn) = open_readonly_sqlite(&db)? else {
+        return Ok(None);
+    };
+    if !table_exists(&conn, "resilience_actions")? {
+        return Ok(None);
+    }
+    let mut stmt = conn
+        .prepare(
+            "SELECT action_id, plan_id, action_type, created_by, input_risk_digest, plan_digest, \
+                    state, parameters_json, owner_instance_id, lease_until, claim_token, execution_epoch, \
+                    effect_class, compensation_state, effect_handle_json, risk_subject_json, expected_effect, \
+                    severity_before, coordination_plan_id, execution_result_json, verification_result_json, \
+                    decision_proof_json, risk_before_digest, risk_after_digest, error_message, \
+                    created_at, updated_at \
+             FROM resilience_actions WHERE action_id = ?1 LIMIT 1",
+        )
+        .map_err(|_| unhandled_error())?;
+    stmt.query_row([action_id], row_to_action_json)
+        .optional()
+        .map_err(|_| unhandled_error())
 }
 
 async fn dispatch_capacity_forecast(method: Method, RawQuery(raw): RawQuery) -> Response {
