@@ -146,7 +146,10 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 fn seed_drill_backup(backups_root: &Path, work: &Path) -> (String, String) {
     let (identity_secret, recipient) = ephemeral_identity();
-    let backup_id = "bk_drill_obj_1".to_string();
+    // `_session_dir` in backups.py requires the `backup_` prefix with an
+    // alphanumeric-only remainder, so this fixture id must satisfy the same
+    // rule the route validates before it looks at the seeded session.
+    let backup_id = "backup_drillobject1".to_string();
     let rel = "payload/projects/p1/drill.txt";
     let body = b"isolated recovery drill payload\n";
 
