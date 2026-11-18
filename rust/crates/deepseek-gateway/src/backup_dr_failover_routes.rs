@@ -35,7 +35,7 @@ use crate::route_support;
 
 const MAX_FAILOVER_BODY_BYTES: i64 = 16_000;
 const DEFAULT_MAX_FAILOVERS: usize = 3;
-const HOLD_TTL_SECONDS: i64 = 6 * 3600;
+const HOLD_TTL_SECONDS: u64 = 6 * 3600;
 const OBJECT_SET_V1: &str = "object-set-v1";
 
 pub fn router() -> Router {

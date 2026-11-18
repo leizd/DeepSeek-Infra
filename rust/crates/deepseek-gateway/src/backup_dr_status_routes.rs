@@ -1732,10 +1732,10 @@ fn build_body() -> Result<Value, AppError> {
             }
         }
         if let Some(st) = horizon.get("status").and_then(Value::as_str) {
-            if st == "critical" || st == "degraded" {
-                if st == "critical" || capacity_status != "critical" {
-                    capacity_status = st.to_string();
-                }
+            if (st == "critical" || st == "degraded")
+                && (st == "critical" || capacity_status != "critical")
+            {
+                capacity_status = st.to_string();
             }
         }
     }

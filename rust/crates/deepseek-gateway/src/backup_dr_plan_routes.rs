@@ -13,7 +13,7 @@ use axum::Json;
 use axum::Router;
 use axum::body::Bytes;
 use axum::http::{HeaderMap, Method};
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use axum::routing::any;
 use deepseek_policy::app_error::{AppError, codes};
 use deepseek_policy::core_utils::python_truthy;
