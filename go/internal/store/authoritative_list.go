@@ -130,9 +130,20 @@ func (store *Control) listAuthoritativeRecords(domain string, withHealth bool) (
 			return nil, nil, err
 		}
 		if snapshot == nil {
-			return nil, nil, ErrTargetHealthNotTransferred
+			// A signed, published native birth starts with no scheduler
+			// observations. Older imports still require their transferred health.
+			transfer, err := verifyNativeOriginTx(tx)
+			if err != nil {
+				return nil, nil, err
+			}
+			if transfer == "" || cutover.TransferID != transfer || cutover.State != CutoverPythonDisabled ||
+				cutover.Revision != 2 || cutover.Epoch != 1 || cutover.FencingToken != 1 {
+				return nil, nil, ErrTargetHealthNotTransferred
+			}
+			health = []TargetHealth{}
+		} else {
+			health = snapshot.Health
 		}
-		health = snapshot.Health
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, nil, err

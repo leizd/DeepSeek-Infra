@@ -79,6 +79,22 @@ func publicTargetRegistrationError(writer http.ResponseWriter, err error) {
 	}
 }
 
+func publicTargetRegistrationFailure(writer http.ResponseWriter, control *store.Control, operation, bodySHA string, err error) {
+	if errors.Is(err, store.ErrMutationRequestReplayConflict) || errors.Is(err, store.ErrRevisionConflict) {
+		// The original body may have committed while these observations were in
+		// flight, including before competing paths were read from the registry.
+		record, _, found, recoveryErr := control.ReplayPublicBackupTargetRegistration(operation, "operator:public-api", bodySHA)
+		if recoveryErr == nil && found {
+			writePublicTarget(writer, record)
+			return
+		}
+		if recoveryErr != nil {
+			err = recoveryErr
+		}
+	}
+	publicTargetRegistrationError(writer, err)
+}
+
 // Existing-marker registration changes only Go metadata. Marker initialization
 // requires its own Rust effect/recovery protocol and remains explicitly denied.
 func backupTargetRegister(writer http.ResponseWriter, request *http.Request, control *store.Control, view PublicView) {
@@ -162,7 +178,7 @@ func backupTargetRegister(writer http.ResponseWriter, request *http.Request, con
 	}
 	paths, err := control.BackupTargetRegistrationPaths(scope, id)
 	if err != nil {
-		publicTargetRegistrationError(writer, err)
+		publicTargetRegistrationFailure(writer, control, operation, bodySHA, err)
 		return
 	}
 	proofs := make([]store.BackupTargetPathProof, 0, len(paths))
@@ -209,19 +225,7 @@ func backupTargetRegister(writer http.ResponseWriter, request *http.Request, con
 	}
 	record, _, err := control.RegisterPublicInspectedBackupTarget(scope, inspection, oldLocation, proofs, bodySHA, document)
 	if err != nil {
-		if errors.Is(err, store.ErrMutationRequestReplayConflict) || errors.Is(err, store.ErrRevisionConflict) {
-			// A concurrent identical request may have committed while these
-			// read-only observations were in flight. Recover its original body.
-			previous, _, found, recoveryErr := control.ReplayPublicBackupTargetRegistration(operation, "operator:public-api", bodySHA)
-			if recoveryErr == nil && found {
-				writePublicTarget(writer, previous)
-				return
-			}
-			if recoveryErr != nil {
-				err = recoveryErr
-			}
-		}
-		publicTargetRegistrationError(writer, err)
+		publicTargetRegistrationFailure(writer, control, operation, bodySHA, err)
 		return
 	}
 	writePublicTarget(writer, record)

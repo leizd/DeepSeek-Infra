@@ -1,5 +1,10 @@
 # Filesystem target registration
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 Status: **NOT_READY**. This snapshot implements the public existing-marker
 filesystem registration path. Its new native tests require cloud qualification;
 the complete target lifecycle and whole-product migration remain unfinished.
@@ -30,6 +35,11 @@ the target events preceding the registration event, so later target deletion or
 metadata updates do not rewrite the earlier admission snapshot. No SQLite writer
 is shared and this context is not a cross-language JSON bridge.
 
+A profile with a signed native birth starts with an empty scheduler health
+history. It can list newly registered targets before its first observation.
+Imported profiles still need their authenticated scheduler health transfer.
+The list rejects scheduler rows that have no matching source evidence.
+
 Clients may retain the returned `X-DeepSeek-Operation-Id` and reuse it with the
 identical request bytes. Go returns the originally committed document after a
 lost response, deletion or writer restart, without reading an expired filesystem
@@ -53,10 +63,11 @@ Go/Rust/platform coverage gates. Marker absence currently returns an explicit
 503; S3 registration remains unavailable and the retained WebDAV reservation is
 501. These refusals are unfinished functionality, not migration completion.
 
-The development workflow preserves all original 43 Go test families and adds 15
-public/store/metadata families, the retained CPython oracle and two Rust complete
-containment tests. Fixture signatures qualify only the relevant Go admission and
-transport tests. Physical Rust observations, source-dispatch workflows, platform
-workflows and any future PR candidate must each be qualified for their exact
-source; a success in one is not a success in the others. Original coverage floors
-remain unchanged.
+The development workflow preserves 58 Go test families and checks five more
+public admission, relocation, replay and native-profile cases. It runs the retained
+CPython oracle, the Rust containment cases, the full Go coverage gate and a
+Chromium test that registers existing targets, moves one, and reopens the list
+and original operation after launcher restart. The Go fixture signatures qualify
+the admission and transport tests. The physical tests exercise Rust filesystem
+reads and separately verify public browser behavior. Workflow results identify
+the tested source and event. The original coverage floors still apply.

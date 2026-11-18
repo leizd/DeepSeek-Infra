@@ -125,35 +125,12 @@ func (store *Control) BackupTargetRegistrationPaths(scope BackupTargetRegistrati
 		return nil, err
 	}
 	defer tx.Rollback()
-	digest, err := targetRegistryDigestTx(tx)
+	records, digest, err := targetRegistrySnapshotTx(tx)
 	if err != nil {
 		return nil, err
 	}
 	if digest != scope.snapshot {
 		return nil, ErrRevisionConflict
-	}
-	rows, err := tx.Query(`SELECT id,revision,execution_epoch,state,payload_json,record_digest,writer_fencing_token,updated_at FROM targets ORDER BY id`)
-	if err != nil {
-		return nil, err
-	}
-	var records []Record
-	for rows.Next() {
-		record, found, err := readControlRecord(rows, "target")
-		if err != nil || !found {
-			rows.Close()
-			if err != nil {
-				return nil, err
-			}
-			return nil, ErrCorruptRecord
-		}
-		records = append(records, record)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return nil, err
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
 	}
 	paths, err := targetPaths(records, excluded)
 	if err != nil {

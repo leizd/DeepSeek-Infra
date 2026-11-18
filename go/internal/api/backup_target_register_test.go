@@ -35,10 +35,20 @@ type publicTargetPeer struct {
 	mode    string
 	binding store.BackupTargetObservationContext
 	calls   atomic.Int64
+	entered chan struct{}
+	resume  chan struct{}
 }
 
 func (p *publicTargetPeer) Inspect(ctx context.Context, r *actionv1.InspectFilesystemBackupTargetRequest) (*actionv1.FilesystemBackupTargetInspectionReceipt, error) {
-	p.calls.Add(1)
+	call := p.calls.Add(1)
+	if p.mode == "stalled-first" && call == 1 {
+		close(p.entered)
+		select {
+		case <-p.resume:
+		case <-ctx.Done():
+			return nil, status.FromContextError(ctx.Err()).Err()
+		}
+	}
 	md, _ := metadata.FromIncomingContext(ctx)
 	if values := md.Get("authorization"); len(values) != 1 || values[0] != "Bearer "+strings.Repeat("t", 32) {
 		return nil, status.Error(codes.Unauthenticated, "isolated controller credential required")
@@ -50,6 +60,9 @@ func (p *publicTargetPeer) Inspect(ctx context.Context, r *actionv1.InspectFiles
 		return nil, status.Error(codes.InvalidArgument, "Unsafe backup target: isolated containment refusal")
 	}
 	marker := []byte(`{"targetId":"target_public","targetNonce":"retained","createdAt":"2000-01-01T00:00:00Z"}`)
+	if p.mode == "two-targets" && filepath.Base(r.Path) == "other" {
+		marker = []byte(`{"targetId":"target_other","targetNonce":"retained","createdAt":"2000-01-01T00:00:00Z"}`)
+	}
 	digest := sha256.Sum256(marker)
 	o := &actionv1.FilesystemBackupTargetObservation{SchemaVersion: 1, Fence: r.Fence, OperationId: r.OperationId,
 		WriterFencingToken: r.WriterFencingToken, RequestedPath: r.Path, CanonicalPath: filepath.Clean(r.Path),
@@ -73,6 +86,9 @@ func (p *publicTargetPeer) ProbeLocation(_ context.Context, r *actionv1.ProbeFil
 	o := &actionv1.FilesystemBackupTargetLocationObservation{SchemaVersion: 1, Fence: r.Fence, OperationId: r.OperationId, WriterFencingToken: r.WriterFencingToken,
 		RequestedPath: r.Path, ObservedAtUnix: time.Now().Unix(), FleetId: p.binding.FleetID, Environment: p.binding.Environment,
 		State: actionv1.BackupTargetLocationState_BACKUP_TARGET_LOCATION_STATE_MISSING}
+	if p.mode == "live-original" {
+		o.State = actionv1.BackupTargetLocationState_BACKUP_TARGET_LOCATION_STATE_EXISTS
+	}
 	if r.ResolvePath {
 		o.State = actionv1.BackupTargetLocationState_BACKUP_TARGET_LOCATION_STATE_UNSPECIFIED
 		o.CanonicalPath = filepath.Clean(r.Path)
@@ -86,6 +102,9 @@ func publicTargetTLSFixture(t *testing.T, mode string) (*store.Control, *publicT
 	t.Helper()
 	control := targetPublicFixtureStoreClock(t, true, true, func() int64 { return time.Now().Unix() })
 	peer := &publicTargetPeer{mode: mode, binding: control.BackupTargetObservationBinding()}
+	if mode == "stalled-first" {
+		peer.entered, peer.resume = make(chan struct{}), make(chan struct{})
+	}
 	rpc := grpc.NewServer()
 	actionv1.RegisterBackupTargetInspectionServer(rpc, peer)
 	t.Cleanup(rpc.Stop)
@@ -191,6 +210,113 @@ func TestTargetRegistrationPublicTCPRejectsAbsentForgedDowngradedAndDeniedReads(
 				t.Fatal("refusal wrote registry", count, err)
 			}
 		})
+	}
+}
+
+func TestTargetRegistrationPublicTCPRequiresOldLocationProofWhenMoving(t *testing.T) {
+	for _, oldExists := range []bool{true, false} {
+		name := "removed-original"
+		if oldExists {
+			name = "live-original"
+		}
+		t.Run(name, func(t *testing.T) {
+			control, peer, server, _ := publicTargetTLSFixture(t, name)
+			dir := t.TempDir()
+			oldPath, newPath := filepath.Join(dir, "before"), filepath.Join(dir, "after")
+			before, _ := json.Marshal(map[string]any{"path": oldPath, "label": "first"})
+			after, _ := json.Marshal(map[string]any{"path": newPath, "label": "moved"})
+			code, body, _ := publicTargetHTTPRequest(t, server, http.MethodPost, "/api/workspace/backup-targets", string(before), "")
+			if code != http.StatusOK {
+				t.Fatalf("initial registration failed: %d %s", code, body)
+			}
+			code, body, _ = publicTargetHTTPRequest(t, server, http.MethodPost, "/api/workspace/backup-targets", string(after), "")
+			wantPath, wantRevision := newPath, int64(2)
+			if oldExists {
+				wantPath, wantRevision = oldPath, 1
+				if code != http.StatusConflict || !strings.Contains(string(body), "target-clone-detected") {
+					t.Fatalf("an active clone was not refused: %d %s", code, body)
+				}
+			} else if code != http.StatusOK {
+				t.Fatalf("a signed missing location did not allow the move: %d %s", code, body)
+			}
+			current, found, err := control.Get("target", "target_public")
+			var doc map[string]any
+			if err != nil || !found || current.Revision != wantRevision ||
+				json.Unmarshal(current.Payload, &doc) != nil || doc["path"] != wantPath || peer.calls.Load() != 3 {
+				t.Fatalf("wrong relocation result or proof count: %+v %v %v (%d calls)", current, found, err, peer.calls.Load())
+			}
+		})
+	}
+}
+
+func TestTargetRegistrationPublicTCPResolvesOtherTargetBeforePublishing(t *testing.T) {
+	control, peer, server, _ := publicTargetTLSFixture(t, "two-targets")
+	root := t.TempDir()
+	for i, check := range []struct {
+		path, id string
+		status   int
+	}{
+		{filepath.Join(root, "first"), "target_public", http.StatusOK},
+		{filepath.Join(root, "first", "other"), "", http.StatusBadRequest},
+		{filepath.Join(root, "sibling", "other"), "target_other", http.StatusOK},
+	} {
+		raw, _ := json.Marshal(map[string]any{"path": check.path})
+		code, body, _ := publicTargetHTTPRequest(t, server, http.MethodPost, "/api/workspace/backup-targets", string(raw), "")
+		if code != check.status || check.id != "" && !strings.Contains(string(body), check.id) ||
+			check.id == "" && !strings.Contains(string(body), "overlaps a registered target") {
+			t.Fatalf("registration case %d returned %d %s", i, code, body)
+		}
+	}
+	records, _, err := control.ListAuthoritativeTargets()
+	if err != nil || len(records) != 2 || peer.calls.Load() != 5 {
+		t.Fatalf("unexpected registry or signed observation count: %d records, %d calls, %v", len(records), peer.calls.Load(), err)
+	}
+}
+
+func TestTargetRegistrationPublicTCPRecoversWhenSnapshotChangesDuringFirstInspection(t *testing.T) {
+	control, peer, server, _ := publicTargetTLSFixture(t, "stalled-first")
+	raw, _ := json.Marshal(map[string]any{"path": filepath.Join(t.TempDir(), "target")})
+	operation := store.PublicTargetOperationPrefix + "stale-snapshot"
+	request, err := http.NewRequest(http.MethodPost, server.URL+"/api/workspace/backup-targets", strings.NewReader(string(raw)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer public-target-test-token")
+	request.Header.Set("X-DeepSeek-Operation-Id", operation)
+	var release sync.Once
+	defer release.Do(func() { close(peer.resume) })
+	type result struct {
+		status int
+		body   string
+		err    error
+	}
+	first := make(chan result, 1)
+	go func() {
+		reply, err := server.Client().Do(request)
+		if err != nil {
+			first <- result{err: err}
+			return
+		}
+		defer reply.Body.Close()
+		body, err := io.ReadAll(reply.Body)
+		first <- result{status: reply.StatusCode, body: string(body), err: err}
+	}()
+	select {
+	case <-peer.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the original request did not reach its inspection")
+	}
+	code, body, _ := publicTargetHTTPRequest(t, server, http.MethodPost, "/api/workspace/backup-targets", string(raw), operation)
+	if code != http.StatusOK {
+		t.Fatalf("concurrent identical request did not commit: %d %s", code, body)
+	}
+	release.Do(func() { close(peer.resume) })
+	replay := <-first
+	if replay.err != nil || replay.status != http.StatusOK || replay.body != string(body) {
+		t.Fatalf("stale snapshot did not recover the committed reply: %+v", replay)
+	}
+	if count, err := control.OperatorJournalSize(); err != nil || count != 1 || peer.calls.Load() != 2 {
+		t.Fatalf("recovery created duplicate work: %d mutations, %d calls, %v", count, peer.calls.Load(), err)
 	}
 }
 

@@ -66,55 +66,56 @@ func (store *Control) PrepareBackupTargetRegistration(operationID, actionID, act
 }
 
 func targetRegistryDigestTx(tx *sql.Tx) (string, error) {
+	_, digest, err := targetRegistrySnapshotTx(tx)
+	return digest, err
+}
+
+func targetRegistrySnapshotTx(tx *sql.Tx) ([]Record, string, error) {
 	rows, err := tx.Query(`SELECT id,revision,execution_epoch,state,payload_json,record_digest,writer_fencing_token,updated_at FROM targets ORDER BY id`)
 	if err != nil {
-		return "", err
+		return nil, "", err
 	}
 	defer rows.Close()
 	var records []Record
 	for rows.Next() {
 		record, exists, err := readControlRecord(rows, "target")
 		if err != nil || !exists {
-			return "", ErrCorruptRecord
+			return nil, "", ErrCorruptRecord
 		}
 		records = append(records, record)
 	}
 	if err := rows.Err(); err != nil {
-		return "", err
+		return nil, "", err
 	}
 	if err := rows.Close(); err != nil {
-		return "", err
+		return nil, "", err
 	}
 	ids := make(map[string]bool, len(records))
 	for _, record := range records {
 		if err := validateControlHistory(tx, record); err != nil {
-			return "", err
+			return nil, "", err
 		}
 		ids[record.ID] = true
 	}
 	events, err := tx.Query("SELECT DISTINCT record_id FROM control_events WHERE domain='target'")
 	if err != nil {
-		return "", err
+		return nil, "", err
 	}
 	defer events.Close()
 	for events.Next() {
 		var id string
 		if err := events.Scan(&id); err != nil {
-			return "", err
+			return nil, "", err
 		}
 		if !ids[id] {
-			return "", ErrCorruptRecord
+			return nil, "", ErrCorruptRecord
 		}
 	}
 	if err := events.Err(); err != nil {
-		return "", err
+		return nil, "", err
 	}
-	raw, err := json.Marshal(records)
-	if err != nil {
-		return "", err
-	}
-	digest := sha256.Sum256(raw)
-	return hex.EncodeToString(digest[:]), nil
+	digest, err := snapshotRecords(records)
+	return records, digest, err
 }
 
 func verifyTargetObservation(receipt *actionv1.FilesystemBackupTargetInspectionReceipt, public, fleet, environment string) error {
@@ -260,7 +261,7 @@ func (store *Control) registerInspectedBackupTarget(scope BackupTargetRegistrati
 	if scope.writerFence != store.token || observation.WriterFencingToken != uint64(store.token) || scope.cutoverRevision != context.cutover.Revision || scope.epoch != uint64(context.cutover.Epoch) || observation.Fence.ExecutionEpoch != scope.epoch || observation.ObservedAtUnix > context.now || context.now-observation.ObservedAtUnix > 60 {
 		return Record{}, OperatorMutationResult{}, ErrTargetRegistrationInvalid
 	}
-	snapshot, err := targetRegistryDigestTx(tx)
+	records, snapshot, err := targetRegistrySnapshotTx(tx)
 	if err != nil {
 		return Record{}, OperatorMutationResult{}, err
 	}
@@ -275,10 +276,6 @@ func (store *Control) registerInspectedBackupTarget(scope BackupTargetRegistrati
 		frame, err := decodePublicTargetContext(wrapped)
 		if err != nil || frame == nil || frame.Scope != scope.publicScope() || !bytes.Equal(frame.Document, document) {
 			return Record{}, OperatorMutationResult{}, ErrTargetRegistrationInvalid
-		}
-		records, err := targetRecordsAtEvent(tx, math.MaxInt64)
-		if err != nil {
-			return Record{}, OperatorMutationResult{}, err
 		}
 		paths, err := targetPaths(records, id)
 		if err != nil {

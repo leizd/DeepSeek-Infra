@@ -116,6 +116,25 @@ func TestNativeOriginCreatesGoOwnedDomainsAndRetainsBirthAcrossTakeover(t *testi
 		}
 	}
 }
+func TestTargetRegistrationNativeBirthListsEmptyHealthAndRejectsUnboundRows(t *testing.T) {
+	opts, _ := nativeFixture(t, filepath.Join(t.TempDir(), "go-control"))
+	control, err := OpenControl(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer control.Close()
+	targets, health, err := control.ListAuthoritativeTargets()
+	if err != nil || targets == nil || health == nil || len(targets) != 0 || len(health) != 0 {
+		t.Fatalf("signed empty origin did not produce empty arrays: %v %v %v", targets, health, err)
+	}
+	if _, err := control.db.Exec("INSERT INTO backup_target_health VALUES ('target_orphan','ok','isolated-fixture',NULL)"); err != nil {
+		t.Fatal(err)
+	}
+	if targets, health, err := control.ListAuthoritativeTargets(); !errors.Is(err, ErrCorruptRecord) || targets != nil || health != nil {
+		t.Fatalf("an unbound health row masqueraded as a valid projection: %v %v %v", targets, health, err)
+	}
+}
+
 func TestNativeOriginLostPublicationResponseRecoversOriginalAtSuccessorFence(t *testing.T) {
 	opts, peer := nativeFixture(t, filepath.Join(t.TempDir(), "go-control"))
 	peer.lostResponse = true

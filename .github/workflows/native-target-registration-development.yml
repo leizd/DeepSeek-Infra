@@ -19,7 +19,7 @@ concurrency:
 jobs:
   registration-go:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 35
     env:
       GOTOOLCHAIN: local
       CGO_ENABLED: "1"
@@ -59,6 +59,11 @@ jobs:
           tree=subprocess.check_output(['git','rev-parse','HEAD^{tree}'],text=True).strip()
           assert source==os.environ['GITHUB_SHA'] and not subprocess.check_output(['git','status','--porcelain=v1','--untracked-files=all'])
           required={
+              'TestBackupTargetsFailClosedAtThePublicReadBoundary',
+              'TestTargetRegistrationNativeBirthListsEmptyHealthAndRejectsUnboundRows',
+              'TestTargetRegistrationPublicTCPRequiresOldLocationProofWhenMoving',
+              'TestTargetRegistrationPublicTCPResolvesOtherTargetBeforePublishing',
+              'TestTargetRegistrationPublicTCPRecoversWhenSnapshotChangesDuringFirstInspection',
               'TestTargetInspectionClientBindsFullContainmentAndRejectsDowngrade',
               'TestTargetMetadataPreservesKindTruthinessQuotedContainersAndNumericFormatting',
               'TestTargetMetadataRejectsBrokenBodiesBeforeAnyFilesystemWork',
@@ -119,13 +124,13 @@ jobs:
               'TestTargetRegistrationRelocationRequiresSignedMissingOriginalLocation',
           }
           actual=[]
-          expression=r'^func (TestTarget(?:Registration|Observation|Location|Inspection|Metadata)[A-Za-z0-9_]*|TestAgentDriverLoopKeepsUnknownAndToolsPendingCustodyWithoutRedispatch)[(]'
+          expression=r'^func (TestTarget(?:Registration|Observation|Location|Inspection|Metadata)[A-Za-z0-9_]*|TestAgentDriverLoopKeepsUnknownAndToolsPendingCustodyWithoutRedispatch|TestBackupTargetsFailClosedAtThePublicReadBoundary)[(]'
           for package in ('store','worker','api','targets'):
               for path in (root/'go/internal'/package).glob('*_test.go'):
                   actual.extend(re.findall(expression,path.read_text(),re.M))
           assert len(actual)==len(set(actual))==len(required) and set(actual)==required
           subprocess.run(['python','scripts/capture_evidence_context.py','--version',(root/'VERSION').read_text().strip(),'--out',str(out/'source-context.json')],check=True)
-          args=['go','test','-race','-json','-count=1','-timeout=8m','-covermode=atomic','-coverprofile='+str(out/'coverage.out'),'-run','^(TestTarget(Registration|Observation|Location|Inspection|Metadata)|TestAgentDriverLoopKeepsUnknownAndToolsPendingCustodyWithoutRedispatch$)','./internal/store','./internal/worker','./internal/api','./internal/targets']
+          args=['go','test','-race','-json','-count=1','-timeout=8m','-covermode=atomic','-coverprofile='+str(out/'coverage.out'),'-run','^(TestTarget(Registration|Observation|Location|Inspection|Metadata)|TestAgentDriverLoopKeepsUnknownAndToolsPendingCustodyWithoutRedispatch$|TestBackupTargetsFailClosedAtThePublicReadBoundary$)','./internal/store','./internal/worker','./internal/api','./internal/targets']
           with (out/'go-tests.jsonl').open('wb') as stream:
               run=subprocess.run(args,cwd=root/'go',stdout=stream,stderr=subprocess.STDOUT,check=False)
           raw=(out/'go-tests.jsonl').read_bytes();events=[];parse_errors=[]
@@ -142,7 +147,7 @@ jobs:
           good=good and all(e['Action']=='pass' for e in top if e['Action'] in {'pass','fail','skip'}) and len(package)==4 and all(e['Action']=='pass' for e in package) and {e['Package'] for e in package}=={'github.com/leizd/DeepSeek-Infra/go/internal/'+p for p in ('store','worker','api','targets')}
           good=good and not any(e['Action']=='fail' or 'WARNING: DATA RACE' in e.get('Output','') for e in events)
           report=dict(status='PASS' if good else 'FAIL',sourceCommit=source,sourceTree=tree,runId=os.environ['GITHUB_RUN_ID'],event=os.environ['GITHUB_EVENT_NAME'],attempt=os.environ['GITHUB_RUN_ATTEMPT'],
-              expectedTests=sorted(required),command=args,exitCode=run.returncode,raceEnabled=True,timeout='8m',retainedOriginalTests=43,addedPublicAndMetadataTests=15,rawEventsSha256=hashlib.sha256(raw).hexdigest(),parseErrors=parse_errors,
+              expectedTests=sorted(required),command=args,exitCode=run.returncode,raceEnabled=True,timeout='8m',retainedOriginalTests=58,addedPublicAndMetadataTests=5,rawEventsSha256=hashlib.sha256(raw).hexdigest(),parseErrors=parse_errors,
               passed=sum(e['Action']=='pass' for e in top),failed=sum(e['Action']=='fail' for e in top),skipped=sum(e['Action']=='skip' for e in top),
               physicalRustInspectionQualified=False,publicRegistrationQualified=False,fullGoSuiteQualified=False,original95PercentCoverageQualified=False,fullMigrationQualified=False,readiness='NOT_READY')
           (out/'result.json').write_text(json.dumps(report,indent=2)+'\n')
@@ -156,6 +161,24 @@ jobs:
           name: native-target-registration-go-${{ github.sha }}
           path: artifacts/native-target-registration-development/
           if-no-files-found: error
+          retention-days: 7
+      - name: Verify the original full Go coverage floor
+        timeout-minutes: 15
+        env:
+          CGO_ENABLED: "0"
+        working-directory: go
+        run: |
+          set -o pipefail
+          mkdir -p ../artifacts/native-target-full-go-coverage
+          python ../scripts/check_go_coverage.py --dir . --min 95.0 \
+            --profile ../artifacts/native-target-full-go-coverage/coverage.out 2>&1 | tee ../artifacts/native-target-full-go-coverage/coverage.log
+      - name: Return the Go coverage profile and log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: native-target-full-go-coverage-${{ github.sha }}
+          path: artifacts/native-target-full-go-coverage/
+          if-no-files-found: warn
           retention-days: 7
 
   filesystem-rust:
@@ -223,6 +246,36 @@ jobs:
           export DEEPSEEK_TEST_TARGET_EXTERNAL_ROOT="$RUNNER_TEMP"
           cd go
           go test -tags=integration -race -json ./internal/worker -run '^TestRustTargetObservationGoClientAgainstRealCustodyAndFilesystem$' -count=1 -timeout=3m 2>&1 | tee ../artifacts/native-target-filesystem-development/go-rust-tests.jsonl
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "24"
+      - name: Build the runtime and prepare the real browser in the cloud
+        timeout-minutes: 22
+        env:
+          CGO_ENABLED: "0"
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/target-registration-chromium
+        run: |
+          set -o pipefail
+          npm ci --prefix frontend
+          npm run build --prefix frontend
+          python -m pip install -r requirements-browser.txt
+          python -m playwright install --with-deps chromium
+          cargo build --locked --manifest-path rust/Cargo.toml -p deepseek-worker -p deepseek-gateway --bins --all-features
+          bin="$RUNNER_TEMP/native-target-application"
+          mkdir -p "$bin"
+          ln -s "$CARGO_TARGET_DIR/debug/deepseek-worker" "$bin/deepseek-worker"
+          ln -s "$CARGO_TARGET_DIR/debug/deepseek-gateway" "$bin/deepseek-gateway"
+          cd go
+          go build -p=2 -o "$bin/deepseekd" ./cmd/deepseekd
+          go build -p=2 -o "$bin/deepseek-launch" ./cmd/deepseek-launch
+      - name: Register and move existing filesystem targets in the native browser
+        timeout-minutes: 6
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/target-registration-chromium
+        run: |
+          python scripts/verify_native_target_registration_browser.py \
+            --bin-dir "$RUNNER_TEMP/native-target-application" \
+            --out artifacts/native-target-filesystem-development/browser-registration.json
       - name: Return only exact-source observation reports
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
