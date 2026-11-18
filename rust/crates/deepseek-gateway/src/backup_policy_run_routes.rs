@@ -238,7 +238,7 @@ fn scrub_staging_tree(dir: &Path) {
         if p.is_dir() {
             scrub_staging_tree(&p);
         } else if p.is_file() {
-            let _ = scrub_plaintext_file(&p);
+            scrub_plaintext_file(&p);
         }
     }
 }
