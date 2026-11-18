@@ -359,7 +359,7 @@ async fn manual_drill_executes_scrubs_plaintext_and_persists_ledger_evidence() {
         .call(
             "PUT",
             &format!("/api/workspace/restores/{restore_id}/secret"),
-            Some(json!({"kind": "age-identity", "value": identity_secret})),
+            Some(json!({"kind": "age-identity", "secret": identity_secret})),
         )
         .await;
     assert_eq!(st_s, StatusCode::OK);

@@ -455,7 +455,7 @@ async fn object_set_from_target_preview_fetch_preflight_materialize_e2e() {
         .call(
             "PUT",
             &format!("/api/workspace/restores/{restore_id}/secret"),
-            Some(json!({"kind": "age-identity", "value": identity_secret})),
+            Some(json!({"kind": "age-identity", "secret": identity_secret})),
         )
         .await;
     assert_eq!(st_sec, StatusCode::OK);
