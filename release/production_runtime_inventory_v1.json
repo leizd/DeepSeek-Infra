@@ -315,21 +315,6 @@
     },
     {
       "method": "post",
-      "path": "/api/workspace/resilience/execute",
-      "file": "deepseek_infra/web/routes/backup_governance.py"
-    },
-    {
-      "method": "post",
-      "path": "/api/workspace/resilience/waves/admit",
-      "file": "deepseek_infra/web/routes/backup_governance.py"
-    },
-    {
-      "method": "post",
-      "path": "/api/workspace/resilience/waves/run",
-      "file": "deepseek_infra/web/routes/backup_governance.py"
-    },
-    {
-      "method": "post",
       "path": "/api/media",
       "file": "deepseek_infra/web/routes/media.py"
     },

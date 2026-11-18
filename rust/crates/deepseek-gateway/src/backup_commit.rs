@@ -157,7 +157,7 @@ pub fn target_generation(root: &Path) -> i64 {
 }
 
 /// `backup_publish._commit_hash`: sha256 over the marker minus its own `commitHash`.
-fn commit_hash(marker: &Value) -> String {
+pub fn commit_hash(marker: &Value) -> String {
     let Some(object) = marker.as_object() else {
         return String::new();
     };

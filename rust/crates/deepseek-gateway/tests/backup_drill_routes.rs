@@ -318,7 +318,7 @@ async fn recovery_drill_run_executes_isolated_rehearsal_under_python_disabled() 
     .unwrap();
     let req = Request::builder()
         .method("POST")
-        .uri(&format!("{DRILL}/run"))
+        .uri(format!("{DRILL}/run"))
         .header(header::HOST, "127.0.0.1")
         .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
         .header(header::CONTENT_TYPE, "application/json")

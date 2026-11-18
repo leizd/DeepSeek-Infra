@@ -36,7 +36,7 @@ pub fn router() -> Router {
         )
 }
 
-fn write_not_owned() -> AppError {
+pub(crate) fn write_not_owned() -> AppError {
     AppError {
         status: 409,
         code: WRITE_NOT_OWNED,
@@ -44,7 +44,7 @@ fn write_not_owned() -> AppError {
     }
 }
 
-fn read_optional_json_object(
+pub(crate) fn read_optional_json_object(
     headers: &HeaderMap,
     body: &Bytes,
 ) -> Result<Map<String, Value>, AppError> {

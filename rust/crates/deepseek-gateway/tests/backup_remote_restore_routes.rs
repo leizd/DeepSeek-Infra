@@ -76,12 +76,16 @@ struct Fixture {
     _lock: EnvLock,
     _env: EnvGuard,
     dir: tempfile::TempDir,
+    static_dir: tempfile::TempDir,
 }
 
 impl Fixture {
     fn new(mode: &str) -> Self {
         let lock = EnvLock::acquire();
         let dir = tempfile::tempdir().unwrap();
+        let static_dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(static_dir.path().join("ui")).unwrap();
+        std::fs::write(static_dir.path().join("ui/index.html"), "<!doctype html>").unwrap();
         let root = dir.path();
         std::fs::write(root.join(".auth-token"), TEST_TOKEN).unwrap();
         let env = EnvGuard::set(&[
@@ -97,6 +101,7 @@ impl Fixture {
             _lock: lock,
             _env: env,
             dir,
+            static_dir,
         }
     }
 
@@ -105,7 +110,7 @@ impl Fixture {
     }
 
     async fn call(&self, method: &str, uri: &str, body: Option<Value>) -> (StatusCode, Value) {
-        let app = create_production_app();
+        let app = create_production_app(self.static_dir.path()).unwrap();
         let mut builder = Request::builder()
             .method(method)
             .uri(uri)

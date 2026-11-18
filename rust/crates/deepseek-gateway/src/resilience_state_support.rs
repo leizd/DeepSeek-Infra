@@ -65,11 +65,11 @@ pub(crate) fn now_unix_secs_and_iso() -> (u64, String) {
     (secs, utc_iso_from_unix(secs))
 }
 
-fn control_db_path(root: &Path) -> PathBuf {
+pub(crate) fn control_db_path(root: &Path) -> PathBuf {
     root.join(".backup-control").join("control.sqlite3")
 }
 
-fn dr_db_path(root: &Path) -> PathBuf {
+pub(crate) fn dr_db_path(root: &Path) -> PathBuf {
     root.join(".backup-dr").join("evidence.sqlite3")
 }
 
@@ -1193,7 +1193,7 @@ pub(crate) fn compute_risk_digest(snapshot: &Value) -> String {
     }))
 }
 
-fn severity_rank(severity: &str) -> i32 {
+pub(crate) fn severity_rank(severity: &str) -> i32 {
     match severity {
         "healthy" => 1,
         "warning" => 2,
@@ -1779,7 +1779,7 @@ fn action_scope(action: &Value) -> (String, BTreeSet<String>, String) {
     (policy_id, targets, failure_domain)
 }
 
-fn read_action_rate_limits(root: &Path) -> Value {
+pub(crate) fn read_action_rate_limits(root: &Path) -> Value {
     let mut limits = json!({
         "maxConcurrentActions": 3,
         "maxActionsPerHour": 20,
@@ -2930,7 +2930,7 @@ CREATE TABLE IF NOT EXISTS resilience_resource_locks (
 CREATE INDEX IF NOT EXISTS idx_resilience_locks_action ON resilience_resource_locks(action_id);
 ";
 
-const NEVER_AUTONOMOUS: [&str; 4] = [
+pub(crate) const NEVER_AUTONOMOUS: [&str; 4] = [
     "PRIMARY_PROMOTION",
     "POLICY_CHANGE",
     "COPY_DELETION",
@@ -3259,7 +3259,7 @@ fn open_slo_rw(root: &Path) -> Result<Connection, AppError> {
     Ok(conn)
 }
 
-fn try_record_slo_sample_rw(
+pub(crate) fn try_record_slo_sample_rw(
     root: &Path,
     metric_name: &str,
     value: f64,
@@ -3283,7 +3283,7 @@ fn try_record_slo_sample_rw(
     );
 }
 
-fn try_record_slo_burn_rw(
+pub(crate) fn try_record_slo_burn_rw(
     root: &Path,
     indicator: &str,
     bad: f64,
@@ -3431,11 +3431,11 @@ fn risk_obs_row_to_value(conn: &Connection, digest: &str) -> Result<Value, AppEr
     Ok(row)
 }
 
-fn is_open_severity(sev: &str) -> bool {
+pub(crate) fn is_open_severity(sev: &str) -> bool {
     matches!(sev, "warning" | "degraded" | "critical" | "blocked")
 }
 
-fn parse_utc_epoch(raw: Option<&str>) -> Option<i64> {
+pub(crate) fn parse_utc_epoch(raw: Option<&str>) -> Option<i64> {
     let text = raw.filter(|s| !s.is_empty())?;
     parse_python_iso(text).ok().flatten()
 }
@@ -3947,7 +3947,7 @@ pub(crate) fn observe_risk_snapshot_and_slo(
     Ok(())
 }
 
-fn read_autonomous_action_policy(root: &Path) -> Value {
+pub(crate) fn read_autonomous_action_policy(root: &Path) -> Value {
     let mut base = json!({
         "automationPolicyVersion": 1,
         "allowedActions": DEFAULT_ALLOWED_ACTIONS,
@@ -3970,7 +3970,7 @@ fn read_autonomous_action_policy(root: &Path) -> Value {
     base
 }
 
-fn is_action_autonomous(act_type: &str, policy: &Value) -> bool {
+pub(crate) fn is_action_autonomous(act_type: &str, policy: &Value) -> bool {
     let upper = act_type.to_uppercase();
     if NEVER_AUTONOMOUS.contains(&upper.as_str()) {
         return false;
@@ -5098,7 +5098,7 @@ fn validate_action_intent(action: &Value) -> Result<(), Vec<&'static str>> {
     }
 }
 
-fn open_journal_rw(root: &Path) -> Result<Connection, AppError> {
+pub(crate) fn open_journal_rw(root: &Path) -> Result<Connection, AppError> {
     let dir = root.join(".resilience-journal");
     fs::create_dir_all(&dir).map_err(|_| unhandled_error())?;
     let conn = Connection::open(dir.join("journal.sqlite3")).map_err(|_| unhandled_error())?;
@@ -5200,7 +5200,7 @@ pub(crate) fn get_action_from_conn(
     Ok(row)
 }
 
-fn conflict_error(msg: impl Into<String>) -> AppError {
+pub(crate) fn conflict_error(msg: impl Into<String>) -> AppError {
     AppError {
         status: 409,
         code: codes::INVALID_REQUEST,

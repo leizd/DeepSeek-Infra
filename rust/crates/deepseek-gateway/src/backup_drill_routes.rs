@@ -161,10 +161,62 @@ fn non_empty_opt_str(value: Option<&Value>) -> Option<String> {
     }
 }
 
-fn execute_run_dr_drill(payload: &Map<String, Value>) -> Result<Value, AppError> {
+pub(crate) fn execute_run_dr_drill(payload: &Map<String, Value>) -> Result<Value, AppError> {
+    let resilience_action_id = payload
+        .get("resilienceActionId")
+        .filter(|v| python_truthy(v))
+        .map(value_str);
+    let root = crate::data_routes::workspace_root();
+    if let Some(action_id) = resilience_action_id.as_deref() {
+        let existing_drills = crate::backup_dr_slo_routes::load_drill_items(&root)?;
+        for rec in existing_drills {
+            let rec_aid = rec
+                .get("resilienceActionId")
+                .filter(|v| python_truthy(v))
+                .map(value_str);
+            let proof_aid = rec
+                .get("proof")
+                .and_then(|p| p.get("resilienceActionId"))
+                .filter(|v| python_truthy(v))
+                .map(value_str);
+            if rec_aid.as_deref() == Some(action_id) || proof_aid.as_deref() == Some(action_id) {
+                let result_str = rec
+                    .get("result")
+                    .or_else(|| rec.get("status"))
+                    .map(value_str)
+                    .unwrap_or_else(|| "success".to_string());
+                let status_str = if result_str == "success" {
+                    "success".to_string()
+                } else {
+                    result_str
+                };
+                let b_id = rec
+                    .get("backupId")
+                    .or_else(|| rec.get("testedBackupId"))
+                    .cloned()
+                    .unwrap_or(Value::Null);
+                let dur_ms = rec
+                    .get("rtoSeconds")
+                    .and_then(Value::as_f64)
+                    .map(|s| (s * 1000.0) as i64)
+                    .unwrap_or(1000);
+                return Ok(json!({
+                    "status": status_str,
+                    "drillId": rec.get("drillId").cloned().unwrap_or(Value::Null),
+                    "testedBackupId": b_id,
+                    "backupId": b_id,
+                    "targetId": rec.get("targetId").cloned().unwrap_or(Value::Null),
+                    "proof": rec.get("proof").cloned().unwrap_or_else(|| json!({})),
+                    "durationMs": dur_ms,
+                    "bytesRestored": rec.get("bytesRestored").cloned().unwrap_or(json!(0)),
+                    "resilienceActionId": action_id,
+                }));
+            }
+        }
+    }
+
     let _guard = DrillRunGuard::acquire()?;
     let started = Instant::now();
-    let root = crate::data_routes::workspace_root();
     let drill_hex: String = SystemEntropy.new_id()?.chars().take(12).collect();
     let ws_hex: String = SystemEntropy.new_id()?.chars().take(8).collect();
     let drill_id = format!("drill_{drill_hex}");
@@ -237,10 +289,14 @@ fn execute_run_dr_drill(payload: &Map<String, Value>) -> Result<Value, AppError>
     }
     let cleanup_ok = !scratch_dir.is_dir();
 
+    let action_id_json = resilience_action_id
+        .as_deref()
+        .map(|s| Value::String(s.to_string()))
+        .unwrap_or(Value::Null);
     let proof = json!({
         "schema": DR_READINESS_PROOF_SCHEMA,
         "drillId": drill_id,
-        "resilienceActionId": Value::Null,
+        "resilienceActionId": action_id_json,
         "backupId": chosen_backup_id,
         "testedBackupId": chosen_backup_id,
         "restoreDurationMs": elapsed_ms,
@@ -258,7 +314,7 @@ fn execute_run_dr_drill(payload: &Map<String, Value>) -> Result<Value, AppError>
     fs::create_dir_all(&res_dir).map_err(|_| server_error())?;
     let persisted = json!({
         "drillId": drill_id,
-        "resilienceActionId": Value::Null,
+        "resilienceActionId": action_id_json,
         "targetId": tested_target_id,
         "backupId": chosen_backup_id,
         "result": "success",
@@ -272,7 +328,7 @@ fn execute_run_dr_drill(payload: &Map<String, Value>) -> Result<Value, AppError>
     Ok(json!({
         "status": "success",
         "drillId": drill_id,
-        "resilienceActionId": Value::Null,
+        "resilienceActionId": action_id_json,
         "backupId": chosen_backup_id,
         "testedBackupId": chosen_backup_id,
         "targetId": tested_target_id,
