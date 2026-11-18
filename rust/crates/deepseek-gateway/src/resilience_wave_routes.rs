@@ -1206,8 +1206,15 @@ pub(crate) fn admit_wave_db(
     conn.execute_batch("BEGIN IMMEDIATE;")
         .map_err(|_| unhandled_error())?;
 
+    enum WaveAdmitPrep {
+        Early(Value),
+        Claimed {
+            schedule: Value,
+            actions: Vec<Value>,
+        },
+    }
     let mut chosen_wave_idx: Option<i64> = wave_index_opt;
-    let prep_res: Result<(Option<Value>, Option<(Value, Vec<Value>)>), AppError> = (|| {
+    let prep_res: Result<WaveAdmitPrep, AppError> = (|| {
         let Some(sched) = schedule_record_from_conn(&conn, schedule_id)? else {
             return Err(unhandled_error());
         };
@@ -1223,7 +1230,7 @@ pub(crate) fn admit_wave_db(
             let mut out = sched;
             out["admitted"] = Value::Bool(false);
             out["reason"] = Value::String(sched_st);
-            return Ok((Some(out), None));
+            return Ok(WaveAdmitPrep::Early(out));
         }
         let target_idx = if let Some(wi) = chosen_wave_idx {
             wi
@@ -1242,7 +1249,7 @@ pub(crate) fn admit_wave_db(
                 let mut out = sched;
                 out["admitted"] = Value::Bool(false);
                 out["reason"] = Value::String("NO_PENDING_WAVE".to_string());
-                return Ok((Some(out), None));
+                return Ok(WaveAdmitPrep::Early(out));
             };
             wi
         };
@@ -1260,13 +1267,13 @@ pub(crate) fn admit_wave_db(
             let mut out = wave;
             out["admitted"] = Value::Bool(false);
             out["reason"] = Value::String(wave_st);
-            return Ok((Some(out), None));
+            return Ok(WaveAdmitPrep::Early(out));
         }
         if !predecessors_verified(&conn, schedule_id, target_idx)? {
             let mut out = wave;
             out["admitted"] = Value::Bool(false);
             out["reason"] = Value::String("PREDECESSOR_WAVE_NOT_VERIFIED".to_string());
-            return Ok((Some(out), None));
+            return Ok(WaveAdmitPrep::Early(out));
         }
 
         let mut act_stmt = conn
@@ -1302,12 +1309,15 @@ pub(crate) fn admit_wave_db(
                 .to_string();
             cur["admitted"] = Value::Bool(false);
             cur["reason"] = Value::String(reason);
-            return Ok((Some(cur), None));
+            return Ok(WaveAdmitPrep::Early(cur));
         }
-        Ok((None, Some((sched, wave_actions))))
+        Ok(WaveAdmitPrep::Claimed {
+            schedule: sched,
+            actions: wave_actions,
+        })
     })();
 
-    let (early_opt, claimed_ctx) = match prep_res {
+    let prep = match prep_res {
         Ok(res) => res,
         Err(err) => {
             let _ = conn.execute_batch("ROLLBACK;");
@@ -1318,11 +1328,9 @@ pub(crate) fn admit_wave_db(
         .map_err(|_| unhandled_error())?;
     drop(conn);
 
-    if let Some(early) = early_opt {
-        return Ok(early);
-    }
-    let Some((schedule_payload, wave_actions)) = claimed_ctx else {
-        return Err(unhandled_error());
+    let (schedule_payload, wave_actions) = match prep {
+        WaveAdmitPrep::Early(early) => return Ok(early),
+        WaveAdmitPrep::Claimed { schedule, actions } => (schedule, actions),
     };
     let wave_index = chosen_wave_idx.unwrap_or(0);
 

@@ -89,8 +89,12 @@ impl Fixture {
         let root = dir.path();
         std::fs::write(root.join(".auth-token"), TEST_TOKEN).unwrap();
         let env = EnvGuard::set(&[
-            ("DEEPSEEK_DATA_DIR", root.to_string_lossy().into_owned()),
+            ("DEEPSEEK_INFRA_ROOT", root.to_string_lossy().into_owned()),
             ("DEEPSEEK_RUNTIME_MODE", mode.to_string()),
+            ("AUTH_TOKEN", TEST_TOKEN.to_string()),
+            ("AUTH_DISABLED", String::new()),
+            ("AUTH_ALLOWED_HOSTS", String::new()),
+            ("HOST", String::new()),
             (
                 "DEEPSEEK_CONTROL_AUTHORITY_URL",
                 "http://127.0.0.1:9".to_string(),
@@ -114,6 +118,7 @@ impl Fixture {
         let mut builder = Request::builder()
             .method(method)
             .uri(uri)
+            .header(header::HOST, "127.0.0.1:8080")
             .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"));
         let req_body = match body {
             Some(val) => {
@@ -180,7 +185,7 @@ fn seed_object_set_backup(backups_root: &Path, work: &Path) -> (String, String, 
         encrypt_tree_zip_native(
             &comp_stage,
             &age_path,
-            "recipients",
+            "age-recipient",
             None,
             &[recipient.clone()],
         )
@@ -276,7 +281,7 @@ fn seed_object_set_backup(backups_root: &Path, work: &Path) -> (String, String, 
     std::fs::write(ctrl_stage.join("payload-index.json"), &payload_index_bytes).unwrap();
     std::fs::write(ctrl_stage.join("checksums.sha256"), sums.as_bytes()).unwrap();
     let ctrl_age = work.join("ctrl.age");
-    encrypt_tree_zip_native(&ctrl_stage, &ctrl_age, "recipients", None, &[recipient]).unwrap();
+    encrypt_tree_zip_native(&ctrl_stage, &ctrl_age, "age-recipient", None, &[recipient]).unwrap();
     let ctrl_bytes = std::fs::read(&ctrl_age).unwrap();
     let (c_sha, c_size) = write_object(backups_root, &ctrl_bytes);
 

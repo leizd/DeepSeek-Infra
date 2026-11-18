@@ -634,15 +634,16 @@ fn check_rate_limits_in_tx(
             .map(|v| value_str(v).to_lowercase())
             .unwrap_or_default();
         if act_type == "CREATE_REPAIR_JOB" && act_sev == "critical" {
-            let victim: Option<(
-                String,
-                String,
-                Option<String>,
-                i64,
-                Option<String>,
-                Option<String>,
-                Option<String>,
-            )> = conn
+            struct PreemptVictimRow {
+                action_id: String,
+                state: String,
+                effect_class: Option<String>,
+                execution_epoch: i64,
+                owner_instance_id: Option<String>,
+                claim_token: Option<String>,
+                effect_handle_json: Option<String>,
+            }
+            let victim: Option<PreemptVictimRow> = conn
                 .query_row(
                     "SELECT action_id, state, effect_class, execution_epoch,
                             owner_instance_id, claim_token, effect_handle_json
@@ -653,33 +654,33 @@ fn check_rate_limits_in_tx(
                      ORDER BY created_at ASC LIMIT 1",
                     [],
                     |r| {
-                        Ok((
-                            r.get(0)?,
-                            r.get(1)?,
-                            r.get(2)?,
-                            r.get(3)?,
-                            r.get(4)?,
-                            r.get(5)?,
-                            r.get(6)?,
-                        ))
+                        Ok(PreemptVictimRow {
+                            action_id: r.get(0)?,
+                            state: r.get(1)?,
+                            effect_class: r.get(2)?,
+                            execution_epoch: r.get(3)?,
+                            owner_instance_id: r.get(4)?,
+                            claim_token: r.get(5)?,
+                            effect_handle_json: r.get(6)?,
+                        })
                     },
                 )
                 .optional()
                 .map_err(|_| unhandled_error())?;
-            if let Some((v_id, v_state, v_eff, v_epoch, v_owner, v_token, v_handle_raw)) = victim {
-                let v_eff_str = v_eff.as_deref().unwrap_or("");
-                if v_state == "CLAIMED" && (v_eff_str.is_empty() || v_eff_str == "NO_EFFECT") {
+            if let Some(v) = victim {
+                let v_eff_str = v.effect_class.as_deref().unwrap_or("");
+                if v.state == "CLAIMED" && (v_eff_str.is_empty() || v_eff_str == "NO_EFFECT") {
                     let updated = conn
                         .execute(
                             "UPDATE resilience_actions
                              SET state = 'PREEMPTED', error_message = 'preempted-by-critical-repair', updated_at = ?
                              WHERE action_id = ? AND state = 'CLAIMED'
                                AND COALESCE(effect_class, 'NO_EFFECT') IN ('', 'NO_EFFECT')",
-                            rusqlite::params![now_iso, v_id],
+                            rusqlite::params![now_iso, v.action_id],
                         )
                         .map_err(|_| unhandled_error())?;
                     if updated == 1 {
-                        release_action_locks(conn, &v_id)?;
+                        release_action_locks(conn, &v.action_id)?;
                         let preemptor_id =
                             action.get("actionId").map(value_str).unwrap_or_default();
                         let eff_label = if v_eff_str.is_empty() {
@@ -692,21 +693,22 @@ fn check_rate_limits_in_tx(
                                 preemptor_action_id, victim_action_id, victim_state,
                                 victim_effect_class, safe, reason, created_at
                              ) VALUES (?, ?, ?, ?, 1, 'critical-repair-preempts-warning-rebalance', ?)",
-                            rusqlite::params![preemptor_id, v_id, v_state, eff_label, now_iso],
+                            rusqlite::params![preemptor_id, v.action_id, v.state, eff_label, now_iso],
                         )
                         .map_err(|_| unhandled_error())?;
-                        let v_handle_val = v_handle_raw
+                        let v_handle_val = v
+                            .effect_handle_json
                             .as_deref()
                             .and_then(|s| serde_json::from_str::<Value>(s).ok());
                         append_action_event(
                             conn,
                             &ActionEvent {
-                                action_id: &v_id,
+                                action_id: &v.action_id,
                                 event_type: "SAFE_PREEMPTION",
                                 state: "PREEMPTED",
-                                owner_instance_id: v_owner.as_deref(),
-                                execution_epoch: v_epoch,
-                                claim_token: v_token.as_deref(),
+                                owner_instance_id: v.owner_instance_id.as_deref(),
+                                execution_epoch: v.execution_epoch,
+                                claim_token: v.claim_token.as_deref(),
                                 effect_handle: v_handle_val.as_ref(),
                                 created_at: now_iso,
                             },

@@ -87,8 +87,12 @@ impl Fixture {
         let root = dir.path();
         std::fs::write(root.join(".auth-token"), TEST_TOKEN).unwrap();
         let env = EnvGuard::set(&[
-            ("DEEPSEEK_DATA_DIR", root.to_string_lossy().into_owned()),
+            ("DEEPSEEK_INFRA_ROOT", root.to_string_lossy().into_owned()),
             ("DEEPSEEK_RUNTIME_MODE", mode.to_string()),
+            ("AUTH_TOKEN", TEST_TOKEN.to_string()),
+            ("AUTH_DISABLED", String::new()),
+            ("AUTH_ALLOWED_HOSTS", String::new()),
+            ("HOST", String::new()),
             (
                 "DEEPSEEK_CONTROL_AUTHORITY_URL",
                 "http://127.0.0.1:9".to_string(),
@@ -112,6 +116,7 @@ impl Fixture {
         let mut builder = Request::builder()
             .method(method)
             .uri(uri)
+            .header(header::HOST, "127.0.0.1:8080")
             .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"));
         let req_body = match body {
             Some(val) => {
@@ -153,7 +158,7 @@ fn seed_drill_backup(backups_root: &Path, work: &Path) -> (String, String) {
     encrypt_tree_zip_native(
         &comp_stage,
         &comp_age,
-        "recipients",
+        "age-recipient",
         None,
         &[recipient.clone()],
     )
@@ -221,7 +226,7 @@ fn seed_drill_backup(backups_root: &Path, work: &Path) -> (String, String) {
     std::fs::write(ctrl_stage.join("payload-index.json"), &payload_index_bytes).unwrap();
     std::fs::write(ctrl_stage.join("checksums.sha256"), sums.as_bytes()).unwrap();
     let ctrl_age = work.join("ctrl.age");
-    encrypt_tree_zip_native(&ctrl_stage, &ctrl_age, "recipients", None, &[recipient]).unwrap();
+    encrypt_tree_zip_native(&ctrl_stage, &ctrl_age, "age-recipient", None, &[recipient]).unwrap();
     let ctrl_bytes = std::fs::read(&ctrl_age).unwrap();
     let c_sha = sha256_hex(&ctrl_bytes);
     let c_size = ctrl_bytes.len() as u64;
@@ -401,19 +406,22 @@ async fn scheduled_drill_skipped_when_disabled_and_blocked_without_credential() 
     let pol_dir = fixture.root().join(".backup-policies");
     std::fs::create_dir_all(&pol_dir).unwrap();
     std::fs::write(
-        pol_dir.join("policies.json"),
-        serde_json::to_vec(&json!([
-            {
-                "policyId": "pol_skip",
-                "targetId": "managed-local",
-                "recoveryDrill": {"enabled": false}
-            },
-            {
-                "policyId": "pol_block",
-                "targetId": "managed-local",
-                "recoveryDrill": {"enabled": true, "provider": "memory", "credentialRef": "missing-ref"}
-            }
-        ]))
+        pol_dir.join("pol_skip.json"),
+        serde_json::to_vec(&json!({
+            "policyId": "pol_skip",
+            "targetId": "managed-local",
+            "recoveryDrill": {"enabled": false}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        pol_dir.join("pol_block.json"),
+        serde_json::to_vec(&json!({
+            "policyId": "pol_block",
+            "targetId": "managed-local",
+            "recoveryDrill": {"enabled": true, "provider": "memory", "credentialRef": "missing-ref"}
+        }))
         .unwrap(),
     )
     .unwrap();
