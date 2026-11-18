@@ -2098,8 +2098,8 @@ fn execute_replica_repair_native(
     };
 
     let mut lease = acquire_target_writer(&dest_root, &dest_target_id)?;
-    let fencing = lease.fencing_token;
-    lease.renew(None)?;
+    let fencing = lease.fencing_token();
+    lease.renew()?;
     let _writer_guard = TargetWriterGuard { lease };
 
     let mut objects = source_receipt
@@ -3506,7 +3506,7 @@ pub(crate) fn execute_autonomous_action_db(
                 match execute_replica_repair_native(
                     root,
                     &rid,
-                    Some(&source_id).filter(|s| !s.is_empty()),
+                    Some(source_id.as_str()).filter(|s| !s.is_empty()),
                     instance_id,
                 ) {
                     Ok(rep_res) => {

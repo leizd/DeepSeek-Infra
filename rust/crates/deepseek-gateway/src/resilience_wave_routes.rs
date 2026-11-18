@@ -1214,14 +1214,15 @@ pub(crate) fn admit_wave_db(
         let sched_st = sched
             .get("status")
             .and_then(Value::as_str)
-            .unwrap_or_default();
+            .unwrap_or_default()
+            .to_string();
         if matches!(
-            sched_st,
+            sched_st.as_str(),
             "FAILED" | "SUPERSEDED" | "PAUSED_REPLAN" | "STALE"
         ) {
             let mut out = sched;
             out["admitted"] = Value::Bool(false);
-            out["reason"] = Value::String(sched_st.to_string());
+            out["reason"] = Value::String(sched_st);
             return Ok((Some(out), None));
         }
         let target_idx = if let Some(wi) = chosen_wave_idx {
@@ -1253,11 +1254,12 @@ pub(crate) fn admit_wave_db(
         let wave_st = wave
             .get("status")
             .and_then(Value::as_str)
-            .unwrap_or_default();
+            .unwrap_or_default()
+            .to_string();
         if wave_st != "PENDING" {
             let mut out = wave;
             out["admitted"] = Value::Bool(false);
-            out["reason"] = Value::String(wave_st.to_string());
+            out["reason"] = Value::String(wave_st);
             return Ok((Some(out), None));
         }
         if !predecessors_verified(&conn, schedule_id, target_idx)? {
@@ -1651,14 +1653,15 @@ pub(crate) fn run_next_wave_db(
     let sched_st = sched
         .get("status")
         .and_then(Value::as_str)
-        .unwrap_or_default();
+        .unwrap_or_default()
+        .to_string();
     if matches!(
-        sched_st,
+        sched_st.as_str(),
         "COMPLETED" | "FAILED" | "SUPERSEDED" | "PAUSED_REPLAN" | "STALE"
     ) {
         let mut out = sched;
         out["ran"] = Value::Bool(false);
-        out["reason"] = Value::String(sched_st.to_string());
+        out["reason"] = Value::String(sched_st);
         return Ok(out);
     }
 
