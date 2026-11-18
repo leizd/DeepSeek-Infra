@@ -1,15 +1,26 @@
 """Offline gate/parser oracles; these never launch or qualify native Windows UI."""
 from __future__ import annotations
 
+from contextlib import closing
+import hashlib
 import json
 from pathlib import Path
 import re
+import sqlite3
 import subprocess
 
 import pytest
 import yaml
 
-from scripts.verify_native_windows_cloud import active_owned_pids, canonical_source, inspect_window_events, require_cloud_windows, validate_window_receipt
+from scripts.verify_native_windows_cloud import (
+    TARGET_ID,
+    active_owned_pids,
+    canonical_source,
+    inspect_window_events,
+    require_cloud_windows,
+    target_witnesses,
+    validate_window_receipt,
+)
 
 
 def cloud_environment() -> dict[str, str]:
@@ -99,6 +110,41 @@ def test_native_shutdown_cannot_hide_a_retained_child_after_its_parent_exits() -
                  {"pid": 900, "parent": 800, "executable": "unrelated-process"}]
     assert active_owned_pids(known_tree, inventory) == {102}
     assert active_owned_pids(known_tree, inventory[1:]) == set()
+
+
+def test_target_witnesses_require_the_original_registration_and_relocation(tmp_path: Path) -> None:
+    directory = tmp_path / "go-control"
+    directory.mkdir()
+    with closing(sqlite3.connect(directory / "control.sqlite3")) as database:
+        database.executescript(
+            """
+            CREATE TABLE control_target_registrations (
+                operation_id TEXT, target_id TEXT, revision INTEGER, public_generation INTEGER, observation BLOB
+            );
+            CREATE TABLE control_operator_mutations (
+                operation_id TEXT, action_id TEXT, execution_epoch INTEGER, writer_fencing_token INTEGER
+            );
+            CREATE TABLE control_target_registration_locations (operation_id TEXT, observation BLOB);
+            """
+        )
+        operations = ("first-registration", "relocation")
+        for revision, operation in enumerate(operations, 1):
+            database.execute("INSERT INTO control_target_registrations VALUES (?,?,?,?,?)",
+                             (operation, TARGET_ID, revision, revision, operation.encode()))
+            database.execute("INSERT INTO control_operator_mutations VALUES (?,?,?,?)", (operation, operation, 1, 4))
+        database.execute("INSERT INTO control_target_registration_locations VALUES (?,?)", (operations[1], b"signed-location-example"))
+        database.commit()
+        assert target_witnesses(tmp_path, operations, 4) == {
+            "registration": hashlib.sha256(operations[0].encode()).hexdigest(),
+            "move": hashlib.sha256(operations[1].encode()).hexdigest(),
+            "oldLocation": hashlib.sha256(b"signed-location-example").hexdigest(),
+        }
+        with pytest.raises(RuntimeError, match="WINDOWS_TARGET_REGISTRATION_WITNESS_INVALID"):
+            target_witnesses(tmp_path, operations, 5)
+        database.execute("UPDATE control_target_registration_locations SET operation_id=?", (operations[0],))
+        database.commit()
+        with pytest.raises(RuntimeError, match="WINDOWS_TARGET_REGISTRATION_WITNESS_INVALID"):
+            target_witnesses(tmp_path, operations, 4)
 
 
 def source_tree(tmp_path: Path) -> tuple[Path, str]:

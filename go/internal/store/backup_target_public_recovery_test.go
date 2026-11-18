@@ -225,6 +225,107 @@ func TestTargetRegistrationPublicPreparationDoesNotPublishPartialRegistryRead(t 
 	}
 }
 
+func TestTargetRegistrationPublicRechecksCurrentRecordAfterVerifyingPathProofs(t *testing.T) {
+	control, original, _, _ := publicHistoryFixture(t)
+	var retained struct {
+		Path string
+	}
+	if err := json.Unmarshal(original.Payload, &retained); err != nil || !filepath.IsAbs(retained.Path) {
+		t.Fatal("invalid original relocated record", err)
+	}
+	scope, receipt, document, body := publicRegistrationFixture(t, control, "retry-registered-path", original.ID, retained.Path)
+	paths, err := control.BackupTargetRegistrationPaths(scope, original.ID)
+	if err != nil || len(paths) != 1 {
+		t.Fatal("competing path proof unavailable", paths, err)
+	}
+	pathProof := publicPathFixture(t, control, scope, paths[0], paths[0].Path)
+	journalSize, err := control.OperatorJournalSize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fault := range []inventoryReadFault{
+		{query: "FROM targets WHERE id = ?", armed: true},
+		{query: "SELECT event_id,recorded_at,payload_json FROM control_events", armAfter: "INSERT INTO control_target_registrations"},
+	} {
+		installInventoryReadFault(t, control, &fault)
+		if _, result, err := control.RegisterPublicInspectedBackupTarget(scope, receipt, nil, []BackupTargetPathProof{pathProof}, body, document); !errors.Is(err, errInventoryReadInterrupted) || !fault.injected || result.Status != "" {
+			t.Fatal("an interrupted identity or history read published a target", fault.query, result.Status, err)
+		}
+		if n, err := control.OperatorJournalSize(); err != nil || n != journalSize {
+			t.Fatal("interrupted registration appended an operator result", n, err)
+		}
+		if current, found, err := control.Get("target", original.ID); err != nil || !found || !reflect.DeepEqual(current, original) {
+			t.Fatal("interrupted registration changed the current target", err)
+		}
+		if _, _, found, err := control.ReplayPublicBackupTargetRegistration(scope.operationID, scope.actor, body); err != nil || found {
+			t.Fatal("interrupted registration acquired a recoverable response", found, err)
+		}
+	}
+	current, _, err := control.RegisterPublicInspectedBackupTarget(scope, receipt, nil, []BackupTargetPathProof{pathProof}, body, document)
+	if err != nil || current.ID != original.ID || current.Revision != original.Revision+1 {
+		t.Fatal("the original signed request did not recover after the read fault", err)
+	}
+}
+
+func TestTargetRegistrationPublicMetadataWriteFailuresPreserveOriginalResult(t *testing.T) {
+	for _, command := range []string{"activate", "delete"} {
+		t.Run(command, func(t *testing.T) {
+			control, original, scope, body := publicHistoryFixture(t)
+			operation := "target-retained-registration-" + command
+			mutate := func() (OperatorMutationResult, error) {
+				if command == "activate" {
+					_, result, err := control.ActivateBackupTarget(operation, operation, scope.actor, original.ID)
+					return result, err
+				}
+				return control.DeleteBackupTarget(operation, operation, scope.actor, original.ID)
+			}
+			journalSize, err := control.OperatorJournalSize()
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, fault := range []inventoryReadFault{
+				{query: "UPDATE targets", exec: true},
+				{query: "INSERT INTO control_operator_mutations", exec: true},
+				{commit: true},
+			} {
+				installInventoryReadFault(t, control, &fault)
+				fault.armed = true
+				if result, err := mutate(); err == nil || !fault.injected || result.Status != "" {
+					t.Fatal("interrupted metadata mutation published a result", command, fault.query, result.Status, err)
+				}
+				if n, err := control.OperatorJournalSize(); err != nil || n != journalSize {
+					t.Fatal("interrupted metadata mutation appended to the journal", n, err)
+				}
+				current, found, err := control.Get("target", original.ID)
+				if err != nil || !found || !reflect.DeepEqual(original, current) {
+					t.Fatal("interrupted metadata mutation replaced the registered target", err)
+				}
+			}
+			result, err := mutate()
+			expectedState := "ACTIVE"
+			if command == "delete" {
+				expectedState = TombstoneState
+			}
+			if err != nil || result.Revision != original.Revision+1 || result.State != expectedState {
+				t.Fatal("the retained metadata operation could not retry", result, err)
+			}
+			replayFault := inventoryReadFault{commit: true}
+			installInventoryReadFault(t, control, &replayFault)
+			replayFault.armed = true
+			if retry, err := mutate(); !errors.Is(err, errInventoryReadInterrupted) || retry.Status != "" || !replayFault.injected {
+				t.Fatal("metadata replay reported success with a failed transaction", retry, err)
+			}
+			if retry, err := mutate(); err != nil || retry.Revision != result.Revision || retry.State != result.State {
+				t.Fatal("metadata operation failed to recover its committed result", retry, err)
+			}
+			replayed, _, found, err := control.ReplayPublicBackupTargetRegistration(scope.operationID, scope.actor, body)
+			if err != nil || !found || !reflect.DeepEqual(replayed, original) {
+				t.Fatal("metadata mutation changed the original registration response", err)
+			}
+		})
+	}
+}
+
 func TestTargetRegistrationPublicPreservesReservedContextAndRejectsMalformedFrames(t *testing.T) {
 	control := targetDeletePromotedStore(t, true)
 	path := filepath.Join(t.TempDir(), "candidate")
@@ -243,6 +344,15 @@ func TestTargetRegistrationPublicPreservesReservedContextAndRejectsMalformedFram
 		if _, _, err := control.RegisterPublicInspectedBackupTarget(scope, receipt, nil, nil, body, candidate); !errors.Is(err, ErrTargetRegistrationInvalid) {
 			t.Fatal("malformed or oversized registration context was admitted", err)
 		}
+	}
+	invalidPath := string([]byte{0xff})
+	invalidProof := &actionv1.FilesystemBackupTargetLocationReceipt{Observation: &actionv1.FilesystemBackupTargetLocationObservation{
+		CanonicalPath: invalidPath,
+	}}
+	if _, _, err := control.RegisterPublicInspectedBackupTarget(scope, receipt, nil, []BackupTargetPathProof{
+		{TargetID: "target_invalid", Receipt: invalidProof},
+	}, body, document); err == nil {
+		t.Fatal("unencodable competing observation entered registration")
 	}
 	if _, err := decodePublicTargetContext([]byte(`{"_nativeTargetRegistrationV1":"` + strings.Repeat("x", maximumPublicTargetContext) + `"}`)); !errors.Is(err, ErrCorruptRecord) {
 		t.Fatal("oversized persisted context was ignored", err)

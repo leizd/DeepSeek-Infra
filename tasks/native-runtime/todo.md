@@ -3923,7 +3923,12 @@ open until independently qualified. Retain NOT_READY and exact-source gates.
 - [x] Verify existing-marker registration, overlap and clone refusal, relocation
   and original operation replay through Chromium and the real native launcher
   on d8e94e2 (Actions run 44226775618).
-- [ ] Qualify the form retry after a response is lost and restore the original
-  full Go and Android Go 95% gates on the resulting exact revision.
+- [x] Qualify same-form retry after interruption of a committed response.
+  Chromium returned the original bytes and retained one registration for the
+  operation on f6e1e42 (Actions run 44230347960).
+- [ ] Qualify the original full Go and Android Go 95% gates on the resulting
+  exact source.
+- [ ] Qualify case alias, extended-path overlap, directory junction refusal,
+  relocation and original-response recovery through the Windows native app.
 - [ ] Implement marker initialization with durable Go admission and Rust
   filesystem effect reconciliation, then complete the other target lifecycles.

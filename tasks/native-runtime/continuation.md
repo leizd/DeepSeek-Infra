@@ -15247,3 +15247,22 @@ full Go and Python/Rust/platform gates still determine source qualification.
 Solve missing marker initialization with a Go-owned durable claim, a Rust-owned
 filesystem effect and retained exact-result reconciliation. Keep the full
 migration ACTIVE / NOT_READY.
+
+### 2026-11-18 Windows target registration acceptance
+
+The exact f6e1e42 push run 44230347960 passed the Chromium form exercise
+including loss of a committed response and byte-identical replay after
+resubmission. The same run passed 73 scoped Go race families and the 74-case
+CPython oracle. Its full Go coverage was 18366/19337 (94.978539%). The original
+95% coverage gate failed by five statements. The follow-up adds three Go test
+families for the final target identity read, transaction rollback after witness
+append, retained activation/deletion failure and an interrupted public read.
+The original 73 test families and coverage floors remain required.
+
+The next Windows app verification registers an existing marker through a
+differently cased path, checks extended-length alias overlap and a real
+directory junction, moves the directory, then closes and restarts the app and
+compares original HTTP bytes and both registration witnesses plus the signed
+location proof. Cloud execution is required for those claims. Implement the
+missing-marker effect and recovery, S3 and remaining lifecycles, and keep the
+full product gate open.

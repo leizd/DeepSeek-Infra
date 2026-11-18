@@ -18,6 +18,7 @@ var errInventoryReadInterrupted = errors.New("inventory database read interrupte
 // schema or bypassing the control store's normal validation and transaction.
 type inventoryReadFault struct {
 	query                                      string
+	armAfter                                   string
 	cursor, malformed, commit, armed, injected bool
 	exec                                       bool
 	skip                                       int
@@ -139,7 +140,11 @@ func (conn inventoryFaultConnection) ExecContext(ctx context.Context, query stri
 		conn.fault.armed, conn.fault.injected = false, true
 		return nil, errInventoryReadInterrupted
 	}
-	return conn.Conn.(driver.ExecerContext).ExecContext(ctx, query, args)
+	result, err := conn.Conn.(driver.ExecerContext).ExecContext(ctx, query, args)
+	if err == nil && conn.fault.armAfter != "" && strings.Contains(query, conn.fault.armAfter) {
+		conn.fault.armAfter, conn.fault.armed = "", true
+	}
+	return result, err
 }
 
 func (conn inventoryFaultConnection) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, error) {

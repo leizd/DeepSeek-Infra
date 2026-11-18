@@ -3310,3 +3310,10 @@ the CPython 3.12 oracle passed 74 metadata cases. The full Go gate measured
 
 Marker initialization and effect reconciliation, S3, the rest of the target
 lifecycle and platform and release qualification remain open.
+
+The f6e1e42 Chromium follow-up passed the existing form's same-operation
+recovery after an interrupted response. It compared request and response bytes
+and checked the durable registration count. The Windows app verifier adds a
+filesystem registration workload against the production process tree. It checks
+case aliases, extended path overlap, directory junction refusal, relocation and
+original evidence after restart. Windows execution is pending on this source.

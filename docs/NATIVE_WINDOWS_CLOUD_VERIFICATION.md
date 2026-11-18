@@ -32,6 +32,16 @@ original uploaded bytes must still be readable, followed by another successful
 window close. SQLite inspection is readonly and never advances a fence or
 repairs a store. Python remains an offline verifier outside the production tree.
 
+The same production app processes also serve authenticated backup-target HTTP
+requests. The verifier registers an existing marker through a differently cased
+path and compares the returned path with the actual Windows directory. It checks
+that an extended-length spelling cannot bypass target overlap and that the Rust
+worker rejects a real directory junction. It moves the target, restarts the
+app, and compares the original registration response bytes and readonly witness
+hashes. The target fixture and the runtime temporary directory are isolated on
+the cloud runner. This workload covers the Windows filesystem boundary and
+retained HTTP behavior. The separate Chromium exercise drives the form itself.
+
 This gate can fail at Windows compilation, WebView2 availability, native startup,
 window behavior or recovery. An uploaded report or compiled executable alone is
 insufficient. The controlled gate does not qualify every desktop feature, the

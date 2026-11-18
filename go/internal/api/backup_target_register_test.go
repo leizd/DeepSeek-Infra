@@ -37,6 +37,7 @@ type publicTargetPeer struct {
 	calls   atomic.Int64
 	entered chan struct{}
 	resume  chan struct{}
+	control *store.Control
 }
 
 func (p *publicTargetPeer) Inspect(ctx context.Context, r *actionv1.InspectFilesystemBackupTargetRequest) (*actionv1.FilesystemBackupTargetInspectionReceipt, error) {
@@ -94,6 +95,11 @@ func (p *publicTargetPeer) ProbeLocation(_ context.Context, r *actionv1.ProbeFil
 	if p.mode == "location-unavailable" {
 		return nil, status.Error(codes.Unavailable, "isolated path observation unavailable")
 	}
+	if p.mode == "store-closed-after-path-proof" && r.ResolvePath {
+		if err := p.control.Close(); err != nil {
+			return nil, status.Error(codes.Internal, "could not interrupt isolated store")
+		}
+	}
 	o := &actionv1.FilesystemBackupTargetLocationObservation{SchemaVersion: 1, Fence: r.Fence, OperationId: r.OperationId, WriterFencingToken: r.WriterFencingToken,
 		RequestedPath: r.Path, ObservedAtUnix: time.Now().Unix(), FleetId: p.binding.FleetID, Environment: p.binding.Environment,
 		State: actionv1.BackupTargetLocationState_BACKUP_TARGET_LOCATION_STATE_MISSING}
@@ -112,7 +118,7 @@ func (p *publicTargetPeer) ProbeLocation(_ context.Context, r *actionv1.ProbeFil
 func publicTargetTLSFixture(t *testing.T, mode string) (*store.Control, *publicTargetPeer, *httptest.Server, *httptest.Server) {
 	t.Helper()
 	control := targetPublicFixtureStoreClock(t, true, true, func() int64 { return time.Now().Unix() })
-	peer := &publicTargetPeer{mode: mode, binding: control.BackupTargetObservationBinding()}
+	peer := &publicTargetPeer{mode: mode, binding: control.BackupTargetObservationBinding(), control: control}
 	if mode == "stalled-first" {
 		peer.entered, peer.resume = make(chan struct{}), make(chan struct{})
 	}
@@ -445,6 +451,24 @@ func TestTargetRegistrationPublicTCPRejectsRelocationOfAnUnlocatableLegacyIdenti
 	record, found, err := control.Get("target", legacy.ID)
 	if err != nil || !found || record.Revision != 1 || !strings.Contains(string(record.Payload), `"kind":"s3"`) {
 		t.Fatal("refused registration lost the existing provider identity", err)
+	}
+}
+
+func TestTargetRegistrationPublicTCPRequiresCurrentReadAfterCompetingPathProof(t *testing.T) {
+	control, peer, server, _ := publicTargetTLSFixture(t, "store-closed-after-path-proof")
+	root := t.TempDir()
+	registered, _ := json.Marshal(map[string]any{"targetId": "target_other", "kind": "filesystem",
+		"path": filepath.Join(root, "retained"), "topologyGeneration": 1})
+	if _, err := control.ApplyOperatorMutation(store.OperatorMutation{
+		OperationID: "prior-competing-target", ActionID: "prior-competing-action", Actor: "operator:test",
+		Record: store.Record{Domain: "target", ID: "target_other", State: "ACTIVE", Revision: 1, Payload: registered},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(map[string]string{"path": filepath.Join(root, "new-target")})
+	statusCode, response, _ := publicTargetHTTPRequest(t, server, http.MethodPost, "/api/workspace/backup-targets", string(body), "")
+	if statusCode != http.StatusServiceUnavailable || !strings.Contains(string(response), "GO_CONTROL_UNAVAILABLE") || peer.calls.Load() != 2 {
+		t.Fatal("Go published a response after the current identity read became unavailable", statusCode, string(response), peer.calls.Load())
 	}
 }
 

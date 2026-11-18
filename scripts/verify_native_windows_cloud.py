@@ -9,6 +9,7 @@ import argparse
 from contextlib import closing
 import ctypes
 from ctypes import wintypes
+from dataclasses import dataclass
 import hashlib
 import json
 import os
@@ -16,10 +17,13 @@ from pathlib import Path
 import re
 import socket
 import sqlite3
+import stat
 import subprocess
 import sys
+import tempfile
 import time
 from typing import Any
+from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
@@ -28,6 +32,19 @@ WINDOW_TEST = "TestNativeWindowLoadsAuthenticatedReactAndRunsFileWorkload"
 WINDOW_PACKAGE = "github.com/leizd/DeepSeek-Infra/go/internal/desktop"
 NATIVE_ROLES = {"deepseek-launch", "deepseekd", "deepseek-worker", "deepseek-gateway", "deepseek-desktop"}
 ORIGINAL = "Native desktop upload 2026\n原生桌面阅读验证\nA nonempty retained file workload.".encode()
+TARGETS = "/api/workspace/backup-targets"
+TARGET_MARKER = ".deepseek-infra-backup-target.json"
+TARGET_OPERATION_HEADER = "X-DeepSeek-Operation-Id"
+TARGET_ID = "target_windows_fixture"
+
+
+@dataclass(frozen=True)
+class RegisteredFilesystemTarget:
+    original_body: bytes
+    original_reply: bytes
+    operations: tuple[str, str]
+    moved: Path
+    marker_sha256: str
 
 
 def require_cloud_windows(environment: dict[str, str], system: str) -> None:
@@ -191,6 +208,110 @@ def request(origin: str, path: str, token: str) -> bytes:
         return body
 
 
+def post_target(origin: str, token: str, body: bytes, operation: str = "") -> tuple[int, bytes, str]:
+    headers = {"Authorization": "Bearer " + token, "Content-Type": "application/json"}
+    if operation:
+        headers[TARGET_OPERATION_HEADER] = operation
+    message = Request(origin + TARGETS, data=body, headers=headers)
+    try:
+        with urlopen(message, timeout=15) as response:
+            return response.status, response.read(2 * 1024**2 + 1), response.headers.get(TARGET_OPERATION_HEADER, "")
+    except HTTPError as error:
+        with error:
+            return error.code, error.read(2 * 1024**2 + 1), ""
+
+
+def target_body(path: Path) -> bytes:
+    return json.dumps({"path": str(path), "label": "Windows target fixture"}, separators=(",", ":")).encode()
+
+
+def target_witnesses(profile: Path, operations: tuple[str, str], writer_fence: int) -> dict[str, str]:
+    database = profile / "go-control/control.sqlite3"
+    with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True, timeout=3)) as db:
+        rows = db.execute(
+            """SELECT r.operation_id,r.target_id,r.revision,r.public_generation,r.observation,
+                      m.action_id,m.execution_epoch,m.writer_fencing_token
+               FROM control_target_registrations r JOIN control_operator_mutations m
+               USING (operation_id) ORDER BY r.revision"""
+        ).fetchall()
+        relocations = db.execute("SELECT operation_id,observation FROM control_target_registration_locations").fetchall()
+    if (len(rows) != 2 or len(relocations) != 1 or relocations[0][0] != operations[1] or not relocations[0][1]
+            or any(row[:4] != (operations[index], TARGET_ID, index + 1, index + 1)
+                   or not row[4] or row[5:] != (operations[index], 1, writer_fence)
+                   for index, row in enumerate(rows))):
+        raise RuntimeError("WINDOWS_TARGET_REGISTRATION_WITNESS_INVALID")
+    return {"registration": hashlib.sha256(rows[0][4]).hexdigest(), "move": hashlib.sha256(rows[1][4]).hexdigest(),
+            "oldLocation": hashlib.sha256(relocations[0][1]).hexdigest()}
+
+
+def verify_windows_target_registration(origin: str, token: str, root: Path) -> RegisteredFilesystemTarget:
+    target = root / "Retained Disk"
+    target.mkdir()
+    marker = json.dumps({"schemaVersion": 3, "targetId": TARGET_ID, "targetNonce": "00102",
+                         "createdAt": "2000-01-01T00:00:00Z", "targetGeneration": 0}, indent=2).encode() + b"\n"
+    (target / TARGET_MARKER).write_bytes(marker)
+    case_alias = target.with_name("rEtAiNeD dIsK")
+    original_path = str(case_alias.resolve(strict=True))
+    if original_path != str(target.resolve(strict=True)) or original_path == str(case_alias):
+        raise RuntimeError("WINDOWS_TARGET_CASE_FIXTURE_INVALID")
+    if json.loads(request(origin, TARGETS, token)).get("targets") != []:
+        raise RuntimeError("WINDOWS_TARGET_LIST_NOT_EMPTY_AT_START")
+    original_body = target_body(case_alias)
+    status, original_reply, original_operation = post_target(origin, token, original_body)
+    original = json.loads(original_reply)
+    if (status != 200 or original.get("targetId") != TARGET_ID or original.get("path") != original_path
+            or original.get("topologyGeneration") != 1 or not re.fullmatch(r"target-inspect-public-v1-[0-9a-f]{32}", original_operation)):
+        raise RuntimeError("WINDOWS_TARGET_CASE_REGISTRATION_FAILED")
+
+    nested = target / "Nested"
+    nested.mkdir()
+    (nested / TARGET_MARKER).write_bytes(marker.replace(TARGET_ID.encode(), b"target_windows_nested"))
+    extended_path = Path("\\\\?\\" + str(nested))
+    status, payload, _ = post_target(origin, token, target_body(extended_path))
+    if (status != 400 or json.loads(payload).get("code") != "invalid_payload"
+            or b"overlaps a registered target" not in payload):
+        raise RuntimeError("WINDOWS_TARGET_EXTENDED_PATH_OVERLAP_NOT_REFUSED")
+
+    junction = root / "Reparse Alias"
+    created = subprocess.run(
+        ["pwsh", "-NoProfile", "-NonInteractive", "-Command",
+         "New-Item -ItemType Junction -Path $env:DEEPSEEK_TEST_TARGET_JUNCTION "
+         "-Target $env:DEEPSEEK_TEST_TARGET_DESTINATION -ErrorAction Stop | Out-Null"],
+        env=dict(os.environ, DEEPSEEK_TEST_TARGET_JUNCTION=str(junction), DEEPSEEK_TEST_TARGET_DESTINATION=str(target)),
+        capture_output=True, check=False, timeout=15,
+    )
+    if (created.returncode or getattr(junction.lstat(), "st_reparse_tag", 0) != stat.IO_REPARSE_TAG_MOUNT_POINT
+            or not junction.samefile(target)):
+        raise RuntimeError("WINDOWS_TARGET_JUNCTION_FIXTURE_INVALID")
+    status, payload, _ = post_target(origin, token, target_body(junction))
+    if status != 400 or json.loads(payload).get("code") != "invalid_payload" or b"symlink or reparse point" not in payload:
+        raise RuntimeError("WINDOWS_TARGET_JUNCTION_NOT_REFUSED")
+    junction.rmdir()
+
+    moved = target.rename(root / "Moved Disk")
+    status, reply, move_operation = post_target(origin, token, target_body(moved))
+    document = json.loads(reply)
+    if (status != 200 or document.get("targetId") != TARGET_ID or document.get("path") != str(moved.resolve(strict=True))
+            or document.get("topologyGeneration") != 2 or move_operation == original_operation
+            or not re.fullmatch(r"target-inspect-public-v1-[0-9a-f]{32}", move_operation)
+            or (moved / TARGET_MARKER).read_bytes() != marker):
+        raise RuntimeError("WINDOWS_TARGET_RELOCATION_FAILED")
+    return RegisteredFilesystemTarget(original_body, original_reply, (original_operation, move_operation),
+                                      moved, hashlib.sha256(marker).hexdigest())
+
+
+def verify_windows_target_restart(origin: str, token: str, target: RegisteredFilesystemTarget) -> None:
+    status, replay, echoed = post_target(origin, token, target.original_body, target.operations[0])
+    listed = json.loads(request(origin, TARGETS, token))
+    targets = listed.get("targets")
+    if (status != 200 or replay != target.original_reply or echoed != target.operations[0]
+            or not isinstance(targets, list) or len(targets) != 1 or listed.get("health") != []
+            or targets[0].get("path") != str(target.moved.resolve(strict=True)) or targets[0].get("targetId") != TARGET_ID
+            or targets[0].get("topologyGeneration") != 2 or "_nativeTargetRegistrationV1" in targets[0]
+            or hashlib.sha256((target.moved / TARGET_MARKER).read_bytes()).hexdigest() != target.marker_sha256):
+        raise RuntimeError("WINDOWS_TARGET_REGISTRATION_RESTART_FAILED")
+
+
 def profile_proof(profile: Path) -> dict[str, Any]:
     database = profile / "go-control/control.sqlite3"
     with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True, timeout=3)) as db:
@@ -276,7 +397,7 @@ def main() -> int:
     environment.update(DEEPSEEK_NATIVE_BIN=str(binaries), DEEPSEEK_INFRA_ROOT=str(profile), DEEPSEEK_INFRA_STATIC_DIR=str(ROOT / "static"))
     report: dict[str, Any] = dict(status="FAIL", sourceCommit=sha, sourceTree=subprocess.check_output(["git", "rev-parse", "HEAD^{tree}"], cwd=ROOT).decode().strip(),
                                   runId=os.environ["GITHUB_RUN_ID"], event=os.environ["GITHUB_EVENT_NAME"], platform="windows-amd64-webview2",
-                                  scope="actual app window, original native bootstrap, test-host WebView2 file workload and whole-app close/restart only",
+                                  scope="actual app window, native bootstrap, WebView2 file workload, filesystem target HTTP and whole-app close/restart",
                                   offlineStoreSeeding=False, privateKeyInspection=False, productionProviderQualified=False,
                                   allDesktopFeaturesQualified=False, fullMigrationQualified=False, readiness="NOT_READY")
     report["binarySha256"] = {name: hashlib.sha256((binaries / (name + ".exe")).read_bytes()).hexdigest() for name in sorted(NATIVE_ROLES)}
@@ -284,8 +405,14 @@ def main() -> int:
     report["canonicalSource"] = source
     process = None
     tokens: list[str] = []
+    fixture = tempfile.TemporaryDirectory(dir=Path(os.environ["RUNNER_TEMP"]).resolve(strict=True), prefix="native-windows-target-")
     try:
         with (out / "launcher.log").open("wb") as log:
+            target_root = Path(fixture.name).resolve(strict=True)
+            runtime_temp = target_root / "Runtime Temp"
+            runtime_temp.mkdir()
+            environment.update(TEMP=str(runtime_temp), TMP=str(runtime_temp))
+
             def launch() -> subprocess.Popen[bytes]:
                 return subprocess.Popen([str(binaries / "deepseek-launch.exe"), "--app", "--host", "127.0.0.1", "--port", str(port), "--no-open", "--no-prompt"],
                                         cwd=ROOT, env=environment, stdout=log, stderr=subprocess.STDOUT,
@@ -308,6 +435,10 @@ def main() -> int:
                 raise RuntimeError("WINDOWS_ACTUAL_WEBVIEW_TEST_FAILED")
             report["actualWindowTest"] = inspect_window_events(out / "window-tests.jsonl")
             file_id = validate_window_receipt(json.loads(receipt_path.read_text()))
+            report["targetRegistrationStage"] = "register-and-move"
+            target = verify_windows_target_registration(origin, token, target_root)
+            witnesses = target_witnesses(profile, target.operations, initial["writerFence"])
+            report["targetRegistrationStage"] = "close-and-restart"
             close_window(process, view, {row["pid"] for row in first})
             report["firstWindowCloseStoppedNativeTree"] = True
             process = launch()
@@ -322,6 +453,13 @@ def main() -> int:
                 raise RuntimeError("WINDOWS_RESTART_DID_NOT_ADVANCE_ORIGINAL_WRITER")
             if request(origin, "/api/file-source?" + urlencode(dict(fileId=file_id)), token) != ORIGINAL:
                 raise RuntimeError("WINDOWS_RESTART_LOST_ORIGINAL_FILE")
+            verify_windows_target_restart(origin, token, target)
+            if target_witnesses(profile, target.operations, initial["writerFence"]) != witnesses:
+                raise RuntimeError("WINDOWS_TARGET_REGISTRATION_WITNESS_CHANGED_AFTER_RESTART")
+            report.update(targetRegistrationStage="completed", filesystemTargetHTTPQualified=True,
+                          targetCaseAliasCanonicalized=True, targetExtendedOverlapRefused=True, targetJunctionRefused=True,
+                          targetOriginalHTTPReplyReplayed=True, targetMarkerSha256=target.marker_sha256,
+                          targetWitnessSha256=witnesses)
             close_window(process, view, {row["pid"] for row in second})
             report.update(status="PASS", restartedProcesses=second, restartedWindow=view, restartedNativeOrigin=restarted,
                           originalNativeOriginRetained=True, originalFileRetainedAfterAppRestart=True, writerFenceAdvanced=True,
@@ -334,6 +472,12 @@ def main() -> int:
         if process is not None and process.poll() is None:
             process.kill()
             process.wait(timeout=15)
+        try:
+            fixture.cleanup()
+        except OSError:
+            report["fixtureCleanupFailed"] = True
+            if report["status"] == "PASS":
+                report.update(status="FAIL", failure="WINDOWS_TARGET_FIXTURE_CLEANUP_FAILED")
         for name in ["launcher.log", "window-tests.jsonl", "window-tests-stderr.log"]:
             path = out / name
             if path.exists():
