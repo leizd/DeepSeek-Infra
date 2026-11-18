@@ -570,8 +570,27 @@ fn assert_catalog_committed(root: &Path) -> Result<(), AppError> {
         let receipt_info = receipt_file_status(root, &backup_id)
             .map_err(|()| catalog_corrupt_error(format!("receipt {backup_id} is corrupt")))?;
         let Some(marker) = markers.get(&backup_id) else {
+            let raw = read_commit_markers(root);
+            let on_disk: Vec<String> = raw
+                .iter()
+                .map(|m| {
+                    format!(
+                        "{}[valid={} id={:?}]",
+                        m.relative_path,
+                        commit_marker_valid(&m.document),
+                        m.document
+                            .get("backupId")
+                            .map(value_str)
+                            .unwrap_or_default()
+                    )
+                })
+                .collect();
             return Err(catalog_corrupt_error(format!(
-                "uncommitted catalog entry: {backup_id}"
+                "uncommitted catalog entry: {backup_id}; root={} markers_parsed={} markers_valid={} on_disk=[{}]",
+                root.display(),
+                raw.len(),
+                markers.len(),
+                on_disk.join(", ")
             )));
         };
         let Some((ref receipt_path, _)) = receipt_info else {
