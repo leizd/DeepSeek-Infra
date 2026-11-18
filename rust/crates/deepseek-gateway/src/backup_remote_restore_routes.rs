@@ -1667,7 +1667,7 @@ pub(crate) fn fetch_restore_session(
             session
                 .get("expectedBytes")
                 .and_then(Value::as_u64)
-                .unwrap_or_else(|| obj_meta.len())
+                .unwrap_or(obj_meta.len())
         ),
     );
     member.insert("ciphertextPath".into(), Value::String(cipher_str.clone()));

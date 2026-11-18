@@ -2064,12 +2064,10 @@ fn evaluate_maintenance_window_action(
     let local_min = lh * 60 + lm;
     let start_val = sh * 60 + sm;
     let end_val = eh * 60 + em;
-    let inside = if start_val == end_val {
-        true
-    } else if start_val < end_val {
-        start_val <= local_min && local_min < end_val
-    } else {
-        local_min >= start_val || local_min < end_val
+    let inside = match start_val.cmp(&end_val) {
+        std::cmp::Ordering::Equal => true,
+        std::cmp::Ordering::Less => start_val <= local_min && local_min < end_val,
+        std::cmp::Ordering::Greater => local_min >= start_val || local_min < end_val,
     };
     Ok(json!({
         "actionId": action_id,

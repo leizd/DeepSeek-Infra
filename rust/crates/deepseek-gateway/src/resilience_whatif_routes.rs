@@ -653,10 +653,10 @@ fn build_optimizer_inputs(
         }),
     };
     if forecast.get("forecastStatus").and_then(Value::as_str) != Some("OK")
-        || !forecast
+        || forecast
             .get("forecastDigest")
             .filter(|v| python_truthy(v))
-            .is_some_and(|v| !value_str(v).is_empty())
+            .is_none_or(|v| value_str(v).is_empty())
     {
         return Err(unavailable_error("FORECAST_REGISTRY_UNAVAILABLE"));
     }
