@@ -422,13 +422,15 @@ fn inspect_cached_component(cache_root: &Path, digest: &str, expected_bytes: u64
 }
 
 fn random_restore_id() -> String {
-    let raw: [u8; 6] = SystemEntropy.random_bytes();
-    let mut out = String::from("restore_");
-    for byte in raw {
-        use std::fmt::Write as _;
-        let _ = write!(&mut out, "{byte:02x}");
-    }
-    out
+    let hex = SystemEntropy.new_id().unwrap_or_else(|_| {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_nanos())
+            .unwrap_or(0);
+        format!("{nanos:016x}")
+    });
+    let suffix = &hex[..12.min(hex.len())];
+    format!("restore_{suffix}")
 }
 
 fn committed_object_inventory(record: &Map<String, Value>) -> Result<Vec<(String, u64)>, AppError> {
@@ -1665,7 +1667,7 @@ pub(crate) fn fetch_restore_session(
             session
                 .get("expectedBytes")
                 .and_then(Value::as_u64)
-                .unwrap_or(obj_meta.len())
+                .unwrap_or_else(|| obj_meta.len())
         ),
     );
     member.insert("ciphertextPath".into(), Value::String(cipher_str.clone()));

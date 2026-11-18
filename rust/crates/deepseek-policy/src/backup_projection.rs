@@ -18,8 +18,8 @@ use uuid_simple_hex::UuidHex;
 use crate::app_error::{AppError, codes};
 use crate::backup_mirror::sha256_file;
 use crate::backup_unlock::{
-    PACK_INDEX_PATH, ParsedPackIndex, SelectedArchiveFilter, extract_selected_archive,
-    is_plain_sha256, parse_pack_index_file, parse_payload_ref, validate_archive_path,
+    PACK_INDEX_PATH, ParsedPackIndex, is_plain_sha256, parse_pack_index_file, parse_payload_ref,
+    validate_archive_path,
 };
 use crate::core_utils::python_truthy;
 use crate::entropy::{Entropy, SystemEntropy};
@@ -52,13 +52,13 @@ mod uuid_simple_hex {
 
     impl UuidHex {
         pub(crate) fn new() -> String {
-            let bytes: [u8; 16] = SystemEntropy.random_bytes();
-            let mut out = String::with_capacity(32);
-            for byte in bytes {
-                use std::fmt::Write as _;
-                let _ = write!(&mut out, "{byte:02x}");
-            }
-            out
+            SystemEntropy.new_file_id().unwrap_or_else(|_| {
+                let nanos = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|elapsed| elapsed.as_nanos())
+                    .unwrap_or(0);
+                format!("{nanos:032x}")
+            })
         }
     }
 }
@@ -1217,7 +1217,7 @@ fn materialize_cdc(
             "Delta CDC file has no chunk list: {logical_path}"
         )));
     };
-    let tmp = target.with_name(format!(".tmp.{}.restore", UuidHex::new()));
+    let tmp = target.with_file_name(format!(".tmp.{}.restore", UuidHex::new()));
     let write_res = (|| -> Result<(), AppError> {
         let file = OpenOptions::new()
             .write(true)
