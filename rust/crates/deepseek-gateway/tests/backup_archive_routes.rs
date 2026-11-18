@@ -207,9 +207,11 @@ async fn python_disabled_finalize_download_inspect_raw_and_multipart_lifecycle()
 
     let (_static_root, _env, app) = build_app(root.path(), "python_disabled");
 
-    // Wrong method -> 405.
+    // Wrong method -> GET hits /api/* 404 catch-all, while DELETE returns 405.
     let (st_get, _) = call_json(&app, "GET", "/api/workspace/restores/inspect", None).await;
-    assert_eq!(st_get, StatusCode::METHOD_NOT_ALLOWED);
+    assert_eq!(st_get, StatusCode::NOT_FOUND);
+    let (st_del, _) = call_json(&app, "DELETE", "/api/workspace/restores/inspect", None).await;
+    assert_eq!(st_del, StatusCode::METHOD_NOT_ALLOWED);
 
     // Create + finalize plaintext backup.
     let (st, created) = call_json(
@@ -366,7 +368,7 @@ async fn python_disabled_age_recipient_recovery_and_restore_fence() {
     .await;
     assert_eq!(st_mismatch, StatusCode::BAD_REQUEST);
     assert!(
-        mismatch_val["error"]["message"]
+        mismatch_val["error"]
             .as_str()
             .unwrap()
             .contains("does not match")
