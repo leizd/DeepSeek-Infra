@@ -15,6 +15,7 @@ from deepseek_infra.core import config
 from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.infra.data import projects as legacy_projects
 from deepseek_infra.infra.media import library as media_store
+from deepseek_infra.infra.native_runtime.authority import assert_python_writer_allowed
 from deepseek_infra.infra.rag.files import load_cached_file
 from deepseek_infra.infra.workspace import artifacts as artifact_store
 from deepseek_infra.infra.workspace import projects as project_store
@@ -450,6 +451,7 @@ def write_trace_items_to_zip(archive: zipfile.ZipFile, items: list[Any]) -> None
 
 def _write_export(project_id: str, kind: str, export_format: str, filename: str, writer: Any) -> dict[str, Any]:
     safe_project_id = validate_project_id(project_id) if project_id else ""
+    assert_python_writer_allowed("project_metadata_store" if safe_project_id else "generated_files_store")
     export_id = new_id("export")
     export_dir = _export_dir(safe_project_id)
     export_dir.mkdir(parents=True, exist_ok=True)

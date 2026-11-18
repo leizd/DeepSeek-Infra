@@ -80,6 +80,7 @@ pub mod tool_search;
 pub mod tool_transform;
 pub mod tzif;
 pub mod url_guard;
+pub mod workspace_exports;
 pub mod workspace_projects;
 pub mod workspace_schema;
 

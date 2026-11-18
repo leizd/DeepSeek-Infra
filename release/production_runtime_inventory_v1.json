@@ -314,11 +314,6 @@
       "file": "deepseek_infra/web/routes/backup_governance.py"
     },
     {
-      "method": "get",
-      "path": "/api/workspace/disaster-recovery/status",
-      "file": "deepseek_infra/web/routes/backup_governance.py"
-    },
-    {
       "method": "post",
       "path": "/api/workspace/disaster-recovery/audit",
       "file": "deepseek_infra/web/routes/backup_governance.py"
@@ -381,11 +376,6 @@
     {
       "method": "get",
       "path": "/api/workspace/resilience/snapshot",
-      "file": "deepseek_infra/web/routes/backup_governance.py"
-    },
-    {
-      "method": "get",
-      "path": "/api/workspace/resilience/readiness",
       "file": "deepseek_infra/web/routes/backup_governance.py"
     },
     {
@@ -462,11 +452,6 @@
       "method": "post",
       "path": "/api/rag/reindex",
       "file": "deepseek_infra/web/routes/rag.py"
-    },
-    {
-      "method": "post",
-      "path": "/api/workspace/exports",
-      "file": "deepseek_infra/web/routes/workspace.py"
     },
     {
       "method": "post",

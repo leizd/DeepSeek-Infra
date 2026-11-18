@@ -44,6 +44,8 @@ def test_resilience_advisory_routes_registered_and_removed_from_inventory() -> N
     }
     assert ("get", "/api/workspace/resilience/forecast") not in python_only
     assert ("get", "/api/workspace/resilience/optimizer") not in python_only
+    assert ("get", "/api/workspace/resilience/readiness") not in python_only
+    assert ("get", "/api/workspace/disaster-recovery/status") not in python_only
 
 
 def test_resilience_advisory_python_oracle_responses(

@@ -18,7 +18,15 @@ GATED_SEVERITIES = ("high", "critical")
 # Documented exceptions: GHSA id -> (justification, removal condition). Keep entries
 # actionable — an exception is a reviewed risk acceptance, not a mute button.
 # The React Router RSC exception was retired after applying its 7.18.2 backport.
-ADVISORY_EXCEPTIONS: dict[str, str] = {}
+ADVISORY_EXCEPTIONS: dict[str, str] = {
+    "GHSA-fc5q-39xc-vjpf": (
+        "devDependency-only build/test glob matcher (picomatch <=4.0.7 pulled via "
+        "fdir/tinyglobby under vite/vitest/@vitejs/plugin-react; never ships in "
+        "static/ui runtime assets and receives only repository-controlled globs; "
+        "no patched picomatch >4.0.7 published upstream). Remove once picomatch "
+        "releases a fix and tinyglobby/fdir resolve to it."
+    ),
+}
 
 
 def _advisory_id(url: str) -> str:

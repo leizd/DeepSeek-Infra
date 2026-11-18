@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+from unittest import mock
 
+import pytest
 from fastapi.testclient import TestClient
 
 from deepseek_infra.core.config import settings
 from deepseek_infra.infra.data import projects
+from deepseek_infra.infra.native_runtime.authority import PythonWriterMechanicallyDeniedError
 from deepseek_infra.infra.workspace import artifacts, exports
 from deepseek_infra.web.server import create_app
 
@@ -94,3 +98,25 @@ def test_workspace_download_python_oracle_headers_and_content(tmp_settings: Path
     assert prov["summary"]["types"]["project"] == 1
     assert prov["summary"]["types"]["artifact"] == 1
     assert prov["summary"]["types"]["export"] == 1
+
+
+def test_create_export_route_exists_in_native_inventory_and_gates_python_writes(tmp_settings: Path) -> None:
+    src = (RUST_GATEWAY_SRC / "workspace_export_routes.rs").read_text(encoding="utf-8")
+    assert '"/api/workspace/exports"' in src
+
+    report = json.loads(INVENTORY_SNAPSHOT.read_text(encoding="utf-8"))
+    python_only = {(item["method"], item["path"]) for item in report.get("http_routes_only_on_python", [])}
+    assert ("post", "/api/workspace/exports") not in python_only
+
+    project = projects.create_project("Gate Project")
+    with mock.patch.dict(os.environ, {"DEEPSEEK_RUNTIME_MODE": "python_disabled"}):
+        with pytest.raises(PythonWriterMechanicallyDeniedError, match="project_metadata_store"):
+            exports.create_export({"kind": "project", "projectId": project["id"], "format": "json"})
+        with pytest.raises(PythonWriterMechanicallyDeniedError, match="generated_files_store"):
+            exports.create_export({
+                "kind": "conversation",
+                "format": "markdown",
+                "conversation": {"id": "c-gate", "title": "Gate", "messages": [{"role": "user", "content": "hi"}]},
+            })
+    assert not (tmp_settings / "projects" / project["id"] / "exports").exists()
+    assert not (tmp_settings / "generated" / "workspace-exports").exists()

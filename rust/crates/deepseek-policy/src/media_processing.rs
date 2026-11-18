@@ -341,7 +341,7 @@ fn raw_segments(media: &Value, source: &[u8], ocr_enabled: bool) -> Result<Vec<V
     }
 }
 
-fn normalize_segment(
+pub fn normalize_segment(
     raw: &Value,
     media_id: &str,
     index: usize,

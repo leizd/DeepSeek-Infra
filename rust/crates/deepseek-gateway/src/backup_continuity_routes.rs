@@ -144,7 +144,7 @@ fn policy_primary_and_revision(policy_id: &str) -> (String, i64) {
     (primary, rev)
 }
 
-fn read_continuity_state(policy_id: &str) -> Result<Value, AppError> {
+pub(crate) fn read_continuity_state(policy_id: &str) -> Result<Value, AppError> {
     if !valid_id(policy_id) {
         return Err(AppError::invalid_payload("Invalid policy id"));
     }

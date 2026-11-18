@@ -6,18 +6,19 @@
 
 use std::path::{Path, PathBuf};
 
+use axum::Json;
 use axum::Router;
 use axum::body::Bytes;
-use axum::extract::{OriginalUri, Path as AxumPath};
+use axum::extract::{DefaultBodyLimit, OriginalUri, Path as AxumPath};
 use axum::http::{HeaderMap, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::any;
 use deepseek_policy::app_error::AppError;
 use deepseek_policy::core_utils::python_truthy;
+use deepseek_policy::entropy::SystemEntropy;
 use deepseek_policy::file_routes::content_disposition_header;
-use deepseek_policy::generated_files::generated_dir;
-use deepseek_policy::projects;
 use deepseek_policy::python_json::value_str;
+use deepseek_policy::workspace_exports;
 use deepseek_policy::workspace_schema::{validate_project_id, validate_workspace_id};
 use serde_json::Value;
 
@@ -25,12 +26,50 @@ use crate::artifact_preview_routes::{
     build_download_response, error_response, guess_download_media_type, method_not_allowed,
     project_query, read_store_json, scan_projects, server_error,
 };
+use crate::route_support;
 
 pub fn router() -> Router {
-    Router::new().route(
-        "/api/workspace/exports/:export_id/download",
-        any(dispatch_download),
-    )
+    Router::new()
+        .route(
+            "/api/workspace/exports",
+            any(dispatch_create_export).layer(DefaultBodyLimit::max(16_000_000)),
+        )
+        .route(
+            "/api/workspace/exports/:export_id/download",
+            any(dispatch_download),
+        )
+}
+
+async fn dispatch_create_export(method: Method, headers: HeaderMap, body: Bytes) -> Response {
+    if method != Method::POST {
+        return route_support::unallowed_api_method(method, Method::GET);
+    }
+    if let Err(err) = route_support::require_native_store(
+        "generated_files_store",
+        "NATIVE_GENERATED_FILES_WRITE_NOT_OWNED",
+    ) {
+        return route_support::app_error_response(err);
+    }
+    if let Err(err) = route_support::require_native_store(
+        "project_metadata_store",
+        crate::PROJECT_METADATA_WRITE_NOT_OWNED,
+    ) {
+        return route_support::app_error_response(err);
+    }
+    let payload = match route_support::read_json_object(&headers, &body, 16_000_000) {
+        Ok(object) => Value::Object(object),
+        Err(err) => return route_support::app_error_response(err),
+    };
+    let root = crate::data_routes::workspace_root();
+    let joined = tokio::task::spawn_blocking(move || {
+        workspace_exports::create_export(&root, &payload, &SystemEntropy)
+    })
+    .await;
+    match joined {
+        Ok(Ok(value)) => (StatusCode::OK, Json(value)).into_response(),
+        Ok(Err(err)) => route_support::app_error_response(err),
+        Err(_) => server_error(),
+    }
 }
 
 async fn dispatch_download(
@@ -67,14 +106,7 @@ async fn download_response(method: Method, export_id: String, project_id: String
 }
 
 pub(crate) fn export_dir(root: &Path, project_id: &str) -> Result<PathBuf, AppError> {
-    if !project_id.is_empty() {
-        let safe_project_id = validate_project_id(project_id)?;
-        Ok(projects::projects_dir(root)
-            .join(safe_project_id)
-            .join("exports"))
-    } else {
-        Ok(generated_dir(root).join("workspace-exports"))
-    }
+    workspace_exports::export_dir(root, project_id)
 }
 
 pub(crate) fn load_exports(root: &Path, project_id: &str) -> Result<Vec<Value>, AppError> {

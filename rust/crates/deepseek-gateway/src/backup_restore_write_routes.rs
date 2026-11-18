@@ -1166,7 +1166,8 @@ fn cleanup_restores(root: &Path) -> Result<Value, AppError> {
         let Some(ts) = timestamp else {
             continue;
         };
-        let Ok(Some(epoch)) = parse_python_iso(&ts) else {
+        let cleaned_ts = ts.trim().replace('Z', "+00:00");
+        let Ok(Some(epoch)) = parse_python_iso(&cleaned_ts) else {
             continue;
         };
         let age_secs = now - (epoch as f64);

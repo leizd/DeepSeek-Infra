@@ -57,20 +57,71 @@ impl Drop for EnvGuard {
     }
 }
 
-fn build_app(root: &std::path::Path) -> (tempfile::TempDir, EnvGuard, axum::Router) {
+fn build_app_with_mode(
+    root: &std::path::Path,
+    mode: &str,
+) -> (tempfile::TempDir, EnvGuard, axum::Router) {
     let static_root = tempfile::tempdir().unwrap();
     let ui = static_root.path().join("ui");
     std::fs::create_dir_all(&ui).unwrap();
     std::fs::write(ui.join("index.html"), "<main>ui</main>").unwrap();
-    let env = EnvGuard::set(&[
+    let mut pairs = vec![
         ("DEEPSEEK_INFRA_ROOT", root.to_string_lossy().into_owned()),
         ("AUTH_TOKEN", TEST_TOKEN.to_string()),
         ("AUTH_DISABLED", String::new()),
         ("AUTH_ALLOWED_HOSTS", String::new()),
         ("HOST", String::new()),
-    ]);
+    ];
+    if !mode.is_empty() {
+        pairs.push(("DEEPSEEK_RUNTIME_MODE", mode.to_string()));
+    }
+    let env = EnvGuard::set(&pairs);
     let app = create_production_app(static_root.path()).unwrap();
     (static_root, env, app)
+}
+
+fn build_app(root: &std::path::Path) -> (tempfile::TempDir, EnvGuard, axum::Router) {
+    build_app_with_mode(root, "")
+}
+
+async fn call_json(
+    app: &axum::Router,
+    method: &str,
+    uri: &str,
+    payload: Option<&serde_json::Value>,
+) -> (StatusCode, axum::http::HeaderMap, Vec<u8>) {
+    let builder = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("host", "127.0.0.1")
+        .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"));
+    let body = if let Some(val) = payload {
+        let encoded = serde_json::to_vec(val).unwrap();
+        let req = builder
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::CONTENT_LENGTH, encoded.len().to_string())
+            .body(Body::from(encoded))
+            .unwrap();
+        let response = app.clone().oneshot(req).await.unwrap();
+        let status = response.status();
+        let headers = response.headers().clone();
+        let bytes = to_bytes(response.into_body(), 262_144)
+            .await
+            .unwrap()
+            .to_vec();
+        return (status, headers, bytes);
+    } else {
+        Body::empty()
+    };
+    let req = builder.body(body).unwrap();
+    let response = app.clone().oneshot(req).await.unwrap();
+    let status = response.status();
+    let headers = response.headers().clone();
+    let bytes = to_bytes(response.into_body(), 262_144)
+        .await
+        .unwrap()
+        .to_vec();
+    (status, headers, bytes)
 }
 
 async fn call_raw(
@@ -203,4 +254,104 @@ async fn artifact_and_export_downloads_serve_files_without_creating_missing_stor
             .unwrap()
             .contains("workspace-bundle.json")
     );
+}
+
+#[tokio::test]
+async fn default_mode_refuses_create_export_without_touching_disk() {
+    let _lock = EnvLock::acquire();
+    let root = tempfile::tempdir().unwrap();
+    let (_static_root, _env, app) = build_app_with_mode(root.path(), "python_authoritative");
+
+    let (status, _, body) = call_json(
+        &app,
+        "POST",
+        "/api/workspace/exports",
+        Some(&json!({
+            "kind": "conversation",
+            "format": "markdown",
+            "conversation": {"id": "c1", "title": "Deny", "messages": []}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(parsed["code"], "NATIVE_GENERATED_FILES_WRITE_NOT_OWNED");
+    assert!(!root.path().join(".generated").exists());
+    assert!(!root.path().join(".projects").exists());
+}
+
+#[tokio::test]
+async fn python_disabled_create_export_and_download_roundtrip() {
+    let _lock = EnvLock::acquire();
+    let root = tempfile::tempdir().unwrap();
+    let (_static_root, _env, app) = build_app_with_mode(root.path(), "python_disabled");
+
+    let (st_get, _, _) = call_json(&app, "GET", "/api/workspace/exports", None).await;
+    assert_eq!(st_get, StatusCode::NOT_FOUND);
+    let (st_del, _, _) = call_json(&app, "DELETE", "/api/workspace/exports", None).await;
+    assert_eq!(st_del, StatusCode::METHOD_NOT_ALLOWED);
+
+    let (st_inline, _, inline_bytes) = call_json(
+        &app,
+        "POST",
+        "/api/workspace/exports",
+        Some(&json!({
+            "kind": "conversation",
+            "format": "markdown",
+            "conversation": {
+                "id": "conv-inline",
+                "title": "Inline",
+                "messages": [{"role": "assistant", "content": "hello sk-1234567890abcdefghij"}]
+            }
+        })),
+    )
+    .await;
+    assert_eq!(st_inline, StatusCode::OK);
+    let inline_val: serde_json::Value = serde_json::from_slice(&inline_bytes).unwrap();
+    let export_id = inline_val["export"]["exportId"].as_str().unwrap();
+    assert_eq!(inline_val["export"]["kind"], "conversation");
+
+    let (st_dl, dl_headers, dl_bytes) = call_raw(
+        &app,
+        "GET",
+        &format!("/api/workspace/exports/{export_id}/download"),
+    )
+    .await;
+    assert_eq!(st_dl, StatusCode::OK);
+    assert_eq!(dl_headers[header::CONTENT_TYPE], "text/markdown");
+    let dl_text = String::from_utf8(dl_bytes).unwrap();
+    assert!(dl_text.contains("# Inline"));
+    assert!(dl_text.contains("[redacted-secret]"));
+    assert!(!dl_text.contains("sk-1234567890abcdefghij"));
+
+    let (st_proj, _, proj_bytes) = call_json(
+        &app,
+        "POST",
+        "/api/workspace/projects",
+        Some(&json!({"name": "ExpProj"})),
+    )
+    .await;
+    assert_eq!(st_proj, StatusCode::OK);
+    let proj_val: serde_json::Value = serde_json::from_slice(&proj_bytes).unwrap();
+    let pid = proj_val["project"]["id"].as_str().unwrap();
+
+    let (st_pexp, _, pexp_bytes) = call_json(
+        &app,
+        "POST",
+        "/api/workspace/exports",
+        Some(&json!({"projectId": pid, "kind": "project", "format": "html"})),
+    )
+    .await;
+    assert_eq!(st_pexp, StatusCode::OK);
+    let pexp_val: serde_json::Value = serde_json::from_slice(&pexp_bytes).unwrap();
+    let p_export_id = pexp_val["export"]["exportId"].as_str().unwrap();
+    let (st_pdl, _, pdl_bytes) = call_raw(
+        &app,
+        "GET",
+        &format!("/api/workspace/exports/{p_export_id}/download?projectId={pid}"),
+    )
+    .await;
+    assert_eq!(st_pdl, StatusCode::OK);
+    let html_body = String::from_utf8(pdl_bytes).unwrap();
+    assert!(html_body.contains("# ExpProj"));
 }

@@ -262,7 +262,7 @@ fn build_forecast_body() -> Result<Value, AppError> {
     }))
 }
 
-fn list_policies_readonly(root: &Path) -> Result<Vec<Value>, AppError> {
+pub(crate) fn list_policies_readonly(root: &Path) -> Result<Vec<Value>, AppError> {
     let mut by_id: BTreeMap<String, Value> = BTreeMap::new();
     let policy_dir = root.join(".backup-policies");
     if policy_dir.is_dir() {

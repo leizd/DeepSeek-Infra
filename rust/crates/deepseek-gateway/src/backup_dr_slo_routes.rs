@@ -43,7 +43,7 @@ async fn dispatch(method: Method) -> Response {
     }
 }
 
-fn now_unix_secs() -> u64 {
+pub(crate) fn now_unix_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
@@ -54,7 +54,7 @@ fn round_places(value: f64, factor: f64) -> f64 {
     (value * factor).round() / factor
 }
 
-fn percentile(values: &[f64], p: f64) -> f64 {
+pub(crate) fn percentile(values: &[f64], p: f64) -> f64 {
     if values.is_empty() {
         return 0.0;
     }
@@ -178,9 +178,12 @@ pub(crate) fn load_drill_items(root: &Path) -> Result<Vec<Value>, AppError> {
     Ok(results)
 }
 
-fn build_body() -> Result<Value, AppError> {
+pub(crate) fn build_body() -> Result<Value, AppError> {
+    build_body_at(now_unix_secs())
+}
+
+pub(crate) fn build_body_at(now_secs: u64) -> Result<Value, AppError> {
     let root = crate::data_routes::workspace_root();
-    let now_secs = now_unix_secs();
     let drill_items = load_drill_items(&root)?;
     let total_drills = drill_items.len();
 

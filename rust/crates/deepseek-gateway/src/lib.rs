@@ -39,6 +39,7 @@ pub mod backup_catalog_write_routes;
 pub mod backup_commit;
 mod backup_continuity_routes;
 mod backup_dr_slo_routes;
+mod backup_dr_status_routes;
 mod backup_drain_routes;
 mod backup_drill_routes;
 pub mod backup_mirror_routes;
@@ -241,6 +242,7 @@ fn create_routes() -> Router {
         .merge(backup_replication_routes::router())
         .merge(backup_drill_routes::router())
         .merge(backup_dr_slo_routes::router())
+        .merge(backup_dr_status_routes::router())
         .merge(backup_restore_read_routes::router())
         .merge(backup_restore_write_routes::router())
         .merge(backup_archive_routes::router())

@@ -7,7 +7,8 @@
 //! create `.resilience-journal`, `.resilience-capacity`, `.resilience-scheduler`,
 //! or `.resilience-waves`.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::Json;
@@ -17,12 +18,31 @@ use axum::http::Method;
 use axum::response::{IntoResponse, Response};
 use axum::routing::any;
 use deepseek_policy::app_error::AppError;
+use deepseek_policy::backup_retention::chrono::{DateTime, Duration as ChronoDuration, Utc};
 use percent_encoding::percent_decode_str;
 use rusqlite::{Connection, OptionalExtension};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use crate::backup_catalog_routes::{open_readonly_sqlite, utc_iso_from_unix};
+use crate::backup_dr_slo_routes;
+use crate::backup_retention_routes::load_backup_policy;
 use crate::route_support::{self, unhandled_error};
+
+const RISK_DETECTION_LATENCY_MS: &str = "risk_detection_latency_ms";
+const REMEDIATION_QUEUE_DELAY_MS: &str = "remediation_queue_delay_ms";
+const REPAIR_TIME_MS: &str = "repair_time_ms";
+const REBALANCE_TIME_MS: &str = "rebalance_time_ms";
+const RISK_CLEAR_LATENCY_MS: &str = "risk_clear_latency_ms";
+const DR_READINESS_AGE_HOURS: &str = "dr_readiness_age_hours";
+const LEASE_TAKEOVER_TIME_MS: &str = "lease_takeover_time_ms";
+const SCHEDULER_STARVATION_AGE_SECONDS: &str = "scheduler_starvation_age_seconds";
+const EVIDENCE_FRESHNESS_SECONDS: &str = "evidence_freshness_seconds";
+
+const DEFAULT_FAST_WINDOW_SECONDS: f64 = 3600.0;
+const DEFAULT_SLOW_WINDOW_SECONDS: f64 = 86400.0;
+const DEFAULT_ERROR_BUDGET_FRACTION: f64 = 0.01;
+const DEFAULT_FAST_CRITICAL_THRESHOLD: f64 = 14.4;
+const DEFAULT_SLOW_CRITICAL_THRESHOLD: f64 = 6.0;
 
 pub fn router() -> Router {
     Router::new()
@@ -32,6 +52,10 @@ pub fn router() -> Router {
             any(dispatch_capacity_forecast),
         )
         .route("/api/workspace/resilience/waves", any(dispatch_waves))
+        .route(
+            "/api/workspace/resilience/readiness",
+            any(dispatch_readiness),
+        )
 }
 
 fn parse_query(raw: Option<&str>) -> HashMap<String, String> {
@@ -55,7 +79,7 @@ fn parse_query(raw: Option<&str>) -> HashMap<String, String> {
     map
 }
 
-fn table_exists(conn: &Connection, name: &str) -> Result<bool, AppError> {
+pub(crate) fn table_exists(conn: &Connection, name: &str) -> Result<bool, AppError> {
     let found: Option<String> = conn
         .query_row(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
@@ -497,5 +521,604 @@ fn waves_snapshot(schedule_id_opt: Option<String>) -> Result<Value, AppError> {
         "schedule": sched.or(snapshot),
         "waves": waves,
         "actions": actions,
+    }))
+}
+
+#[derive(Clone)]
+struct SloSample {
+    metric_name: String,
+    value: f64,
+    metadata: Value,
+    observed_at: String,
+}
+
+async fn dispatch_readiness(method: Method) -> Response {
+    run_get(method, fleet_readiness_snapshot).await
+}
+
+fn round_scale(value: f64, scale: f64) -> f64 {
+    (value * scale).round() / scale
+}
+
+fn parse_utc_rfc3339(raw: &str) -> Option<DateTime<Utc>> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    DateTime::parse_from_rfc3339(trimmed)
+        .ok()
+        .map(|dt| dt.with_timezone(&Utc))
+}
+
+fn format_utc_iso(dt: DateTime<Utc>) -> String {
+    dt.format("%Y-%m-%dT%H:%M:%SZ").to_string()
+}
+
+fn percentile_linear(values: &[f64], q: f64) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    let mut ordered = values.to_vec();
+    ordered.sort_by(|a, b| a.total_cmp(b));
+    let index = (ordered.len() - 1) as f64 * q;
+    let lower = index as usize;
+    let upper = (lower + 1).min(ordered.len() - 1);
+    let fraction = index - lower as f64;
+    ordered[lower] + fraction * (ordered[upper] - ordered[lower])
+}
+
+fn list_open_risk_observations(root: &Path) -> Result<Vec<Value>, AppError> {
+    let db_path = root.join(".resilience-risk").join("risk.sqlite3");
+    let Some(conn) = open_readonly_sqlite(&db_path)? else {
+        return Ok(Vec::new());
+    };
+    if !table_exists(&conn, "resilience_risk_observations")? {
+        return Ok(Vec::new());
+    }
+    let mut stmt = conn
+        .prepare(
+            "SELECT risk_subject_digest, current_severity, open_since_at, policy_id \
+             FROM resilience_risk_observations \
+             WHERE status IN ('OPEN', 'REOPENED', 'UNKNOWN_COVERAGE') \
+             ORDER BY open_since_at ASC, risk_subject_digest ASC",
+        )
+        .map_err(|_| unhandled_error())?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(json!({
+                "riskSubjectDigest": row.get::<_, String>(0)?,
+                "currentSeverity": row.get::<_, String>(1)?,
+                "openSinceAt": row.get::<_, Option<String>>(2)?,
+                "policyId": row.get::<_, Option<String>>(3)?,
+            }))
+        })
+        .map_err(|_| unhandled_error())?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row.map_err(|_| unhandled_error())?);
+    }
+    Ok(out)
+}
+
+fn risk_debt_for_observation(risk: &Value, now: DateTime<Utc>) -> Result<f64, AppError> {
+    let pid = risk
+        .get("policyId")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let policy = if pid.is_empty() {
+        None
+    } else {
+        match load_backup_policy(&pid) {
+            Ok(pol) => Some(pol),
+            Err(err) if err.status == 404 => None,
+            Err(err) => return Err(err),
+        }
+    };
+    let severity = risk
+        .get("currentSeverity")
+        .and_then(Value::as_str)
+        .unwrap_or("warning")
+        .to_lowercase();
+    let base_weight = match severity.as_str() {
+        "critical" => 10.0,
+        "degraded" => 5.0,
+        "warning" => 2.0,
+        "healthy" => 0.0,
+        "blocked" => 15.0,
+        _ => 2.0,
+    };
+    let age_seconds = risk
+        .get("openSinceAt")
+        .and_then(Value::as_str)
+        .and_then(parse_utc_rfc3339)
+        .map(|opened| ((now - opened).num_milliseconds() as f64 / 1000.0).max(0.0))
+        .unwrap_or(0.0);
+    let age_factor = 1.0 + ((age_seconds / 86400.0) * 0.5).min(10.0);
+    let pol_crit = policy
+        .as_ref()
+        .and_then(|p| p.get("criticality").or_else(|| p.get("priority")))
+        .and_then(Value::as_str)
+        .unwrap_or("standard")
+        .to_lowercase();
+    let crit_multiplier = match pol_crit.as_str() {
+        "critical" => 3.0,
+        "high" => 2.0,
+        "standard" => 1.0,
+        _ => 1.0,
+    };
+    Ok(round_scale(
+        base_weight * age_factor * crit_multiplier,
+        1000.0,
+    ))
+}
+
+fn load_recent_slo_samples(conn: &Connection) -> Result<Vec<SloSample>, AppError> {
+    if !table_exists(conn, "resilience_slo_samples")? {
+        return Ok(Vec::new());
+    }
+    let mut metric_stmt = conn
+        .prepare("SELECT DISTINCT metric_name FROM resilience_slo_samples ORDER BY metric_name")
+        .map_err(|_| unhandled_error())?;
+    let metric_rows = metric_stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|_| unhandled_error())?;
+    let mut metrics = Vec::new();
+    for row in metric_rows {
+        metrics.push(row.map_err(|_| unhandled_error())?);
+    }
+
+    let mut samples = Vec::new();
+    let mut stmt = conn
+        .prepare(
+            "SELECT metric_name, value, metadata_json, observed_at \
+             FROM resilience_slo_samples \
+             WHERE metric_name = ? \
+             ORDER BY observed_at DESC, sample_id DESC LIMIT 10000",
+        )
+        .map_err(|_| unhandled_error())?;
+    for metric_name in metrics {
+        let rows = stmt
+            .query_map([&metric_name], |row| {
+                let meta_str: String = row.get(2)?;
+                Ok(SloSample {
+                    metric_name: row.get(0)?,
+                    value: row.get(1)?,
+                    metadata: serde_json::from_str(&meta_str).unwrap_or_else(|_| json!({})),
+                    observed_at: row.get(3)?,
+                })
+            })
+            .map_err(|_| unhandled_error())?;
+        let mut collected = Vec::new();
+        for row in rows {
+            collected.push(row.map_err(|_| unhandled_error())?);
+        }
+        collected.reverse();
+        samples.extend(collected);
+    }
+    Ok(samples)
+}
+
+fn sample_in_window(sample: &SloSample, now: DateTime<Utc>, window_seconds: Option<f64>) -> bool {
+    let Some(win) = window_seconds else {
+        return true;
+    };
+    let Some(obs) = parse_utc_rfc3339(&sample.observed_at) else {
+        return false;
+    };
+    let diff_seconds = (now - obs).num_milliseconds() as f64 / 1000.0;
+    diff_seconds <= win
+}
+
+fn window_metric_summary(
+    items: &[SloSample],
+    now: DateTime<Utc>,
+    window_seconds: Option<f64>,
+) -> Value {
+    let ordered: Vec<&SloSample> = items
+        .iter()
+        .filter(|sample| sample_in_window(sample, now, window_seconds))
+        .collect();
+    if ordered.is_empty() {
+        return json!({
+            "p50": Value::Null,
+            "p95": Value::Null,
+            "p99": Value::Null,
+            "samples": 0,
+            "coverageSeconds": 0.0,
+            "status": "INSUFFICIENT_DATA",
+        });
+    }
+    let values: Vec<f64> = ordered.iter().map(|s| s.value).collect();
+    let coverage = ordered
+        .first()
+        .zip(ordered.last())
+        .and_then(|(first, last)| {
+            Some(
+                ((parse_utc_rfc3339(&last.observed_at)? - parse_utc_rfc3339(&first.observed_at)?)
+                    .num_milliseconds() as f64
+                    / 1000.0)
+                    .max(0.0),
+            )
+        })
+        .unwrap_or(0.0);
+    json!({
+        "p50": round_scale(percentile_linear(&values, 0.50), 1000.0),
+        "p95": round_scale(percentile_linear(&values, 0.95), 1000.0),
+        "p99": round_scale(percentile_linear(&values, 0.99), 1000.0),
+        "samples": values.len(),
+        "coverageSeconds": round_scale(coverage, 1000.0),
+        "status": "OK",
+    })
+}
+
+fn fleet_slo_snapshot(samples: &[SloSample], now: DateTime<Utc>, dr_freshness_hours: f64) -> Value {
+    let mut grouped: BTreeMap<String, Vec<SloSample>> = BTreeMap::new();
+    for sample in samples {
+        grouped
+            .entry(sample.metric_name.clone())
+            .or_default()
+            .push(sample.clone());
+    }
+
+    let window_defs: [(&str, Option<f64>); 5] = [
+        ("1h", Some(3600.0)),
+        ("24h", Some(86400.0)),
+        ("7d", Some(604800.0)),
+        ("30d", Some(2592000.0)),
+        ("lifetime", None),
+    ];
+    let mut windows = Map::new();
+    for (win_name, win_secs) in window_defs {
+        let mut per_metric = Map::new();
+        for (metric_name, items) in &grouped {
+            per_metric.insert(
+                metric_name.clone(),
+                window_metric_summary(items, now, win_secs),
+            );
+        }
+        windows.insert(win_name.to_string(), Value::Object(per_metric));
+    }
+
+    let mut summaries = Map::new();
+    let mut sample_counts = Map::new();
+    for (metric_name, items) in &grouped {
+        let bounded: Vec<&SloSample> = items
+            .iter()
+            .filter(|sample| sample_in_window(sample, now, Some(86400.0)))
+            .collect();
+        if bounded.is_empty() {
+            continue;
+        }
+        let values: Vec<f64> = bounded.iter().map(|s| s.value).collect();
+        sample_counts.insert(metric_name.clone(), json!(values.len()));
+        summaries.insert(
+            metric_name.clone(),
+            json!({
+                "count": values.len(),
+                "p50": round_scale(percentile_linear(&values, 0.50), 1000.0),
+                "p95": round_scale(percentile_linear(&values, 0.95), 1000.0),
+                "latest": round_scale(*values.last().unwrap_or(&0.0), 1000.0),
+                "lastObservedAt": bounded.last().map(|s| s.observed_at.clone()).unwrap_or_default(),
+            }),
+        );
+    }
+
+    let p95 = |metric_name: &str| -> f64 {
+        let win24 = windows
+            .get("24h")
+            .and_then(|v| v.get(metric_name))
+            .and_then(Value::as_object);
+        if win24.and_then(|w| w.get("status")).and_then(Value::as_str) == Some("INSUFFICIENT_DATA")
+        {
+            return 0.0;
+        }
+        win24
+            .and_then(|w| w.get("p95"))
+            .and_then(Value::as_f64)
+            .or_else(|| {
+                summaries
+                    .get(metric_name)
+                    .and_then(|s| s.get("p95"))
+                    .and_then(Value::as_f64)
+            })
+            .unwrap_or(0.0)
+    };
+    let latest_val = |metric_name: &str| -> f64 {
+        summaries
+            .get(metric_name)
+            .and_then(|s| s.get("latest"))
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0)
+    };
+
+    let evidence_freshness_seconds = grouped
+        .get(EVIDENCE_FRESHNESS_SECONDS)
+        .and_then(|items| items.last())
+        .and_then(|sample| parse_utc_rfc3339(&sample.observed_at))
+        .map(|obs| {
+            round_scale(
+                ((now - obs).num_milliseconds() as f64 / 1000.0).max(0.0),
+                1000.0,
+            )
+        });
+
+    json!({
+        "riskDetectionP95Ms": p95(RISK_DETECTION_LATENCY_MS),
+        "remediationQueueDelayP95Ms": p95(REMEDIATION_QUEUE_DELAY_MS),
+        "repairP95Ms": p95(REPAIR_TIME_MS),
+        "rebalanceP95Ms": p95(REBALANCE_TIME_MS),
+        "riskClearP95Ms": p95(RISK_CLEAR_LATENCY_MS),
+        "drFreshnessHours": round_scale(dr_freshness_hours, 1000.0),
+        "leaseTakeoverP95Ms": p95(LEASE_TAKEOVER_TIME_MS),
+        "schedulerStarvationAgeSeconds": latest_val(SCHEDULER_STARVATION_AGE_SECONDS),
+        "evidenceFreshnessSeconds": evidence_freshness_seconds,
+        "sampleCounts": Value::Object(sample_counts),
+        "metrics": Value::Object(summaries),
+        "windows": Value::Object(windows),
+        "evaluatedAt": format_utc_iso(now),
+    })
+}
+
+fn window_burn_by_indicator(
+    conn: &Connection,
+    since: DateTime<Utc>,
+    until: DateTime<Utc>,
+) -> Result<BTreeMap<String, f64>, AppError> {
+    if !table_exists(conn, "resilience_slo_burn_observations")? {
+        return Ok(BTreeMap::new());
+    }
+    let mut stmt = conn
+        .prepare(
+            "SELECT indicator, bad_units, total_units, started_at, observed_at \
+             FROM resilience_slo_burn_observations \
+             WHERE observed_at >= ? AND started_at <= ? \
+             ORDER BY indicator, observed_at, observation_id",
+        )
+        .map_err(|_| unhandled_error())?;
+    let rows = stmt
+        .query_map([format_utc_iso(since), format_utc_iso(until)], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, f64>(1)?,
+                row.get::<_, f64>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        })
+        .map_err(|_| unhandled_error())?;
+
+    let mut totals: BTreeMap<String, (f64, f64)> = BTreeMap::new();
+    for row in rows {
+        let (indicator, bad_units, total_units, started_opt, observed_raw) =
+            row.map_err(|_| unhandled_error())?;
+        let started_str = started_opt.unwrap_or_else(|| observed_raw.clone());
+        let (Some(started), Some(observed)) = (
+            parse_utc_rfc3339(&started_str),
+            parse_utc_rfc3339(&observed_raw),
+        ) else {
+            continue;
+        };
+        let fraction = if observed > started {
+            let overlap_start = started.max(since);
+            let overlap_end = observed.min(until);
+            let overlap_ms = (overlap_end - overlap_start).num_milliseconds().max(0) as f64;
+            let total_ms = (observed - started).num_milliseconds() as f64;
+            overlap_ms / total_ms
+        } else if observed >= since && observed <= until {
+            1.0
+        } else {
+            0.0
+        };
+        let entry = totals.entry(indicator).or_insert((0.0, 0.0));
+        entry.0 += bad_units * fraction;
+        entry.1 += total_units * fraction;
+    }
+
+    let mut rates = BTreeMap::new();
+    for (indicator, (bad, total)) in totals {
+        let rate = if total > 0.0 {
+            bad / total / DEFAULT_ERROR_BUDGET_FRACTION
+        } else {
+            0.0
+        };
+        rates.insert(indicator, rate);
+    }
+    Ok(rates)
+}
+
+fn compute_burn_rates(
+    conn_opt: Option<&Connection>,
+    now: DateTime<Utc>,
+) -> Result<Value, AppError> {
+    let fast_since = now - ChronoDuration::seconds(DEFAULT_FAST_WINDOW_SECONDS as i64);
+    let slow_since = now - ChronoDuration::seconds(DEFAULT_SLOW_WINDOW_SECONDS as i64);
+    let (fast_map, slow_map) = match conn_opt {
+        Some(conn) => (
+            window_burn_by_indicator(conn, fast_since, now)?,
+            window_burn_by_indicator(conn, slow_since, now)?,
+        ),
+        None => (BTreeMap::new(), BTreeMap::new()),
+    };
+
+    let indicators: BTreeSet<String> = fast_map.keys().chain(slow_map.keys()).cloned().collect();
+    let mut by_indicator = Map::new();
+    let mut critical = Vec::new();
+    let mut max_fast = 0.0_f64;
+    let mut max_slow = 0.0_f64;
+    for indicator in indicators {
+        let fast = *fast_map.get(&indicator).unwrap_or(&0.0);
+        let slow = *slow_map.get(&indicator).unwrap_or(&0.0);
+        max_fast = max_fast.max(fast);
+        max_slow = max_slow.max(slow);
+        if fast > DEFAULT_FAST_CRITICAL_THRESHOLD && slow > DEFAULT_SLOW_CRITICAL_THRESHOLD {
+            critical.push(Value::String(indicator.clone()));
+        }
+        by_indicator.insert(
+            indicator,
+            json!({
+                "fast": round_scale(fast, 1_000_000.0),
+                "slow": round_scale(slow, 1_000_000.0),
+            }),
+        );
+    }
+    let status = if critical.is_empty() {
+        "OK"
+    } else {
+        "CRITICAL"
+    };
+    Ok(json!({
+        "fast": round_scale(max_fast, 1_000_000.0),
+        "slow": round_scale(max_slow, 1_000_000.0),
+        "fastWindowSeconds": DEFAULT_FAST_WINDOW_SECONDS,
+        "slowWindowSeconds": DEFAULT_SLOW_WINDOW_SECONDS,
+        "errorBudgetFraction": DEFAULT_ERROR_BUDGET_FRACTION,
+        "fastCriticalThreshold": DEFAULT_FAST_CRITICAL_THRESHOLD,
+        "slowCriticalThreshold": DEFAULT_SLOW_CRITICAL_THRESHOLD,
+        "byIndicator": Value::Object(by_indicator),
+        "criticalIndicators": critical,
+        "status": status,
+        "evaluatedAt": format_utc_iso(now),
+    }))
+}
+
+fn latest_schedule_snapshot(root: &Path) -> Result<Value, AppError> {
+    let sched_db = root.join(".resilience-scheduler").join("service.sqlite3");
+    let Some(conn) = open_readonly_sqlite(&sched_db)? else {
+        return Ok(json!({}));
+    };
+    if !table_exists(&conn, "resilience_scheduler_runs")? {
+        return Ok(json!({}));
+    }
+    let raw: Option<String> = conn
+        .query_row(
+            "SELECT schedule_json FROM resilience_scheduler_runs \
+             ORDER BY scheduled_at DESC, rowid DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|_| unhandled_error())?;
+    Ok(raw
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .filter(Value::is_object)
+        .unwrap_or_else(|| json!({})))
+}
+
+fn fleet_readiness_snapshot() -> Result<Value, AppError> {
+    let root = crate::data_routes::workspace_root();
+    let now_dt = Utc::now();
+    let now_secs = now_dt.timestamp().max(0) as u64;
+    let current = DateTime::from_timestamp(now_secs as i64, 0).unwrap_or(now_dt);
+
+    let open_risks = list_open_risk_observations(&root)?;
+    let mut open_ages = Vec::new();
+    let mut critical_count = 0usize;
+    let mut debt_total = 0.0_f64;
+    for risk in &open_risks {
+        if let Some(opened) = risk
+            .get("openSinceAt")
+            .and_then(Value::as_str)
+            .and_then(parse_utc_rfc3339)
+        {
+            let age = ((current - opened).num_milliseconds() as f64 / 1000.0).max(0.0);
+            open_ages.push(age);
+        }
+        let sev = risk
+            .get("currentSeverity")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_lowercase();
+        if sev == "critical" || sev == "blocked" {
+            critical_count += 1;
+        }
+        debt_total += risk_debt_for_observation(risk, current)?;
+    }
+
+    let dr_slo = backup_dr_slo_routes::build_body_at(now_secs)?;
+    let dr_freshness_hours = dr_slo
+        .get("evidenceFreshnessDays")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0)
+        .max(0.0)
+        * 24.0;
+    let overall_dr_compliant = dr_slo
+        .get("overallSloCompliant")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+
+    let slo_db = root.join(".resilience-slo").join("slo.sqlite3");
+    let slo_conn = open_readonly_sqlite(&slo_db)?;
+    let samples = match slo_conn.as_ref() {
+        Some(conn) => load_recent_slo_samples(conn)?,
+        None => Vec::new(),
+    };
+    let slo = fleet_slo_snapshot(&samples, current, dr_freshness_hours);
+    let burn_rate = compute_burn_rates(slo_conn.as_ref(), current)?;
+
+    let evidence_sample = samples
+        .iter()
+        .rev()
+        .find(|s| s.metric_name == EVIDENCE_FRESHNESS_SECONDS);
+    let proof_freshness = evidence_sample
+        .and_then(|s| parse_utc_rfc3339(&s.observed_at))
+        .map(|obs| {
+            round_scale(
+                ((current - obs).num_milliseconds() as f64 / 1000.0).max(0.0),
+                1000.0,
+            )
+        });
+
+    let schedule = latest_schedule_snapshot(&root)?;
+    let waves = schedule
+        .get("executionWaves")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let deferred = schedule
+        .get("deferredCount")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let unschedulable = schedule
+        .get("unschedulableCount")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+
+    let readiness = if critical_count > 0 || burn_rate["status"] == "CRITICAL" {
+        "CRITICAL"
+    } else if !open_risks.is_empty()
+        || unschedulable != 0
+        || !overall_dr_compliant
+        || evidence_sample.is_none()
+    {
+        "DEGRADED"
+    } else {
+        "READY"
+    };
+
+    let oldest_age = open_ages.into_iter().fold(0.0_f64, f64::max);
+    Ok(json!({
+        "fleetReadiness": readiness,
+        "slo": slo,
+        "riskDebt": {
+            "total": round_scale(debt_total, 1000.0),
+            "openCount": open_risks.len(),
+            "critical": critical_count,
+            "oldestRiskAgeSeconds": round_scale(oldest_age, 1000.0),
+        },
+        "scheduler": {
+            "scheduleId": schedule.get("scheduleId").cloned().unwrap_or(Value::Null),
+            "waves": waves,
+            "deferred": deferred,
+            "unschedulable": unschedulable,
+        },
+        "burnRate": burn_rate,
+        "evidence": {
+            "lastVerifiedAt": evidence_sample.map(|s| json!(s.observed_at)).unwrap_or(Value::Null),
+            "proofFreshnessSeconds": proof_freshness,
+            "proofSha256": evidence_sample.and_then(|s| s.metadata.get("proofSha256")).cloned().unwrap_or(Value::Null),
+            "scenario": evidence_sample.and_then(|s| s.metadata.get("scenario")).cloned().unwrap_or(Value::Null),
+        },
+        "generatedAt": format_utc_iso(current),
     }))
 }

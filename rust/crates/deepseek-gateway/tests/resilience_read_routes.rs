@@ -240,3 +240,72 @@ async fn resilience_reads_query_sqlite_tables_and_filters() {
     assert_eq!(wb["waves"].as_array().unwrap().len(), 1);
     assert_eq!(wb["actions"].as_array().unwrap().len(), 1);
 }
+
+#[tokio::test]
+async fn resilience_readiness_aggregates_risks_slo_burn_and_evidence() {
+    let _lock = EnvLock::acquire();
+    let root = tempfile::tempdir().unwrap();
+    let (_static, _env, app) = build_app(root.path());
+
+    // Empty workspace -> DEGRADED without touching disk.
+    let (st_empty, empty_body) = call_get(&app, "GET", "/api/workspace/resilience/readiness").await;
+    assert_eq!(st_empty, StatusCode::OK);
+    assert_eq!(empty_body["fleetReadiness"], "DEGRADED");
+    assert_eq!(empty_body["riskDebt"]["openCount"], 0);
+    assert_eq!(empty_body["burnRate"]["status"], "OK");
+    assert!(!root.path().join(".resilience-slo").exists());
+    assert!(!root.path().join(".resilience-risk").exists());
+
+    let (st_head, _) = call_get(&app, "HEAD", "/api/workspace/resilience/readiness").await;
+    assert_eq!(st_head, StatusCode::OK);
+    let (st_post, _) = call_get(&app, "POST", "/api/workspace/resilience/readiness").await;
+    assert_eq!(st_post, StatusCode::METHOD_NOT_ALLOWED);
+
+    // Seed risk observation + SLO sample + burn rate + schedule snapshot.
+    std::fs::create_dir_all(root.path().join(".resilience-risk")).unwrap();
+    let rconn = Connection::open(root.path().join(".resilience-risk/risk.sqlite3")).unwrap();
+    rconn
+        .execute_batch(
+            "CREATE TABLE resilience_risk_observations (
+                risk_subject_digest TEXT PRIMARY KEY, subject_json TEXT NOT NULL,
+                first_seen_at TEXT NOT NULL, open_since_at TEXT, last_seen_at TEXT NOT NULL,
+                observation_count INTEGER NOT NULL, current_severity TEXT NOT NULL,
+                peak_severity TEXT NOT NULL, status TEXT NOT NULL, last_cleared_at TEXT,
+                reopen_count INTEGER NOT NULL DEFAULT 0, policy_id TEXT, backup_id TEXT,
+                target_id TEXT, failure_domain TEXT, last_snapshot_digest TEXT,
+                last_snapshot_observation_key TEXT, closure_reason TEXT, updated_at TEXT NOT NULL
+            );
+            INSERT INTO resilience_risk_observations VALUES (
+                'dig-1', '{}', '2026-11-17T00:00:00Z', '2026-11-17T00:00:00Z', '2026-11-17T01:00:00Z',
+                2, 'critical', 'critical', 'OPEN', NULL, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2026-11-17T01:00:00Z'
+            );",
+        )
+        .unwrap();
+
+    std::fs::create_dir_all(root.path().join(".resilience-slo")).unwrap();
+    let sconn = Connection::open(root.path().join(".resilience-slo/slo.sqlite3")).unwrap();
+    sconn
+        .execute_batch(
+            "CREATE TABLE resilience_slo_samples (
+                sample_id INTEGER PRIMARY KEY AUTOINCREMENT, sample_key TEXT NOT NULL UNIQUE,
+                metric_name TEXT NOT NULL, value REAL NOT NULL, policy_id TEXT, action_id TEXT,
+                risk_subject_digest TEXT, outcome TEXT, metadata_json TEXT NOT NULL, observed_at TEXT NOT NULL
+            );
+            CREATE TABLE resilience_slo_burn_observations (
+                observation_id INTEGER PRIMARY KEY AUTOINCREMENT, observation_key TEXT NOT NULL UNIQUE,
+                indicator TEXT NOT NULL, bad_units REAL NOT NULL, total_units REAL NOT NULL,
+                metadata_json TEXT NOT NULL, started_at TEXT NOT NULL, observed_at TEXT NOT NULL
+            );
+            INSERT INTO resilience_slo_samples (sample_key, metric_name, value, metadata_json, observed_at)
+            VALUES ('ev-1', 'evidence_freshness_seconds', 10.0, '{\"proofSha256\":\"abc\",\"scenario\":\"dr-test\"}', '2026-11-17T01:00:00Z');",
+        )
+        .unwrap();
+
+    let (st_crit, crit_body) = call_get(&app, "GET", "/api/workspace/resilience/readiness").await;
+    assert_eq!(st_crit, StatusCode::OK);
+    assert_eq!(crit_body["fleetReadiness"], "CRITICAL");
+    assert_eq!(crit_body["riskDebt"]["openCount"], 1);
+    assert_eq!(crit_body["riskDebt"]["critical"], 1);
+    assert_eq!(crit_body["evidence"]["proofSha256"], "abc");
+    assert_eq!(crit_body["evidence"]["scenario"], "dr-test");
+}
