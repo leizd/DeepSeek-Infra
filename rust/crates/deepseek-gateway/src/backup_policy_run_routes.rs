@@ -730,7 +730,7 @@ fn build_object_set_once(
     let mut seen_rel = BTreeSet::new();
 
     for spec in LOCAL_CONTRIBUTORS {
-        let collected = collect_contributor_files(root, spec, context);
+        let collected = collect_contributor_files(root, &spec, context);
         let mut c_files: u64 = 0;
         let mut c_bytes: u64 = 0;
         for (rel_path, src_path) in collected {
