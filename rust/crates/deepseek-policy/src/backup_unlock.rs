@@ -804,28 +804,157 @@ pub fn safe_extract_and_verify(archive_path: &Path, destination: &Path) -> Resul
     verify_manifest_tree(destination)
 }
 
-fn parse_payload_ref(value: Option<&Value>) -> Result<(&'static str, String), AppError> {
+/// Selection of archive payload paths for projected ZIP extraction.
+pub struct SelectedArchiveFilter<'a> {
+    pub needed_full: &'a BTreeSet<String>,
+    pub needed_packs: &'a BTreeSet<String>,
+    pub needed_standalone: &'a BTreeSet<String>,
+}
+
+fn declared_archive_digests(manifest: &Value) -> BTreeMap<String, String> {
+    let mut digests = BTreeMap::new();
+    for key in ["files", "deltaFiles"] {
+        let Some(entries) = manifest.get(key).and_then(Value::as_array) else {
+            continue;
+        };
+        for entry in entries {
+            let Some(path) = entry.get("path").and_then(Value::as_str) else {
+                continue;
+            };
+            let Some(digest) = entry.get("sha256").and_then(Value::as_str) else {
+                continue;
+            };
+            if !path.is_empty() && !digest.is_empty() {
+                digests.insert(path.to_string(), digest.to_string());
+            }
+        }
+    }
+    digests
+}
+
+/// Validate all entries in a backup archive and extract only the selected paths.
+pub fn extract_selected_archive(
+    archive_path: &Path,
+    destination: &Path,
+    filter: &SelectedArchiveFilter<'_>,
+    manifest: &Value,
+) -> Result<(), AppError> {
+    reset_dir(destination)?;
+    let is_incremental =
+        manifest.get("snapshotKind").and_then(Value::as_str) == Some("incremental");
+    let mut desired: BTreeSet<String> =
+        ["manifest.json".to_string(), "checksums.sha256".to_string()]
+            .into_iter()
+            .collect();
+    desired.extend(filter.needed_full.iter().cloned());
+    desired.extend(filter.needed_packs.iter().cloned());
+    desired.extend(filter.needed_standalone.iter().cloned());
+    if is_incremental {
+        desired.insert("delta/operations.json".to_string());
+        desired.insert(PACK_INDEX_PATH.to_string());
+    }
+
+    let declared = declared_archive_digests(manifest);
+    let file =
+        File::open(archive_path).map_err(|_| invalid_payload("Backup archive is unreadable"))?;
+    let mut archive = ZipArchive::new(BufReader::new(file))
+        .map_err(|_| invalid_payload("Backup archive is unreadable"))?;
+    let infos = validate_archive_infos(&mut archive)?;
+    let available: BTreeSet<String> = infos
+        .iter()
+        .filter(|meta| !meta.is_dir)
+        .map(|meta| meta.normalized.clone())
+        .collect();
+    let missing: Vec<String> = desired.difference(&available).cloned().collect();
+    if !missing.is_empty() {
+        return Err(invalid_payload(format!(
+            "Backup is missing required entries: {}",
+            missing.join(", ")
+        )));
+    }
+
+    let mut actual_total = 0_u64;
+    for meta in infos {
+        if meta.is_dir || !desired.contains(&meta.normalized) {
+            continue;
+        }
+        let target = target_from_relative(destination, &meta.normalized);
+        let mut zip_file = archive
+            .by_index(meta.index)
+            .map_err(|_| invalid_payload("Backup archive is unreadable"))?;
+        extract_entry_bounded(&mut zip_file, &target, &mut actual_total)?;
+    }
+
+    for relative in filter
+        .needed_full
+        .iter()
+        .chain(filter.needed_standalone.iter())
+    {
+        let expected = declared
+            .get(relative)
+            .ok_or_else(|| invalid_payload(format!("Backup entry is undeclared: {relative}")))?;
+        let path = target_from_relative(destination, relative);
+        let ok = path.is_file() && sha256_file(&path).ok().as_deref() == Some(expected.as_str());
+        if !ok {
+            return Err(invalid_payload(format!(
+                "Backup selected entry failed checksum: {relative}"
+            )));
+        }
+    }
+    if is_incremental && !target_from_relative(destination, "delta/operations.json").is_file() {
+        return Err(invalid_payload(
+            "Backup delta operations manifest is missing",
+        ));
+    }
+    Ok(())
+}
+
+/// Metadata for a single `.pack` file referenced in `payload/packs/index.json`.
+#[derive(Clone, Debug)]
+pub struct PackSpec {
+    pub path: String,
+    pub size: u64,
+    pub sha256: String,
+}
+
+/// Normalized entry within a delta `.pack` file.
+#[derive(Clone, Debug)]
+pub struct PackEntry {
+    pub pack: String,
+    pub offset: u64,
+    pub length: u64,
+    pub sha256: Option<String>,
+}
+
+/// Parsed pack index metadata without eagerly reading `.pack` files.
+#[derive(Clone, Debug)]
+pub struct ParsedPackIndex {
+    pub packs: BTreeMap<String, PackSpec>,
+    pub entries: BTreeMap<String, PackEntry>,
+}
+
+/// Parse `payloadRef` into `("standalone" | "pack-range", locator)`.
+pub fn parse_payload_ref(value: Option<&Value>) -> Result<(&'static str, String), AppError> {
     match value {
         Some(Value::String(text)) if !text.is_empty() => Ok(("standalone", text.clone())),
         Some(Value::Object(map)) => {
             let kind = map.get("kind").and_then(Value::as_str).unwrap_or("");
-            if kind == "pack-range" {
-                if let Some(blob_id) = map.get("blobId").and_then(Value::as_str) {
-                    if !blob_id.is_empty() {
-                        return Ok(("pack-range", blob_id.to_string()));
-                    }
+            let locator = match kind {
+                "pack-range" => map.get("blobId").and_then(Value::as_str),
+                "standalone" => map.get("path").and_then(Value::as_str),
+                _ => None,
+            };
+            match (kind, locator) {
+                ("pack-range", Some(blob_id)) if !blob_id.is_empty() => {
+                    Ok(("pack-range", blob_id.to_string()))
                 }
-            }
-            if kind == "standalone" {
-                if let Some(path) = map.get("path").and_then(Value::as_str) {
-                    if !path.is_empty() {
-                        return Ok(("standalone", path.to_string()));
-                    }
+                ("standalone", Some(path)) if !path.is_empty() => {
+                    Ok(("standalone", path.to_string()))
                 }
+                _ => Err(invalid_payload(
+                    "Delta payload reference is missing or invalid",
+                )),
             }
-            Err(invalid_payload(
-                "Delta payload reference is missing or invalid",
-            ))
         }
         _ => Err(invalid_payload(
             "Delta payload reference is missing or invalid",
@@ -833,13 +962,8 @@ fn parse_payload_ref(value: Option<&Value>) -> Result<(&'static str, String), Ap
     }
 }
 
-struct PackIndexVerification {
-    entry_ids: BTreeSet<String>,
-    indexed_packs: BTreeSet<String>,
-    entry_packs: BTreeMap<String, String>,
-}
-
-fn load_and_verify_pack_index(destination: &Path) -> Result<PackIndexVerification, AppError> {
+/// Parse and structurally validate `payload/packs/index.json` without hashing packfiles.
+pub fn parse_pack_index_file(destination: &Path) -> Result<ParsedPackIndex, AppError> {
     let index = read_json_object(
         &target_from_relative(destination, PACK_INDEX_PATH),
         "Delta pack index is invalid",
@@ -854,9 +978,8 @@ fn load_and_verify_pack_index(destination: &Path) -> Result<PackIndexVerificatio
         .and_then(Value::as_array)
         .ok_or_else(|| invalid_payload("Delta pack index is invalid"))?;
 
-    let mut packs = BTreeMap::<String, u64>::new();
+    let mut packs = BTreeMap::<String, PackSpec>::new();
     let mut pack_order = Vec::<String>::new();
-    let mut pack_specs = Vec::<(String, u64, String)>::new();
     for raw in raw_packs {
         let Some(obj) = raw.as_object() else {
             return Err(invalid_payload("Delta pack index is invalid"));
@@ -881,14 +1004,20 @@ fn load_and_verify_pack_index(destination: &Path) -> Result<PackIndexVerificatio
         {
             return Err(invalid_payload("Delta pack index is invalid"));
         }
-        packs.insert(relative.clone(), size);
-        pack_order.push(relative.clone());
-        pack_specs.push((relative, size, digest));
+        packs.insert(
+            relative.clone(),
+            PackSpec {
+                path: relative.clone(),
+                size,
+                sha256: digest,
+            },
+        );
+        pack_order.push(relative);
     }
 
     let mut ranges: BTreeMap<String, Vec<(u64, u64)>> =
         packs.keys().map(|k| (k.clone(), Vec::new())).collect();
-    let mut entry_packs = BTreeMap::<String, String>::new();
+    let mut entries = BTreeMap::<String, PackEntry>::new();
 
     if schema_version == 1 {
         let Some(raw_entries) = index.get("entries").and_then(Value::as_object) else {
@@ -907,11 +1036,11 @@ fn load_and_verify_pack_index(destination: &Path) -> Result<PackIndexVerificatio
             let length = strict_non_negative_int(obj.get("length"))
                 .ok_or_else(|| invalid_payload("Delta pack entry is invalid"))?;
             let digest = obj.get("sha256").and_then(Value::as_str).unwrap_or("");
-            let Some(&pack_size) = packs.get(relative) else {
+            let Some(spec) = packs.get(relative) else {
                 return Err(invalid_payload("Delta pack entry is invalid"));
             };
             if offset % PACK_ALIGNMENT != 0
-                || offset.checked_add(length).is_none_or(|end| end > pack_size)
+                || offset.checked_add(length).is_none_or(|end| end > spec.size)
                 || !is_plain_sha256(digest)
             {
                 return Err(invalid_payload("Delta pack entry is invalid"));
@@ -920,7 +1049,15 @@ fn load_and_verify_pack_index(destination: &Path) -> Result<PackIndexVerificatio
                 .get_mut(relative)
                 .expect("pack checked")
                 .push((offset, offset + length));
-            entry_packs.insert(blob_id.clone(), relative.to_string());
+            entries.insert(
+                blob_id.clone(),
+                PackEntry {
+                    pack: relative.to_string(),
+                    offset,
+                    length,
+                    sha256: Some(digest.to_string()),
+                },
+            );
         }
     } else {
         let Some(raw_entries) = index.get("entries").and_then(Value::as_array) else {
@@ -943,7 +1080,7 @@ fn load_and_verify_pack_index(destination: &Path) -> Result<PackIndexVerificatio
                 .ok_or_else(|| invalid_payload("Delta pack entry is invalid"))?;
             let length = strict_non_negative_int(arr.get(2))
                 .ok_or_else(|| invalid_payload("Delta pack entry is invalid"))?;
-            let pack_size = packs[relative];
+            let pack_size = packs[relative].size;
             if offset % PACK_ALIGNMENT != 0
                 || offset.checked_add(length).is_none_or(|end| end > pack_size)
             {
@@ -953,7 +1090,15 @@ fn load_and_verify_pack_index(destination: &Path) -> Result<PackIndexVerificatio
                 .get_mut(relative)
                 .expect("pack checked")
                 .push((offset, offset + length));
-            entry_packs.insert(format!("blob_{ordinal:06}"), relative.clone());
+            entries.insert(
+                format!("blob_{ordinal:06}"),
+                PackEntry {
+                    pack: relative.clone(),
+                    offset,
+                    length,
+                    sha256: None,
+                },
+            );
         }
     }
 
@@ -968,23 +1113,39 @@ fn load_and_verify_pack_index(destination: &Path) -> Result<PackIndexVerificatio
         }
     }
 
-    for (relative, size, digest) in &pack_specs {
-        let pack_path = target_from_relative(destination, relative);
+    Ok(ParsedPackIndex { packs, entries })
+}
+
+struct PackIndexVerification {
+    entry_ids: BTreeSet<String>,
+    indexed_packs: BTreeSet<String>,
+    entry_packs: BTreeMap<String, String>,
+}
+
+fn load_and_verify_pack_index(destination: &Path) -> Result<PackIndexVerification, AppError> {
+    let parsed = parse_pack_index_file(destination)?;
+    for spec in parsed.packs.values() {
+        let pack_path = target_from_relative(destination, &spec.path);
         let ok = pack_path.is_file()
-            && fs::metadata(&pack_path).map(|m| m.len()).ok() == Some(*size)
-            && sha256_file(&pack_path).ok().as_deref() == Some(digest.as_str());
+            && fs::metadata(&pack_path).map(|m| m.len()).ok() == Some(spec.size)
+            && sha256_file(&pack_path).ok().as_deref() == Some(spec.sha256.as_str());
         if !ok {
             return Err(invalid_payload(format!(
-                "Delta pack failed checksum: {relative}"
+                "Delta pack failed checksum: {}",
+                spec.path
             )));
         }
     }
-
-    let entry_ids: BTreeSet<String> = entry_packs.keys().cloned().collect();
-    let pack_paths: BTreeSet<String> = packs.into_keys().collect();
+    let entry_ids: BTreeSet<String> = parsed.entries.keys().cloned().collect();
+    let indexed_packs: BTreeSet<String> = parsed.packs.keys().cloned().collect();
+    let entry_packs: BTreeMap<String, String> = parsed
+        .entries
+        .into_iter()
+        .map(|(k, v)| (k, v.pack))
+        .collect();
     Ok(PackIndexVerification {
         entry_ids,
-        indexed_packs: pack_paths,
+        indexed_packs,
         entry_packs,
     })
 }

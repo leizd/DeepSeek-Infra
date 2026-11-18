@@ -12,6 +12,7 @@ pub mod attachment_context;
 pub mod audit;
 pub mod authority_retention;
 pub mod backup_mirror;
+pub mod backup_projection;
 pub mod backup_retention;
 pub mod backup_unlock;
 pub mod backup_writer_lease;

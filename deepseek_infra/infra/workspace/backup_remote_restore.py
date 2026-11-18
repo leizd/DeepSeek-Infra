@@ -570,6 +570,7 @@ def create_restore_from_target(
     and, once frozen, resuming the same session with a different selection is
     rejected with ``409 restore-selection-mismatch``.
     """
+    assert_python_writer_allowed("restore_staging_store")
     selection_value = backup_projection.normalize_selection(selection)
     selection_digest_value = backup_projection.selection_digest(selection_value) if selection_value is not None else None
     if restore_id:
@@ -1269,6 +1270,7 @@ def fetch_restore_session(
     _on_component_verified: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Idempotently continue a durable remote download until complete."""
+    assert_python_writer_allowed("restore_staging_store")
     session = read_restore_session(restore_id)
     if session is None:
         raise AppError("Remote restore session not found", code=ErrorCode.NOT_FOUND, status=404)
@@ -1411,6 +1413,7 @@ def preview_restore_from_target(
     decrypted; the preview re-puts it so the later materialize step can still
     consume it.
     """
+    assert_python_writer_allowed("restore_staging_store")
     selection_value = backup_projection.normalize_selection(selection)
     assert selection_value is not None
     created = create_restore_from_target(
@@ -1492,6 +1495,7 @@ def preflight_restore_session(
     client: Any | None = None,
 ) -> dict[str, Any]:
     """Build/reuse a verified plan and perform read-only recovery checks."""
+    assert_python_writer_allowed("restore_staging_store")
     session = read_restore_session(restore_id)
     if session is None:
         raise AppError("Remote restore session not found", code=ErrorCode.NOT_FOUND, status=404)
@@ -2311,6 +2315,7 @@ def materialize_federated_restore(
     client: Any | None = None,
 ) -> dict[str, Any]:
     """Close the public remote chain into the crash-safe federated restore."""
+    assert_python_writer_allowed("restore_staging_store")
     session = read_restore_session(restore_id)
     if session is None:
         raise AppError("Remote restore session not found", code=ErrorCode.NOT_FOUND, status=404)

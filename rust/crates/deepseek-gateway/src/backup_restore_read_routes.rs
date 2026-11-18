@@ -413,7 +413,7 @@ pub(crate) fn public_restore(
     Ok(Value::Object(out))
 }
 
-fn get_restore(root: &Path, restore_id: &str) -> Result<Value, AppError> {
+pub(crate) fn get_restore(root: &Path, restore_id: &str) -> Result<Value, AppError> {
     let dir = restore_root(root, restore_id)?;
     let meta_path = ["transaction.json", "plan.json", "upload.json"]
         .into_iter()

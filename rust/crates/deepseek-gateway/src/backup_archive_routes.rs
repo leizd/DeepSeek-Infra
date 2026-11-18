@@ -1240,21 +1240,48 @@ fn count_relative_conflicts(source_dir: &Path, dest_dir: &Path) -> usize {
     conflicts
 }
 
-struct InspectMeta<'a> {
-    restore_id: &'a str,
-    archive_sha256: String,
-    encrypted: bool,
-    ciphertext_sha256: Option<String>,
-    protection: &'a str,
+pub(crate) struct InspectMeta<'a> {
+    pub restore_id: &'a str,
+    pub archive_sha256: String,
+    pub encrypted: bool,
+    pub ciphertext_sha256: Option<String>,
+    pub protection: &'a str,
 }
 
-fn inspect_verified_tree(
+/// Estimate total logical bytes covered by local registered contributors for safety backup sizing.
+pub(crate) fn estimate_local_safety_logical_bytes(root: &Path) -> u64 {
+    let context = BackupContext {
+        mode: "full".to_string(),
+        include_history: true,
+        coverage_policy: "best-effort".to_string(),
+        project_ids: None,
+    };
+    let mut total = 0_u64;
+    for spec in LOCAL_CONTRIBUTORS {
+        for (_, path) in collect_contributor_files(root, spec, &context) {
+            if let Ok(meta) = fs::metadata(&path) {
+                total = total.saturating_add(meta.len());
+            }
+        }
+    }
+    total
+}
+
+struct ContributorInspection {
+    compatible: bool,
+    operations: Vec<Value>,
+    conflicts: Vec<Value>,
+    migrations: Vec<Value>,
+    requires_external_mcp: bool,
+}
+
+fn inspect_contributors(
     root: &Path,
-    manifest: Value,
+    manifest: &Value,
     extracted: &Path,
-    restore_dir: &Path,
-    meta: InspectMeta<'_>,
-) -> Result<Value, AppError> {
+    selected: Option<&BTreeSet<String>>,
+    selected_projects: Option<&[String]>,
+) -> Result<ContributorInspection, AppError> {
     let source_version = manifest
         .get("source")
         .and_then(|s| s.get("version"))
@@ -1267,16 +1294,19 @@ fn inspect_verified_tree(
         .get("contributors")
         .and_then(Value::as_array)
         .ok_or_else(|| AppError::invalid_payload("Backup contributor inventory is invalid"))?;
-    let scope_project_ids: Vec<String> = manifest
-        .get("scope")
-        .and_then(|s| s.get("projectIds"))
-        .and_then(Value::as_array)
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(str::to_string))
-                .collect()
-        })
-        .unwrap_or_default();
+    let scope_project_ids: Vec<String> = match selected_projects {
+        Some(pids) if !pids.is_empty() => pids.to_vec(),
+        _ => manifest
+            .get("scope")
+            .and_then(|s| s.get("projectIds"))
+            .and_then(Value::as_array)
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default(),
+    };
 
     let mut operations: Vec<Value> = Vec::new();
     let mut conflicts: Vec<Value> = Vec::new();
@@ -1289,6 +1319,9 @@ fn inspect_verified_tree(
                 "Backup contributor inventory is invalid",
             ));
         };
+        if selected.is_some_and(|sel| !sel.contains(id)) {
+            continue;
+        }
         let schema_ver = entry
             .get("schemaVersion")
             .and_then(Value::as_i64)
@@ -1372,6 +1405,31 @@ fn inspect_verified_tree(
         }
     }
 
+    Ok(ContributorInspection {
+        compatible,
+        operations,
+        conflicts,
+        migrations,
+        requires_external_mcp,
+    })
+}
+
+pub(crate) fn inspect_verified_tree(
+    root: &Path,
+    manifest: Value,
+    extracted: &Path,
+    restore_dir: &Path,
+    meta: InspectMeta<'_>,
+) -> Result<Value, AppError> {
+    let source_version = manifest
+        .get("source")
+        .and_then(|s| s.get("version"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let target_version = version_info().version;
+    let inspected = inspect_contributors(root, &manifest, extracted, None, None)?;
+
     let estimated_bytes: u64 = manifest
         .get("files")
         .and_then(Value::as_array)
@@ -1404,15 +1462,12 @@ fn inspect_verified_tree(
         "restoreId".into(),
         Value::String(meta.restore_id.to_string()),
     );
-    plan.insert(
-        "sourceVersion".into(),
-        Value::String(source_version.to_string()),
-    );
+    plan.insert("sourceVersion".into(), Value::String(source_version));
     plan.insert(
         "targetVersion".into(),
         Value::String(target_version.to_string()),
     );
-    plan.insert("compatible".into(), Value::Bool(compatible));
+    plan.insert("compatible".into(), Value::Bool(inspected.compatible));
     plan.insert(
         "purpose".into(),
         manifest
@@ -1420,9 +1475,9 @@ fn inspect_verified_tree(
             .cloned()
             .unwrap_or_else(|| Value::String(PACKAGE_PURPOSE.to_string())),
     );
-    plan.insert("operations".into(), Value::Array(operations));
-    plan.insert("conflicts".into(), Value::Array(conflicts));
-    plan.insert("migrations".into(), Value::Array(migrations));
+    plan.insert("operations".into(), Value::Array(inspected.operations));
+    plan.insert("conflicts".into(), Value::Array(inspected.conflicts));
+    plan.insert("migrations".into(), Value::Array(inspected.migrations));
     plan.insert("warnings".into(), Value::Array(warnings));
     plan.insert("estimatedWriteBytes".into(), json!(estimated_bytes));
     plan.insert(
@@ -1431,7 +1486,7 @@ fn inspect_verified_tree(
     );
     plan.insert(
         "requiresExternalMcp".into(),
-        Value::Bool(requires_external_mcp),
+        Value::Bool(inspected.requires_external_mcp),
     );
     plan.insert("archiveSha256".into(), Value::String(meta.archive_sha256));
     plan.insert(
@@ -1464,6 +1519,140 @@ fn inspect_verified_tree(
         plan.insert("secretArmedAt".into(), json!(now_unix_secs_f64()));
     }
 
+    write_atomic_json(&restore_dir.join("plan.json"), &Value::Object(plan.clone()))?;
+    let mut out = plan;
+    out.insert("ok".into(), Value::Bool(true));
+    Ok(Value::Object(out))
+}
+
+/// Inspect a projected restored tree and persist `plan.json` bound to `selectionDigest`.
+pub(crate) fn inspect_projected_restore_tree(
+    root: &Path,
+    manifest: Value,
+    extracted: &Path,
+    restore_dir: &Path,
+    projection: &Value,
+    meta: InspectMeta<'_>,
+) -> Result<Value, AppError> {
+    let selection = projection
+        .get("selection")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let selected: BTreeSet<String> = selection
+        .get("contributors")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    let project_ids: Vec<String> = selection
+        .get("projectIds")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    let source_version = manifest
+        .get("source")
+        .and_then(|s| s.get("version"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let target_version = version_info().version;
+    let inspected = inspect_contributors(
+        root,
+        &manifest,
+        extracted,
+        Some(&selected),
+        Some(&project_ids),
+    )?;
+    let estimated_bytes = projection
+        .get("bytes")
+        .and_then(|b| b.get("selectedLogicalBytes"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let requires_frontend = projection
+        .get("requiresFrontendApply")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let requires_external = projection
+        .get("requiresExternalMcp")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let selection_digest = projection
+        .get("selectionDigest")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let extracted_tree_digest = tree_digest(extracted)?;
+    let manifest_digest = sha256_file(&extracted.join("manifest.json"))
+        .map_err(|_| route_support::unhandled_error())?;
+
+    let mut plan = Map::new();
+    plan.insert(
+        "restoreId".into(),
+        Value::String(meta.restore_id.to_string()),
+    );
+    plan.insert("sourceVersion".into(), Value::String(source_version));
+    plan.insert(
+        "targetVersion".into(),
+        Value::String(target_version.to_string()),
+    );
+    plan.insert("compatible".into(), Value::Bool(inspected.compatible));
+    plan.insert(
+        "purpose".into(),
+        manifest
+            .get("purpose")
+            .cloned()
+            .unwrap_or_else(|| Value::String(PACKAGE_PURPOSE.to_string())),
+    );
+    plan.insert("operations".into(), Value::Array(inspected.operations));
+    plan.insert("conflicts".into(), Value::Array(inspected.conflicts));
+    plan.insert("migrations".into(), Value::Array(inspected.migrations));
+    plan.insert("warnings".into(), json!([]));
+    plan.insert("estimatedWriteBytes".into(), json!(estimated_bytes));
+    plan.insert("requiresFrontendApply".into(), json!(requires_frontend));
+    plan.insert("requiresExternalMcp".into(), json!(requires_external));
+    plan.insert(
+        "archiveSha256".into(),
+        Value::String(extracted_tree_digest.clone()),
+    );
+    plan.insert(
+        "ciphertextSha256".into(),
+        match meta.ciphertext_sha256 {
+            Some(sha) => Value::String(sha),
+            None => Value::Null,
+        },
+    );
+    plan.insert("encrypted".into(), json!(true));
+    plan.insert(
+        "protection".into(),
+        Value::String(meta.protection.to_string()),
+    );
+    plan.insert(
+        "coverage".into(),
+        manifest
+            .get("coverage")
+            .cloned()
+            .unwrap_or_else(|| json!({})),
+    );
+    plan.insert("manifest".into(), manifest);
+    plan.insert("manifestDigest".into(), Value::String(manifest_digest));
+    plan.insert(
+        "extractedTreeDigest".into(),
+        Value::String(extracted_tree_digest),
+    );
+    plan.insert("selection".into(), selection);
+    plan.insert("selectionDigest".into(), Value::String(selection_digest));
+    plan.insert("projected".into(), json!(true));
+    plan.insert("phase".into(), Value::String("inspected".to_string()));
+    if meta.encrypted {
+        plan.insert("secretArmedAt".into(), json!(now_unix_secs_f64()));
+    }
     write_atomic_json(&restore_dir.join("plan.json"), &Value::Object(plan.clone()))?;
     let mut out = plan;
     out.insert("ok".into(), Value::Bool(true));

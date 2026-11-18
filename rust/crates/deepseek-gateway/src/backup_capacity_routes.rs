@@ -73,7 +73,7 @@ fn sqlite_table_exists(conn: &Connection, table: &str) -> Result<bool, AppError>
 }
 
 #[cfg(windows)]
-fn filesystem_disk_usage(path: &Path) -> Option<(u64, u64, u64)> {
+pub(crate) fn filesystem_disk_usage(path: &Path) -> Option<(u64, u64, u64)> {
     use std::ffi::OsStr;
     use std::os::windows::ffi::OsStrExt;
     #[link(name = "kernel32")]
@@ -100,7 +100,7 @@ fn filesystem_disk_usage(path: &Path) -> Option<(u64, u64, u64)> {
 }
 
 #[cfg(unix)]
-fn filesystem_disk_usage(path: &Path) -> Option<(u64, u64, u64)> {
+pub(crate) fn filesystem_disk_usage(path: &Path) -> Option<(u64, u64, u64)> {
     let output = std::process::Command::new("df")
         .args(["-Pk", "--"])
         .arg(path)

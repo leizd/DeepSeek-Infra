@@ -109,16 +109,16 @@ fn list_scopes(dr_conn: Option<&Connection>) -> Result<Vec<(String, String)>, Ap
 
 #[derive(Clone)]
 struct RecoveryPointRow {
-    target_id: String,
-    policy_id: String,
+    _target_id: String,
+    _policy_id: String,
     backup_id: String,
-    committed_at: String,
+    _committed_at: String,
     snapshot_kind: String,
     parent_backup_id: Option<String>,
     ciphertext_bytes: i64,
     logical_bytes: i64,
     recoverable: bool,
-    storage_protocol: Option<String>,
+    _storage_protocol: Option<String>,
 }
 
 fn list_recovery_points_for_scope(
@@ -162,16 +162,16 @@ fn list_recovery_points_for_scope(
 
 fn map_rp_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RecoveryPointRow> {
     Ok(RecoveryPointRow {
-        target_id: row.get(0)?,
-        policy_id: row.get(1)?,
+        _target_id: row.get(0)?,
+        _policy_id: row.get(1)?,
         backup_id: row.get(2)?,
-        committed_at: row.get(3)?,
+        _committed_at: row.get(3)?,
         snapshot_kind: row.get(4)?,
         parent_backup_id: row.get::<_, Option<String>>(5)?.filter(|s| !s.is_empty()),
         ciphertext_bytes: row.get(6)?,
         logical_bytes: row.get(7)?,
         recoverable: row.get::<_, i64>(8)? != 0,
-        storage_protocol: row.get::<_, Option<String>>(9)?.filter(|s| !s.is_empty()),
+        _storage_protocol: row.get::<_, Option<String>>(9)?.filter(|s| !s.is_empty()),
     })
 }
 
@@ -1053,12 +1053,12 @@ fn evaluate_scope_readiness(ctx: &ScopeInput<'_>) -> Result<Value, AppError> {
                 .filter(|v| python_truthy(v))
                 .or_else(|| pol.get("primaryTargetId").filter(|v| python_truthy(v)))
                 .or_else(|| pol.get("targetId").filter(|v| python_truthy(v)))
-                .map(|v| value_str(v))
+                .map(value_str)
                 .unwrap_or_else(|| ctx.target_id.to_string());
             let active_id = continuity
                 .get("activeWriteTargetId")
                 .filter(|v| python_truthy(v))
-                .map(|v| value_str(v))
+                .map(value_str)
                 .unwrap_or_else(|| primary_id.clone());
             let is_failover = active_id != primary_id
                 || continuity
@@ -1732,9 +1732,7 @@ fn build_body() -> Result<Value, AppError> {
             }
         }
         if let Some(st) = horizon.get("status").and_then(Value::as_str) {
-            if (st == "critical" || st == "degraded")
-                && (st == "critical" || capacity_status != "critical")
-            {
+            if st == "critical" || (st == "degraded" && capacity_status != "critical") {
                 capacity_status = st.to_string();
             }
         }

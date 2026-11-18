@@ -33,7 +33,6 @@ const REMEDIATION_QUEUE_DELAY_MS: &str = "remediation_queue_delay_ms";
 const REPAIR_TIME_MS: &str = "repair_time_ms";
 const REBALANCE_TIME_MS: &str = "rebalance_time_ms";
 const RISK_CLEAR_LATENCY_MS: &str = "risk_clear_latency_ms";
-const DR_READINESS_AGE_HOURS: &str = "dr_readiness_age_hours";
 const LEASE_TAKEOVER_TIME_MS: &str = "lease_takeover_time_ms";
 const SCHEDULER_STARVATION_AGE_SECONDS: &str = "scheduler_starvation_age_seconds";
 const EVIDENCE_FRESHNESS_SECONDS: &str = "evidence_freshness_seconds";

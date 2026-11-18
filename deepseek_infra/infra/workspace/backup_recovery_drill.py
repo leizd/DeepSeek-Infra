@@ -377,6 +377,9 @@ def _run_recovery_drill_locked(restore_id: str, *, client: Any | None = None) ->
 
 def run_recovery_drill(restore_id: str, *, client: Any | None = None) -> dict[str, Any]:
     """Execute production recovery through validation without federated prepare."""
+    from deepseek_infra.infra.native_runtime.authority import assert_python_writer_allowed
+
+    assert_python_writer_allowed("restore_staging_store")
     root = _root(restore_id)
     with _exclusive_drill_lock(root):
         return _run_recovery_drill_locked(restore_id, client=client)
@@ -486,12 +489,14 @@ def _select_drill_rotation_target(
 
 def execute_scheduled_drill(policy_id: str, *, client: Any | None = None) -> dict[str, Any]:
     """Orchestrate an unattended isolated recovery drill for a scheduled policy."""
+    from deepseek_infra.infra.native_runtime.authority import assert_python_writer_allowed
     from deepseek_infra.infra.workspace import (
         backup_dr_ledger,
         backup_policies,
         backup_recovery_credential,
     )
 
+    assert_python_writer_allowed("restore_staging_store")
     policy = backup_policies.get_policy(policy_id)
     drill_conf = policy.get("recoveryDrill") or {}
     if not drill_conf.get("enabled"):

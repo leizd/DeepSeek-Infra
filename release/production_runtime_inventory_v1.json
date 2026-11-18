@@ -314,41 +314,6 @@
       "file": "deepseek_infra/web/routes/backup_governance.py"
     },
     {
-      "method": "post",
-      "path": "/api/workspace/disaster-recovery/drills",
-      "file": "deepseek_infra/web/routes/backup_governance.py"
-    },
-    {
-      "method": "post",
-      "path": "/api/workspace/disaster-recovery/drills/schedule/{policy_id}",
-      "file": "deepseek_infra/web/routes/backup_governance.py"
-    },
-    {
-      "method": "post",
-      "path": "/api/workspace/restores/from-target/preview",
-      "file": "deepseek_infra/web/routes/backup_governance.py"
-    },
-    {
-      "method": "post",
-      "path": "/api/workspace/restores/from-target",
-      "file": "deepseek_infra/web/routes/backup_governance.py"
-    },
-    {
-      "method": "post",
-      "path": "/api/workspace/restores/{restore_id}/fetch",
-      "file": "deepseek_infra/web/routes/backup_governance.py"
-    },
-    {
-      "method": "post",
-      "path": "/api/workspace/restores/{restore_id}/preflight",
-      "file": "deepseek_infra/web/routes/backup_governance.py"
-    },
-    {
-      "method": "post",
-      "path": "/api/workspace/restores/{restore_id}/materialize",
-      "file": "deepseek_infra/web/routes/backup_governance.py"
-    },
-    {
       "method": "get",
       "path": "/api/workspace/resilience/snapshot",
       "file": "deepseek_infra/web/routes/backup_governance.py"

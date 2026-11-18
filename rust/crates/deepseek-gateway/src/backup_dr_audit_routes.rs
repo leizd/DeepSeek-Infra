@@ -96,7 +96,7 @@ fn now_utc_iso() -> String {
     utc_iso_from_unix(now_unix_secs())
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     format!("{:x}", hasher.finalize())
@@ -132,7 +132,7 @@ fn compute_hash_without_field(obj: &Map<String, Value>, omit_key: &str) -> Strin
     sha256_hex(dumps_compact(&Value::Object(body)).as_bytes())
 }
 
-fn commit_marker_valid(commit: &Map<String, Value>) -> bool {
+pub(crate) fn commit_marker_valid(commit: &Map<String, Value>) -> bool {
     let commit_hash = truthy_str(commit.get("commitHash"));
     if commit_hash.is_empty() {
         return false;
@@ -267,19 +267,144 @@ fn ensure_dr_ledger_schema(conn: &Connection) -> Result<(), AppError> {
             records_checked INTEGER NOT NULL DEFAULT 0,
             error TEXT,
             details_json TEXT
-         );",
+         );
+         CREATE TABLE IF NOT EXISTS drill_evidence (
+            drill_id TEXT PRIMARY KEY,
+            target_id TEXT NOT NULL,
+            policy_id TEXT NOT NULL,
+            backup_id TEXT NOT NULL,
+            observed_at TEXT NOT NULL,
+            result TEXT NOT NULL,
+            duration_ms INTEGER NOT NULL DEFAULT 0,
+            details_json TEXT
+         );
+         CREATE INDEX IF NOT EXISTS idx_drill_evidence_scope_time
+            ON drill_evidence (target_id, policy_id, observed_at DESC);
+         CREATE TABLE IF NOT EXISTS target_evidence (
+            target_id TEXT PRIMARY KEY,
+            observed_at TEXT NOT NULL,
+            scheduled_ready INTEGER NOT NULL DEFAULT 0,
+            integrity_mode TEXT,
+            status TEXT NOT NULL,
+            reason TEXT,
+            details_json TEXT
+         );
+         CREATE TABLE IF NOT EXISTS recovery_stage_samples (
+            sample_id TEXT PRIMARY KEY,
+            target_id TEXT,
+            recovery_class_json TEXT NOT NULL,
+            stage TEXT NOT NULL,
+            bytes INTEGER NOT NULL,
+            duration_ms INTEGER NOT NULL,
+            observed_at TEXT NOT NULL,
+            result TEXT NOT NULL DEFAULT 'success'
+         );
+         CREATE INDEX IF NOT EXISTS idx_stage_samples_stage_time
+            ON recovery_stage_samples (stage, observed_at DESC);",
     )
     .map_err(|_| unhandled_error())?;
     Ok(())
 }
 
-fn open_dr_ledger_write() -> Result<Connection, AppError> {
+pub(crate) fn open_dr_ledger_write() -> Result<Connection, AppError> {
     let dir = crate::data_routes::workspace_root().join(".backup-dr");
     fs::create_dir_all(&dir).map_err(|_| unhandled_error())?;
     let db_path = dir.join("evidence.sqlite3");
     let conn = Connection::open(db_path).map_err(|_| unhandled_error())?;
     ensure_dr_ledger_schema(&conn)?;
     Ok(conn)
+}
+
+pub(crate) struct DrillEvidenceRecord<'a> {
+    pub drill_id: &'a str,
+    pub target_id: &'a str,
+    pub policy_id: &'a str,
+    pub backup_id: &'a str,
+    pub drill_kind: &'a str,
+    pub observed_at: &'a str,
+    pub result: &'a str,
+    pub duration_ms: i64,
+    pub details: Option<&'a Map<String, Value>>,
+}
+
+pub(crate) fn record_drill_evidence(record: &DrillEvidenceRecord<'_>) -> Result<(), AppError> {
+    let conn = open_dr_ledger_write()?;
+    let mut full = record.details.cloned().unwrap_or_default();
+    if !record.drill_kind.is_empty() {
+        full.insert(
+            "drillKind".into(),
+            Value::String(record.drill_kind.to_string()),
+        );
+    }
+    let details_json = if full.is_empty() {
+        None
+    } else {
+        Some(serde_json::to_string(&Value::Object(full)).map_err(|_| unhandled_error())?)
+    };
+    conn.execute(
+        "INSERT INTO drill_evidence (drill_id, target_id, policy_id, backup_id, observed_at, result, duration_ms, details_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(drill_id) DO UPDATE SET
+             target_id = excluded.target_id,
+             policy_id = excluded.policy_id,
+             backup_id = excluded.backup_id,
+             observed_at = excluded.observed_at,
+             result = excluded.result,
+             duration_ms = excluded.duration_ms,
+             details_json = excluded.details_json",
+        rusqlite::params![
+            record.drill_id,
+            record.target_id,
+            record.policy_id,
+            record.backup_id,
+            record.observed_at,
+            record.result,
+            record.duration_ms.max(0),
+            details_json,
+        ],
+    )
+    .map_err(|_| unhandled_error())?;
+    Ok(())
+}
+
+pub(crate) struct StageSampleRecord<'a> {
+    pub sample_id: &'a str,
+    pub target_id: Option<&'a str>,
+    pub recovery_class: &'a Value,
+    pub stage: &'a str,
+    pub bytes: i64,
+    pub duration_ms: i64,
+    pub observed_at: &'a str,
+    pub result: &'a str,
+}
+
+pub(crate) fn record_stage_sample(sample: &StageSampleRecord<'_>) -> Result<(), AppError> {
+    let conn = open_dr_ledger_write()?;
+    let rc_json = serde_json::to_string(sample.recovery_class).map_err(|_| unhandled_error())?;
+    conn.execute(
+        "INSERT INTO recovery_stage_samples (sample_id, target_id, recovery_class_json, stage, bytes, duration_ms, observed_at, result)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(sample_id) DO UPDATE SET
+             target_id = COALESCE(excluded.target_id, recovery_stage_samples.target_id),
+             recovery_class_json = excluded.recovery_class_json,
+             stage = excluded.stage,
+             bytes = excluded.bytes,
+             duration_ms = excluded.duration_ms,
+             observed_at = excluded.observed_at,
+             result = excluded.result",
+        rusqlite::params![
+            sample.sample_id,
+            sample.target_id,
+            rc_json,
+            sample.stage,
+            sample.bytes.max(0),
+            sample.duration_ms.max(0),
+            sample.observed_at,
+            sample.result,
+        ],
+    )
+    .map_err(|_| unhandled_error())?;
+    Ok(())
 }
 
 fn map_audit_job(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {

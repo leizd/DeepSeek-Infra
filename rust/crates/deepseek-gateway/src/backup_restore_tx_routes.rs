@@ -2736,7 +2736,7 @@ fn write_atomic_remote_session_unlocked(
     Ok(())
 }
 
-fn release_session_holds(root: &Path, session: &Map<String, Value>) {
+pub(crate) fn release_session_holds(root: &Path, session: &Map<String, Value>) {
     let restore_id = session
         .get("restoreId")
         .and_then(Value::as_str)
@@ -2834,7 +2834,7 @@ fn scrub_remote_scratch(session_dir: &Path) {
     }
 }
 
-fn converge_job_control(
+pub(crate) fn converge_job_control(
     root: &Path,
     restore_id: &str,
     session_dir: &Path,
