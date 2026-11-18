@@ -3433,16 +3433,6 @@ fn risk_obs_row_to_value(conn: &Connection, digest: &str) -> Result<Value, AppEr
     Ok(row)
 }
 
-fn severity_rank(sev: &str) -> i32 {
-    match sev {
-        "warning" => 1,
-        "degraded" => 2,
-        "critical" => 3,
-        "blocked" => 4,
-        _ => 0,
-    }
-}
-
 fn is_open_severity(sev: &str) -> bool {
     matches!(sev, "warning" | "degraded" | "critical" | "blocked")
 }
