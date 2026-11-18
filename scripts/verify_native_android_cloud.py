@@ -10,6 +10,8 @@ from pathlib import Path
 import re
 import subprocess
 import struct
+import tempfile
+import time
 import zipfile
 import sys
 from typing import Any
@@ -23,7 +25,9 @@ from scripts.build_android_native import expected_android_go_compatibility, sour
 from scripts.check_native_android_package import inspect_package  # noqa: E402
 
 APPLICATION = "com.deepseek.mobile.nativeverify"
-RUNNER = APPLICATION + ".test/androidx.test.runner.AndroidJUnitRunner"
+TEST_APPLICATION = APPLICATION + ".test"
+RUNNER = TEST_APPLICATION + "/androidx.test.runner.AndroidJUnitRunner"
+INSTALLED_BASE_APK = re.compile(r"/data/app/[A-Za-z0-9_.=/+~\-]+/base\.apk")
 
 
 def digest(path: Path) -> str:
@@ -203,11 +207,73 @@ def build_report(root: Path, apk: Path, test_apk: Path, commit: str) -> dict[str
 
 
 def adb(arguments: list[str], output: Path, timeout: int = 120) -> str:
-    result = subprocess.run(["adb", *arguments], capture_output=True, timeout=timeout)
+    try:
+        result = subprocess.run(["adb", *arguments], capture_output=True, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        output.write_bytes((exc.stdout or b"") + (exc.stderr or b""))
+        raise
     output.write_bytes(result.stdout + result.stderr)
     if result.returncode:
         raise ValueError("ADB command failed; inspect " + output.name)
     return result.stdout.decode("utf-8", errors="replace").strip()
+
+
+def wait_for_package_manager(output: Path) -> int:
+    for attempt in range(1, 6):
+        if attempt > 1:
+            time.sleep(2)
+        try:
+            packages = adb(["shell", "-T", "pm", "path", "android"], output / f"package-manager-{attempt}.log", timeout=12)
+        except (ValueError, subprocess.TimeoutExpired):
+            continue
+        if any(line.startswith("package:/") for line in packages.splitlines()):
+            return attempt
+    raise ValueError("Android package manager did not become responsive")
+
+
+def installed_apk_digest(package: str, expected_size: int, output: Path, label: str) -> str:
+    listed = adb(["shell", "-T", "pm", "path", package], output / f"installed-{label}-path.log", timeout=15).splitlines()
+    path = listed[0].removeprefix("package:") if len(listed) == 1 and listed[0].startswith("package:") else ""
+    if not INSTALLED_BASE_APK.fullmatch(path) or any(part in {"", ".", ".."} for part in path.split("/")[1:]):
+        raise ValueError(f"Package Manager returned an unexpected {label} APK path")
+    # Hash the bytes read back by the cloud runner. A temporary file bounds
+    # memory even for larger APKs and only digests and diagnostics are retained.
+    with tempfile.TemporaryFile() as copy:
+        result = subprocess.run(["adb", "exec-out", "cat", path], stdout=copy, stderr=subprocess.PIPE, timeout=90)
+        diagnostic = output / f"installed-{label}-digest.log"
+        diagnostic.write_bytes(result.stderr or b"")
+        size = os.fstat(copy.fileno()).st_size
+        if result.returncode or size != expected_size:
+            raise ValueError(f"Could not read the exact installed {label} APK; bytes={size}, expected={expected_size}")
+        copy.seek(0)
+        measured = hashlib.sha256()
+        for chunk in iter(lambda: copy.read(1024 * 1024), b""):
+            measured.update(chunk)
+        value = measured.hexdigest()
+        with diagnostic.open("ab") as log:
+            log.write(f"sha256={value} bytes={size}\n".encode())
+    return value
+
+
+def install_and_verify_apk(apk: Path, package: str, expected_sha256: str, output: Path, label: str) -> dict[str, str]:
+    install_status = "ACKNOWLEDGED"
+    try:
+        result = adb(["install", "--no-streaming", "-r", "-t", str(apk)], output / f"install-{label}.log", timeout=180)
+        if not any(line.strip() == "Success" for line in result.splitlines()):
+            raise ValueError(f"ADB did not acknowledge the {label} APK installation")
+    except subprocess.TimeoutExpired:
+        # A timed-out install may have committed. Reconcile against installed
+        # bytes without making another install request.
+        install_status = "TIMEOUT_RECONCILED"
+    try:
+        observed = installed_apk_digest(package, apk.stat().st_size, output, label)
+        if observed != expected_sha256:
+            raise ValueError(f"Installed {label} APK SHA-256 differs from the reviewed cloud package")
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        if install_status == "TIMEOUT_RECONCILED":
+            raise ValueError(f"{label} APK install timed out and could not be reconciled: {exc}") from exc
+        raise
+    return {"status": install_status, "package": package, "sha256": observed, "transport": "non-streaming"}
 
 
 def collect_runtime_logs(output: Path) -> list[dict[str, str]]:
@@ -262,8 +328,12 @@ def run_device(args: argparse.Namespace) -> int:
         report.update(runtimeApkSha256=actual["runtimeApkSha256"], testApkSha256=actual["testApkSha256"],
                       sourceIdentity=actual["sourceIdentity"], workflow=actual["workflow"], packagedABIs=sorted(actual["packageInspection"]["binaries"]),
                       apkPythonEntries=actual["packageInspection"]["pythonEntries"], emulatorABI=abi)
-        adb(["install", "-r", "-t", str(args.apk)], output / "install-runtime.log")
-        adb(["install", "-r", "-t", str(args.test_apk)], output / "install-tests.log")
+        report["packageManagerReadyAttempt"] = wait_for_package_manager(output)
+        report["installedAPKs"] = {}
+        report["installedAPKs"]["runtime"] = install_and_verify_apk(
+            args.apk, APPLICATION, actual["runtimeApkSha256"], output, "runtime")
+        report["installedAPKs"]["test"] = install_and_verify_apk(
+            args.test_apk, TEST_APPLICATION, actual["testApkSha256"], output, "tests")
         if adb(["shell", "pm", "clear", APPLICATION], output / "clear-disposable-app.log") != "Success":
             raise ValueError("Disposable cloud app sandbox was not reset")
         sandbox_prepared = True

@@ -19,7 +19,7 @@ concurrency:
 jobs:
   registration-go:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 50
     env:
       GOTOOLCHAIN: local
       CGO_ENABLED: "1"
@@ -48,12 +48,14 @@ jobs:
           python -m pip install -r requirements.txt
           python scripts/generate_target_registration_oracle.py --report artifacts/native-target-registration-development/metadata-oracle.json
       - name: Verify the exact source and registration control transactions
-        timeout-minutes: 10
+        timeout-minutes: 18
         run: |
           python - <<'PY'
           from pathlib import Path
           from collections import Counter
           import hashlib, json, os, re, subprocess
+          from scripts.run_native_go_race import partition_catalog, run_pattern
+          from scripts.run_native_target_development import INVOCATION_TIMEOUT, merge_profiles
           root=Path.cwd(); out=root/'artifacts/native-target-registration-development';out.mkdir(parents=True,exist_ok=True)
           source=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
           tree=subprocess.check_output(['git','rev-parse','HEAD^{tree}'],text=True).strip()
@@ -143,31 +145,58 @@ jobs:
               'TestTargetRegistrationRelocationReplaysOriginalProofAfterDeletionAndTakeover',
               'TestTargetRegistrationRelocationRequiresSignedMissingOriginalLocation',
           }
-          actual=[]
+          catalogs={}
           expression=r'^func (TestTarget(?:Registration|Observation|Location|Inspection|Metadata)[A-Za-z0-9_]*|TestAgentDriverLoopKeepsUnknownAndToolsPendingCustodyWithoutRedispatch|TestBackupTargetsFailClosedAtThePublicReadBoundary)[(]'
           for package in ('store','worker','api','targets'):
-              for path in (root/'go/internal'/package).glob('*_test.go'):
-                  actual.extend(re.findall(expression,path.read_text(),re.M))
+              catalogs[package]=[name for path in (root/'go/internal'/package).glob('*_test.go')
+                                 for name in re.findall(expression,path.read_text(),re.M)]
+          actual=[name for names in catalogs.values() for name in names]
           assert len(actual)==len(set(actual))==len(required) and set(actual)==required
           subprocess.run(['python','scripts/capture_evidence_context.py','--version',(root/'VERSION').read_text().strip(),'--out',str(out/'source-context.json')],check=True)
-          args=['go','test','-race','-json','-count=1','-timeout=8m','-covermode=atomic','-coverprofile='+str(out/'coverage.out'),'-run','^(TestTarget(Registration|Observation|Location|Inspection|Metadata)|TestAgentDriverLoopKeepsUnknownAndToolsPendingCustodyWithoutRedispatch$|TestBackupTargetsFailClosedAtThePublicReadBoundary$)','./internal/store','./internal/worker','./internal/api','./internal/targets']
-          with (out/'go-tests.jsonl').open('wb') as stream:
-              run=subprocess.run(args,cwd=root/'go',stdout=stream,stderr=subprocess.STDOUT,check=False)
-          raw=(out/'go-tests.jsonl').read_bytes();events=[];parse_errors=[]
-          for line in raw.decode('utf-8').splitlines():
-              if line.startswith('{'):
-                  events.append(json.loads(line))
-              elif line.strip() and not re.fullmatch(r'go: downloading [A-Za-z0-9./_~+@-]+ v[0-9A-Za-z.+_-]+',line):
-                  parse_errors.append(line[:200])
+          groups=[(f'store-{index}', ['store'], names) for index,names in enumerate(partition_catalog(catalogs['store'], 2))]
+          other=['worker','api','targets']
+          groups.append(('other', other, sorted(name for package in other for name in catalogs[package])))
+          executions=[];profiles=[];events=[];parse_errors=[];group_integrity=True
+          package_prefix='github.com/leizd/DeepSeek-Infra/go/internal/'
+          with (out/'go-tests.jsonl').open('wb') as combined:
+              for group,packages,names in groups:
+                  profile=out/(group+'-coverage.out')
+                  log=out/(group+'-tests.jsonl')
+                  args=['go','test','-race','-json','-count=1','-timeout='+INVOCATION_TIMEOUT,'-covermode=atomic',
+                        '-coverprofile='+str(profile),'-run',run_pattern(names),*['./internal/'+p for p in packages]]
+                  with log.open('wb') as stream:
+                      run=subprocess.run(args,cwd=root/'go',stdout=stream,stderr=subprocess.STDOUT,check=False)
+                  data=log.read_bytes()
+                  combined.write(data)
+                  if data and not data.endswith(b'\n'):
+                      combined.write(b'\n')
+                  group_events=[]
+                  for line in data.decode('utf-8').splitlines():
+                      if line.startswith('{'):
+                          group_events.append(json.loads(line))
+                      elif line.strip() and not re.fullmatch(r'go: downloading [A-Za-z0-9./_~+@-]+ v[0-9A-Za-z.+_-]+',line):
+                          parse_errors.append(line[:200])
+                  starts_for_group=Counter((e['Package'],e['Test']) for e in group_events if e.get('Test') and e['Action']=='run' and '/' not in e['Test'])
+                  wanted=Counter((package_prefix+package,name) for package in packages for name in names if name in catalogs[package])
+                  terminal=Counter(e['Package'] for e in group_events if not e.get('Test') and e['Action']=='pass')
+                  group_integrity=group_integrity and starts_for_group==wanted and terminal==Counter(package_prefix+p for p in packages)
+                  events.extend(group_events)
+                  if profile.is_file():
+                      profiles.append(profile)
+                  executions.append(dict(name=group,expectedTests=names,command=args,exitCode=run.returncode,rawEventsSha256=hashlib.sha256(data).hexdigest()))
+          if profiles:
+              merge_profiles(profiles,out/'coverage.out')
+          raw=(out/'go-tests.jsonl').read_bytes()
+          exit_code=max((abs(e['exitCode']) for e in executions), default=1)
           top=[e for e in events if e.get('Test') and '/' not in e['Test']]
           starts=Counter(e['Test'] for e in top if e['Action']=='run')
           ends=Counter(e['Test'] for e in top if e['Action'] in {'pass','fail','skip'})
           package=[e for e in events if not e.get('Test') and e['Action'] in {'pass','fail','skip'}]
-          good=run.returncode==0 and not parse_errors and set(starts)==required and starts==ends and set(starts.values())=={1}
-          good=good and all(e['Action']=='pass' for e in top if e['Action'] in {'pass','fail','skip'}) and len(package)==4 and all(e['Action']=='pass' for e in package) and {e['Package'] for e in package}=={'github.com/leizd/DeepSeek-Infra/go/internal/'+p for p in ('store','worker','api','targets')}
+          good=exit_code==0 and group_integrity and len(profiles)==len(groups) and not parse_errors and set(starts)==required and starts==ends and set(starts.values())=={1}
+          good=good and all(e['Action']=='pass' for e in top if e['Action'] in {'pass','fail','skip'}) and all(e['Action']=='pass' for e in package)
           good=good and not any(e['Action']=='fail' or 'WARNING: DATA RACE' in e.get('Output','') for e in events)
           report=dict(status='PASS' if good else 'FAIL',sourceCommit=source,sourceTree=tree,runId=os.environ['GITHUB_RUN_ID'],event=os.environ['GITHUB_EVENT_NAME'],attempt=os.environ['GITHUB_RUN_ATTEMPT'],
-              expectedTests=sorted(required),command=args,exitCode=run.returncode,raceEnabled=True,timeout='8m',retainedOriginalTests=76,addedMarkerTests=7,rawEventsSha256=hashlib.sha256(raw).hexdigest(),parseErrors=parse_errors,
+              expectedTests=sorted(required),groups=executions,exitCode=exit_code,raceEnabled=True,timeout=INVOCATION_TIMEOUT,retainedOriginalTests=76,addedMarkerTests=7,rawEventsSha256=hashlib.sha256(raw).hexdigest(),parseErrors=parse_errors,
               passed=sum(e['Action']=='pass' for e in top),failed=sum(e['Action']=='fail' for e in top),skipped=sum(e['Action']=='skip' for e in top),
               physicalRustInspectionQualified=False,publicRegistrationQualified=False,fullGoSuiteQualified=False,original95PercentCoverageQualified=False,fullMigrationQualified=False,readiness='NOT_READY')
           (out/'result.json').write_text(json.dumps(report,indent=2)+'\n')
@@ -183,12 +212,14 @@ jobs:
           if-no-files-found: error
           retention-days: 7
       - name: Verify the original full Go coverage floor
+        if: always() && !cancelled()
         timeout-minutes: 15
         env:
           CGO_ENABLED: "0"
         working-directory: go
         run: |
           set -o pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           mkdir -p ../artifacts/native-target-full-go-coverage
           python ../scripts/check_go_coverage.py --dir . --min 95.0 \
             --profile ../artifacts/native-target-full-go-coverage/coverage.out 2>&1 | tee ../artifacts/native-target-full-go-coverage/coverage.log

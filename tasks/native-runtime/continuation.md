@@ -15342,3 +15342,21 @@ or stale authority, partial schema migration, and transaction failures before
 and after dispatch. A successful dispatch update now must report exactly one
 affected row before a permit can be issued. All 79 prior race families and the
 original coverage floor remain required.
+
+### 2026-11-18 exact Android install readback and timed Go cohorts
+
+Android source run 44278820624 on d42e893 built both APKs. API levels 24,
+26, 30 and 34 passed instrumentation. API 28 hit the 120-second deadline
+while installing the runtime APK, before the disposable app reset or test
+execution. The cloud verifier waits for a responsive Package Manager,
+uses ADB's non-streaming install, and checks both installed APK digests
+against the exact build report. A timed-out install proceeds only when the
+device bytes confirm the requested package, with one install attempt.
+
+Push run 44282170033 on 9967354 passed Rust restart and Chromium and
+all six scoped Android SQLite cases. All seven marker Go families passed,
+but the store package reached its eight-minute timer after 78 of 83 total
+families had completed. The new development run keeps the full inventory
+and race flag in two store groups and one API, worker and metadata group.
+Every invocation retains the eight-minute limit. The independent complete
+95% Go measurement produces a result even if a development group fails.

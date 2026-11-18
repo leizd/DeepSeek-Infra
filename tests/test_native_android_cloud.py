@@ -4,7 +4,7 @@ import json
 import struct
 import zipfile
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 import pytest
 
@@ -115,6 +115,97 @@ def test_missing_log_exit_status_cannot_be_mistaken_for_collected_child_output(m
     rows = {row["service"]: row for row in android_cloud.collect_runtime_logs(tmp_path)}
     assert rows["control"]["status"] == rows["gateway"]["status"] == "COLLECTED"
     assert rows["worker"]["status"] == "UNAVAILABLE"
+
+
+def test_package_manager_waits_for_an_actual_package_query(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    outputs = iter(["", "package:/system/framework/framework-res.apk"])
+    delays: list[float] = []
+
+    def read(arguments: list[str], output: Path, timeout: int) -> str:
+        assert arguments == ["shell", "-T", "pm", "path", "android"] and timeout == 12
+        result = next(outputs)
+        output.write_text(result, encoding="utf-8")
+        return result
+
+    monkeypatch.setattr(android_cloud, "adb", read)
+    monkeypatch.setattr(android_cloud.time, "sleep", delays.append)
+    assert android_cloud.wait_for_package_manager(tmp_path) == 2
+    assert delays == [2] and (tmp_path / "package-manager-2.log").is_file()
+
+
+@pytest.mark.parametrize("timed_out,expected", [(False, "ACKNOWLEDGED"), (True, "TIMEOUT_RECONCILED")])
+def test_install_checks_exact_device_apk_without_second_attempt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, timed_out: bool, expected: str,
+) -> None:
+    apk = tmp_path / "reviewed.apk"
+    expected_bytes = b"offline APK fixture"
+    apk.write_bytes(expected_bytes)
+    device_path = "/data/app/~~isolated==/com.deepseek.mobile.nativeverify-Abc_-==/base.apk"
+    request_count = 0
+
+    def execute(command: list[str], *, timeout: int, stdout: BinaryIO | None = None, **_kwargs: object) -> object:
+        nonlocal request_count
+        if command[1] == "install":
+            request_count += 1
+            assert command[2:] == ["--no-streaming", "-r", "-t", str(apk)] and timeout == 180
+            if timed_out:
+                raise android_cloud.subprocess.TimeoutExpired(command, timeout, output=b"partial push log\n")
+            return android_cloud.subprocess.CompletedProcess(command, 0, stdout=b"Performing Push Install\nSuccess\n", stderr=b"")
+        if command[1:3] == ["shell", "-T"]:
+            assert command[3:] == ["pm", "path", android_cloud.APPLICATION]
+            return android_cloud.subprocess.CompletedProcess(command, 0, stdout=f"package:{device_path}\n".encode(), stderr=b"")
+        assert command[1:] == ["exec-out", "cat", device_path] and stdout is not None and timeout == 90
+        stdout.write(expected_bytes)
+        stdout.flush()
+        return android_cloud.subprocess.CompletedProcess(command, 0, stderr=b"")
+
+    monkeypatch.setattr(android_cloud.subprocess, "run", execute)
+    sha256 = android_cloud.digest(apk)
+    result = android_cloud.install_and_verify_apk(apk, android_cloud.APPLICATION, sha256, tmp_path, "runtime")
+    assert result == {"status": expected, "package": android_cloud.APPLICATION, "sha256": sha256, "transport": "non-streaming"}
+    assert request_count == 1
+    install_log = (tmp_path / "install-runtime.log").read_bytes()
+    assert (b"partial push log" if timed_out else b"Success") in install_log
+    assert sha256 in (tmp_path / "installed-runtime-digest.log").read_text()
+
+
+@pytest.mark.parametrize("path_response", [
+    "",
+    "package:/data/app/shared/base.apk\npackage:/data/app/shared/split_config.apk",
+    "package:/data/app/shared/../replacement/base.apk",
+    "package:/data/app/invalid;command/base.apk",
+])
+def test_timeout_with_unproven_apk_keeps_install_unresolved(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, path_response: str,
+) -> None:
+    apk = tmp_path / "reviewed.apk"
+    apk.write_bytes(b"offline APK fixture")
+    commands: list[list[str]] = []
+
+    def read(arguments: list[str], output: Path, timeout: int) -> str:
+        commands.append(arguments)
+        if arguments[0] == "install":
+            raise android_cloud.subprocess.TimeoutExpired(arguments, timeout)
+        assert arguments == ["shell", "-T", "pm", "path", android_cloud.TEST_APPLICATION]
+        return path_response
+
+    def forbidden(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("untrusted package path reached the readback command")
+
+    monkeypatch.setattr(android_cloud, "adb", read)
+    monkeypatch.setattr(android_cloud.subprocess, "run", forbidden)
+    with pytest.raises(ValueError, match="install timed out and could not be reconciled"):
+        android_cloud.install_and_verify_apk(apk, android_cloud.TEST_APPLICATION, android_cloud.digest(apk), tmp_path, "tests")
+    assert [request[0] for request in commands] == ["install", "shell"]
+
+
+def test_installed_apk_digest_mismatch_overrides_package_manager_success(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    apk = tmp_path / "reviewed.apk"
+    apk.write_bytes(b"offline APK fixture")
+    monkeypatch.setattr(android_cloud, "adb", lambda arguments, *_args, **_kwargs: "Success")
+    monkeypatch.setattr(android_cloud, "installed_apk_digest", lambda *_args: "0" * 64)
+    with pytest.raises(ValueError, match="Installed runtime APK SHA-256 differs"):
+        android_cloud.install_and_verify_apk(apk, android_cloud.APPLICATION, android_cloud.digest(apk), tmp_path, "runtime")
 
 
 def test_kernel_probe_retains_only_fixed_platform_facts_and_marks_failure(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
