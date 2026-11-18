@@ -15266,3 +15266,18 @@ compares original HTTP bytes and both registration witnesses plus the signed
 location proof. Cloud execution is required for those claims. Implement the
 missing-marker effect and recovery, S3 and remaining lifecycles, and keep the
 full product gate open.
+
+### 2026-11-18 registration transaction phase verification
+
+Exact source 076d365 passed all 76 scoped Go race families and the Chromium
+response-loss scenario in push run 44234036844. The original full Go gate
+measured 18370/19337 (94.999224%) and failed by one statement. Windows source
+workflow run 44234138385 covers the separate native platform workload.
+
+The fault tests now arm the final identity read interruption only after the
+registry snapshot is complete. They also exercise an unreadable registry
+event identifier, the historical operation count, and an unavailable retained
+generation before activation or deletion. The original 76-family selection and
+95% gate still apply. Verify the same source in the cloud before recording a
+coverage pass. Initialization, reconciliation and the rest of the product
+matrix remain open.

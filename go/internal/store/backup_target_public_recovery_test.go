@@ -132,6 +132,7 @@ func TestTargetRegistrationPublicReplayCannotTreatDatabaseFaultAsAbsence(t *test
 	control, original, scope, body := publicHistoryFixture(t)
 	for _, fault := range []inventoryReadFault{
 		{query: "FROM control_operator_mutations"},
+		{query: "substr(o.operation_id,1,15)='target-inspect-'"},
 		{query: "SELECT event_id,recorded_at,payload_json FROM control_events"},
 		{query: "FROM control_events e WHERE e.domain='target' AND e.event_id=("},
 		{query: "FROM control_events e WHERE e.domain='target' AND e.event_id=(", cursor: true},
@@ -206,7 +207,11 @@ func TestTargetRegistrationPublicPreparationDoesNotPublishPartialRegistryRead(t 
 	if err != nil || len(original) != 2 {
 		t.Fatal("complete registry failed before the interruption fixture", original, err)
 	}
-	for _, fault := range []inventoryReadFault{{query: "FROM targets ORDER BY id"}, {commit: true}} {
+	for _, fault := range []inventoryReadFault{
+		{query: "FROM targets ORDER BY id"},
+		{query: "SELECT DISTINCT record_id FROM control_events WHERE domain='target'", malformed: true},
+		{commit: true},
+	} {
 		installInventoryReadFault(t, control, &fault)
 		fault.armed = true
 		if paths, err := control.BackupTargetRegistrationPaths(scope, "target_new"); paths != nil || err == nil || !fault.injected {
@@ -244,8 +249,10 @@ func TestTargetRegistrationPublicRechecksCurrentRecordAfterVerifyingPathProofs(t
 		t.Fatal(err)
 	}
 	for _, fault := range []inventoryReadFault{
-		{query: "FROM targets WHERE id = ?", armed: true},
-		{query: "SELECT event_id,recorded_at,payload_json FROM control_events", armAfter: "INSERT INTO control_target_registrations"},
+		// Earlier schema/history checks also read targets. Inject only after
+		// the registry snapshot reaches its final completeness query.
+		{query: "FROM targets WHERE id = ?", armAfterQuery: "SELECT DISTINCT record_id FROM control_events WHERE domain='target'"},
+		{query: "SELECT event_id,recorded_at,payload_json FROM control_events", armAfterExec: "INSERT INTO control_target_registrations"},
 	} {
 		installInventoryReadFault(t, control, &fault)
 		if _, result, err := control.RegisterPublicInspectedBackupTarget(scope, receipt, nil, []BackupTargetPathProof{pathProof}, body, document); !errors.Is(err, errInventoryReadInterrupted) || !fault.injected || result.Status != "" {
@@ -284,6 +291,7 @@ func TestTargetRegistrationPublicMetadataWriteFailuresPreserveOriginalResult(t *
 				t.Fatal(err)
 			}
 			for _, fault := range []inventoryReadFault{
+				{query: "SELECT revision,public_generation FROM control_target_registrations"},
 				{query: "UPDATE targets", exec: true},
 				{query: "INSERT INTO control_operator_mutations", exec: true},
 				{commit: true},
@@ -336,6 +344,18 @@ func TestTargetRegistrationPublicPreservesReservedContextAndRejectsMalformedFram
 	legacy, _, _ := registrationFixture(t, control, "target-inspect-legacy", "target_other", path)
 	if _, _, err := control.RegisterPublicInspectedBackupTarget(legacy, receipt, nil, nil, body, document); !errors.Is(err, ErrTargetRegistrationInvalid) {
 		t.Fatal("public entry accepted a legacy operation", err)
+	}
+	var supplied map[string]json.RawMessage
+	if err := json.Unmarshal(document, &supplied); err != nil {
+		t.Fatal(err)
+	}
+	supplied[publicTargetContextField] = json.RawMessage(`{"version":1}`)
+	reserved, err := json.Marshal(supplied)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := control.RegisterPublicInspectedBackupTarget(scope, receipt, nil, nil, body, reserved); !errors.Is(err, ErrTargetRegistrationInvalid) {
+		t.Fatal("registration accepted caller-supplied private evidence", err)
 	}
 	for _, candidate := range []json.RawMessage{
 		json.RawMessage(`{"broken":`),

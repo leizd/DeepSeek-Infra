@@ -18,7 +18,7 @@ var errInventoryReadInterrupted = errors.New("inventory database read interrupte
 // schema or bypassing the control store's normal validation and transaction.
 type inventoryReadFault struct {
 	query                                      string
-	armAfter                                   string
+	armAfterQuery, armAfterExec                string
 	cursor, malformed, commit, armed, injected bool
 	exec                                       bool
 	skip                                       int
@@ -62,7 +62,11 @@ func (conn inventoryFaultConnection) QueryContext(ctx context.Context, query str
 		}
 		return inventoryFaultRows{Rows: rows, malformed: conn.fault.malformed}, nil
 	}
-	return conn.queryUnderlying(ctx, query, args)
+	rows, err := conn.queryUnderlying(ctx, query, args)
+	if err == nil && conn.fault.armAfterQuery != "" && strings.Contains(query, conn.fault.armAfterQuery) {
+		conn.fault.armAfterQuery, conn.fault.armed = "", true
+	}
+	return rows, err
 }
 
 // QueryerContext is optional: the Android SQLite driver queries prepared
@@ -141,8 +145,8 @@ func (conn inventoryFaultConnection) ExecContext(ctx context.Context, query stri
 		return nil, errInventoryReadInterrupted
 	}
 	result, err := conn.Conn.(driver.ExecerContext).ExecContext(ctx, query, args)
-	if err == nil && conn.fault.armAfter != "" && strings.Contains(query, conn.fault.armAfter) {
-		conn.fault.armAfter, conn.fault.armed = "", true
+	if err == nil && conn.fault.armAfterExec != "" && strings.Contains(query, conn.fault.armAfterExec) {
+		conn.fault.armAfterExec, conn.fault.armed = "", true
 	}
 	return result, err
 }
