@@ -11,6 +11,7 @@ import android.net.Uri;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.platform.app.InstrumentationRegistry;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -24,6 +25,7 @@ import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.Assert.*;
@@ -34,12 +36,19 @@ public class NativeRuntimeIntegrationTest {
     private String token;
 
     private byte[] request(String method, String path, JSONObject body, int expected) throws Exception {
+        return request(method, path, body, expected, null);
+    }
+
+    private byte[] request(String method, String path, JSONObject body, int expected, String operationId) throws Exception {
         HttpURLConnection connection = (HttpURLConnection) new URL("http://127.0.0.1:" + NativeRuntime.SERVER_PORT + path).openConnection();
         connection.setConnectTimeout(2000);
         connection.setReadTimeout(15000);
         connection.setRequestMethod(method);
         if (token != null) {
             connection.setRequestProperty("Authorization", "Bearer " + token);
+        }
+        if (operationId != null) {
+            connection.setRequestProperty("X-DeepSeek-Operation-Id", operationId);
         }
         if (body != null) {
             connection.setDoOutput(true);
@@ -49,6 +58,9 @@ public class NativeRuntimeIntegrationTest {
         }
         try {
             assertEquals("HTTP " + method + " " + path, expected, connection.getResponseCode());
+            if (operationId != null) {
+                assertEquals(operationId, connection.getHeaderField("X-DeepSeek-Operation-Id"));
+            }
             InputStream stream = expected < 400 ? connection.getInputStream() : connection.getErrorStream();
             try (InputStream input = stream; ByteArrayOutputStream output = new ByteArrayOutputStream()) {
                 byte[] buffer = new byte[8192];
@@ -140,6 +152,68 @@ public class NativeRuntimeIntegrationTest {
             assertEquals("completed", stored.getJSONObject("skillRun").getString("status"));
             assertTrue(new String(request("GET", download, null, 200), StandardCharsets.UTF_8).contains("App sandbox persistence"));
             assertArrayEquals(goldenBefore, readFile(goldenFile));
+        } finally {
+            runtime.stop();
+        }
+    }
+
+    @Test
+    public void packagedRuntimeInitializesAndReplaysFilesystemTarget() throws Exception {
+        Context app = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        File target = new File(app.getDir("native-target-fixtures", Context.MODE_PRIVATE), UUID.randomUUID().toString()).getCanonicalFile();
+        assertTrue("fixture target outside the managed runtime root", target.mkdir());
+        assertFalse(target.getPath().startsWith(app.getFilesDir().getCanonicalPath() + File.separator));
+        File marker = new File(target, ".deepseek-infra-backup-target.json");
+        assertFalse(marker.exists());
+        String endpoint = "/api/workspace/backup-targets";
+        String operation = "target-inspect-public-v1-android-" + UUID.randomUUID();
+        JSONObject body = new JSONObject().put("path", target.getPath()).put("label", "Android filesystem fixture");
+
+        NativeRuntime runtime = new NativeRuntime(app);
+        try {
+            token = Uri.parse(runtime.start()).getQueryParameter("token");
+            assertNotNull(token);
+            String originalToken = token;
+            JSONObject invalid = new JSONObject().put("path", target.getPath()).put("maxConcurrentTransfers", -1);
+            assertEquals("invalid_payload", json("POST", endpoint, invalid, 400).getString("code"));
+            assertFalse("invalid metadata published a marker", marker.exists());
+
+            byte[] reply = request("POST", endpoint, body, 200, operation);
+            JSONObject registration = new JSONObject(new String(reply, StandardCharsets.UTF_8));
+            assertEquals(target.getPath(), registration.getString("path"));
+            assertEquals(body.getString("label"), registration.getString("label"));
+            assertFalse(registration.has("_nativeTargetRegistrationV1"));
+            byte[] originalMarker = readFile(marker);
+            JSONObject genesis = new JSONObject(new String(originalMarker, StandardCharsets.UTF_8));
+            assertEquals(3, genesis.getInt("schemaVersion"));
+            String targetId = registration.getString("targetId");
+            assertTrue(targetId.matches("target_[0-9a-f]{12}"));
+            assertEquals(targetId, genesis.getString("targetId"));
+            assertEquals(registration.getString("targetNonce"), genesis.getString("targetNonce"));
+            assertTrue(genesis.getString("targetNonce").matches("[0-9a-f]{32}"));
+            assertTrue(genesis.getString("incarnationId").matches("inc_[0-9a-f]{16}"));
+            assertEquals(0, genesis.getInt("targetGeneration"));
+            assertTrue(genesis.getString("latestCommitHash").matches("0{64}"));
+            assertEquals(registration.getString("createdAt"), genesis.getString("createdAt"));
+
+            runtime.stop();
+            Thread.sleep(1000);
+            runtime = new NativeRuntime(app);
+            token = Uri.parse(runtime.start()).getQueryParameter("token");
+            assertEquals(originalToken, token);
+            assertArrayEquals(reply, request("POST", endpoint, body, 200, operation));
+            JSONArray registered = json("GET", endpoint, null, 200).getJSONArray("targets");
+            int matches = 0;
+            for (int index = 0; index < registered.length(); index++) {
+                JSONObject record = registered.getJSONObject(index);
+                if (targetId.equals(record.getString("targetId"))) {
+                    matches++;
+                    assertEquals(target.getPath(), record.getString("path"));
+                }
+            }
+            assertEquals("exact replay exposed more than one target", 1, matches);
+            request("POST", endpoint, new JSONObject().put("path", target.getPath()).put("label", "Changed fixture"), 409, operation);
+            assertArrayEquals(originalMarker, readFile(marker));
         } finally {
             runtime.stop();
         }

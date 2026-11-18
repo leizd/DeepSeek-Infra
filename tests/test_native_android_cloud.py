@@ -361,7 +361,10 @@ def test_inventory_includes_every_existing_instrumentation_method() -> None:
         "com.deepseek.mobile.PlatformOcrProtocolIntegrationTest#cancelledUploadAndRestartCleanOwnedTemporaryFilesAndRotateCredential",
         "com.deepseek.mobile.PlatformOcrProtocolIntegrationTest#privateCredentialLengthAndDigestAreRequiredBeforeDecoding",
     }
-    added = {"com.deepseek.mobile.PlatformOcrProtocolIntegrationTest#acceptedPlatformStreamsSurviveConcurrentTransportShutdown"}
+    added = {
+        "com.deepseek.mobile.PlatformOcrProtocolIntegrationTest#acceptedPlatformStreamsSurviveConcurrentTransportShutdown",
+        "com.deepseek.mobile.NativeRuntimeIntegrationTest#packagedRuntimeInitializesAndReplaysFilesystemTarget",
+    }
     assert len(original) == 14 and not original & added
     assert cases == original | added
     custody = {"ordinaryTimeoutReapsAllAppUidChildren", "detachedTimeoutReapsAllAppUidChildren",

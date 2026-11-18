@@ -15369,3 +15369,12 @@ the isolated claim or receipt fixtures, interrupt expiration, and verify that
 consumed operation IDs cannot obtain new permits. The metadata package checks
 the cost and QoS validation that must succeed before marker publication. The
 87-family development inventory retains the original 83 cases.
+
+The Android packaged instrumentation inventory adds filesystem target
+registration under the actual app UID. It uses a disposable directory outside
+the managed runtime root, checks that invalid metadata leaves it empty, and
+verifies the new marker and registered target from the normal authenticated
+endpoint. After restarting the native runtime, the test requires the exact
+original HTTP response and marker bytes, one registry entry, and a conflict for
+a changed body submitted with the original operation ID. It joins the
+existing five-emulator cloud workload without changing the other test cases.
