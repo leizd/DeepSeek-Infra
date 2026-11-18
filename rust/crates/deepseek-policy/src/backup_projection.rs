@@ -51,7 +51,7 @@ mod uuid_simple_hex {
     pub(crate) struct UuidHex;
 
     impl UuidHex {
-        pub(crate) fn new() -> String {
+        pub(crate) fn generate() -> String {
             SystemEntropy.new_file_id().unwrap_or_else(|_| {
                 let nanos = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -634,12 +634,14 @@ fn pack_for_blob_from_json(index: Option<&Value>, blob_id: &str) -> Option<Strin
     None
 }
 
+pub type LayerPayloads = (BTreeSet<String>, BTreeSet<String>, BTreeSet<String>);
+
 /// Returns `(packs, blobs, standalone)` needed to materialize `layer`.
 pub fn layer_needed_payloads(
     chain: &[ChainPackage],
     produced_by_layer: &[BTreeSet<String>],
     layer: usize,
-) -> Result<(BTreeSet<String>, BTreeSet<String>, BTreeSet<String>), AppError> {
+) -> Result<LayerPayloads, AppError> {
     let mut packs = BTreeSet::new();
     let mut blobs = BTreeSet::new();
     let mut standalone = BTreeSet::new();
@@ -832,12 +834,14 @@ pub fn plan_projection(
     })
 }
 
+pub type ControlComponentInventory = (BTreeMap<String, String>, BTreeMap<String, Value>);
+
 /// Validate `component-map.json`, `payload-index.json`, and member remote object commitments.
 pub fn validate_control_component_inventory(
     member: &Value,
     component_map: &Value,
     payload_index: &Value,
-) -> Result<(BTreeMap<String, String>, BTreeMap<String, Value>), AppError> {
+) -> Result<ControlComponentInventory, AppError> {
     let valid_headers = component_map.get("schemaVersion").and_then(Value::as_i64) == Some(1)
         && payload_index.get("schemaVersion").and_then(Value::as_i64) == Some(1)
         && payload_index.get("storageProtocol").and_then(Value::as_str) == Some(OBJECT_SET_V1);
@@ -1217,7 +1221,7 @@ fn materialize_cdc(
             "Delta CDC file has no chunk list: {logical_path}"
         )));
     };
-    let tmp = target.with_file_name(format!(".tmp.{}.restore", UuidHex::new()));
+    let tmp = target.with_file_name(format!(".tmp.{}.restore", UuidHex::generate()));
     let write_res = (|| -> Result<(), AppError> {
         let file = OpenOptions::new()
             .write(true)
@@ -1500,7 +1504,7 @@ pub fn materialize_chain(
     let mut final_manifest = Value::Null;
 
     let work_root = if projection.is_some() {
-        let scratch = output_root.join(format!(".projection-support-{}", UuidHex::new()));
+        let scratch = output_root.join(format!(".projection-support-{}", UuidHex::generate()));
         fs::create_dir_all(&scratch).map_err(|err| internal_error(err.to_string()))?;
         scratch
     } else {
@@ -1579,7 +1583,7 @@ pub fn materialize_chain(
                 )));
             }
 
-            let prepared_root = work_root.join(format!(".delta-prepared-{}", UuidHex::new()));
+            let prepared_root = work_root.join(format!(".delta-prepared-{}", UuidHex::generate()));
             fs::create_dir_all(&prepared_root).map_err(|err| internal_error(err.to_string()))?;
             let chunk_protocol = chunk_protocol_for_manifest(&manifest);
             let mut pack_cache = if target_from_relative(package_root, PACK_INDEX_PATH)
@@ -1906,7 +1910,7 @@ pub fn write_verified_plan(
     });
     let path = base.join(VERIFIED_PLAN_NAME);
     fs::create_dir_all(base).map_err(|err| internal_error(err.to_string()))?;
-    let tmp = base.join(format!(".{VERIFIED_PLAN_NAME}.{}.tmp", UuidHex::new()));
+    let tmp = base.join(format!(".{VERIFIED_PLAN_NAME}.{}.tmp", UuidHex::generate()));
     let formatted =
         serde_json::to_string_pretty(&payload).map_err(|err| internal_error(err.to_string()))?;
     let write_res = (|| -> Result<(), AppError> {

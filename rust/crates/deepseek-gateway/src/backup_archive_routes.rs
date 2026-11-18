@@ -1252,12 +1252,15 @@ pub(crate) struct InspectMeta<'a> {
 pub(crate) fn estimate_local_safety_logical_bytes(root: &Path) -> u64 {
     let context = BackupContext {
         mode: "full".to_string(),
+        project_ids: Vec::new(),
         include_history: true,
+        include_drafts: false,
+        include_rebuildable_indexes: false,
         coverage_policy: "best-effort".to_string(),
-        project_ids: None,
+        include_external_state: true,
     };
     let mut total = 0_u64;
-    for spec in LOCAL_CONTRIBUTORS {
+    for spec in &LOCAL_CONTRIBUTORS {
         for (_, path) in collect_contributor_files(root, spec, &context) {
             if let Ok(meta) = fs::metadata(&path) {
                 total = total.saturating_add(meta.len());

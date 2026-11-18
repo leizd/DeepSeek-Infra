@@ -24,10 +24,10 @@ use axum::{Json, Router};
 use deepseek_policy::app_error::{AppError, codes};
 use deepseek_policy::backup_mirror::sha256_file;
 use deepseek_policy::backup_projection::{
-    ChainPackage, OBJECT_SET_V1, ProjectionPlan, RestoreSelection, estimate_safety_backup_peak,
-    load_verified_plan, manifest_files, materialize_chain, normalize_selection, plan_projection,
-    resolve_lineage_from_receipts, sha256_bytes, validate_control_component_inventory,
-    write_verified_plan,
+    ChainPackage, OBJECT_SET_V1, ProjectionPlan, RestoreSelection, capacity_report,
+    estimate_safety_backup_peak, load_verified_plan, manifest_files, materialize_chain,
+    normalize_selection, plan_projection, resolve_lineage_from_receipts, sha256_bytes,
+    validate_control_component_inventory, write_verified_plan,
 };
 use deepseek_policy::backup_unlock::{
     PACK_INDEX_PATH, SelectedArchiveFilter, decrypt_file_native, decrypt_passphrase_file_native,
@@ -36,7 +36,7 @@ use deepseek_policy::backup_unlock::{
 };
 use deepseek_policy::core_utils::python_truthy;
 use deepseek_policy::entropy::{Entropy, SystemEntropy};
-use deepseek_policy::python_json::value_str;
+use deepseek_policy::python_json::{dumps_compact, value_str};
 use deepseek_storage::object_set::{ObjectInventoryEntry, object_inventory_digest};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
