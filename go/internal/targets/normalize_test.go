@@ -199,3 +199,28 @@ func TestTargetMetadataPreservesKindTruthinessQuotedContainersAndNumericFormatti
 		}
 	}
 }
+func TestTargetMetadataCanBeValidatedBeforePublishingAnyMarker(t *testing.T) {
+	for _, fixture := range []struct {
+		name  string
+		raw   string
+		valid bool
+	}{
+		{"defaults", `{}`, true},
+		{"explicit-cost-and-qos", `{"maxConcurrentTransfers":4,"maxReadBytesPerSecond":4000,"storageCostPerGiBMonth":0.05}`, true},
+		{"invalid-storage-cost", `{"storageCostPerGiBMonth":-1}`, false},
+		{"invalid-egress-cost", `{"egressCostPerGiB":-1}`, false},
+		{"invalid-read-limit", `{"maxReadBytesPerSecond":-1}`, false},
+		{"invalid-write-limit", `{"maxWriteBytesPerSecond":-1}`, false},
+		{"invalid-concurrency", `{"maxConcurrentTransfers":0}`, false},
+	} {
+		t.Run(fixture.name, func(t *testing.T) {
+			input, err := ReadInput([]byte(fixture.raw))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := input.ValidateFilesystemMetadata(); (err == nil) != fixture.valid {
+				t.Fatalf("unexpected metadata admission: %v", err)
+			}
+		})
+	}
+}

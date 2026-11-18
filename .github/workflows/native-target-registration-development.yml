@@ -63,6 +63,8 @@ jobs:
           required={
               'TestTargetRegistrationMarkerAdmissionAndDispatchFaultsPreserveOriginalState',
               'TestTargetRegistrationMarkerControlRequiresNativeAuthorityAndLiveRequest',
+              'TestTargetRegistrationMarkerConsumedOperationCannotIssueFreshClaim',
+              'TestTargetRegistrationMarkerCorruptCustodyCannotLookUnclaimed',
               'TestTargetRegistrationMarkerDispatchIsSingleAndOriginalResultRecoversAfterTakeover',
               'TestTargetRegistrationMarkerHTTPRecoversOriginalRequestAfterEffectReplyLoss',
               'TestTargetRegistrationMarkerOnlyAnUndispatchedClaimCanAdvanceEpoch',
@@ -88,6 +90,7 @@ jobs:
               'TestTargetRegistrationPublicTCPRecoversWhenSnapshotChangesDuringFirstInspection',
               'TestTargetInspectionClientBindsFullContainmentAndRejectsDowngrade',
               'TestTargetMetadataPreservesKindTruthinessQuotedContainersAndNumericFormatting',
+              'TestTargetMetadataCanBeValidatedBeforePublishingAnyMarker',
               'TestTargetMetadataRejectsBrokenBodiesBeforeAnyFilesystemWork',
               'TestTargetMetadataRetainedHTTPAndRegisterOracle',
               'TestTargetMetadataUnicodeClassificationMatchesOriginalPython312',
@@ -119,6 +122,7 @@ jobs:
               'TestTargetRegistrationMissingOperatorOrMalformedEventCannotPublishHealthyState',
               'TestAgentDriverLoopKeepsUnknownAndToolsPendingCustodyWithoutRedispatch',
               'TestTargetInspectionClientBoundsUntrustedResponseSizes',
+              'TestTargetInspectionClientMarkerReconcilesOriginalFenceAfterLostReply',
               'TestTargetInspectionClientNeverFallsBackToPlaintextOrDuplicateCredentials',
               'TestTargetInspectionClientReadsBothStatesWithTLSAndPinnedPublicMetadata',
               'TestTargetInspectionClientRejectsInvalidBindingsBeforeRPC',
@@ -196,7 +200,7 @@ jobs:
           good=good and all(e['Action']=='pass' for e in top if e['Action'] in {'pass','fail','skip'}) and all(e['Action']=='pass' for e in package)
           good=good and not any(e['Action']=='fail' or 'WARNING: DATA RACE' in e.get('Output','') for e in events)
           report=dict(status='PASS' if good else 'FAIL',sourceCommit=source,sourceTree=tree,runId=os.environ['GITHUB_RUN_ID'],event=os.environ['GITHUB_EVENT_NAME'],attempt=os.environ['GITHUB_RUN_ATTEMPT'],
-              expectedTests=sorted(required),groups=executions,exitCode=exit_code,raceEnabled=True,timeout=INVOCATION_TIMEOUT,retainedOriginalTests=76,addedMarkerTests=7,rawEventsSha256=hashlib.sha256(raw).hexdigest(),parseErrors=parse_errors,
+              expectedTests=sorted(required),groups=executions,exitCode=exit_code,raceEnabled=True,timeout=INVOCATION_TIMEOUT,retainedOriginalTests=76,addedMarkerTests=11,rawEventsSha256=hashlib.sha256(raw).hexdigest(),parseErrors=parse_errors,
               passed=sum(e['Action']=='pass' for e in top),failed=sum(e['Action']=='fail' for e in top),skipped=sum(e['Action']=='skip' for e in top),
               physicalRustInspectionQualified=False,publicRegistrationQualified=False,fullGoSuiteQualified=False,original95PercentCoverageQualified=False,fullMigrationQualified=False,readiness='NOT_READY')
           (out/'result.json').write_text(json.dumps(report,indent=2)+'\n')

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"path/filepath"
@@ -13,6 +15,7 @@ import (
 	"time"
 
 	actionv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/actionv1"
+	commonv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/commonv1"
 	targetmodel "github.com/leizd/DeepSeek-Infra/go/internal/targets"
 	"google.golang.org/protobuf/proto"
 )
@@ -184,6 +187,32 @@ func TestTargetRegistrationMarkerDispatchIsSingleAndOriginalResultRecoversAfterT
 	if err != nil || !found || !reflect.DeepEqual(current, record) || reply.Status != OperatorMutationAlreadyApplied {
 		t.Fatal("lost reply did not replay the original committed result", found, err)
 	}
+	frame, err := decodePublicTargetContext(record.Payload)
+	if err != nil || frame == nil {
+		t.Fatal("original marker event lacks its signed custody context", err)
+	}
+	// These faults use a disposable database inside a rolled-back transaction.
+	withRegistrationRollback(t, recovered, func(tx *sql.Tx) {
+		if _, err := tx.Exec("DROP TRIGGER control_target_marker_advance"); err != nil {
+			t.Fatal(err)
+		}
+		for _, damaged := range []*actionv1.TargetMarkerReceipt{nil, forged} {
+			wire := []byte{0xff}
+			if damaged != nil {
+				var err error
+				wire, _, err = markerMessageBytes(damaged)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := tx.Exec("UPDATE control_target_marker_operations SET receipt=? WHERE operation_id=?", wire, scope.operationID); err != nil {
+				t.Fatal(err)
+			}
+			if err := validateRetainedTargetMarkerTx(tx, frame, record.ID, observed); !errors.Is(err, ErrCorruptRecord) {
+				t.Fatal("corrupt retained effect could authorize registration replay", err)
+			}
+		}
+	})
 	tx, err := recovered.db.Begin()
 	if err != nil {
 		t.Fatal(err)
@@ -207,6 +236,11 @@ func TestTargetRegistrationMarkerOnlyAnUndispatchedClaimCanAdvanceEpoch(t *testi
 	}
 	now := operation.Claim.LeaseUntilUnix + 1
 	control = reopenTargetDeleteStore(t, path, func() int64 { return now })
+	fault := inventoryReadFault{query: "UPDATE control_target_marker_operations SET state='ABORTED'", exec: true, armed: true}
+	installInventoryReadFault(t, control, &fault)
+	if pending, found, err := control.PendingTargetMarker(scope.operationID, scope.actor, body); !errors.Is(err, errInventoryReadInterrupted) || found || pending.Claim != nil {
+		t.Fatal("an interrupted expiration looked like a new eligible request", found, err)
+	}
 	if _, found, err := control.PendingTargetMarker(scope.operationID, scope.actor, body); found || err != nil {
 		t.Fatal("never-dispatched permit retained an effect", found, err)
 	}
@@ -323,5 +357,98 @@ func TestTargetRegistrationMarkerAdmissionAndDispatchFaultsPreserveOriginalState
 	}
 	if _, err := control.BeginTargetMarkerDispatch(request); err != nil {
 		t.Fatal("proven rollback could not use original claim", err)
+	}
+}
+
+func TestTargetRegistrationMarkerCorruptCustodyCannotLookUnclaimed(t *testing.T) {
+	for _, corruption := range []string{"encoding", "digest", "row-binding"} {
+		t.Run(corruption, func(t *testing.T) {
+			control := targetDeletePromotedStore(t, true)
+			scope, absent, body := absentMarkerFixture(t, control, "corrupt-"+corruption, filepath.Join(t.TempDir(), "candidate"))
+			requestHash, err := hex.DecodeString(body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			claim := &actionv1.TargetMarkerClaim{SchemaVersion: 1, OperationId: scope.operationID, WriterFencingToken: uint64(scope.writerFence),
+				Fence: &commonv1.ActionFence{ActionId: scope.operationID, ExecutionEpoch: 1}, CutoverRevision: uint64(scope.cutoverRevision),
+				IssuedAtUnix: 1000, LeaseUntilUnix: 1020, RequestedPath: scope.requestedPath, CanonicalPath: absent.Observation.CanonicalPath,
+				TargetId: "target_202020202020", Nonce: bytes.Repeat([]byte{0x20}, 32), RequestSha256: requestHash,
+				DirectoryIdentity: absent.Observation.DirectoryIdentity, FleetId: absent.Observation.FleetId, Environment: absent.Observation.Environment}
+			if corruption == "row-binding" {
+				claim.Fence.ExecutionEpoch++
+			}
+			wire, digest, err := markerMessageBytes(claim)
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch corruption {
+			case "encoding":
+				wire = []byte{0xff}
+				digest = sha256.Sum256(wire)
+			case "digest":
+				digest[0] ^= 1
+			}
+			if _, err := control.db.Exec("INSERT INTO control_target_marker_operations(operation_id,execution_epoch,actor,claim,claim_sha256,state) VALUES(?,1,?,?,?,'CLAIMED')",
+				scope.operationID, scope.actor, wire, digest[:]); err != nil {
+				t.Fatal(err)
+			}
+			if pending, found, err := control.PendingTargetMarker(scope.operationID, scope.actor, body); !errors.Is(err, ErrCorruptRecord) || found || pending.Claim != nil {
+				t.Fatal("corruption appeared as absent or eligible operation", found, err)
+			}
+			if op, err := control.AdmitTargetMarker(scope, absent, nil, body); !errors.Is(err, ErrCorruptRecord) || op.Claim != nil {
+				t.Fatal("new effect claim replaced damaged evidence", err)
+			}
+			if permit, err := control.BeginTargetMarkerDispatch(&actionv1.TargetMarkerDispatchRequest{
+				Claim: claim, Fence: claim.Fence, PreparationSha256: requestHash,
+			}); !errors.Is(err, ErrCorruptRecord) || permit != nil {
+				t.Fatal("damaged evidence qualified for dispatch", err)
+			}
+		})
+	}
+}
+
+func TestTargetRegistrationMarkerConsumedOperationCannotIssueFreshClaim(t *testing.T) {
+	control := targetDeletePromotedStore(t, true)
+	scope, past, document, body := publicRegistrationFixture(t, control, "consumed", "target_prior", filepath.Join(t.TempDir(), "prior"))
+	if _, _, err := control.RegisterPublicInspectedBackupTarget(scope, past, nil, nil, body, document); err != nil {
+		t.Fatal(err)
+	}
+	_, absent, _ := absentMarkerFixture(t, control, "consumed", scope.requestedPath)
+	if op, err := control.AdmitTargetMarker(scope, absent, nil, body); !errors.Is(err, ErrMutationRequestReplayConflict) || op.Claim != nil {
+		t.Fatal("a consumed public request authorized a new filesystem effect", err)
+	}
+	if pending, found, err := control.PendingTargetMarker(scope.operationID, scope.actor, body); err != nil || found || pending.Claim != nil {
+		t.Fatal("refused claim created marker history", found, err)
+	}
+	fresh, read, digest := absentMarkerFixture(t, control, "closed-store", filepath.Join(t.TempDir(), "fresh"))
+	// Reuse the authentic competing path while constructing the valid claim.
+	paths, err := control.BackupTargetRegistrationPaths(fresh, "")
+	if err != nil || len(paths) != 1 {
+		t.Fatal("fixture lacks prior registered path", paths, err)
+	}
+	proof := publicPathFixture(t, control, fresh, paths[0], paths[0].Path)
+	op, err := control.AdmitTargetMarker(fresh, read, []BackupTargetPathProof{proof}, digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if later, err := control.AdmitTargetMarker(fresh, read, []BackupTargetPathProof{proof}, body); !errors.Is(err, ErrMutationRequestReplayConflict) || later.Claim != nil {
+		t.Fatal("pending claim accepted a different body", err)
+	}
+	prepared, receipt := targetMarkerEffectFixture(t, op)
+	observed, observation, updated := targetMarkerReadFixture(t, control, op, receipt)
+	if _, _, err := control.RegisterPublicInitializedBackupTarget(observed, observation, nil, digest, updated, nil); !errors.Is(err, ErrTargetMarkerClaim) {
+		t.Fatal("initialization settled without any original effect proof", err)
+	}
+	if err := control.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, err := control.PendingTargetMarker(fresh.operationID, fresh.actor, digest); found || !errors.Is(err, ErrWriterFenceHeld) {
+		t.Fatal("closed store appeared to have no eligible marker work", found, err)
+	}
+	if _, err := control.AdmitTargetMarker(fresh, read, []BackupTargetPathProof{proof}, digest); !errors.Is(err, ErrWriterFenceHeld) {
+		t.Fatal("closed store admitted target initialization", err)
+	}
+	if grant, err := control.BeginTargetMarkerDispatch(prepared); grant != nil || !errors.Is(err, ErrWriterFenceHeld) {
+		t.Fatal("closed store released an original permit", err)
 	}
 }

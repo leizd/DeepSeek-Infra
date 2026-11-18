@@ -15360,3 +15360,12 @@ families had completed. The new development run keeps the full inventory
 and race flag in two store groups and one API, worker and metadata group.
 Every invocation retains the eight-minute limit. The independent complete
 95% Go measurement produces a result even if a development group fails.
+
+The follow-up test inventory covers the worker client's own package, since the
+original complete Go gate instruments each package independently. It exercises
+unavailable transport, duplicate credentials, an interrupted Initialize reply,
+and a read-only Reconcile bound to the original epoch. The store tests corrupt
+the isolated claim or receipt fixtures, interrupt expiration, and verify that
+consumed operation IDs cannot obtain new permits. The metadata package checks
+the cost and QoS validation that must succeed before marker publication. The
+87-family development inventory retains the original 83 cases.

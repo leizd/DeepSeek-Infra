@@ -36,6 +36,25 @@ func TestTargetRegistrationMarkerV22UpgradePreservesRegistrationAfterRollback(t 
 		t.Fatal(err)
 	}
 	control.schema = SchemaV22
+	if pending, found, err := control.PendingTargetMarker(scope.operationID, scope.actor, body); err != nil || found || pending.Claim != nil {
+		t.Fatal("legacy store reported marker operation history", found, err)
+	}
+	if op, err := control.AdmitTargetMarker(scope, observation, nil, body); !errors.Is(err, ErrTargetMarkerClaim) || op.Claim != nil {
+		t.Fatal("legacy store admitted a new marker", err)
+	}
+
+	badClock := control.now
+	control.now = func() int64 { return -1 }
+	clockTx, err := control.db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	clockErr := control.migrateToV23Tx(clockTx)
+	rollbackErr := clockTx.Rollback()
+	control.now = badClock
+	if !errors.Is(clockErr, ErrWriterFenceHeld) || rollbackErr != nil {
+		t.Fatal("migration used a bad clock or failed to roll back", clockErr, rollbackErr)
+	}
 
 	for _, fault := range []inventoryReadFault{
 		{query: "CREATE TRIGGER control_target_marker_advance", exec: true, armed: true},
