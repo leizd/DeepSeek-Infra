@@ -21,6 +21,7 @@ type inventoryReadFault struct {
 	armAfterQuery, armAfterExec                string
 	cursor, malformed, commit, armed, injected bool
 	exec                                       bool
+	zeroAffected                               bool
 	skip                                       int
 	matched                                    int
 }
@@ -148,11 +149,16 @@ func TestAuthoritativeTargetLastReadMustSucceedAfterSchemaValidation(t *testing.
 }
 
 func (conn inventoryFaultConnection) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
-	if conn.fault.armed && conn.fault.exec && strings.Contains(query, conn.fault.query) {
+	match := conn.fault.armed && conn.fault.exec && strings.Contains(query, conn.fault.query)
+	if match && !conn.fault.zeroAffected {
 		conn.fault.armed, conn.fault.injected = false, true
 		return nil, errInventoryReadInterrupted
 	}
 	result, err := conn.execUnderlying(ctx, query, args)
+	if match && conn.fault.zeroAffected && err == nil {
+		conn.fault.armed, conn.fault.injected = false, true
+		return driver.RowsAffected(0), nil
+	}
 	if err == nil && conn.fault.armAfterExec != "" && strings.Contains(query, conn.fault.armAfterExec) {
 		conn.fault.armAfterExec, conn.fault.armed = "", true
 	}

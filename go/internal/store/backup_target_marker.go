@@ -269,9 +269,14 @@ func (store *Control) BeginTargetMarkerDispatch(request *actionv1.TargetMarkerDi
 		context.now < claim.IssuedAtUnix || context.now >= claim.LeaseUntilUnix {
 		return nil, ErrTargetMarkerClaim
 	}
-	if _, err := tx.Exec("UPDATE control_target_marker_operations SET state='DISPATCHED',preparation_sha256=? WHERE operation_id=? AND execution_epoch=? AND state='CLAIMED'",
-		request.PreparationSha256, claim.OperationId, claim.Fence.ExecutionEpoch); err != nil {
+	change, err := tx.Exec("UPDATE control_target_marker_operations SET state='DISPATCHED',preparation_sha256=? WHERE operation_id=? AND execution_epoch=? AND state='CLAIMED'",
+		request.PreparationSha256, claim.OperationId, claim.Fence.ExecutionEpoch)
+	if err != nil {
 		return nil, err
+	}
+	count, err := change.RowsAffected()
+	if err != nil || count != 1 {
+		return nil, ErrTargetMarkerClaim
 	}
 	context.actionLeaseUntil = claim.LeaseUntilUnix
 	if err := store.finishOperatorMutationTx(tx, context); err != nil {

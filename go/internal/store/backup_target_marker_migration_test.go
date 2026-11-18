@@ -37,29 +37,37 @@ func TestTargetRegistrationMarkerV22UpgradePreservesRegistrationAfterRollback(t 
 	}
 	control.schema = SchemaV22
 
-	fault := inventoryReadFault{query: "CREATE TRIGGER control_target_marker_advance", exec: true, armed: true}
-	installInventoryReadFault(t, control, &fault)
-	attempt, err := control.db.Begin()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer attempt.Rollback()
-	if err := control.migrateToV23Tx(attempt); !errors.Is(err, errInventoryReadInterrupted) || !fault.injected {
-		t.Fatal("v23 migration interruption was hidden", err)
-	}
-	if err := attempt.Rollback(); err != nil {
-		t.Fatal(err)
-	}
-	check, err := control.db.Begin()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer check.Rollback()
-	if err := verifySchemaTx(check, SchemaV22); err != nil {
-		t.Fatal("rollback did not restore original schema", err)
-	}
-	if err := check.Rollback(); err != nil {
-		t.Fatal(err)
+	for _, fault := range []inventoryReadFault{
+		{query: "CREATE TRIGGER control_target_marker_advance", exec: true, armed: true},
+		{query: "INSERT INTO schema_migrations VALUES(23", exec: true, armed: true},
+		{query: "UPDATE control_store_meta SET schema_version=23", exec: true, armed: true},
+		{query: "PRAGMA user_version=23", exec: true, armed: true},
+		{query: "SELECT sql FROM sqlite_schema WHERE name=? AND type=?", armAfterExec: "PRAGMA user_version=23"},
+	} {
+		installInventoryReadFault(t, control, &fault)
+		attempt, err := control.db.Begin()
+		if err != nil {
+			t.Fatal(err)
+		}
+		migrationErr := control.migrateToV23Tx(attempt)
+		if err := attempt.Rollback(); err != nil {
+			t.Fatal(err)
+		}
+		control.schema = SchemaV22
+		if !fault.injected || (!errors.Is(migrationErr, errInventoryReadInterrupted) && !errors.Is(migrationErr, ErrForeignRuntimeStore)) {
+			t.Fatal("v23 migration interruption was hidden", fault.query, migrationErr)
+		}
+		check, err := control.db.Begin()
+		if err != nil {
+			t.Fatal(err)
+		}
+		schemaErr := verifySchemaTx(check, SchemaV22)
+		if err := check.Rollback(); err != nil {
+			t.Fatal(err)
+		}
+		if schemaErr != nil {
+			t.Fatal("rollback did not restore original schema", schemaErr)
+		}
 	}
 	path := control.path
 	if err := control.Close(); err != nil {

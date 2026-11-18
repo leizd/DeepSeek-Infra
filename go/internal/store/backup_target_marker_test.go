@@ -109,6 +109,17 @@ func TestTargetRegistrationMarkerDispatchIsSingleAndOriginalResultRecoversAfterT
 	if _, err := control.BeginTargetMarkerDispatch(dispatch); !errors.Is(err, ErrTargetMarkerClaim) {
 		t.Fatal("second dispatch permit was issued", err)
 	}
+	for _, fault := range []inventoryReadFault{
+		{query: "SELECT operation_id FROM control_target_marker_operations WHERE state"},
+		{query: "SELECT execution_epoch,actor,claim,claim_sha256,state"},
+		{commit: true},
+	} {
+		installInventoryReadFault(t, control, &fault)
+		fault.armed = true
+		if pending, found, err := control.PendingTargetMarker(scope.operationID, scope.actor, body); err == nil || found || pending.Claim != nil || !fault.injected {
+			t.Fatal("read fault erased evidence of a previously dispatched effect", fault.query, err)
+		}
+	}
 
 	path := control.path
 	if err := control.Close(); err != nil {
@@ -137,13 +148,33 @@ func TestTargetRegistrationMarkerDispatchIsSingleAndOriginalResultRecoversAfterT
 	if _, _, err := recovered.RegisterPublicInitializedBackupTarget(fresh, observed, nil, body, document, forged); !errors.Is(err, ErrTargetMarkerClaim) {
 		t.Fatal("forged receipt settled", err)
 	}
-	fault := inventoryReadFault{query: "INSERT INTO control_target_registrations", exec: true, armed: true}
-	installInventoryReadFault(t, recovered, &fault)
-	if _, _, err := recovered.RegisterPublicInitializedBackupTarget(fresh, observed, nil, body, document, effect); !errors.Is(err, errInventoryReadInterrupted) || !fault.injected {
-		t.Fatal("effect settlement was not coupled to registration commit", err)
+	for _, change := range []func(*actionv1.TargetMarkerReceipt){
+		func(receipt *actionv1.TargetMarkerReceipt) { receipt.Effect = nil },
+		func(receipt *actionv1.TargetMarkerReceipt) { receipt.Effect.ClaimSha256[0] ^= 1 },
+		func(receipt *actionv1.TargetMarkerReceipt) { receipt.Effect.MarkerSha256[0] ^= 1 },
+	} {
+		bad := proto.Clone(effect).(*actionv1.TargetMarkerReceipt)
+		change(bad)
+		if _, _, err := recovered.RegisterPublicInitializedBackupTarget(fresh, observed, nil, body, document, bad); !errors.Is(err, ErrTargetMarkerClaim) {
+			t.Fatal("unbound effect receipt settled", err)
+		}
 	}
-	if pending, found, err := recovered.PendingTargetMarker(scope.operationID, scope.actor, body); err != nil || !found || pending.State != "DISPATCHED" {
-		t.Fatal("rollback consumed the initial effect", found, err)
+	for _, fault := range []inventoryReadFault{
+		{query: "SELECT execution_epoch,actor,claim,claim_sha256,state"},
+		{query: "UPDATE control_target_marker_operations SET state='SETTLED'", exec: true},
+		{query: "UPDATE control_target_marker_operations SET state='SETTLED'", exec: true, zeroAffected: true},
+		{query: "INSERT INTO control_target_registrations", exec: true},
+		{query: "SELECT execution_epoch,actor,claim,claim_sha256,state", armAfterExec: "INSERT INTO control_target_registrations"},
+		{commit: true},
+	} {
+		installInventoryReadFault(t, recovered, &fault)
+		fault.armed = fault.armAfterExec == ""
+		if _, _, err := recovered.RegisterPublicInitializedBackupTarget(fresh, observed, nil, body, document, effect); err == nil || !fault.injected {
+			t.Fatal("effect settlement was not coupled to registration commit", fault.query, err)
+		}
+		if pending, found, err := recovered.PendingTargetMarker(scope.operationID, scope.actor, body); err != nil || !found || pending.State != "DISPATCHED" {
+			t.Fatal("rollback consumed the initial effect", found, err)
+		}
 	}
 	record, result, err := recovered.RegisterPublicInitializedBackupTarget(fresh, observed, nil, body, document, effect)
 	if err != nil || record.ID != operation.Claim.TargetId || result.Status != OperatorMutationApplied {
@@ -187,5 +218,110 @@ func TestTargetRegistrationMarkerOnlyAnUndispatchedClaimCanAdvanceEpoch(t *testi
 	dispatch, _ := targetMarkerEffectFixture(t, operation)
 	if _, err := control.BeginTargetMarkerDispatch(dispatch); !errors.Is(err, ErrTargetMarkerClaim) {
 		t.Fatal("the expired original action was redispatched", err)
+	}
+}
+
+func TestTargetRegistrationMarkerRefusesUntrustedAbsenceAndOverlapBeforeClaim(t *testing.T) {
+	control := targetDeletePromotedStore(t, true)
+	root := t.TempDir()
+	registered := filepath.Join(root, "registered")
+	original, originalRead, originalDoc := registrationFixture(t, control, "target-inspect-previous-marker", "target_prior", registered)
+	if _, _, err := control.RegisterInspectedBackupTarget(original, originalRead, originalDoc); err != nil {
+		t.Fatal(err)
+	}
+	scope, absent, body := absentMarkerFixture(t, control, "bad-absence", filepath.Join(root, "candidate"))
+	paths, err := control.BackupTargetRegistrationPaths(scope, "")
+	if err != nil || len(paths) != 1 {
+		t.Fatal("original competing target unavailable", err)
+	}
+	proof := publicPathFixture(t, control, scope, paths[0], registered)
+	present := proto.Clone(absent).(*actionv1.FilesystemBackupTargetInspectionReceipt)
+	present.Observation.MarkerPresent = true
+	present.Observation.MarkerJson = originalRead.Observation.MarkerJson
+	present.Observation.MarkerSha256 = originalRead.Observation.MarkerSha256
+	signRegistrationFixture(t, present)
+	missingIdentity := proto.Clone(absent).(*actionv1.FilesystemBackupTargetInspectionReceipt)
+	missingIdentity.Observation.DirectoryIdentity = nil
+	signRegistrationFixture(t, missingIdentity)
+	staleScope := scope
+	staleScope.snapshot = strings.Repeat("0", 64)
+	oldWriter := scope
+	oldWriter.writerFence--
+	overlap := publicPathFixture(t, control, scope, paths[0], root)
+
+	for _, test := range []struct {
+		name   string
+		scope  BackupTargetRegistrationScope
+		read   *actionv1.FilesystemBackupTargetInspectionReceipt
+		proofs []BackupTargetPathProof
+		digest string
+		want   error
+	}{
+		{"invalid-body", scope, absent, []BackupTargetPathProof{proof}, "bad", ErrTargetMarkerClaim},
+		{"present", scope, present, []BackupTargetPathProof{proof}, body, ErrTargetMarkerClaim},
+		{"missing-directory-id", scope, missingIdentity, []BackupTargetPathProof{proof}, body, ErrTargetMarkerClaim},
+		{"stale-snapshot", staleScope, absent, []BackupTargetPathProof{proof}, body, ErrRevisionConflict},
+		{"old-writer", oldWriter, absent, []BackupTargetPathProof{proof}, body, ErrTargetMarkerClaim},
+		{"missing-path-proof", scope, absent, nil, body, ErrTargetRegistrationInvalid},
+		{"invalid-path-proof", scope, absent, []BackupTargetPathProof{{TargetID: paths[0].TargetID}}, body, ErrTargetRegistrationInvalid},
+		{"overlap", scope, absent, []BackupTargetPathProof{overlap}, body, ErrTargetOverlap},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if op, err := control.AdmitTargetMarker(test.scope, test.read, test.proofs, test.digest); !errors.Is(err, test.want) || op.Claim != nil {
+				t.Fatal("unsafe absence produced a claim", err)
+			}
+			if _, found, err := control.PendingTargetMarker(scope.operationID, scope.actor, body); err != nil || found {
+				t.Fatal("denied admission entered the journal", found, err)
+			}
+		})
+	}
+	if _, err := control.AdmitTargetMarker(scope, absent, []BackupTargetPathProof{proof}, body); err != nil {
+		t.Fatal("valid absence and non-overlap did not obtain a claim", err)
+	}
+}
+
+func TestTargetRegistrationMarkerAdmissionAndDispatchFaultsPreserveOriginalState(t *testing.T) {
+	control := targetDeletePromotedStore(t, true)
+	scope, absent, body := absentMarkerFixture(t, control, "marker-transaction-faults", filepath.Join(t.TempDir(), "candidate"))
+	for _, fault := range []inventoryReadFault{
+		{query: "SELECT operation_id FROM control_target_marker_operations WHERE state"},
+		{query: "SELECT execution_epoch,actor,claim,claim_sha256,state"},
+		{query: "FROM targets ORDER BY id"},
+		{query: "SELECT EXISTS(SELECT 1 FROM control_target_marker_operations"},
+		{query: "INSERT INTO control_target_marker_operations", exec: true},
+		{commit: true},
+	} {
+		installInventoryReadFault(t, control, &fault)
+		fault.armed = true
+		if op, err := control.AdmitTargetMarker(scope, absent, nil, body); !errors.Is(err, errInventoryReadInterrupted) || !fault.injected || op.Claim != nil {
+			t.Fatal("a fault admitted an initialization", fault.query, err)
+		}
+		if _, found, err := control.PendingTargetMarker(scope.operationID, scope.actor, body); err != nil || found {
+			t.Fatal("admission fault retained a partial claim", found, err)
+		}
+	}
+	operation, err := control.AdmitTargetMarker(scope, absent, nil, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, _ := targetMarkerEffectFixture(t, operation)
+	for _, fault := range []inventoryReadFault{
+		{query: "SELECT execution_epoch,actor,claim,claim_sha256,state"},
+		{query: "UPDATE control_target_marker_operations SET state='DISPATCHED'", exec: true},
+		{query: "UPDATE control_target_marker_operations SET state='DISPATCHED'", exec: true, zeroAffected: true},
+		{commit: true},
+	} {
+		installInventoryReadFault(t, control, &fault)
+		fault.armed = true
+		if permit, err := control.BeginTargetMarkerDispatch(request); err == nil || !fault.injected || permit != nil {
+			t.Fatal("a failed transaction issued a permit", fault.query, err)
+		}
+		current, found, err := control.PendingTargetMarker(scope.operationID, scope.actor, body)
+		if err != nil || !found || current.State != "CLAIMED" || !proto.Equal(current.Claim, operation.Claim) {
+			t.Fatal("dispatch fault changed the original claim", found, err)
+		}
+	}
+	if _, err := control.BeginTargetMarkerDispatch(request); err != nil {
+		t.Fatal("proven rollback could not use original claim", err)
 	}
 }

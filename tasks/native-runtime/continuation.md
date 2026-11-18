@@ -15327,3 +15327,18 @@ The marker initialization checks do not yet qualify missing-effect resolution
 after an issued permit, portable filesystem lineage operations, S3 target
 registration, the retained MCP pytest behavior, or the complete product. Keep
 full CI, Evidence, the original coverage floors and platform qualification open.
+
+Push run 44277795233 on d42e893 passed 79 Go race families, 74 retained
+CPython cases, four scoped Android SQLite cases, real Rust marker recovery
+after a discarded reply and restart, and the Chromium registration and replay
+workload. Its full Go profile measured 18610/19722 statements (94.361627%).
+The original 95% floor requires 126 additional covered statements at that
+source. The exact-source development gate remains failed.
+
+The next source exercises the public HTTP path from an unresolved effect
+through fresh observation and exact replay. It tests a replaced directory,
+missing or invalid marker bytes, unavailable competing-path evidence, missing
+or stale authority, partial schema migration, and transaction failures before
+and after dispatch. A successful dispatch update now must report exactly one
+affected row before a permit can be issued. All 79 prior race families and the
+original coverage floor remain required.

@@ -38,6 +38,7 @@ type publicTargetPeer struct {
 	entered chan struct{}
 	resume  chan struct{}
 	control *store.Control
+	marker  *publicTargetMarkerPeer
 }
 
 func (p *publicTargetPeer) Inspect(ctx context.Context, r *actionv1.InspectFilesystemBackupTargetRequest) (*actionv1.FilesystemBackupTargetInspectionReceipt, error) {
@@ -82,6 +83,9 @@ func (p *publicTargetPeer) Inspect(ctx context.Context, r *actionv1.InspectFiles
 		o.MarkerJson = nil
 		o.MarkerSha256 = nil
 	}
+	if p.marker != nil && filepath.Base(r.Path) == "marker-subject" {
+		p.marker.inspect(o)
+	}
 	wire, _ := proto.MarshalOptions{Deterministic: true}.Marshal(o)
 	receipt := &actionv1.FilesystemBackupTargetInspectionReceipt{SchemaVersion: 1, Observation: o, SignerPublicKey: p.binding.PublicKey,
 		Signature: ed25519.Sign(promotionRoutePrivate, append([]byte("deepseek-infra:backup-target-inspection-v1\x00"), wire...))}
@@ -92,6 +96,9 @@ func (p *publicTargetPeer) Inspect(ctx context.Context, r *actionv1.InspectFiles
 }
 func (p *publicTargetPeer) ProbeLocation(_ context.Context, r *actionv1.ProbeFilesystemBackupTargetLocationRequest) (*actionv1.FilesystemBackupTargetLocationReceipt, error) {
 	p.calls.Add(1)
+	if p.marker != nil && p.marker.observationFault.Load() == markerCompetingUnavailable {
+		return nil, status.Error(codes.Unavailable, "isolated competing target observation unavailable")
+	}
 	if p.mode == "location-unavailable" {
 		return nil, status.Error(codes.Unavailable, "isolated path observation unavailable")
 	}
@@ -124,6 +131,12 @@ func publicTargetTLSFixture(t *testing.T, mode string) (*store.Control, *publicT
 	}
 	rpc := grpc.NewServer()
 	actionv1.RegisterBackupTargetInspectionServer(rpc, peer)
+	if mode == "marker-reply-lost" {
+		peer.marker = &publicTargetMarkerPeer{control: &backupTargetMarkerControl{
+			control: control, health: HealthFor(config.Config{Mode: config.ModeAuthoritative}),
+		}, signer: peer.binding.PublicKey}
+		actionv1.RegisterBackupTargetMarkerWorkerServer(rpc, peer.marker)
+	}
 	t.Cleanup(rpc.Stop)
 	tlsServer := httptest.NewUnstartedServer(rpc)
 	tlsServer.EnableHTTP2 = true
