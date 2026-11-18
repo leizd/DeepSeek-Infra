@@ -155,6 +155,7 @@ func DialTLS(cfg TLSDialConfig) (*Client, error) {
 		media:            mediav1.NewMediaMutationWorkerClient(connection),
 		mediaCreation:    mediav1.NewMediaCreationPayloadsClient(connection),
 		targetInspection: actionv1.NewBackupTargetInspectionClient(connection),
+		targetMarker:     actionv1.NewBackupTargetMarkerWorkerClient(connection),
 		connection:       connection,
 		tlsSecured:       true,
 		bearerAttached:   true,

@@ -70,7 +70,7 @@ def browser_register(page: Page, origin: str, directory: Path, label: str, targe
     return operation, request_bytes, response.body()
 
 
-def register_after_lost_response(page: Page, origin: str, directory: Path, label: str, target_id: str) -> tuple[str, bytes, bytes]:
+def register_after_lost_response(page: Page, origin: str, directory: Path, label: str, target_id: str | None) -> tuple[str, bytes, bytes]:
     committed: list[tuple[str, bytes, bytes]] = []
     endpoint = origin + TARGETS
 
@@ -84,7 +84,11 @@ def register_after_lost_response(page: Page, origin: str, directory: Path, label
         body = json_response(upstream, 200, "TARGET_COMMIT_BEFORE_LOSS")
         operation = route.request.headers.get("x-deepseek-operation-id")
         raw = route.request.post_data_buffer
-        if not operation or not raw or body.get("targetId") != target_id or upstream.headers.get("x-deepseek-operation-id") != operation:
+        published_id = body.get("targetId")
+        valid_id = isinstance(published_id, str) and (
+            published_id == target_id if target_id is not None else re.fullmatch(r"target_[0-9a-f]{12}", published_id) is not None
+        )
+        if not operation or not raw or not valid_id or upstream.headers.get("x-deepseek-operation-id") != operation:
             raise TargetCheckFailed("ORIGINAL_BROWSER_OPERATION_BINDING")
         committed.append((operation, raw, upstream.body()))
         route.abort("failed")
@@ -98,7 +102,8 @@ def register_after_lost_response(page: Page, origin: str, directory: Path, label
     page.unroute(endpoint, lose_response)
     require(len(committed) == 1, "LOST_RESPONSE_AFTER_DURABLE_COMMIT")
     require(page.get_by_placeholder(re.compile("^目标目录绝对路径")).input_value() == str(directory), "FORM_RETAINED_AFTER_LOSS")
-    recovered = browser_register(page, origin, directory, label, target_id)
+    committed_target: str = json.loads(committed[0][2])["targetId"]
+    recovered = browser_register(page, origin, directory, label, committed_target)
     require(recovered == committed[0], "BROWSER_RETRY_RETURNED_ORIGINAL_RESPONSE")
     return recovered
 
@@ -112,7 +117,7 @@ def fixture_target(directory: Path, target_id: str) -> bytes:
     return marker
 
 
-def assert_journal(profile: Path, scopes: dict[str, tuple[str, int, int]], move_operation: str) -> dict[str, Any]:
+def assert_journal(profile: Path, scopes: dict[str, tuple[str, int, int]], move_operation: str, init_operation: str) -> dict[str, Any]:
     database = profile / "go-control/control.sqlite3"
     binding = json.loads((profile / "rust-worker/custody/manifest.json").read_bytes())
     with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)) as db:
@@ -125,14 +130,19 @@ def assert_journal(profile: Path, scopes: dict[str, tuple[str, int, int]], move_
         health_count = db.execute("SELECT COUNT(*) FROM backup_target_health").fetchone()
         imported = db.execute("SELECT COUNT(*) FROM control_inventory_imports WHERE domain='target'").fetchone()
         moves = db.execute("SELECT operation_id,length(observation) FROM control_target_registration_locations").fetchall()
+        marker = db.execute("""SELECT operation_id,execution_epoch,state,claim_sha256,preparation_sha256,receipt
+                               FROM control_target_marker_operations""").fetchall()
     require(custody == (binding["signer_public_key"], binding["fleet_id"], binding["environment"]), "RUST_CUSTODY_BINDING")
     require({row[0]: (row[1], row[2], row[3]) for row in rows} == scopes
             and all(row[4] and row[0] == row[5] and row[6] == 1 and row[7] == 1 for row in rows), "DURABLE_REGISTRATION_SCOPE")
     require(health_count == (0,) and imported == (0,), "NATIVE_PROFILE_NO_IMPORTED_HEALTH")
     require(len(moves) == 1 and moves[0][0] == move_operation and moves[0][1] > 0, "DURABLE_MOVE_RECEIPT")
+    require(len(marker) == 1 and marker[0][:3] == (init_operation, 1, "SETTLED")
+            and len(marker[0][3]) == len(marker[0][4]) == 32 and bool(marker[0][5]), "DURABLE_MARKER_EFFECT")
     if writer is None:
         raise TargetCheckFailed("CONTROL_WRITER_ABSENT")
     return {"writerFence": writer[0], "signedRegistrationReceipts": len(rows), "signedMoveReceipts": len(moves),
+            "markerReceiptSha256": hashlib.sha256(marker[0][5]).hexdigest(),
             "witnessSha256": {row[1] + "@" + str(row[2]): hashlib.sha256(row[4]).hexdigest() for row in rows}}
 
 
@@ -201,16 +211,35 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
                     op_one, original_body, original_reply = register_after_lost_response(page, origin, first, "Isolated disk one", "target_one")
                     op_two, _, _ = browser_register(page, origin, second, "Isolated disk two", "target_two")
                     report["stage"] = "filesystem-denials"
-                    for directory, status, code in ((nested, 400, "invalid_payload"), (clone, 409, "invalid_request"),
-                                                     (uninitialized, 503, "BACKUP_TARGET_INITIALIZATION_UNAVAILABLE")):
+                    for directory, status, code in ((nested, 400, "invalid_payload"), (clone, 409, "invalid_request")):
                         denied = context.request.post(origin + TARGETS, data={"path": str(directory)})
                         require(json_response(denied, status, "TARGET_DENIAL").get("code") == code, "TARGET_DENIAL_CODE")
-                    require(not (uninitialized / MARKER).exists(), "UNINITIALIZED_MARKER_CREATED")
+                    absent_nested = first / "empty-contained"
+                    absent_nested.mkdir()
+                    denied = context.request.post(origin + TARGETS, data={"path": str(absent_nested)})
+                    require(json_response(denied, 400, "EMPTY_TARGET_OVERLAP").get("code") == "invalid_payload"
+                            and not (absent_nested / MARKER).exists(), "EMPTY_TARGET_OVERLAP_NO_MARKER")
+                    denied = context.request.post(origin + TARGETS, data={"path": str(uninitialized), "maxConcurrentTransfers": -1})
+                    require(json_response(denied, 400, "INVALID_INITIALIZATION_METADATA").get("code") == "invalid_payload"
+                            and not (uninitialized / MARKER).exists(), "INVALID_METADATA_NO_MARKER")
+                    report["stage"] = "native-marker-initialization"
+                    op_init, _, init_reply = register_after_lost_response(page, origin, uninitialized, "Initialized disk", None)
+                    initialized: dict[str, Any] = json.loads(init_reply)
+                    initialization = (uninitialized / MARKER).read_bytes()
+                    genesis = json.loads(initialization)
+                    require(genesis["schemaVersion"] == 3 and genesis["targetId"] == initialized["targetId"]
+                            and re.fullmatch(r"[0-9a-f]{32}", genesis["targetNonce"]) is not None
+                            and genesis["targetNonce"] == initialized["targetNonce"]
+                            and re.fullmatch(r"inc_[0-9a-f]{16}", genesis["incarnationId"]) is not None
+                            and re.fullmatch(r"inst_[0-9a-f]{16}", genesis["ownerInstallationId"]) is not None
+                            and genesis["targetGeneration"] == 0 and genesis["latestCommitHash"] == "0" * 64
+                            and genesis["createdAt"] == initialized["createdAt"], "RETAINED_MARKER_GENESIS")
                     report["stage"] = "move-and-journal"
                     first.rename(moved)
                     op_move, _, _ = browser_register(page, origin, moved, "Isolated disk moved", "target_one")
-                    scopes = {op_one: ("target_one", 1, 1), op_two: ("target_two", 1, 1), op_move: ("target_one", 2, 2)}
-                    before = assert_journal(profile, scopes, op_move)
+                    scopes = {op_one: ("target_one", 1, 1), op_two: ("target_two", 1, 1), op_move: ("target_one", 2, 2),
+                              op_init: (initialized["targetId"], 1, 1)}
+                    before = assert_journal(profile, scopes, op_move, op_init)
                     context.close()
                     stop(process)
                     process = None
@@ -221,8 +250,9 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
                     page, listed = open_automatic_tab(context, origin, token)
                     page.get_by_text("Isolated disk moved", exact=True).wait_for()
                     page.get_by_text("Isolated disk two", exact=True).wait_for()
+                    page.get_by_text("Initialized disk", exact=True).wait_for()
                     public = listed.get("targets", [])
-                    require(len(public) == 2 and {doc["targetId"] for doc in public} == {"target_one", "target_two"}
+                    require(len(public) == 3 and {doc["targetId"] for doc in public} == {"target_one", "target_two", initialized["targetId"]}
                             and all(PRIVATE_FIELD not in doc for doc in public) and listed.get("health") == [], "RESTART_LIST")
                     replay = context.request.post(origin + TARGETS, data=original_body, headers={
                         "Content-Type": "application/json", "X-DeepSeek-Operation-Id": op_one})
@@ -231,19 +261,23 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
                     conflict = context.request.post(origin + TARGETS, data={"path": str(moved)}, headers={
                         "X-DeepSeek-Operation-Id": op_one})
                     require(json_response(conflict, 409, "REBOUND_REPLAY").get("code") == "mutation_request_replay_conflict", "REBOUND_REPLAY_CODE")
-                    after = assert_journal(profile, scopes, op_move)
-                    require(after["writerFence"] == before["writerFence"] + 1 and after["witnessSha256"] == before["witnessSha256"],
+                    after = assert_journal(profile, scopes, op_move, op_init)
+                    require(after["writerFence"] == before["writerFence"] + 1 and after["witnessSha256"] == before["witnessSha256"]
+                            and after["markerReceiptSha256"] == before["markerReceiptSha256"],
                             "WRITER_RESTART_BINDINGS")
                     require((moved / MARKER).read_bytes() == (clone / MARKER).read_bytes() == first_marker
-                            and (second / MARKER).read_bytes() == second_marker, "MARKER_BYTES")
+                            and (second / MARKER).read_bytes() == second_marker
+                            and (uninitialized / MARKER).read_bytes() == initialization, "MARKER_BYTES")
                 finally:
                     browser.close()
         finally:
             stop(process)
         report.update(status="PASS", stage="completed", chromium=True, authenticatedExistingForm=True,
-                      activeTargetsAfterRestart=2, durableJournal=after, previousWriterFence=before["writerFence"],
+                      activeTargetsAfterRestart=3, durableJournal=after, previousWriterFence=before["writerFence"],
                       originalMarkerBytesRetained=True, originalHTTPResponseReplayed=True, overlapAndCloneRefused=True,
-                      existingMarkerRegistrationQualified=True, browserLostCommittedResponseRecovered=True)
+                      existingMarkerRegistrationQualified=True, browserLostCommittedResponseRecovered=True,
+                      absentMarkerInitializationQualified=True,
+                      initializationMarkerSha256=hashlib.sha256(initialization).hexdigest())
 
 
 def main() -> int:

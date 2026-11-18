@@ -74,15 +74,12 @@ func (conn inventoryFaultConnection) QueryContext(ctx context.Context, query str
 // transport, with the statement alive until the underlying rows are closed.
 func (conn inventoryFaultConnection) queryUnderlying(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
 	if queryer, ok := conn.Conn.(driver.QueryerContext); ok {
-		return queryer.QueryContext(ctx, query, args)
+		rows, err := queryer.QueryContext(ctx, query, args)
+		if err != driver.ErrSkip {
+			return rows, err
+		}
 	}
-	var statement driver.Stmt
-	var err error
-	if preparer, ok := conn.Conn.(driver.ConnPrepareContext); ok {
-		statement, err = preparer.PrepareContext(ctx, query)
-	} else {
-		statement, err = conn.Conn.Prepare(query)
-	}
+	statement, err := conn.prepareUnderlying(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -90,17 +87,28 @@ func (conn inventoryFaultConnection) queryUnderlying(ctx context.Context, query 
 	if queryer, ok := statement.(driver.StmtQueryContext); ok {
 		rows, err = queryer.QueryContext(ctx, args)
 	} else {
-		values := make([]driver.Value, len(args))
-		for i, argument := range args {
-			values[i] = argument.Value
-		}
-		rows, err = statement.Query(values)
+		rows, err = statement.Query(inventoryDriverValues(args))
 	}
 	if err != nil {
 		_ = statement.Close()
 		return nil, err
 	}
 	return inventoryPreparedRows{Rows: rows, statement: statement}, nil
+}
+
+func (conn inventoryFaultConnection) prepareUnderlying(ctx context.Context, query string) (driver.Stmt, error) {
+	if preparer, ok := conn.Conn.(driver.ConnPrepareContext); ok {
+		return preparer.PrepareContext(ctx, query)
+	}
+	return conn.Conn.Prepare(query)
+}
+
+func inventoryDriverValues(args []driver.NamedValue) []driver.Value {
+	values := make([]driver.Value, len(args))
+	for i, argument := range args {
+		values[i] = argument.Value
+	}
+	return values
 }
 
 type inventoryPreparedRows struct {
@@ -144,11 +152,33 @@ func (conn inventoryFaultConnection) ExecContext(ctx context.Context, query stri
 		conn.fault.armed, conn.fault.injected = false, true
 		return nil, errInventoryReadInterrupted
 	}
-	result, err := conn.Conn.(driver.ExecerContext).ExecContext(ctx, query, args)
+	result, err := conn.execUnderlying(ctx, query, args)
 	if err == nil && conn.fault.armAfterExec != "" && strings.Contains(query, conn.fault.armAfterExec) {
 		conn.fault.armAfterExec, conn.fault.armed = "", true
 	}
 	return result, err
+}
+
+func (conn inventoryFaultConnection) execUnderlying(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
+	if executor, ok := conn.Conn.(driver.ExecerContext); ok {
+		result, err := executor.ExecContext(ctx, query, args)
+		if err != driver.ErrSkip {
+			return result, err
+		}
+	}
+	// Android returns ErrSkip for parameterized writes. Observe the actual
+	// prepared execution so the next read is armed only after the write ran.
+	statement, err := conn.prepareUnderlying(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	var result driver.Result
+	if executor, ok := statement.(driver.StmtExecContext); ok {
+		result, err = executor.ExecContext(ctx, args)
+	} else {
+		result, err = statement.Exec(inventoryDriverValues(args))
+	}
+	return result, errors.Join(err, statement.Close())
 }
 
 func (conn inventoryFaultConnection) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, error) {

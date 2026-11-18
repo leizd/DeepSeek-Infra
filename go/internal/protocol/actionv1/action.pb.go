@@ -2023,8 +2023,10 @@ type FilesystemBackupTargetObservation struct {
 	FleetId                string                 `protobuf:"bytes,11,opt,name=fleet_id,json=fleetId,proto3" json:"fleet_id,omitempty"`
 	Environment            string                 `protobuf:"bytes,12,opt,name=environment,proto3" json:"environment,omitempty"`
 	FullContainmentChecked bool                   `protobuf:"varint,13,opt,name=full_containment_checked,json=fullContainmentChecked,proto3" json:"full_containment_checked,omitempty"`
-	unknownFields          protoimpl.UnknownFields
-	sizeCache              protoimpl.SizeCache
+	// Present on an initialization-capable worker's absence observation.
+	DirectoryIdentity []byte `protobuf:"bytes,14,opt,name=directory_identity,json=directoryIdentity,proto3" json:"directory_identity,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *FilesystemBackupTargetObservation) Reset() {
@@ -2146,6 +2148,13 @@ func (x *FilesystemBackupTargetObservation) GetFullContainmentChecked() bool {
 		return x.FullContainmentChecked
 	}
 	return false
+}
+
+func (x *FilesystemBackupTargetObservation) GetDirectoryIdentity() []byte {
+	if x != nil {
+		return x.DirectoryIdentity
+	}
+	return nil
 }
 
 type FilesystemBackupTargetInspectionReceipt struct {
@@ -2489,6 +2498,588 @@ func (x *FilesystemBackupTargetLocationReceipt) GetSignerPublicKey() string {
 	return ""
 }
 
+// The Go target registry reserves a single operation before Rust can prepare an
+// external marker. The original fence is kept when a later writer reconciles it.
+type TargetMarkerClaim struct {
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	SchemaVersion      uint32                 `protobuf:"varint,1,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
+	Fence              *commonv1.ActionFence  `protobuf:"bytes,2,opt,name=fence,proto3" json:"fence,omitempty"`
+	OperationId        string                 `protobuf:"bytes,3,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
+	WriterFencingToken uint64                 `protobuf:"varint,4,opt,name=writer_fencing_token,json=writerFencingToken,proto3" json:"writer_fencing_token,omitempty"`
+	CutoverRevision    uint64                 `protobuf:"varint,5,opt,name=cutover_revision,json=cutoverRevision,proto3" json:"cutover_revision,omitempty"`
+	IssuedAtUnix       int64                  `protobuf:"varint,6,opt,name=issued_at_unix,json=issuedAtUnix,proto3" json:"issued_at_unix,omitempty"`
+	LeaseUntilUnix     int64                  `protobuf:"varint,7,opt,name=lease_until_unix,json=leaseUntilUnix,proto3" json:"lease_until_unix,omitempty"`
+	RequestedPath      string                 `protobuf:"bytes,8,opt,name=requested_path,json=requestedPath,proto3" json:"requested_path,omitempty"`
+	CanonicalPath      string                 `protobuf:"bytes,9,opt,name=canonical_path,json=canonicalPath,proto3" json:"canonical_path,omitempty"`
+	TargetId           string                 `protobuf:"bytes,10,opt,name=target_id,json=targetId,proto3" json:"target_id,omitempty"`
+	RequestSha256      []byte                 `protobuf:"bytes,11,opt,name=request_sha256,json=requestSha256,proto3" json:"request_sha256,omitempty"`
+	Nonce              []byte                 `protobuf:"bytes,12,opt,name=nonce,proto3" json:"nonce,omitempty"`
+	FleetId            string                 `protobuf:"bytes,13,opt,name=fleet_id,json=fleetId,proto3" json:"fleet_id,omitempty"`
+	Environment        string                 `protobuf:"bytes,14,opt,name=environment,proto3" json:"environment,omitempty"`
+	DirectoryIdentity  []byte                 `protobuf:"bytes,15,opt,name=directory_identity,json=directoryIdentity,proto3" json:"directory_identity,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *TargetMarkerClaim) Reset() {
+	*x = TargetMarkerClaim{}
+	mi := &file_action_v1_action_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TargetMarkerClaim) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TargetMarkerClaim) ProtoMessage() {}
+
+func (x *TargetMarkerClaim) ProtoReflect() protoreflect.Message {
+	mi := &file_action_v1_action_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TargetMarkerClaim.ProtoReflect.Descriptor instead.
+func (*TargetMarkerClaim) Descriptor() ([]byte, []int) {
+	return file_action_v1_action_proto_rawDescGZIP(), []int{26}
+}
+
+func (x *TargetMarkerClaim) GetSchemaVersion() uint32 {
+	if x != nil {
+		return x.SchemaVersion
+	}
+	return 0
+}
+
+func (x *TargetMarkerClaim) GetFence() *commonv1.ActionFence {
+	if x != nil {
+		return x.Fence
+	}
+	return nil
+}
+
+func (x *TargetMarkerClaim) GetOperationId() string {
+	if x != nil {
+		return x.OperationId
+	}
+	return ""
+}
+
+func (x *TargetMarkerClaim) GetWriterFencingToken() uint64 {
+	if x != nil {
+		return x.WriterFencingToken
+	}
+	return 0
+}
+
+func (x *TargetMarkerClaim) GetCutoverRevision() uint64 {
+	if x != nil {
+		return x.CutoverRevision
+	}
+	return 0
+}
+
+func (x *TargetMarkerClaim) GetIssuedAtUnix() int64 {
+	if x != nil {
+		return x.IssuedAtUnix
+	}
+	return 0
+}
+
+func (x *TargetMarkerClaim) GetLeaseUntilUnix() int64 {
+	if x != nil {
+		return x.LeaseUntilUnix
+	}
+	return 0
+}
+
+func (x *TargetMarkerClaim) GetRequestedPath() string {
+	if x != nil {
+		return x.RequestedPath
+	}
+	return ""
+}
+
+func (x *TargetMarkerClaim) GetCanonicalPath() string {
+	if x != nil {
+		return x.CanonicalPath
+	}
+	return ""
+}
+
+func (x *TargetMarkerClaim) GetTargetId() string {
+	if x != nil {
+		return x.TargetId
+	}
+	return ""
+}
+
+func (x *TargetMarkerClaim) GetRequestSha256() []byte {
+	if x != nil {
+		return x.RequestSha256
+	}
+	return nil
+}
+
+func (x *TargetMarkerClaim) GetNonce() []byte {
+	if x != nil {
+		return x.Nonce
+	}
+	return nil
+}
+
+func (x *TargetMarkerClaim) GetFleetId() string {
+	if x != nil {
+		return x.FleetId
+	}
+	return ""
+}
+
+func (x *TargetMarkerClaim) GetEnvironment() string {
+	if x != nil {
+		return x.Environment
+	}
+	return ""
+}
+
+func (x *TargetMarkerClaim) GetDirectoryIdentity() []byte {
+	if x != nil {
+		return x.DirectoryIdentity
+	}
+	return nil
+}
+
+type TargetMarkerPreparation struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	Claim             *TargetMarkerClaim     `protobuf:"bytes,1,opt,name=claim,proto3" json:"claim,omitempty"`
+	DirectoryIdentity []byte                 `protobuf:"bytes,2,opt,name=directory_identity,json=directoryIdentity,proto3" json:"directory_identity,omitempty"`
+	MarkerJson        []byte                 `protobuf:"bytes,3,opt,name=marker_json,json=markerJson,proto3" json:"marker_json,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *TargetMarkerPreparation) Reset() {
+	*x = TargetMarkerPreparation{}
+	mi := &file_action_v1_action_proto_msgTypes[27]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TargetMarkerPreparation) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TargetMarkerPreparation) ProtoMessage() {}
+
+func (x *TargetMarkerPreparation) ProtoReflect() protoreflect.Message {
+	mi := &file_action_v1_action_proto_msgTypes[27]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TargetMarkerPreparation.ProtoReflect.Descriptor instead.
+func (*TargetMarkerPreparation) Descriptor() ([]byte, []int) {
+	return file_action_v1_action_proto_rawDescGZIP(), []int{27}
+}
+
+func (x *TargetMarkerPreparation) GetClaim() *TargetMarkerClaim {
+	if x != nil {
+		return x.Claim
+	}
+	return nil
+}
+
+func (x *TargetMarkerPreparation) GetDirectoryIdentity() []byte {
+	if x != nil {
+		return x.DirectoryIdentity
+	}
+	return nil
+}
+
+func (x *TargetMarkerPreparation) GetMarkerJson() []byte {
+	if x != nil {
+		return x.MarkerJson
+	}
+	return nil
+}
+
+type TargetMarkerDispatchRequest struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	Claim             *TargetMarkerClaim     `protobuf:"bytes,1,opt,name=claim,proto3" json:"claim,omitempty"`
+	PreparationSha256 []byte                 `protobuf:"bytes,2,opt,name=preparation_sha256,json=preparationSha256,proto3" json:"preparation_sha256,omitempty"`
+	Fence             *commonv1.ActionFence  `protobuf:"bytes,3,opt,name=fence,proto3" json:"fence,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *TargetMarkerDispatchRequest) Reset() {
+	*x = TargetMarkerDispatchRequest{}
+	mi := &file_action_v1_action_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TargetMarkerDispatchRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TargetMarkerDispatchRequest) ProtoMessage() {}
+
+func (x *TargetMarkerDispatchRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_action_v1_action_proto_msgTypes[28]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TargetMarkerDispatchRequest.ProtoReflect.Descriptor instead.
+func (*TargetMarkerDispatchRequest) Descriptor() ([]byte, []int) {
+	return file_action_v1_action_proto_rawDescGZIP(), []int{28}
+}
+
+func (x *TargetMarkerDispatchRequest) GetClaim() *TargetMarkerClaim {
+	if x != nil {
+		return x.Claim
+	}
+	return nil
+}
+
+func (x *TargetMarkerDispatchRequest) GetPreparationSha256() []byte {
+	if x != nil {
+		return x.PreparationSha256
+	}
+	return nil
+}
+
+func (x *TargetMarkerDispatchRequest) GetFence() *commonv1.ActionFence {
+	if x != nil {
+		return x.Fence
+	}
+	return nil
+}
+
+type TargetMarkerDispatchPermit struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	SchemaVersion     uint32                 `protobuf:"varint,1,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
+	PreparationSha256 []byte                 `protobuf:"bytes,2,opt,name=preparation_sha256,json=preparationSha256,proto3" json:"preparation_sha256,omitempty"`
+	LeaseUntilUnix    int64                  `protobuf:"varint,3,opt,name=lease_until_unix,json=leaseUntilUnix,proto3" json:"lease_until_unix,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *TargetMarkerDispatchPermit) Reset() {
+	*x = TargetMarkerDispatchPermit{}
+	mi := &file_action_v1_action_proto_msgTypes[29]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TargetMarkerDispatchPermit) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TargetMarkerDispatchPermit) ProtoMessage() {}
+
+func (x *TargetMarkerDispatchPermit) ProtoReflect() protoreflect.Message {
+	mi := &file_action_v1_action_proto_msgTypes[29]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TargetMarkerDispatchPermit.ProtoReflect.Descriptor instead.
+func (*TargetMarkerDispatchPermit) Descriptor() ([]byte, []int) {
+	return file_action_v1_action_proto_rawDescGZIP(), []int{29}
+}
+
+func (x *TargetMarkerDispatchPermit) GetSchemaVersion() uint32 {
+	if x != nil {
+		return x.SchemaVersion
+	}
+	return 0
+}
+
+func (x *TargetMarkerDispatchPermit) GetPreparationSha256() []byte {
+	if x != nil {
+		return x.PreparationSha256
+	}
+	return nil
+}
+
+func (x *TargetMarkerDispatchPermit) GetLeaseUntilUnix() int64 {
+	if x != nil {
+		return x.LeaseUntilUnix
+	}
+	return 0
+}
+
+type ReconcileTargetMarkerRequest struct {
+	state                     protoimpl.MessageState `protogen:"open.v1"`
+	SchemaVersion             uint32                 `protobuf:"varint,1,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
+	Fence                     *commonv1.ActionFence  `protobuf:"bytes,2,opt,name=fence,proto3" json:"fence,omitempty"`
+	OperationId               string                 `protobuf:"bytes,3,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
+	CurrentWriterFencingToken uint64                 `protobuf:"varint,4,opt,name=current_writer_fencing_token,json=currentWriterFencingToken,proto3" json:"current_writer_fencing_token,omitempty"`
+	ClaimSha256               []byte                 `protobuf:"bytes,5,opt,name=claim_sha256,json=claimSha256,proto3" json:"claim_sha256,omitempty"`
+	unknownFields             protoimpl.UnknownFields
+	sizeCache                 protoimpl.SizeCache
+}
+
+func (x *ReconcileTargetMarkerRequest) Reset() {
+	*x = ReconcileTargetMarkerRequest{}
+	mi := &file_action_v1_action_proto_msgTypes[30]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReconcileTargetMarkerRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReconcileTargetMarkerRequest) ProtoMessage() {}
+
+func (x *ReconcileTargetMarkerRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_action_v1_action_proto_msgTypes[30]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReconcileTargetMarkerRequest.ProtoReflect.Descriptor instead.
+func (*ReconcileTargetMarkerRequest) Descriptor() ([]byte, []int) {
+	return file_action_v1_action_proto_rawDescGZIP(), []int{30}
+}
+
+func (x *ReconcileTargetMarkerRequest) GetSchemaVersion() uint32 {
+	if x != nil {
+		return x.SchemaVersion
+	}
+	return 0
+}
+
+func (x *ReconcileTargetMarkerRequest) GetFence() *commonv1.ActionFence {
+	if x != nil {
+		return x.Fence
+	}
+	return nil
+}
+
+func (x *ReconcileTargetMarkerRequest) GetOperationId() string {
+	if x != nil {
+		return x.OperationId
+	}
+	return ""
+}
+
+func (x *ReconcileTargetMarkerRequest) GetCurrentWriterFencingToken() uint64 {
+	if x != nil {
+		return x.CurrentWriterFencingToken
+	}
+	return 0
+}
+
+func (x *ReconcileTargetMarkerRequest) GetClaimSha256() []byte {
+	if x != nil {
+		return x.ClaimSha256
+	}
+	return nil
+}
+
+type TargetMarkerEffect struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	SchemaVersion     uint32                 `protobuf:"varint,1,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
+	Fence             *commonv1.ActionFence  `protobuf:"bytes,2,opt,name=fence,proto3" json:"fence,omitempty"`
+	OperationId       string                 `protobuf:"bytes,3,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
+	ClaimSha256       []byte                 `protobuf:"bytes,4,opt,name=claim_sha256,json=claimSha256,proto3" json:"claim_sha256,omitempty"`
+	PreparationSha256 []byte                 `protobuf:"bytes,5,opt,name=preparation_sha256,json=preparationSha256,proto3" json:"preparation_sha256,omitempty"`
+	CanonicalPath     string                 `protobuf:"bytes,6,opt,name=canonical_path,json=canonicalPath,proto3" json:"canonical_path,omitempty"`
+	DirectoryIdentity []byte                 `protobuf:"bytes,7,opt,name=directory_identity,json=directoryIdentity,proto3" json:"directory_identity,omitempty"`
+	MarkerJson        []byte                 `protobuf:"bytes,8,opt,name=marker_json,json=markerJson,proto3" json:"marker_json,omitempty"`
+	MarkerSha256      []byte                 `protobuf:"bytes,9,opt,name=marker_sha256,json=markerSha256,proto3" json:"marker_sha256,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *TargetMarkerEffect) Reset() {
+	*x = TargetMarkerEffect{}
+	mi := &file_action_v1_action_proto_msgTypes[31]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TargetMarkerEffect) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TargetMarkerEffect) ProtoMessage() {}
+
+func (x *TargetMarkerEffect) ProtoReflect() protoreflect.Message {
+	mi := &file_action_v1_action_proto_msgTypes[31]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TargetMarkerEffect.ProtoReflect.Descriptor instead.
+func (*TargetMarkerEffect) Descriptor() ([]byte, []int) {
+	return file_action_v1_action_proto_rawDescGZIP(), []int{31}
+}
+
+func (x *TargetMarkerEffect) GetSchemaVersion() uint32 {
+	if x != nil {
+		return x.SchemaVersion
+	}
+	return 0
+}
+
+func (x *TargetMarkerEffect) GetFence() *commonv1.ActionFence {
+	if x != nil {
+		return x.Fence
+	}
+	return nil
+}
+
+func (x *TargetMarkerEffect) GetOperationId() string {
+	if x != nil {
+		return x.OperationId
+	}
+	return ""
+}
+
+func (x *TargetMarkerEffect) GetClaimSha256() []byte {
+	if x != nil {
+		return x.ClaimSha256
+	}
+	return nil
+}
+
+func (x *TargetMarkerEffect) GetPreparationSha256() []byte {
+	if x != nil {
+		return x.PreparationSha256
+	}
+	return nil
+}
+
+func (x *TargetMarkerEffect) GetCanonicalPath() string {
+	if x != nil {
+		return x.CanonicalPath
+	}
+	return ""
+}
+
+func (x *TargetMarkerEffect) GetDirectoryIdentity() []byte {
+	if x != nil {
+		return x.DirectoryIdentity
+	}
+	return nil
+}
+
+func (x *TargetMarkerEffect) GetMarkerJson() []byte {
+	if x != nil {
+		return x.MarkerJson
+	}
+	return nil
+}
+
+func (x *TargetMarkerEffect) GetMarkerSha256() []byte {
+	if x != nil {
+		return x.MarkerSha256
+	}
+	return nil
+}
+
+type TargetMarkerReceipt struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Effect          *TargetMarkerEffect    `protobuf:"bytes,1,opt,name=effect,proto3" json:"effect,omitempty"`
+	Signature       []byte                 `protobuf:"bytes,2,opt,name=signature,proto3" json:"signature,omitempty"`
+	SignerPublicKey string                 `protobuf:"bytes,3,opt,name=signer_public_key,json=signerPublicKey,proto3" json:"signer_public_key,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *TargetMarkerReceipt) Reset() {
+	*x = TargetMarkerReceipt{}
+	mi := &file_action_v1_action_proto_msgTypes[32]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TargetMarkerReceipt) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TargetMarkerReceipt) ProtoMessage() {}
+
+func (x *TargetMarkerReceipt) ProtoReflect() protoreflect.Message {
+	mi := &file_action_v1_action_proto_msgTypes[32]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TargetMarkerReceipt.ProtoReflect.Descriptor instead.
+func (*TargetMarkerReceipt) Descriptor() ([]byte, []int) {
+	return file_action_v1_action_proto_rawDescGZIP(), []int{32}
+}
+
+func (x *TargetMarkerReceipt) GetEffect() *TargetMarkerEffect {
+	if x != nil {
+		return x.Effect
+	}
+	return nil
+}
+
+func (x *TargetMarkerReceipt) GetSignature() []byte {
+	if x != nil {
+		return x.Signature
+	}
+	return nil
+}
+
+func (x *TargetMarkerReceipt) GetSignerPublicKey() string {
+	if x != nil {
+		return x.SignerPublicKey
+	}
+	return ""
+}
+
 var File_action_v1_action_proto protoreflect.FileDescriptor
 
 const file_action_v1_action_proto_rawDesc = "" +
@@ -2637,7 +3228,7 @@ const file_action_v1_action_proto_rawDesc = "" +
 	"\foperation_id\x18\x03 \x01(\tR\voperationId\x12\x12\n" +
 	"\x04path\x18\x04 \x01(\tR\x04path\x120\n" +
 	"\x14writer_fencing_token\x18\x05 \x01(\x04R\x12writerFencingToken\x128\n" +
-	"\x18require_full_containment\x18\x06 \x01(\bR\x16requireFullContainment\"\xb2\x04\n" +
+	"\x18require_full_containment\x18\x06 \x01(\bR\x16requireFullContainment\"\xe1\x04\n" +
 	"!FilesystemBackupTargetObservation\x12%\n" +
 	"\x0eschema_version\x18\x01 \x01(\rR\rschemaVersion\x125\n" +
 	"\x05fence\x18\x02 \x01(\v2\x1f.deepseek.common.v1.ActionFenceR\x05fence\x12!\n" +
@@ -2653,7 +3244,8 @@ const file_action_v1_action_proto_rawDesc = "" +
 	" \x01(\x03R\x0eobservedAtUnix\x12\x19\n" +
 	"\bfleet_id\x18\v \x01(\tR\afleetId\x12 \n" +
 	"\venvironment\x18\f \x01(\tR\venvironment\x128\n" +
-	"\x18full_containment_checked\x18\r \x01(\bR\x16fullContainmentChecked\"\xf3\x01\n" +
+	"\x18full_containment_checked\x18\r \x01(\bR\x16fullContainmentChecked\x12-\n" +
+	"\x12directory_identity\x18\x0e \x01(\fR\x11directoryIdentity\"\xf3\x01\n" +
 	"'FilesystemBackupTargetInspectionReceipt\x12%\n" +
 	"\x0eschema_version\x18\x01 \x01(\rR\rschemaVersion\x12W\n" +
 	"\vobservation\x18\x02 \x01(\v25.deepseek.action.v1.FilesystemBackupTargetObservationR\vobservation\x12\x1c\n" +
@@ -2682,7 +3274,58 @@ const file_action_v1_action_proto_rawDesc = "" +
 	"\x0eschema_version\x18\x01 \x01(\rR\rschemaVersion\x12_\n" +
 	"\vobservation\x18\x02 \x01(\v2=.deepseek.action.v1.FilesystemBackupTargetLocationObservationR\vobservation\x12\x1c\n" +
 	"\tsignature\x18\x03 \x01(\fR\tsignature\x12*\n" +
-	"\x11signer_public_key\x18\x04 \x01(\tR\x0fsignerPublicKey*\x81\x02\n" +
+	"\x11signer_public_key\x18\x04 \x01(\tR\x0fsignerPublicKey\"\xd5\x04\n" +
+	"\x11TargetMarkerClaim\x12%\n" +
+	"\x0eschema_version\x18\x01 \x01(\rR\rschemaVersion\x125\n" +
+	"\x05fence\x18\x02 \x01(\v2\x1f.deepseek.common.v1.ActionFenceR\x05fence\x12!\n" +
+	"\foperation_id\x18\x03 \x01(\tR\voperationId\x120\n" +
+	"\x14writer_fencing_token\x18\x04 \x01(\x04R\x12writerFencingToken\x12)\n" +
+	"\x10cutover_revision\x18\x05 \x01(\x04R\x0fcutoverRevision\x12$\n" +
+	"\x0eissued_at_unix\x18\x06 \x01(\x03R\fissuedAtUnix\x12(\n" +
+	"\x10lease_until_unix\x18\a \x01(\x03R\x0eleaseUntilUnix\x12%\n" +
+	"\x0erequested_path\x18\b \x01(\tR\rrequestedPath\x12%\n" +
+	"\x0ecanonical_path\x18\t \x01(\tR\rcanonicalPath\x12\x1b\n" +
+	"\ttarget_id\x18\n" +
+	" \x01(\tR\btargetId\x12%\n" +
+	"\x0erequest_sha256\x18\v \x01(\fR\rrequestSha256\x12\x14\n" +
+	"\x05nonce\x18\f \x01(\fR\x05nonce\x12\x19\n" +
+	"\bfleet_id\x18\r \x01(\tR\afleetId\x12 \n" +
+	"\venvironment\x18\x0e \x01(\tR\venvironment\x12-\n" +
+	"\x12directory_identity\x18\x0f \x01(\fR\x11directoryIdentity\"\xa6\x01\n" +
+	"\x17TargetMarkerPreparation\x12;\n" +
+	"\x05claim\x18\x01 \x01(\v2%.deepseek.action.v1.TargetMarkerClaimR\x05claim\x12-\n" +
+	"\x12directory_identity\x18\x02 \x01(\fR\x11directoryIdentity\x12\x1f\n" +
+	"\vmarker_json\x18\x03 \x01(\fR\n" +
+	"markerJson\"\xc0\x01\n" +
+	"\x1bTargetMarkerDispatchRequest\x12;\n" +
+	"\x05claim\x18\x01 \x01(\v2%.deepseek.action.v1.TargetMarkerClaimR\x05claim\x12-\n" +
+	"\x12preparation_sha256\x18\x02 \x01(\fR\x11preparationSha256\x125\n" +
+	"\x05fence\x18\x03 \x01(\v2\x1f.deepseek.common.v1.ActionFenceR\x05fence\"\x9c\x01\n" +
+	"\x1aTargetMarkerDispatchPermit\x12%\n" +
+	"\x0eschema_version\x18\x01 \x01(\rR\rschemaVersion\x12-\n" +
+	"\x12preparation_sha256\x18\x02 \x01(\fR\x11preparationSha256\x12(\n" +
+	"\x10lease_until_unix\x18\x03 \x01(\x03R\x0eleaseUntilUnix\"\x83\x02\n" +
+	"\x1cReconcileTargetMarkerRequest\x12%\n" +
+	"\x0eschema_version\x18\x01 \x01(\rR\rschemaVersion\x125\n" +
+	"\x05fence\x18\x02 \x01(\v2\x1f.deepseek.common.v1.ActionFenceR\x05fence\x12!\n" +
+	"\foperation_id\x18\x03 \x01(\tR\voperationId\x12?\n" +
+	"\x1ccurrent_writer_fencing_token\x18\x04 \x01(\x04R\x19currentWriterFencingToken\x12!\n" +
+	"\fclaim_sha256\x18\x05 \x01(\fR\vclaimSha256\"\x83\x03\n" +
+	"\x12TargetMarkerEffect\x12%\n" +
+	"\x0eschema_version\x18\x01 \x01(\rR\rschemaVersion\x125\n" +
+	"\x05fence\x18\x02 \x01(\v2\x1f.deepseek.common.v1.ActionFenceR\x05fence\x12!\n" +
+	"\foperation_id\x18\x03 \x01(\tR\voperationId\x12!\n" +
+	"\fclaim_sha256\x18\x04 \x01(\fR\vclaimSha256\x12-\n" +
+	"\x12preparation_sha256\x18\x05 \x01(\fR\x11preparationSha256\x12%\n" +
+	"\x0ecanonical_path\x18\x06 \x01(\tR\rcanonicalPath\x12-\n" +
+	"\x12directory_identity\x18\a \x01(\fR\x11directoryIdentity\x12\x1f\n" +
+	"\vmarker_json\x18\b \x01(\fR\n" +
+	"markerJson\x12#\n" +
+	"\rmarker_sha256\x18\t \x01(\fR\fmarkerSha256\"\x9f\x01\n" +
+	"\x13TargetMarkerReceipt\x12>\n" +
+	"\x06effect\x18\x01 \x01(\v2&.deepseek.action.v1.TargetMarkerEffectR\x06effect\x12\x1c\n" +
+	"\tsignature\x18\x02 \x01(\fR\tsignature\x12*\n" +
+	"\x11signer_public_key\x18\x03 \x01(\tR\x0fsignerPublicKey*\x81\x02\n" +
 	"\vCommandKind\x12\x1c\n" +
 	"\x18COMMAND_KIND_UNSPECIFIED\x10\x00\x12\x1f\n" +
 	"\x1bCOMMAND_KIND_EXECUTE_BACKUP\x10\x01\x12 \n" +
@@ -2732,7 +3375,13 @@ const file_action_v1_action_proto_rawDesc = "" +
 	"\aPublish\x12..deepseek.action.v1.PublishNativeOriginRequest\x1a%.deepseek.action.v1.NativeOriginState2\xa8\x02\n" +
 	"\x16BackupTargetInspection\x12\x80\x01\n" +
 	"\aInspect\x128.deepseek.action.v1.InspectFilesystemBackupTargetRequest\x1a;.deepseek.action.v1.FilesystemBackupTargetInspectionReceipt\x12\x8a\x01\n" +
-	"\rProbeLocation\x12>.deepseek.action.v1.ProbeFilesystemBackupTargetLocationRequest\x1a9.deepseek.action.v1.FilesystemBackupTargetLocationReceiptBHZFgithub.com/leizd/DeepSeek-Infra/go/internal/protocol/actionv1;actionv1b\x06proto3"
+	"\rProbeLocation\x12>.deepseek.action.v1.ProbeFilesystemBackupTargetLocationRequest\x1a9.deepseek.action.v1.FilesystemBackupTargetLocationReceipt2\xe0\x01\n" +
+	"\x18BackupTargetMarkerWorker\x12\\\n" +
+	"\n" +
+	"Initialize\x12%.deepseek.action.v1.TargetMarkerClaim\x1a'.deepseek.action.v1.TargetMarkerReceipt\x12f\n" +
+	"\tReconcile\x120.deepseek.action.v1.ReconcileTargetMarkerRequest\x1a'.deepseek.action.v1.TargetMarkerReceipt2\x8d\x01\n" +
+	"\x19BackupTargetMarkerControl\x12p\n" +
+	"\rBeginDispatch\x12/.deepseek.action.v1.TargetMarkerDispatchRequest\x1a..deepseek.action.v1.TargetMarkerDispatchPermitBHZFgithub.com/leizd/DeepSeek-Infra/go/internal/protocol/actionv1;actionv1b\x06proto3"
 
 var (
 	file_action_v1_action_proto_rawDescOnce sync.Once
@@ -2747,7 +3396,7 @@ func file_action_v1_action_proto_rawDescGZIP() []byte {
 }
 
 var file_action_v1_action_proto_enumTypes = make([]protoimpl.EnumInfo, 6)
-var file_action_v1_action_proto_msgTypes = make([]protoimpl.MessageInfo, 26)
+var file_action_v1_action_proto_msgTypes = make([]protoimpl.MessageInfo, 33)
 var file_action_v1_action_proto_goTypes = []any{
 	(CommandKind)(0),                                   // 0: deepseek.action.v1.CommandKind
 	(AdmitStatus)(0),                                   // 1: deepseek.action.v1.AdmitStatus
@@ -2781,79 +3430,99 @@ var file_action_v1_action_proto_goTypes = []any{
 	(*ProbeFilesystemBackupTargetLocationRequest)(nil), // 29: deepseek.action.v1.ProbeFilesystemBackupTargetLocationRequest
 	(*FilesystemBackupTargetLocationObservation)(nil),  // 30: deepseek.action.v1.FilesystemBackupTargetLocationObservation
 	(*FilesystemBackupTargetLocationReceipt)(nil),      // 31: deepseek.action.v1.FilesystemBackupTargetLocationReceipt
-	(*commonv1.ActionFence)(nil),                       // 32: deepseek.common.v1.ActionFence
-	(commonv1.EffectState)(0),                          // 33: deepseek.common.v1.EffectState
-	(*commonv1.ErrorDetail)(nil),                       // 34: deepseek.common.v1.ErrorDetail
-	(*agentv1.AgentRunExecutionClaim)(nil),             // 35: deepseek.agent.v1.AgentRunExecutionClaim
+	(*TargetMarkerClaim)(nil),                          // 32: deepseek.action.v1.TargetMarkerClaim
+	(*TargetMarkerPreparation)(nil),                    // 33: deepseek.action.v1.TargetMarkerPreparation
+	(*TargetMarkerDispatchRequest)(nil),                // 34: deepseek.action.v1.TargetMarkerDispatchRequest
+	(*TargetMarkerDispatchPermit)(nil),                 // 35: deepseek.action.v1.TargetMarkerDispatchPermit
+	(*ReconcileTargetMarkerRequest)(nil),               // 36: deepseek.action.v1.ReconcileTargetMarkerRequest
+	(*TargetMarkerEffect)(nil),                         // 37: deepseek.action.v1.TargetMarkerEffect
+	(*TargetMarkerReceipt)(nil),                        // 38: deepseek.action.v1.TargetMarkerReceipt
+	(*commonv1.ActionFence)(nil),                       // 39: deepseek.common.v1.ActionFence
+	(commonv1.EffectState)(0),                          // 40: deepseek.common.v1.EffectState
+	(*commonv1.ErrorDetail)(nil),                       // 41: deepseek.common.v1.ErrorDetail
+	(*agentv1.AgentRunExecutionClaim)(nil),             // 42: deepseek.agent.v1.AgentRunExecutionClaim
 }
 var file_action_v1_action_proto_depIdxs = []int32{
 	0,  // 0: deepseek.action.v1.AdmitCommandRequest.kind:type_name -> deepseek.action.v1.CommandKind
-	32, // 1: deepseek.action.v1.AdmitCommandRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	39, // 1: deepseek.action.v1.AdmitCommandRequest.fence:type_name -> deepseek.common.v1.ActionFence
 	1,  // 2: deepseek.action.v1.AdmitCommandResponse.status:type_name -> deepseek.action.v1.AdmitStatus
-	33, // 3: deepseek.action.v1.AdmitCommandResponse.state:type_name -> deepseek.common.v1.EffectState
-	34, // 4: deepseek.action.v1.AdmitCommandResponse.error:type_name -> deepseek.common.v1.ErrorDetail
-	32, // 5: deepseek.action.v1.QueryEffectRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	32, // 6: deepseek.action.v1.EffectResult.fence:type_name -> deepseek.common.v1.ActionFence
-	33, // 7: deepseek.action.v1.EffectResult.state:type_name -> deepseek.common.v1.EffectState
-	34, // 8: deepseek.action.v1.EffectResult.error:type_name -> deepseek.common.v1.ErrorDetail
-	32, // 9: deepseek.action.v1.InstallAuthoritativeEpochRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	40, // 3: deepseek.action.v1.AdmitCommandResponse.state:type_name -> deepseek.common.v1.EffectState
+	41, // 4: deepseek.action.v1.AdmitCommandResponse.error:type_name -> deepseek.common.v1.ErrorDetail
+	39, // 5: deepseek.action.v1.QueryEffectRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	39, // 6: deepseek.action.v1.EffectResult.fence:type_name -> deepseek.common.v1.ActionFence
+	40, // 7: deepseek.action.v1.EffectResult.state:type_name -> deepseek.common.v1.EffectState
+	41, // 8: deepseek.action.v1.EffectResult.error:type_name -> deepseek.common.v1.ErrorDetail
+	39, // 9: deepseek.action.v1.InstallAuthoritativeEpochRequest.fence:type_name -> deepseek.common.v1.ActionFence
 	1,  // 10: deepseek.action.v1.InstallAuthoritativeEpochResponse.status:type_name -> deepseek.action.v1.AdmitStatus
-	32, // 11: deepseek.action.v1.InstallAuthoritativeEpochResponse.fence:type_name -> deepseek.common.v1.ActionFence
-	34, // 12: deepseek.action.v1.InstallAuthoritativeEpochResponse.error:type_name -> deepseek.common.v1.ErrorDetail
+	39, // 11: deepseek.action.v1.InstallAuthoritativeEpochResponse.fence:type_name -> deepseek.common.v1.ActionFence
+	41, // 12: deepseek.action.v1.InstallAuthoritativeEpochResponse.error:type_name -> deepseek.common.v1.ErrorDetail
 	3,  // 13: deepseek.action.v1.StoragePrecondition.condition_type:type_name -> deepseek.action.v1.StorageConditionType
-	32, // 14: deepseek.action.v1.StorageMutationRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	39, // 14: deepseek.action.v1.StorageMutationRequest.fence:type_name -> deepseek.common.v1.ActionFence
 	12, // 15: deepseek.action.v1.StorageMutationRequest.precondition:type_name -> deepseek.action.v1.StoragePrecondition
 	2,  // 16: deepseek.action.v1.StorageMutationResponse.status:type_name -> deepseek.action.v1.StorageMutationStatus
-	33, // 17: deepseek.action.v1.StorageMutationResponse.state:type_name -> deepseek.common.v1.EffectState
-	32, // 18: deepseek.action.v1.StorageMutationResponse.fence:type_name -> deepseek.common.v1.ActionFence
-	34, // 19: deepseek.action.v1.StorageMutationResponse.error:type_name -> deepseek.common.v1.ErrorDetail
-	32, // 20: deepseek.action.v1.QueryStorageEffectRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	40, // 17: deepseek.action.v1.StorageMutationResponse.state:type_name -> deepseek.common.v1.EffectState
+	39, // 18: deepseek.action.v1.StorageMutationResponse.fence:type_name -> deepseek.common.v1.ActionFence
+	41, // 19: deepseek.action.v1.StorageMutationResponse.error:type_name -> deepseek.common.v1.ErrorDetail
+	39, // 20: deepseek.action.v1.QueryStorageEffectRequest.fence:type_name -> deepseek.common.v1.ActionFence
 	4,  // 21: deepseek.action.v1.SignControlRequest.purpose:type_name -> deepseek.action.v1.ControlSigningPurpose
-	32, // 22: deepseek.action.v1.SignControlRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	39, // 22: deepseek.action.v1.SignControlRequest.fence:type_name -> deepseek.common.v1.ActionFence
 	13, // 23: deepseek.action.v1.SignControlRequest.storage_intent:type_name -> deepseek.action.v1.StorageMutationRequest
-	35, // 24: deepseek.action.v1.SignControlRequest.agent_intent:type_name -> deepseek.agent.v1.AgentRunExecutionClaim
-	32, // 25: deepseek.action.v1.SignControlResponse.fence:type_name -> deepseek.common.v1.ActionFence
-	32, // 26: deepseek.action.v1.NativeOriginEvidence.fence:type_name -> deepseek.common.v1.ActionFence
+	42, // 24: deepseek.action.v1.SignControlRequest.agent_intent:type_name -> deepseek.agent.v1.AgentRunExecutionClaim
+	39, // 25: deepseek.action.v1.SignControlResponse.fence:type_name -> deepseek.common.v1.ActionFence
+	39, // 26: deepseek.action.v1.NativeOriginEvidence.fence:type_name -> deepseek.common.v1.ActionFence
 	20, // 27: deepseek.action.v1.NativeOriginReceipt.evidence:type_name -> deepseek.action.v1.NativeOriginEvidence
-	32, // 28: deepseek.action.v1.NativeOriginPublication.fence:type_name -> deepseek.common.v1.ActionFence
-	32, // 29: deepseek.action.v1.ReadNativeOriginRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	32, // 30: deepseek.action.v1.PublishNativeOriginRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	39, // 28: deepseek.action.v1.NativeOriginPublication.fence:type_name -> deepseek.common.v1.ActionFence
+	39, // 29: deepseek.action.v1.ReadNativeOriginRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	39, // 30: deepseek.action.v1.PublishNativeOriginRequest.fence:type_name -> deepseek.common.v1.ActionFence
 	21, // 31: deepseek.action.v1.NativeOriginState.origin:type_name -> deepseek.action.v1.NativeOriginReceipt
 	22, // 32: deepseek.action.v1.NativeOriginState.publication:type_name -> deepseek.action.v1.NativeOriginPublication
-	32, // 33: deepseek.action.v1.InspectFilesystemBackupTargetRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	32, // 34: deepseek.action.v1.FilesystemBackupTargetObservation.fence:type_name -> deepseek.common.v1.ActionFence
+	39, // 33: deepseek.action.v1.InspectFilesystemBackupTargetRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	39, // 34: deepseek.action.v1.FilesystemBackupTargetObservation.fence:type_name -> deepseek.common.v1.ActionFence
 	27, // 35: deepseek.action.v1.FilesystemBackupTargetInspectionReceipt.observation:type_name -> deepseek.action.v1.FilesystemBackupTargetObservation
-	32, // 36: deepseek.action.v1.ProbeFilesystemBackupTargetLocationRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	32, // 37: deepseek.action.v1.FilesystemBackupTargetLocationObservation.fence:type_name -> deepseek.common.v1.ActionFence
+	39, // 36: deepseek.action.v1.ProbeFilesystemBackupTargetLocationRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	39, // 37: deepseek.action.v1.FilesystemBackupTargetLocationObservation.fence:type_name -> deepseek.common.v1.ActionFence
 	5,  // 38: deepseek.action.v1.FilesystemBackupTargetLocationObservation.state:type_name -> deepseek.action.v1.BackupTargetLocationState
 	30, // 39: deepseek.action.v1.FilesystemBackupTargetLocationReceipt.observation:type_name -> deepseek.action.v1.FilesystemBackupTargetLocationObservation
-	6,  // 40: deepseek.action.v1.Worker.AdmitCommand:input_type -> deepseek.action.v1.AdmitCommandRequest
-	8,  // 41: deepseek.action.v1.Worker.QueryEffect:input_type -> deepseek.action.v1.QueryEffectRequest
-	10, // 42: deepseek.action.v1.Worker.InstallAuthoritativeEpoch:input_type -> deepseek.action.v1.InstallAuthoritativeEpochRequest
-	13, // 43: deepseek.action.v1.Worker.ExecuteStorageMutation:input_type -> deepseek.action.v1.StorageMutationRequest
-	15, // 44: deepseek.action.v1.Worker.QueryStorageEffect:input_type -> deepseek.action.v1.QueryStorageEffectRequest
-	16, // 45: deepseek.action.v1.ControlSigner.SignControl:input_type -> deepseek.action.v1.SignControlRequest
-	18, // 46: deepseek.action.v1.ControlSignerBootstrap.GetBinding:input_type -> deepseek.action.v1.ControlSignerBindingRequest
-	23, // 47: deepseek.action.v1.NativeOriginCustody.Read:input_type -> deepseek.action.v1.ReadNativeOriginRequest
-	24, // 48: deepseek.action.v1.NativeOriginCustody.Publish:input_type -> deepseek.action.v1.PublishNativeOriginRequest
-	26, // 49: deepseek.action.v1.BackupTargetInspection.Inspect:input_type -> deepseek.action.v1.InspectFilesystemBackupTargetRequest
-	29, // 50: deepseek.action.v1.BackupTargetInspection.ProbeLocation:input_type -> deepseek.action.v1.ProbeFilesystemBackupTargetLocationRequest
-	7,  // 51: deepseek.action.v1.Worker.AdmitCommand:output_type -> deepseek.action.v1.AdmitCommandResponse
-	9,  // 52: deepseek.action.v1.Worker.QueryEffect:output_type -> deepseek.action.v1.EffectResult
-	11, // 53: deepseek.action.v1.Worker.InstallAuthoritativeEpoch:output_type -> deepseek.action.v1.InstallAuthoritativeEpochResponse
-	14, // 54: deepseek.action.v1.Worker.ExecuteStorageMutation:output_type -> deepseek.action.v1.StorageMutationResponse
-	14, // 55: deepseek.action.v1.Worker.QueryStorageEffect:output_type -> deepseek.action.v1.StorageMutationResponse
-	17, // 56: deepseek.action.v1.ControlSigner.SignControl:output_type -> deepseek.action.v1.SignControlResponse
-	19, // 57: deepseek.action.v1.ControlSignerBootstrap.GetBinding:output_type -> deepseek.action.v1.ControlSignerBindingResponse
-	25, // 58: deepseek.action.v1.NativeOriginCustody.Read:output_type -> deepseek.action.v1.NativeOriginState
-	25, // 59: deepseek.action.v1.NativeOriginCustody.Publish:output_type -> deepseek.action.v1.NativeOriginState
-	28, // 60: deepseek.action.v1.BackupTargetInspection.Inspect:output_type -> deepseek.action.v1.FilesystemBackupTargetInspectionReceipt
-	31, // 61: deepseek.action.v1.BackupTargetInspection.ProbeLocation:output_type -> deepseek.action.v1.FilesystemBackupTargetLocationReceipt
-	51, // [51:62] is the sub-list for method output_type
-	40, // [40:51] is the sub-list for method input_type
-	40, // [40:40] is the sub-list for extension type_name
-	40, // [40:40] is the sub-list for extension extendee
-	0,  // [0:40] is the sub-list for field type_name
+	39, // 40: deepseek.action.v1.TargetMarkerClaim.fence:type_name -> deepseek.common.v1.ActionFence
+	32, // 41: deepseek.action.v1.TargetMarkerPreparation.claim:type_name -> deepseek.action.v1.TargetMarkerClaim
+	32, // 42: deepseek.action.v1.TargetMarkerDispatchRequest.claim:type_name -> deepseek.action.v1.TargetMarkerClaim
+	39, // 43: deepseek.action.v1.TargetMarkerDispatchRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	39, // 44: deepseek.action.v1.ReconcileTargetMarkerRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	39, // 45: deepseek.action.v1.TargetMarkerEffect.fence:type_name -> deepseek.common.v1.ActionFence
+	37, // 46: deepseek.action.v1.TargetMarkerReceipt.effect:type_name -> deepseek.action.v1.TargetMarkerEffect
+	6,  // 47: deepseek.action.v1.Worker.AdmitCommand:input_type -> deepseek.action.v1.AdmitCommandRequest
+	8,  // 48: deepseek.action.v1.Worker.QueryEffect:input_type -> deepseek.action.v1.QueryEffectRequest
+	10, // 49: deepseek.action.v1.Worker.InstallAuthoritativeEpoch:input_type -> deepseek.action.v1.InstallAuthoritativeEpochRequest
+	13, // 50: deepseek.action.v1.Worker.ExecuteStorageMutation:input_type -> deepseek.action.v1.StorageMutationRequest
+	15, // 51: deepseek.action.v1.Worker.QueryStorageEffect:input_type -> deepseek.action.v1.QueryStorageEffectRequest
+	16, // 52: deepseek.action.v1.ControlSigner.SignControl:input_type -> deepseek.action.v1.SignControlRequest
+	18, // 53: deepseek.action.v1.ControlSignerBootstrap.GetBinding:input_type -> deepseek.action.v1.ControlSignerBindingRequest
+	23, // 54: deepseek.action.v1.NativeOriginCustody.Read:input_type -> deepseek.action.v1.ReadNativeOriginRequest
+	24, // 55: deepseek.action.v1.NativeOriginCustody.Publish:input_type -> deepseek.action.v1.PublishNativeOriginRequest
+	26, // 56: deepseek.action.v1.BackupTargetInspection.Inspect:input_type -> deepseek.action.v1.InspectFilesystemBackupTargetRequest
+	29, // 57: deepseek.action.v1.BackupTargetInspection.ProbeLocation:input_type -> deepseek.action.v1.ProbeFilesystemBackupTargetLocationRequest
+	32, // 58: deepseek.action.v1.BackupTargetMarkerWorker.Initialize:input_type -> deepseek.action.v1.TargetMarkerClaim
+	36, // 59: deepseek.action.v1.BackupTargetMarkerWorker.Reconcile:input_type -> deepseek.action.v1.ReconcileTargetMarkerRequest
+	34, // 60: deepseek.action.v1.BackupTargetMarkerControl.BeginDispatch:input_type -> deepseek.action.v1.TargetMarkerDispatchRequest
+	7,  // 61: deepseek.action.v1.Worker.AdmitCommand:output_type -> deepseek.action.v1.AdmitCommandResponse
+	9,  // 62: deepseek.action.v1.Worker.QueryEffect:output_type -> deepseek.action.v1.EffectResult
+	11, // 63: deepseek.action.v1.Worker.InstallAuthoritativeEpoch:output_type -> deepseek.action.v1.InstallAuthoritativeEpochResponse
+	14, // 64: deepseek.action.v1.Worker.ExecuteStorageMutation:output_type -> deepseek.action.v1.StorageMutationResponse
+	14, // 65: deepseek.action.v1.Worker.QueryStorageEffect:output_type -> deepseek.action.v1.StorageMutationResponse
+	17, // 66: deepseek.action.v1.ControlSigner.SignControl:output_type -> deepseek.action.v1.SignControlResponse
+	19, // 67: deepseek.action.v1.ControlSignerBootstrap.GetBinding:output_type -> deepseek.action.v1.ControlSignerBindingResponse
+	25, // 68: deepseek.action.v1.NativeOriginCustody.Read:output_type -> deepseek.action.v1.NativeOriginState
+	25, // 69: deepseek.action.v1.NativeOriginCustody.Publish:output_type -> deepseek.action.v1.NativeOriginState
+	28, // 70: deepseek.action.v1.BackupTargetInspection.Inspect:output_type -> deepseek.action.v1.FilesystemBackupTargetInspectionReceipt
+	31, // 71: deepseek.action.v1.BackupTargetInspection.ProbeLocation:output_type -> deepseek.action.v1.FilesystemBackupTargetLocationReceipt
+	38, // 72: deepseek.action.v1.BackupTargetMarkerWorker.Initialize:output_type -> deepseek.action.v1.TargetMarkerReceipt
+	38, // 73: deepseek.action.v1.BackupTargetMarkerWorker.Reconcile:output_type -> deepseek.action.v1.TargetMarkerReceipt
+	35, // 74: deepseek.action.v1.BackupTargetMarkerControl.BeginDispatch:output_type -> deepseek.action.v1.TargetMarkerDispatchPermit
+	61, // [61:75] is the sub-list for method output_type
+	47, // [47:61] is the sub-list for method input_type
+	47, // [47:47] is the sub-list for extension type_name
+	47, // [47:47] is the sub-list for extension extendee
+	0,  // [0:47] is the sub-list for field type_name
 }
 
 func init() { file_action_v1_action_proto_init() }
@@ -2867,9 +3536,9 @@ func file_action_v1_action_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_action_v1_action_proto_rawDesc), len(file_action_v1_action_proto_rawDesc)),
 			NumEnums:      6,
-			NumMessages:   26,
+			NumMessages:   33,
 			NumExtensions: 0,
-			NumServices:   5,
+			NumServices:   7,
 		},
 		GoTypes:           file_action_v1_action_proto_goTypes,
 		DependencyIndexes: file_action_v1_action_proto_depIdxs,

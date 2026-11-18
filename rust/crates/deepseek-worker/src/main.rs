@@ -2,6 +2,7 @@ use std::io;
 use std::net::SocketAddr;
 
 use deepseek_protocol::generated::deepseek::action::v1::backup_target_inspection_server::BackupTargetInspectionServer;
+use deepseek_protocol::generated::deepseek::action::v1::backup_target_marker_worker_server::BackupTargetMarkerWorkerServer;
 use deepseek_protocol::generated::deepseek::action::v1::control_signer_bootstrap_server::ControlSignerBootstrapServer;
 use deepseek_protocol::generated::deepseek::action::v1::control_signer_server::ControlSignerServer;
 use deepseek_protocol::generated::deepseek::action::v1::native_origin_custody_server::NativeOriginCustodyServer;
@@ -174,12 +175,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let service = if media_enabled {
         let root = environment("DEEPSEEK_INFRA_ROOT").unwrap_or_else(|_| ".".into());
         let executable = std::env::current_exe()?;
-        service.with_backup_target_inspection(
-            std::path::Path::new(&root),
-            executable
-                .parent()
-                .ok_or("BACKUP_TARGET_PACKAGE_ROOT_REQUIRED")?,
-        )?
+        service
+            .with_backup_target_inspection(
+                std::path::Path::new(&root),
+                executable
+                    .parent()
+                    .ok_or("BACKUP_TARGET_PACKAGE_ROOT_REQUIRED")?,
+            )?
+            .with_backup_target_marker_journal(std::path::Path::new(
+                signer_root
+                    .as_deref()
+                    .ok_or("BACKUP_TARGET_MARKER_STATE_ROOT_REQUIRED")?,
+            ))?
     } else {
         service
     };
@@ -202,6 +209,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .max_decoding_message_size(128 * 1024)
                 .max_encoding_message_size(
                     deepseek_protocol::backup_target_inspection::MAX_RECEIPT_BYTES,
+                ),
+        )
+        .add_service(
+            BackupTargetMarkerWorkerServer::new(service.clone())
+                .max_decoding_message_size(128 * 1024)
+                .max_encoding_message_size(
+                    deepseek_protocol::backup_target_inspection::MARKER_EFFECT_MAX_WIRE,
                 ),
         )
         .add_service(ControlSignerBootstrapServer::new(service.clone()))

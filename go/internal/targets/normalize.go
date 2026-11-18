@@ -426,11 +426,7 @@ func MarkerIdentity(raw []byte) (string, string, string, error) {
 
 var markerTargetID = regexp.MustCompile(`^target_[a-z0-9][a-z0-9._-]{0,63}$`)
 
-func (i Input) FilesystemDocument(marker []byte, path string, now int64) (json.RawMessage, error) {
-	id, nonce, created, err := MarkerIdentity(marker)
-	if err != nil {
-		return nil, err
-	}
+func (i Input) filesystemMetadata() (map[string]any, error) {
 	field := func(name, fallback string) string {
 		value := strip(i.value.field(name).strOr())
 		if value == "" {
@@ -458,14 +454,43 @@ func (i Input) FilesystemDocument(marker []byte, path string, now int64) (json.R
 	if err != nil {
 		return nil, err
 	}
-	stamp := time.Unix(now, 0).UTC().Format("2006-01-02T15:04:05Z")
-	if created == "" {
-		created = stamp
-	}
-	return json.Marshal(map[string]any{"schemaVersion": 3, "targetId": id, "kind": "filesystem", "path": path, "targetNonce": nonce,
+	return map[string]any{
 		"label": i.value.field("label").strOr(), "region": field("region", "local"), "failureDomain": field("failureDomain", "local"),
 		"provider": field("provider", "operator-filesystem"), "jurisdiction": field("jurisdiction", "local"), "priority": i.priority,
 		"costClass": field("costClass", "standard"), "storageCostPerGiBMonth": storage, "egressCostPerGiB": egress,
 		"maxReadBytesPerSecond": read, "maxWriteBytesPerSecond": write, "maxConcurrentTransfers": concurrent,
-		"storageTier": "hot", "restoreLatencyClass": "seconds", "minResidenceSeconds": 0, "retrievalCostPerGiB": nil, "drainState": "active", "createdAt": created, "registeredAt": stamp})
+		"storageTier": "hot", "restoreLatencyClass": "seconds", "minResidenceSeconds": 0, "retrievalCostPerGiB": nil, "drainState": "active",
+	}, nil
+}
+
+func (i Input) ValidateFilesystemMetadata() error {
+	fields, err := i.filesystemMetadata()
+	if err != nil {
+		return err
+	}
+	_, err = json.Marshal(fields)
+	return err
+}
+
+func (i Input) FilesystemDocument(marker []byte, path string, now int64) (json.RawMessage, error) {
+	id, nonce, created, err := MarkerIdentity(marker)
+	if err != nil {
+		return nil, err
+	}
+	fields, err := i.filesystemMetadata()
+	if err != nil {
+		return nil, err
+	}
+	stamp := time.Unix(now, 0).UTC().Format("2006-01-02T15:04:05Z")
+	if created == "" {
+		created = stamp
+	}
+	fields["schemaVersion"] = 3
+	fields["targetId"] = id
+	fields["kind"] = "filesystem"
+	fields["path"] = path
+	fields["targetNonce"] = nonce
+	fields["createdAt"] = created
+	fields["registeredAt"] = stamp
+	return json.Marshal(fields)
 }

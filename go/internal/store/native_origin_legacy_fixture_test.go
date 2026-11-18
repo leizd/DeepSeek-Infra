@@ -55,6 +55,7 @@ func dropEmptyNativeOriginFixture(t *testing.T, db nativeOriginLegacyFixtureDB) 
 // their exact old object catalogs without weakening production admission.
 func dropEmptyTargetRegistrationFixture(t *testing.T, db nativeOriginLegacyFixtureDB) {
 	t.Helper()
+	dropEmptyTargetMarkerFixture(t, db)
 	var locationTable int
 	if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_schema WHERE type='table' AND name='control_target_registration_locations'").Scan(&locationTable); err != nil {
 		t.Fatal(err)
@@ -91,5 +92,22 @@ func dropEmptyTargetRegistrationFixture(t *testing.T, db nativeOriginLegacyFixtu
 		if _, err := db.Exec("DROP TABLE IF EXISTS " + name); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func dropEmptyTargetMarkerFixture(t *testing.T, db nativeOriginLegacyFixtureDB) {
+	t.Helper()
+	var exists int
+	if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_schema WHERE type='table' AND name=?", targetMarkerTable).Scan(&exists); err != nil {
+		t.Fatal(err)
+	}
+	if exists == 0 {
+		return
+	}
+	if err := retireEmptyTargetMarkersTx(db); err != nil {
+		t.Fatal("cannot manufacture historical schema from retained marker claims", err)
+	}
+	if _, err := db.Exec("DELETE FROM schema_migrations WHERE version=23"); err != nil {
+		t.Fatal(err)
 	}
 }

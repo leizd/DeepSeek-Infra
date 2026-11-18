@@ -4,12 +4,47 @@ use deepseek_protocol::{
     backup_target_inspection as wire,
     generated::deepseek::action::v1::{
         FilesystemBackupTargetLocationObservation, FilesystemBackupTargetObservation,
+        TargetMarkerClaim, TargetMarkerEffect, TargetMarkerPreparation,
     },
 };
 use prost::Message as _;
 use sha2::{Digest as _, Sha256};
 
 impl ControlSigningKey {
+    pub fn sign_backup_target_marker_effect(
+        &self,
+        claim: &TargetMarkerClaim,
+        effect: &TargetMarkerEffect,
+    ) -> Result<Vec<u8>, FederationIdentityError> {
+        if !wire::valid_marker_claim(claim)
+            || self.binding["fleetId"].as_str() != Some(claim.fleet_id.as_str())
+            || self.binding["environment"].as_str() != Some(claim.environment.as_str())
+            || effect.schema_version != 1
+            || effect.operation_id != claim.operation_id
+            || effect.fence != claim.fence
+            || effect.claim_sha256 != Sha256::digest(claim.encode_to_vec()).as_slice()
+            || effect.canonical_path != claim.canonical_path
+            || effect.directory_identity != claim.directory_identity
+            || effect.marker_json.is_empty()
+            || effect.marker_json.len() > wire::MARKER_INITIALIZATION_MAX_JSON
+            || effect.marker_sha256 != Sha256::digest(&effect.marker_json).as_slice()
+            || effect.encoded_len() > wire::MARKER_EFFECT_MAX_WIRE - 256
+        {
+            return Err(error("BACKUP_TARGET_MARKER_EFFECT_INVALID"));
+        }
+        let preparation = TargetMarkerPreparation {
+            claim: Some(claim.clone()),
+            directory_identity: effect.directory_identity.clone(),
+            marker_json: effect.marker_json.clone(),
+        };
+        if effect.preparation_sha256 != Sha256::digest(preparation.encode_to_vec()).as_slice() {
+            return Err(error("BACKUP_TARGET_MARKER_EFFECT_INVALID"));
+        }
+        let mut message = wire::MARKER_EFFECT_SIGNATURE_DOMAIN.to_vec();
+        message.extend(effect.encode_to_vec());
+        Ok(self.key.sign(&message).to_bytes().to_vec())
+    }
+
     pub fn sign_backup_target_location(
         &self,
         observation: &FilesystemBackupTargetLocationObservation,
@@ -162,6 +197,7 @@ mod tests {
             marker_sha256: Sha256::digest(&bytes).to_vec(),
             marker_json: bytes,
             full_containment_checked: false,
+            directory_identity: Vec::new(),
             observed_at_unix: 1794445200,
             fleet_id: "fleet-a".into(),
             environment: "test".into(),

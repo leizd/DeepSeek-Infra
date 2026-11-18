@@ -19,7 +19,7 @@ concurrency:
 jobs:
   registration-go:
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 45
     env:
       GOTOOLCHAIN: local
       CGO_ENABLED: "1"
@@ -59,6 +59,9 @@ jobs:
           tree=subprocess.check_output(['git','rev-parse','HEAD^{tree}'],text=True).strip()
           assert source==os.environ['GITHUB_SHA'] and not subprocess.check_output(['git','status','--porcelain=v1','--untracked-files=all'])
           required={
+              'TestTargetRegistrationMarkerDispatchIsSingleAndOriginalResultRecoversAfterTakeover',
+              'TestTargetRegistrationMarkerOnlyAnUndispatchedClaimCanAdvanceEpoch',
+              'TestTargetRegistrationMarkerV22UpgradePreservesRegistrationAfterRollback',
               'TestTargetRegistrationPublicMetadataWriteFailuresPreserveOriginalResult',
               'TestTargetRegistrationPublicRechecksCurrentRecordAfterVerifyingPathProofs',
               'TestTargetRegistrationPublicTCPRequiresCurrentReadAfterCompetingPathProof',
@@ -160,7 +163,7 @@ jobs:
           good=good and all(e['Action']=='pass' for e in top if e['Action'] in {'pass','fail','skip'}) and len(package)==4 and all(e['Action']=='pass' for e in package) and {e['Package'] for e in package}=={'github.com/leizd/DeepSeek-Infra/go/internal/'+p for p in ('store','worker','api','targets')}
           good=good and not any(e['Action']=='fail' or 'WARNING: DATA RACE' in e.get('Output','') for e in events)
           report=dict(status='PASS' if good else 'FAIL',sourceCommit=source,sourceTree=tree,runId=os.environ['GITHUB_RUN_ID'],event=os.environ['GITHUB_EVENT_NAME'],attempt=os.environ['GITHUB_RUN_ATTEMPT'],
-              expectedTests=sorted(required),command=args,exitCode=run.returncode,raceEnabled=True,timeout='8m',retainedOriginalTests=73,addedPublicAndMetadataTests=3,rawEventsSha256=hashlib.sha256(raw).hexdigest(),parseErrors=parse_errors,
+              expectedTests=sorted(required),command=args,exitCode=run.returncode,raceEnabled=True,timeout='8m',retainedOriginalTests=76,addedMarkerTests=3,rawEventsSha256=hashlib.sha256(raw).hexdigest(),parseErrors=parse_errors,
               passed=sum(e['Action']=='pass' for e in top),failed=sum(e['Action']=='fail' for e in top),skipped=sum(e['Action']=='skip' for e in top),
               physicalRustInspectionQualified=False,publicRegistrationQualified=False,fullGoSuiteQualified=False,original95PercentCoverageQualified=False,fullMigrationQualified=False,readiness='NOT_READY')
           (out/'result.json').write_text(json.dumps(report,indent=2)+'\n')
@@ -191,6 +194,27 @@ jobs:
         with:
           name: native-target-full-go-coverage-${{ github.sha }}
           path: artifacts/native-target-full-go-coverage/
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Exercise registration rollback on the Android SQLite driver
+        if: always() && !cancelled()
+        timeout-minutes: 10
+        working-directory: go
+        run: |
+          set -o pipefail
+          mkdir -p ../artifacts/native-target-registration-android
+          cd ..
+          python scripts/capture_evidence_context.py --version "$(cat VERSION)" --out artifacts/native-target-registration-android/source-context.json
+          cd go
+          go test -tags=deepseek_android,sqlite3_flock -race -json -count=1 -timeout=7m \
+            -run '^(TestTargetRegistrationMarker|TestTargetRegistrationPublicRechecksCurrentRecordAfterVerifyingPathProofs$)' \
+            ./internal/store | tee ../artifacts/native-target-registration-android/target-registration.jsonl
+      - name: Return Android SQLite registration report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: native-target-registration-android-${{ github.sha }}
+          path: artifacts/native-target-registration-android/
           if-no-files-found: warn
           retention-days: 7
 
@@ -250,6 +274,7 @@ jobs:
           set -o pipefail
           cargo test --locked --manifest-path rust/Cargo.toml -p deepseek-worker --lib target_path_resolution -- --nocapture 2>&1 | tee artifacts/native-target-filesystem-development/rust-path-tests.log
           cargo test --locked --manifest-path rust/Cargo.toml -p deepseek-worker --lib target_full_containment -- --nocapture 2>&1 | tee artifacts/native-target-filesystem-development/rust-containment-tests.log
+          cargo test --locked --manifest-path rust/Cargo.toml -p deepseek-worker --lib target_marker -- --nocapture 2>&1 | tee artifacts/native-target-filesystem-development/rust-marker-tests.log
           cargo build --locked --manifest-path rust/Cargo.toml -p deepseek-worker --bin deepseek-worker
       - name: Verify the real Go TLS Rust custody path and retained Python oracle
         timeout-minutes: 4
@@ -281,7 +306,7 @@ jobs:
           cd go
           go build -p=2 -o "$bin/deepseekd" ./cmd/deepseekd
           go build -p=2 -o "$bin/deepseek-launch" ./cmd/deepseek-launch
-      - name: Register and move existing filesystem targets in the native browser
+      - name: Initialize, register, and move filesystem targets in the native browser
         timeout-minutes: 6
         env:
           PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/target-registration-chromium

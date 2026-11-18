@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -21,6 +22,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
+
+const publicTargetActor = "operator:public-api"
 
 func publicTargetOperation(request *http.Request) (string, error) {
 	if supplied := request.Header.Get("X-DeepSeek-Operation-Id"); supplied != "" {
@@ -53,6 +56,10 @@ func writePublicTarget(writer http.ResponseWriter, record store.Record) {
 
 func publicTargetRegistrationError(writer http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, store.ErrTargetMarkerPending):
+		policyWriteError(writer, 503, "BACKUP_TARGET_MARKER_EFFECT_UNKNOWN", "Backup target initialization is unresolved; retry with the same operation id")
+	case errors.Is(err, store.ErrTargetMarkerClaim):
+		policyWriteError(writer, 503, "BACKUP_TARGET_INITIALIZATION_UNAVAILABLE", "Backup target initialization could not be authorized")
 	case errors.Is(err, worker.ErrTargetInspectionResponse):
 		policyWriteError(writer, 503, "BACKUP_TARGET_INSPECTION_UNAVAILABLE", "Backup target inspection is unavailable")
 	case errors.Is(err, store.ErrTargetOverlap):
@@ -80,10 +87,10 @@ func publicTargetRegistrationError(writer http.ResponseWriter, err error) {
 }
 
 func publicTargetRegistrationFailure(writer http.ResponseWriter, control *store.Control, operation, bodySHA string, err error) {
-	if errors.Is(err, store.ErrMutationRequestReplayConflict) || errors.Is(err, store.ErrRevisionConflict) {
+	if errors.Is(err, store.ErrMutationRequestReplayConflict) || errors.Is(err, store.ErrRevisionConflict) || errors.Is(err, store.ErrTargetMarkerPending) {
 		// The original body may have committed while these observations were in
 		// flight, including before competing paths were read from the registry.
-		record, _, found, recoveryErr := control.ReplayPublicBackupTargetRegistration(operation, "operator:public-api", bodySHA)
+		record, _, found, recoveryErr := control.ReplayPublicBackupTargetRegistration(operation, publicTargetActor, bodySHA)
 		if recoveryErr == nil && found {
 			writePublicTarget(writer, record)
 			return
@@ -95,8 +102,6 @@ func publicTargetRegistrationFailure(writer http.ResponseWriter, control *store.
 	publicTargetRegistrationError(writer, err)
 }
 
-// Existing-marker registration changes only Go metadata. Marker initialization
-// requires its own Rust effect/recovery protocol and remains explicitly denied.
 func backupTargetRegister(writer http.ResponseWriter, request *http.Request, control *store.Control, view PublicView) {
 	if !authorizationAndHost(writer, request) {
 		return
@@ -122,7 +127,7 @@ func backupTargetRegister(writer http.ResponseWriter, request *http.Request, con
 	writer.Header().Set("X-DeepSeek-Operation-Id", operation)
 	digest := sha256.Sum256(raw)
 	bodySHA := hex.EncodeToString(digest[:])
-	if record, _, found, err := control.ReplayPublicBackupTargetRegistration(operation, "operator:public-api", bodySHA); err != nil {
+	if record, _, found, err := control.ReplayPublicBackupTargetRegistration(operation, publicTargetActor, bodySHA); err != nil {
 		publicTargetRegistrationError(writer, err)
 		return
 	} else if found {
@@ -147,14 +152,28 @@ func backupTargetRegister(writer http.ResponseWriter, request *http.Request, con
 		policyWriteError(writer, 400, "invalid_payload", "Backup target path must be absolute")
 		return
 	}
-	scope, err := control.PrepareBackupTargetRegistration(operation, operation, "operator:public-api", path)
+	native := os.Getenv("DEEPSEEK_RUNTIME_MODE") == "python_disabled"
+	var original store.TargetMarkerOperation
+	var pending bool
+	if native {
+		original, pending, err = control.PendingTargetMarker(operation, publicTargetActor, bodySHA)
+		if err != nil {
+			publicTargetRegistrationFailure(writer, control, operation, bodySHA, err)
+			return
+		}
+	}
+	scope, err := control.PrepareBackupTargetRegistration(operation, operation, publicTargetActor, path)
 	if err != nil {
 		publicTargetRegistrationError(writer, err)
 		return
 	}
 	client, err := dialMediaWorker()
 	if err != nil {
-		policyWriteError(writer, 503, "BACKUP_TARGET_INSPECTION_UNAVAILABLE", "Backup target inspection is unavailable")
+		if pending {
+			publicTargetRegistrationFailure(writer, control, operation, bodySHA, store.ErrTargetMarkerPending)
+		} else {
+			policyWriteError(writer, 503, "BACKUP_TARGET_INSPECTION_UNAVAILABLE", "Backup target inspection is unavailable")
+		}
 		return
 	}
 	defer client.Close()
@@ -162,13 +181,35 @@ func backupTargetRegister(writer http.ResponseWriter, request *http.Request, con
 	binding := worker.ControlSignerBinding{PublicKey: pinned.PublicKey, FleetID: pinned.FleetID, Environment: pinned.Environment}
 	ctx, cancel := context.WithTimeout(request.Context(), 45*time.Second)
 	defer cancel()
+	if pending {
+		completeTargetMarkerRegistration(ctx, writer, control, client, scope, binding, input, operation, bodySHA, original)
+		return
+	}
 	inspection, err := client.InspectFilesystemBackupTarget(ctx, scope.InspectionRequest(), binding)
 	if err != nil {
 		publicTargetRegistrationError(writer, err)
 		return
 	}
 	if !inspection.Observation.MarkerPresent {
-		policyWriteError(writer, 503, "BACKUP_TARGET_INITIALIZATION_UNAVAILABLE", "Backup target initialization is unavailable")
+		if !native || len(inspection.Observation.DirectoryIdentity) != 32 {
+			policyWriteError(writer, 503, "BACKUP_TARGET_INITIALIZATION_UNAVAILABLE", "Backup target initialization is unavailable")
+			return
+		}
+		if err := input.ValidateFilesystemMetadata(); err != nil {
+			normalizeRefusal(writer, err)
+			return
+		}
+		proofs, err := inspectCompetingTargetPaths(ctx, control, client, scope, binding, "")
+		if err != nil {
+			publicTargetRegistrationFailure(writer, control, operation, bodySHA, err)
+			return
+		}
+		original, err := control.AdmitTargetMarker(scope, inspection, proofs, bodySHA)
+		if err != nil {
+			publicTargetRegistrationFailure(writer, control, operation, bodySHA, err)
+			return
+		}
+		completeTargetMarkerRegistration(ctx, writer, control, client, scope, binding, input, operation, bodySHA, original)
 		return
 	}
 	id, _, _, err := targetmodel.MarkerIdentity(inspection.Observation.MarkerJson)
@@ -176,21 +217,10 @@ func backupTargetRegister(writer http.ResponseWriter, request *http.Request, con
 		normalizeRefusal(writer, err)
 		return
 	}
-	paths, err := control.BackupTargetRegistrationPaths(scope, id)
+	proofs, err := inspectCompetingTargetPaths(ctx, control, client, scope, binding, id)
 	if err != nil {
 		publicTargetRegistrationFailure(writer, control, operation, bodySHA, err)
 		return
-	}
-	proofs := make([]store.BackupTargetPathProof, 0, len(paths))
-	for _, candidate := range paths {
-		read := scope.LocationRequest(candidate.Path)
-		read.ResolvePath = true
-		receipt, err := client.ProbeFilesystemBackupTargetLocation(ctx, read, binding)
-		if err != nil {
-			publicTargetRegistrationError(writer, err)
-			return
-		}
-		proofs = append(proofs, store.BackupTargetPathProof{TargetID: candidate.TargetID, Receipt: receipt})
 	}
 	var oldLocation *actionv1.FilesystemBackupTargetLocationReceipt
 	if old, found, err := control.Get("target", id); err != nil {
@@ -229,4 +259,23 @@ func backupTargetRegister(writer http.ResponseWriter, request *http.Request, con
 		return
 	}
 	writePublicTarget(writer, record)
+}
+
+func inspectCompetingTargetPaths(ctx context.Context, control *store.Control, client *worker.Client,
+	scope store.BackupTargetRegistrationScope, binding worker.ControlSignerBinding, exclude string) ([]store.BackupTargetPathProof, error) {
+	paths, err := control.BackupTargetRegistrationPaths(scope, exclude)
+	if err != nil {
+		return nil, err
+	}
+	proofs := make([]store.BackupTargetPathProof, 0, len(paths))
+	for _, candidate := range paths {
+		read := scope.LocationRequest(candidate.Path)
+		read.ResolvePath = true
+		receipt, err := client.ProbeFilesystemBackupTargetLocation(ctx, read, binding)
+		if err != nil {
+			return nil, err
+		}
+		proofs = append(proofs, store.BackupTargetPathProof{TargetID: candidate.TargetID, Receipt: receipt})
+	}
+	return proofs, nil
 }

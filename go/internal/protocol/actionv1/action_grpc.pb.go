@@ -757,3 +757,251 @@ var BackupTargetInspection_ServiceDesc = grpc.ServiceDesc{
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "action/v1/action.proto",
 }
+
+const (
+	BackupTargetMarkerWorker_Initialize_FullMethodName = "/deepseek.action.v1.BackupTargetMarkerWorker/Initialize"
+	BackupTargetMarkerWorker_Reconcile_FullMethodName  = "/deepseek.action.v1.BackupTargetMarkerWorker/Reconcile"
+)
+
+// BackupTargetMarkerWorkerClient is the client API for BackupTargetMarkerWorker service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+type BackupTargetMarkerWorkerClient interface {
+	Initialize(ctx context.Context, in *TargetMarkerClaim, opts ...grpc.CallOption) (*TargetMarkerReceipt, error)
+	Reconcile(ctx context.Context, in *ReconcileTargetMarkerRequest, opts ...grpc.CallOption) (*TargetMarkerReceipt, error)
+}
+
+type backupTargetMarkerWorkerClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewBackupTargetMarkerWorkerClient(cc grpc.ClientConnInterface) BackupTargetMarkerWorkerClient {
+	return &backupTargetMarkerWorkerClient{cc}
+}
+
+func (c *backupTargetMarkerWorkerClient) Initialize(ctx context.Context, in *TargetMarkerClaim, opts ...grpc.CallOption) (*TargetMarkerReceipt, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(TargetMarkerReceipt)
+	err := c.cc.Invoke(ctx, BackupTargetMarkerWorker_Initialize_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *backupTargetMarkerWorkerClient) Reconcile(ctx context.Context, in *ReconcileTargetMarkerRequest, opts ...grpc.CallOption) (*TargetMarkerReceipt, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(TargetMarkerReceipt)
+	err := c.cc.Invoke(ctx, BackupTargetMarkerWorker_Reconcile_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// BackupTargetMarkerWorkerServer is the server API for BackupTargetMarkerWorker service.
+// All implementations must embed UnimplementedBackupTargetMarkerWorkerServer
+// for forward compatibility.
+type BackupTargetMarkerWorkerServer interface {
+	Initialize(context.Context, *TargetMarkerClaim) (*TargetMarkerReceipt, error)
+	Reconcile(context.Context, *ReconcileTargetMarkerRequest) (*TargetMarkerReceipt, error)
+	mustEmbedUnimplementedBackupTargetMarkerWorkerServer()
+}
+
+// UnimplementedBackupTargetMarkerWorkerServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedBackupTargetMarkerWorkerServer struct{}
+
+func (UnimplementedBackupTargetMarkerWorkerServer) Initialize(context.Context, *TargetMarkerClaim) (*TargetMarkerReceipt, error) {
+	return nil, status.Error(codes.Unimplemented, "method Initialize not implemented")
+}
+func (UnimplementedBackupTargetMarkerWorkerServer) Reconcile(context.Context, *ReconcileTargetMarkerRequest) (*TargetMarkerReceipt, error) {
+	return nil, status.Error(codes.Unimplemented, "method Reconcile not implemented")
+}
+func (UnimplementedBackupTargetMarkerWorkerServer) mustEmbedUnimplementedBackupTargetMarkerWorkerServer() {
+}
+func (UnimplementedBackupTargetMarkerWorkerServer) testEmbeddedByValue() {}
+
+// UnsafeBackupTargetMarkerWorkerServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to BackupTargetMarkerWorkerServer will
+// result in compilation errors.
+type UnsafeBackupTargetMarkerWorkerServer interface {
+	mustEmbedUnimplementedBackupTargetMarkerWorkerServer()
+}
+
+func RegisterBackupTargetMarkerWorkerServer(s grpc.ServiceRegistrar, srv BackupTargetMarkerWorkerServer) {
+	// If the following call panics, it indicates UnimplementedBackupTargetMarkerWorkerServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&BackupTargetMarkerWorker_ServiceDesc, srv)
+}
+
+func _BackupTargetMarkerWorker_Initialize_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(TargetMarkerClaim)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BackupTargetMarkerWorkerServer).Initialize(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BackupTargetMarkerWorker_Initialize_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BackupTargetMarkerWorkerServer).Initialize(ctx, req.(*TargetMarkerClaim))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BackupTargetMarkerWorker_Reconcile_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReconcileTargetMarkerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BackupTargetMarkerWorkerServer).Reconcile(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BackupTargetMarkerWorker_Reconcile_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BackupTargetMarkerWorkerServer).Reconcile(ctx, req.(*ReconcileTargetMarkerRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// BackupTargetMarkerWorker_ServiceDesc is the grpc.ServiceDesc for BackupTargetMarkerWorker service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var BackupTargetMarkerWorker_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "deepseek.action.v1.BackupTargetMarkerWorker",
+	HandlerType: (*BackupTargetMarkerWorkerServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "Initialize",
+			Handler:    _BackupTargetMarkerWorker_Initialize_Handler,
+		},
+		{
+			MethodName: "Reconcile",
+			Handler:    _BackupTargetMarkerWorker_Reconcile_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "action/v1/action.proto",
+}
+
+const (
+	BackupTargetMarkerControl_BeginDispatch_FullMethodName = "/deepseek.action.v1.BackupTargetMarkerControl/BeginDispatch"
+)
+
+// BackupTargetMarkerControlClient is the client API for BackupTargetMarkerControl service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+type BackupTargetMarkerControlClient interface {
+	// Only the initial dispatch can acquire this permit. A lost or expired
+	// permit leaves the original operation subject to read-only reconciliation.
+	BeginDispatch(ctx context.Context, in *TargetMarkerDispatchRequest, opts ...grpc.CallOption) (*TargetMarkerDispatchPermit, error)
+}
+
+type backupTargetMarkerControlClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewBackupTargetMarkerControlClient(cc grpc.ClientConnInterface) BackupTargetMarkerControlClient {
+	return &backupTargetMarkerControlClient{cc}
+}
+
+func (c *backupTargetMarkerControlClient) BeginDispatch(ctx context.Context, in *TargetMarkerDispatchRequest, opts ...grpc.CallOption) (*TargetMarkerDispatchPermit, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(TargetMarkerDispatchPermit)
+	err := c.cc.Invoke(ctx, BackupTargetMarkerControl_BeginDispatch_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// BackupTargetMarkerControlServer is the server API for BackupTargetMarkerControl service.
+// All implementations must embed UnimplementedBackupTargetMarkerControlServer
+// for forward compatibility.
+type BackupTargetMarkerControlServer interface {
+	// Only the initial dispatch can acquire this permit. A lost or expired
+	// permit leaves the original operation subject to read-only reconciliation.
+	BeginDispatch(context.Context, *TargetMarkerDispatchRequest) (*TargetMarkerDispatchPermit, error)
+	mustEmbedUnimplementedBackupTargetMarkerControlServer()
+}
+
+// UnimplementedBackupTargetMarkerControlServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedBackupTargetMarkerControlServer struct{}
+
+func (UnimplementedBackupTargetMarkerControlServer) BeginDispatch(context.Context, *TargetMarkerDispatchRequest) (*TargetMarkerDispatchPermit, error) {
+	return nil, status.Error(codes.Unimplemented, "method BeginDispatch not implemented")
+}
+func (UnimplementedBackupTargetMarkerControlServer) mustEmbedUnimplementedBackupTargetMarkerControlServer() {
+}
+func (UnimplementedBackupTargetMarkerControlServer) testEmbeddedByValue() {}
+
+// UnsafeBackupTargetMarkerControlServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to BackupTargetMarkerControlServer will
+// result in compilation errors.
+type UnsafeBackupTargetMarkerControlServer interface {
+	mustEmbedUnimplementedBackupTargetMarkerControlServer()
+}
+
+func RegisterBackupTargetMarkerControlServer(s grpc.ServiceRegistrar, srv BackupTargetMarkerControlServer) {
+	// If the following call panics, it indicates UnimplementedBackupTargetMarkerControlServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&BackupTargetMarkerControl_ServiceDesc, srv)
+}
+
+func _BackupTargetMarkerControl_BeginDispatch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(TargetMarkerDispatchRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BackupTargetMarkerControlServer).BeginDispatch(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BackupTargetMarkerControl_BeginDispatch_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BackupTargetMarkerControlServer).BeginDispatch(ctx, req.(*TargetMarkerDispatchRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// BackupTargetMarkerControl_ServiceDesc is the grpc.ServiceDesc for BackupTargetMarkerControl service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var BackupTargetMarkerControl_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "deepseek.action.v1.BackupTargetMarkerControl",
+	HandlerType: (*BackupTargetMarkerControlServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "BeginDispatch",
+			Handler:    _BackupTargetMarkerControl_BeginDispatch_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "action/v1/action.proto",
+}

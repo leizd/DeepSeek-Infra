@@ -9,6 +9,7 @@ import (
 
 	"github.com/leizd/DeepSeek-Infra/go/internal/agent"
 	"github.com/leizd/DeepSeek-Infra/go/internal/config"
+	actionv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/actionv1"
 	agentv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/agentv1"
 	controlv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/controlv1"
 	mediav1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/mediav1"
@@ -94,6 +95,7 @@ func NewControlRPC(control *store.Control, bearer string, health ControlPlaneHea
 	agentv1.RegisterAgentRunRecoveryControlServer(server, &agentRunRecoveryService{run: agentRun})
 	agentv1.RegisterAgentNodeControlServer(server, &agentNodeService{run: agentRun})
 	mediav1.RegisterMediaMutationControlServer(server, &mediaMutationService{control: control, health: health})
+	actionv1.RegisterBackupTargetMarkerControlServer(server, &backupTargetMarkerControl{control: control, health: health})
 	return server
 }
 
@@ -151,6 +153,8 @@ func (service *controlReadService) GetBackupPolicyRecipients(context.Context, *c
 // control method retains its original 1 MiB request AND response limit.
 func controlRPCMessageLimit(method string) int {
 	switch method {
+	case actionv1.BackupTargetMarkerControl_BeginDispatch_FullMethodName:
+		return 128 * 1024
 	case mediav1.MediaMutationControl_GetClaim_FullMethodName, mediav1.MediaMutationControl_BeginDispatch_FullMethodName, mediav1.MediaMutationControl_RecordOutcome_FullMethodName:
 		return 4 << 20
 	default:

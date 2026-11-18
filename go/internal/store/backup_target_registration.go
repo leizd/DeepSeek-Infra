@@ -136,6 +136,9 @@ func verifyTargetObservationEnvelope(receipt *actionv1.FilesystemBackupTargetIns
 	if o.Fence == nil || !nativeKnown(receipt, o, o.Fence) || o.SchemaVersion != 1 || o.Fence.ExecutionEpoch == 0 || o.Fence.ExecutionEpoch > math.MaxInt64 || o.OperationId != o.Fence.ActionId || !strings.HasPrefix(o.OperationId, targetInspectionOperationPrefix) || len(o.OperationId) > 128 || o.WriterFencingToken == 0 || o.WriterFencingToken > math.MaxInt64 || o.ObservedAtUnix <= 0 || o.FleetId != fleet || o.Environment != environment || len(o.RequestedPath) == 0 || len(o.RequestedPath) > 32768 || len(o.CanonicalPath) > 32768 || !filepath.IsAbs(o.CanonicalPath) {
 		return ErrTargetRegistrationInvalid
 	}
+	if len(o.DirectoryIdentity) != 0 && (!o.FullContainmentChecked || len(o.DirectoryIdentity) != 32) {
+		return ErrTargetRegistrationInvalid
+	}
 	if o.MarkerPresent {
 		digest := sha256.Sum256(o.MarkerJson)
 		if len(o.MarkerJson) == 0 || len(o.MarkerJson) > 4*1024*1024 || !bytes.Equal(digest[:], o.MarkerSha256) {
@@ -187,16 +190,16 @@ func targetRegistrationDocument(o *actionv1.FilesystemBackupTargetObservation, d
 // still supply the public route's complete containment/clone/contributor checks;
 // this method never initializes a marker or treats absence as a failed effect.
 func (store *Control) RegisterInspectedBackupTarget(scope BackupTargetRegistrationScope, receipt *actionv1.FilesystemBackupTargetInspectionReceipt, document json.RawMessage) (Record, OperatorMutationResult, error) {
-	return store.registerInspectedBackupTarget(scope, receipt, nil, document, nil)
+	return store.registerInspectedBackupTarget(scope, receipt, nil, document, nil, nil)
 }
 
 // The second receipt is a separate Rust read of the previously registered path.
 // It cannot authorize initialization, a provider retry, or an effect epoch.
 func (store *Control) RegisterInspectedBackupTargetWithLocation(scope BackupTargetRegistrationScope, receipt *actionv1.FilesystemBackupTargetInspectionReceipt, location *actionv1.FilesystemBackupTargetLocationReceipt, document json.RawMessage) (Record, OperatorMutationResult, error) {
-	return store.registerInspectedBackupTarget(scope, receipt, location, document, nil)
+	return store.registerInspectedBackupTarget(scope, receipt, location, document, nil, nil)
 }
 
-func (store *Control) registerInspectedBackupTarget(scope BackupTargetRegistrationScope, receipt *actionv1.FilesystemBackupTargetInspectionReceipt, location *actionv1.FilesystemBackupTargetLocationReceipt, document json.RawMessage, publicContext []byte) (Record, OperatorMutationResult, error) {
+func (store *Control) registerInspectedBackupTarget(scope BackupTargetRegistrationScope, receipt *actionv1.FilesystemBackupTargetInspectionReceipt, location *actionv1.FilesystemBackupTargetLocationReceipt, document json.RawMessage, publicContext []byte, markerEffect *actionv1.TargetMarkerReceipt) (Record, OperatorMutationResult, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if err := verifyTargetObservation(receipt, store.promotionSignerKey, store.fleetID, store.environment); err != nil {
@@ -271,9 +274,10 @@ func (store *Control) registerInspectedBackupTarget(scope BackupTargetRegistrati
 	if strings.HasPrefix(scope.operationID, PublicTargetOperationPrefix) != (len(publicContext) != 0) {
 		return Record{}, OperatorMutationResult{}, ErrTargetRegistrationInvalid
 	}
+	var frame *publicTargetContext
 	if len(publicContext) != 0 {
 		wrapped, _ := json.Marshal(map[string]json.RawMessage{publicTargetContextField: publicContext})
-		frame, err := decodePublicTargetContext(wrapped)
+		frame, err = decodePublicTargetContext(wrapped)
 		if err != nil || frame == nil || frame.Scope != scope.publicScope() || !bytes.Equal(frame.Document, document) {
 			return Record{}, OperatorMutationResult{}, ErrTargetRegistrationInvalid
 		}
@@ -289,6 +293,22 @@ func (store *Control) registerInspectedBackupTarget(scope BackupTargetRegistrati
 	existing, exists, err := readTargetMetadataTx(tx, id)
 	if err != nil {
 		return Record{}, OperatorMutationResult{}, err
+	}
+	if markerEffect != nil {
+		if exists || location != nil || frame == nil || store.schema < SchemaV23 {
+			return Record{}, OperatorMutationResult{}, ErrTargetMarkerClaim
+		}
+		if err := settleTargetMarkerTx(tx, frame, id, receipt, markerEffect); err != nil {
+			return Record{}, OperatorMutationResult{}, err
+		}
+	} else if store.schema >= SchemaV23 {
+		var pending bool
+		if err := tx.QueryRow("SELECT " + targetMarkerPending).Scan(&pending); err != nil {
+			return Record{}, OperatorMutationResult{}, err
+		}
+		if pending {
+			return Record{}, OperatorMutationResult{}, ErrTargetMarkerPending
+		}
 	}
 	previousPath := ""
 	if store.schema >= SchemaV22 {

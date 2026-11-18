@@ -1,5 +1,8 @@
 //! Read-only filesystem target inspection. Registry writes remain exclusively Go.
-use crate::WorkerRpcService;
+use crate::{
+    WorkerRpcService,
+    target_marker_files::{MARKER_NAME, MarkerDirectory},
+};
 use deepseek_protocol::{
     backup_target_inspection as wire,
     generated::deepseek::action::v1::{
@@ -19,9 +22,10 @@ use std::{
 };
 use tonic::{Request, Response, Status};
 
-const MARKER_NAME: &str = ".deepseek-infra-backup-target.json";
 const MAX_MARKER_BYTES: usize = wire::MAX_MARKER_BYTES;
 
+#[path = "target_marker.rs"]
+mod marker;
 #[path = "target_path_resolution.rs"]
 mod path_resolution;
 
@@ -29,6 +33,7 @@ mod path_resolution;
 pub(crate) struct LocationPolicy {
     protected: Vec<PathBuf>,
     readers: Arc<tokio::sync::Semaphore>,
+    marker_journal: Option<marker::MarkerJournal>,
 }
 #[derive(Debug)]
 struct Inspection {
@@ -84,9 +89,10 @@ impl LocationPolicy {
         Ok(Self {
             protected,
             readers: Arc::new(tokio::sync::Semaphore::new(1)),
+            marker_journal: None,
         })
     }
-    fn inspect(&self, raw: &str) -> Result<Inspection, Status> {
+    fn validated_path(&self, raw: &str) -> Result<PathBuf, Status> {
         let requested = Path::new(raw);
         if !requested.is_absolute() {
             return Err(Status::invalid_argument(
@@ -105,6 +111,12 @@ impl LocationPolicy {
                 "Unsafe backup target: directory is inside a protected runtime, package or temporary root",
             ));
         }
+        Ok(path)
+    }
+
+    fn inspect(&self, raw: &str) -> Result<Inspection, Status> {
+        let requested = Path::new(raw);
+        let path = self.validated_path(raw)?;
         let marker_path = path.join(MARKER_NAME);
         let before = match fs::symlink_metadata(&marker_path) {
             Ok(metadata) => metadata,
@@ -358,15 +370,29 @@ impl BackupTargetInspection for WorkerRpcService {
             .try_acquire_owned()
             .map_err(|_| Status::resource_exhausted("BACKUP_TARGET_INSPECTION_BUSY"))?;
         let full_containment = input.require_full_containment;
-        let inspected = tokio::task::spawn_blocking(move || {
+        let (inspected, directory_identity) = tokio::task::spawn_blocking(move || {
             // Cancellation of the RPC must not release the bound while its
             // blocking reader still owns memory and the filesystem handle.
             let _permit = permit;
             let inspected = policy.inspect(&path)?;
-            if full_containment {
+            let directory_identity = if full_containment {
                 policy.check_contributors(&inspected.path)?;
-            }
-            Ok::<_, Status>(inspected)
+                match MarkerDirectory::open(&inspected.path).and_then(|directory| {
+                    if directory.marker(MAX_MARKER_BYTES)? != inspected.marker {
+                        return Err(std::io::Error::other("backup target marker changed"));
+                    }
+                    directory.identity()
+                }) {
+                    Ok(identity) => identity.to_vec(),
+                    // An existing target may have traverse/read permissions
+                    // without permission to open the directory itself. Keep
+                    // the legacy read; initialization requires a pinned ID.
+                    Err(_) => Vec::new(),
+                }
+            } else {
+                Vec::new()
+            };
+            Ok::<_, Status>((inspected, directory_identity))
         })
         .await
         .map_err(|_| invalid_marker())??;
@@ -391,6 +417,7 @@ impl BackupTargetInspection for WorkerRpcService {
             fleet_id: config.fleet_id,
             environment: config.environment,
             full_containment_checked: full_containment,
+            directory_identity,
         };
         // Match the established worker -> signer lock order and recheck the
         // expiring transport credential before issuing the read-only witness.

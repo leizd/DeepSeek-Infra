@@ -34,6 +34,7 @@ type Client struct {
 	media            mediav1.MediaMutationWorkerClient
 	mediaCreation    mediav1.MediaCreationPayloadsClient
 	targetInspection actionv1.BackupTargetInspectionClient
+	targetMarker     actionv1.BackupTargetMarkerWorkerClient
 }
 
 func New(rpc actionv1.WorkerClient) *Client {

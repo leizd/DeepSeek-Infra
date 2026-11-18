@@ -53,6 +53,7 @@ mod service;
 mod signature_journal;
 mod storage_transport;
 mod target_inspection;
+mod target_marker_files;
 mod transport;
 pub use agent_execution_grant::{
     AGENT_EXECUTION_GRANT_SCHEMA, AgentExecutionControl, AgentExecutionGrantContext,

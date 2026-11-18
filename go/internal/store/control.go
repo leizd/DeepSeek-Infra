@@ -558,6 +558,11 @@ func expectedControlUserObjects(schema int) map[string]string {
 			objects[name] = kind
 		}
 	}
+	if schema >= SchemaV23 {
+		for _, object := range targetMarkerSchema {
+			objects[object.name] = object.kind
+		}
+	}
 	return objects
 }
 
@@ -876,6 +881,11 @@ func (store *Control) migrateTx(tx *sql.Tx) error {
 	}
 	if store.schema == SchemaV21 {
 		if err := store.migrateToV22Tx(tx); err != nil {
+			return err
+		}
+	}
+	if store.schema == SchemaV22 {
+		if err := store.migrateToV23Tx(tx); err != nil {
 			return err
 		}
 	}
@@ -1222,6 +1232,11 @@ func verifySchemaTx(tx *sql.Tx, schema int) error {
 	}
 	if schema >= SchemaV22 {
 		if err := verifyTargetLocationSchemaTx(tx); err != nil {
+			return err
+		}
+	}
+	if schema >= SchemaV23 {
+		if err := verifyTargetMarkerSchemaTx(tx); err != nil {
 			return err
 		}
 	}
@@ -2509,6 +2524,11 @@ func (store *Control) Rollback(version int) error {
 	leaseUntil, err := store.assertWriterTx(tx, now)
 	if err != nil {
 		return err
+	}
+	if store.schema >= SchemaV23 {
+		if err := retireEmptyTargetMarkersTx(tx); err != nil {
+			return err
+		}
 	}
 	if store.schema >= SchemaV22 {
 		if err := retireEmptyTargetLocationsTx(tx); err != nil {

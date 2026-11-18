@@ -15302,3 +15302,28 @@ Proceed with Go-owned durable admission and Rust-owned marker creation for
 uninitialized filesystem targets. Verify the original operation, directory
 identity, and marker bytes after an interrupted response or worker restart
 before publishing the registry record. The complete product stays NOT_READY.
+
+### 2026-11-18 filesystem target marker admission and recovery
+
+The authenticated filesystem registration route now distinguishes initial
+marker creation from existing-marker registration. Go validates the original
+request, the signed directory identity and the competing target paths before
+recording a claim in schema v23. Rust persists the proposed genesis and obtains
+a single permit over the private control RPC. It checks the directory identity
+again before publishing the marker with no replacement. An admitted dispatch
+can only be reconciled from the original prepared bytes and the existing marker.
+Go commits the signed effect and the registration in the same transaction.
+Competing registry writes wait while a marker effect is unresolved.
+
+The Android SQLite fault harness now observes parameterized writes after the
+driver selects its prepared-statement path. That path was missed in full source
+run 44237745473, allowing the registration test to commit without triggering
+its intended history-read fault. Keep all 76 previous race families and the
+original 95% Go gate. The development workflow adds marker admission, recovery
+and v22 migration rollback tests, an Android SQLite check, a real Rust restart
+after a discarded effect reply, and a Chromium registration and replay check.
+
+The marker initialization checks do not yet qualify missing-effect resolution
+after an issued permit, portable filesystem lineage operations, S3 target
+registration, the retained MCP pytest behavior, or the complete product. Keep
+full CI, Evidence, the original coverage floors and platform qualification open.

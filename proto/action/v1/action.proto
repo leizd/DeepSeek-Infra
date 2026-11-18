@@ -273,6 +273,8 @@ message FilesystemBackupTargetObservation {
   string fleet_id = 11;
   string environment = 12;
   bool full_containment_checked = 13;
+  // Present on an initialization-capable worker's absence observation.
+  bytes directory_identity = 14;
 }
 
 message FilesystemBackupTargetInspectionReceipt {
@@ -327,4 +329,79 @@ message FilesystemBackupTargetLocationReceipt {
 service BackupTargetInspection {
   rpc Inspect(InspectFilesystemBackupTargetRequest) returns (FilesystemBackupTargetInspectionReceipt);
   rpc ProbeLocation(ProbeFilesystemBackupTargetLocationRequest) returns (FilesystemBackupTargetLocationReceipt);
+}
+
+// The Go target registry reserves a single operation before Rust can prepare an
+// external marker. The original fence is kept when a later writer reconciles it.
+message TargetMarkerClaim {
+  uint32 schema_version = 1;
+  deepseek.common.v1.ActionFence fence = 2;
+  string operation_id = 3;
+  uint64 writer_fencing_token = 4;
+  uint64 cutover_revision = 5;
+  int64 issued_at_unix = 6;
+  int64 lease_until_unix = 7;
+  string requested_path = 8;
+  string canonical_path = 9;
+  string target_id = 10;
+  bytes request_sha256 = 11;
+  bytes nonce = 12;
+  string fleet_id = 13;
+  string environment = 14;
+  bytes directory_identity = 15;
+}
+
+message TargetMarkerPreparation {
+  TargetMarkerClaim claim = 1;
+  bytes directory_identity = 2;
+  bytes marker_json = 3;
+}
+
+message TargetMarkerDispatchRequest {
+  TargetMarkerClaim claim = 1;
+  bytes preparation_sha256 = 2;
+  deepseek.common.v1.ActionFence fence = 3;
+}
+
+message TargetMarkerDispatchPermit {
+  uint32 schema_version = 1;
+  bytes preparation_sha256 = 2;
+  int64 lease_until_unix = 3;
+}
+
+message ReconcileTargetMarkerRequest {
+  uint32 schema_version = 1;
+  deepseek.common.v1.ActionFence fence = 2;
+  string operation_id = 3;
+  uint64 current_writer_fencing_token = 4;
+  bytes claim_sha256 = 5;
+}
+
+message TargetMarkerEffect {
+  uint32 schema_version = 1;
+  deepseek.common.v1.ActionFence fence = 2;
+  string operation_id = 3;
+  bytes claim_sha256 = 4;
+  bytes preparation_sha256 = 5;
+  string canonical_path = 6;
+  bytes directory_identity = 7;
+  bytes marker_json = 8;
+  bytes marker_sha256 = 9;
+}
+
+message TargetMarkerReceipt {
+  TargetMarkerEffect effect = 1;
+  bytes signature = 2;
+  string signer_public_key = 3;
+}
+
+service BackupTargetMarkerWorker {
+  rpc Initialize(TargetMarkerClaim) returns (TargetMarkerReceipt);
+  rpc Reconcile(ReconcileTargetMarkerRequest) returns (TargetMarkerReceipt);
+}
+
+service BackupTargetMarkerControl {
+  // Only the initial dispatch can acquire this permit. A lost or expired
+  // permit leaves the original operation subject to read-only reconciliation.
+  rpc BeginDispatch(TargetMarkerDispatchRequest) returns (TargetMarkerDispatchPermit);
 }

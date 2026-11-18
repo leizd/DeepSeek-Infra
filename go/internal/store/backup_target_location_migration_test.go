@@ -17,6 +17,7 @@ func locationV21Fixture(t *testing.T, control *Control) {
 		t.Fatal(err)
 	}
 	defer tx.Rollback()
+	dropEmptyTargetMarkerFixture(t, tx)
 	if err := retireEmptyTargetLocationsTx(tx); err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +46,7 @@ func TestTargetRegistrationLocationV21UpgradePreservesOriginalBytesAndReplay(t *
 	original, result, previous, boundary := fixture.record, fixture.result, fixture.previous, fixture.boundary
 	recovered := openLegacyTargetV21Copy(t, fixture)
 	oldProof := relocationFixture(t, recovered, previous, scope, actionv1.BackupTargetLocationState_BACKUP_TARGET_LOCATION_STATE_MISSING)
-	if recovered.SchemaVersion() != SchemaV22 {
+	if recovered.SchemaVersion() != CurrentSchema {
 		t.Fatal("v21 did not upgrade to the location-proof layout")
 	}
 	after, found, err := recovered.Get("target", original.ID)
@@ -188,7 +189,7 @@ func TestTargetRegistrationLocationRetirementRejectsRetainedOrUnreadableCustody(
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := verifySchemaTx(tx, SchemaV22); err != nil {
+		if err := verifySchemaTx(tx, CurrentSchema); err != nil {
 			t.Fatal("rolled-back retirement changed original schema", err)
 		}
 		if err := tx.Rollback(); err != nil {

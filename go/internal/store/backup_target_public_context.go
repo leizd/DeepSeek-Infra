@@ -41,11 +41,12 @@ type publicTargetPathProof struct {
 	Wire     []byte
 }
 type publicTargetContext struct {
-	Version    uint32
-	BodySHA256 string
-	Scope      publicTargetScope
-	Document   json.RawMessage
-	Paths      []publicTargetPathProof
+	Version            uint32
+	BodySHA256         string
+	Scope              publicTargetScope
+	Document           json.RawMessage
+	Paths              []publicTargetPathProof
+	MarkerEffectSHA256 string `json:"markerEffectSha256,omitempty"`
 }
 
 func (scope BackupTargetRegistrationScope) publicScope() publicTargetScope {
@@ -221,31 +222,68 @@ func decodePublicTargetContext(payload []byte) (*publicTargetContext, error) {
 	if b, err := hex.DecodeString(value.BodySHA256); err != nil || len(b) != 32 || value.BodySHA256 != strings.ToLower(value.BodySHA256) {
 		return nil, ErrCorruptRecord
 	}
+	if value.MarkerEffectSHA256 != "" && !isLowerSHA256(value.MarkerEffectSHA256) {
+		return nil, ErrCorruptRecord
+	}
 	return &value, nil
 }
 
 func (store *Control) RegisterPublicInspectedBackupTarget(scope BackupTargetRegistrationScope, marker *actionv1.FilesystemBackupTargetInspectionReceipt,
 	location *actionv1.FilesystemBackupTargetLocationReceipt, proofs []BackupTargetPathProof, bodySHA string, document json.RawMessage) (Record, OperatorMutationResult, error) {
+	return store.registerPublicBackupTarget(scope, marker, location, proofs, bodySHA, document, nil)
+}
+
+func (store *Control) RegisterPublicInitializedBackupTarget(scope BackupTargetRegistrationScope, marker *actionv1.FilesystemBackupTargetInspectionReceipt,
+	proofs []BackupTargetPathProof, bodySHA string, document json.RawMessage, effect *actionv1.TargetMarkerReceipt) (Record, OperatorMutationResult, error) {
+	if effect == nil {
+		return Record{}, OperatorMutationResult{}, ErrTargetMarkerClaim
+	}
+	return store.registerPublicBackupTarget(scope, marker, nil, proofs, bodySHA, document, effect)
+}
+
+func encodePublicTargetPathProofs(proofs []BackupTargetPathProof) ([]publicTargetPathProof, error) {
+	var paths []publicTargetPathProof
+	for _, proof := range proofs {
+		if proof.Receipt == nil || proto.Size(proof.Receipt) > MaxBackupTargetLocationReceiptBytes {
+			return nil, ErrTargetRegistrationInvalid
+		}
+		wire, err := proto.MarshalOptions{Deterministic: true}.Marshal(proof.Receipt)
+		if err != nil {
+			return nil, err
+		}
+		paths = append(paths, publicTargetPathProof{proof.TargetID, wire})
+	}
+	sort.Slice(paths, func(i, j int) bool { return paths[i].TargetID < paths[j].TargetID })
+	return paths, nil
+}
+
+func (store *Control) registerPublicBackupTarget(scope BackupTargetRegistrationScope, marker *actionv1.FilesystemBackupTargetInspectionReceipt,
+	location *actionv1.FilesystemBackupTargetLocationReceipt, proofs []BackupTargetPathProof, bodySHA string, document json.RawMessage,
+	effect *actionv1.TargetMarkerReceipt) (Record, OperatorMutationResult, error) {
 	if !strings.HasPrefix(scope.operationID, PublicTargetOperationPrefix) {
 		return Record{}, OperatorMutationResult{}, ErrTargetRegistrationInvalid
 	}
 	value := publicTargetContext{Version: 1, BodySHA256: bodySHA, Scope: scope.publicScope(), Document: append(json.RawMessage(nil), document...)}
-	for _, proof := range proofs {
-		if proof.Receipt == nil || proto.Size(proof.Receipt) > MaxBackupTargetLocationReceiptBytes {
-			return Record{}, OperatorMutationResult{}, ErrTargetRegistrationInvalid
+	paths, err := encodePublicTargetPathProofs(proofs)
+	if err != nil {
+		return Record{}, OperatorMutationResult{}, err
+	}
+	value.Paths = paths
+	if effect != nil {
+		if proto.Size(effect) > MaxTargetMarkerReceiptBytes {
+			return Record{}, OperatorMutationResult{}, ErrTargetMarkerClaim
 		}
-		wire, err := proto.MarshalOptions{Deterministic: true}.Marshal(proof.Receipt)
+		_, digest, err := markerMessageBytes(effect)
 		if err != nil {
 			return Record{}, OperatorMutationResult{}, err
 		}
-		value.Paths = append(value.Paths, publicTargetPathProof{proof.TargetID, wire})
+		value.MarkerEffectSHA256 = hex.EncodeToString(digest[:])
 	}
-	sort.Slice(value.Paths, func(i, j int) bool { return value.Paths[i].TargetID < value.Paths[j].TargetID })
 	encoded, err := json.Marshal(value)
 	if err != nil || len(encoded) > maximumPublicTargetContext {
 		return Record{}, OperatorMutationResult{}, ErrTargetRegistrationInvalid
 	}
-	return store.registerInspectedBackupTarget(scope, marker, location, document, encoded)
+	return store.registerInspectedBackupTarget(scope, marker, location, document, encoded, effect)
 }
 
 // PublicBackupTargetRecord removes durable admission internals from all user projections.
@@ -309,6 +347,11 @@ func validatePublicTargetBindingsTx(tx *sql.Tx, id string, bindings map[int64]ta
 			frame.Scope.CutoverRevision != binding.result.CutoverRevision || frame.Scope.Epoch != binding.result.ExecutionEpoch ||
 			frame.Scope.RequestedPath != binding.receipt.Observation.RequestedPath || frame.Scope.WriterFence != int64(binding.receipt.Observation.WriterFencingToken) {
 			return ErrCorruptRecord
+		}
+		if frame.MarkerEffectSHA256 != "" {
+			if err := validateRetainedTargetMarkerTx(tx, frame, id, binding.receipt); err != nil {
+				return err
+			}
 		}
 		records, err := targetRecordsAtEvent(tx, eventID)
 		if err != nil {
