@@ -552,12 +552,12 @@ async fn python_disabled_handles_remote_restore_pause_resume_and_abort_controls(
     )
     .unwrap();
 
-    let hold_path = root
-        .path()
-        .join(".backups")
-        .join("publish")
-        .join("holds")
-        .join("h1.json");
+    // `release_session_holds` resolves a `holdKeys` entry against the target
+    // store root, which is `.backups` for `managed-local`. The file therefore
+    // sits at `.backups/holds/h1.json`; an extra `publish/` segment put it
+    // outside the tree the release walks, so the test asserted on a path the
+    // implementation is not supposed to touch.
+    let hold_path = root.path().join(".backups").join("holds").join("h1.json");
     std::fs::create_dir_all(hold_path.parent().unwrap()).unwrap();
     std::fs::write(&hold_path, "{}").unwrap();
     let pin_hash = sha256_hex_bytes(rid.as_bytes());
