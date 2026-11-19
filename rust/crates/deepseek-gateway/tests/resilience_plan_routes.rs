@@ -520,7 +520,12 @@ async fn resilience_plan_writes_succeed_and_persist_under_python_disabled() {
     assert_eq!(rep_risk["riskObservation"]["status"], "OPEN");
     assert_eq!(rep_risk["riskObservation"]["observationCount"], 1);
     assert!(workspace.join(".resilience-risk/risk.sqlite3").is_file());
-    assert!(workspace.join(".resilience-slo/slo.sqlite3").is_file());
+    // `assess` writes the risk observation only. The SLO ledger is written when
+    // an action settles: `resilience_action_journal` records REPAIR_TIME_MS /
+    // REBALANCE_TIME_MS and the failed-remediation burn on execution, and
+    // `resilience_slo_ledger` has no caller on the assess path.
+    // Asserting the database here pinned a file the oracle never creates.
+    assert!(!workspace.join(".resilience-slo/slo.sqlite3").is_file());
 
     // 2. POST /plan with materialize=false proposes repair + DR drill without journal write
     let (st_prop, prop) = call_json(
