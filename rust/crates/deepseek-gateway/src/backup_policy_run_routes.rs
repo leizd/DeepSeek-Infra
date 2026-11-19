@@ -39,9 +39,7 @@ use deepseek_storage::object_set::{ObjectInventoryEntry, object_inventory_digest
 use rusqlite::{Connection, params};
 use serde_json::{Map, Value, json};
 
-use crate::backup_archive_routes::{
-    build_revision, copy_staged_file, gate_to_app_error, hex_digest,
-};
+use crate::backup_archive_routes::{build_revision, copy_staged_file, gate_to_app_error};
 use crate::backup_capacity_routes::now_utc_iso;
 use crate::backup_catalog_routes::{object_path, registered_target};
 use crate::backup_catalog_write_routes::{
@@ -889,7 +887,7 @@ fn build_object_set_once(
         ("manifest.json", manifest_bytes.as_slice()),
         ("payload-index.json", pindex_bytes.as_slice()),
     ] {
-        let _ = writeln!(sums, "{}  {name}", hex_digest(bytes));
+        let _ = writeln!(sums, "{}  {name}", sha256_bytes(bytes));
     }
 
     fs::write(control_stage.join("component-map.json"), &cmap_bytes)
