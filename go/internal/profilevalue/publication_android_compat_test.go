@@ -556,3 +556,29 @@ func TestAndroidProfileValueFilesystemFailuresNeverAcknowledgeNewAuthority(t *te
 		}
 	})
 }
+
+func TestAndroidProfileValueConfirmsOnlyOriginalBytesAfterLegacyUpgrade(t *testing.T) {
+	path := profilePath(t)
+	original := []byte(strings.Repeat("a", 32))
+	other := []byte(strings.Repeat("b", 32))
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ConfirmDurable(path, other); !errors.Is(err, ErrInvalid) {
+		t.Fatal("legacy identity was acknowledged for a different intent", err)
+	}
+	if err := ConfirmDurable(path, original); err != nil {
+		t.Fatal("the retained original identity could not be confirmed", err)
+	}
+	after, err := os.Lstat(path)
+	if err != nil || !os.SameFile(before, after) {
+		t.Fatal("confirmation replaced the retained identity", err)
+	}
+	if value, err := Read(path, 64); err != nil || string(value) != string(original) {
+		t.Fatalf("legacy identity changed: %q %v", value, err)
+	}
+}

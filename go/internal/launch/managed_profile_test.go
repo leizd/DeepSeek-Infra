@@ -343,6 +343,49 @@ func TestManagedProfileRequiresOriginalMetadataAndExclusiveOwner(t *testing.T) {
 		}
 	}
 }
+
+func TestManagedProfileRejectsMalformedPublishedIdentity(t *testing.T) {
+	for _, malformed := range []struct{ name, value string }{
+		{"wrong-length", strings.Repeat("a", 31)},
+		{"uppercase", strings.Repeat("A", 32)},
+		{"non-hexadecimal", strings.Repeat("z", 32)},
+	} {
+		t.Run(malformed.name, func(t *testing.T) {
+			root := t.TempDir()
+			metadata := filepath.Join(root, "go-control", "native-profile")
+			if err := managedDirectory(metadata); err != nil {
+				t.Fatal(err)
+			}
+			idPath := filepath.Join(metadata, "profile-id")
+			// Use this build's actual publication format so Android reaches
+			// identity validation after successfully reading its descriptor.
+			if err := publishManagedValue(idPath, []byte(malformed.value)); err != nil {
+				t.Fatal(err)
+			}
+			if raw, err := managedFile(idPath, 64); err != nil || string(raw) != malformed.value {
+				t.Fatalf("published identifier must be readable before admission: %q %v", raw, err)
+			}
+			if profile, err := openManagedProfile(root); profile != nil || !errors.Is(err, errManagedProfile) {
+				if profile != nil {
+					profile.close()
+				}
+				t.Fatal("invalid directory identity was admitted", err)
+			}
+			lock, err := os.OpenFile(filepath.Join(metadata, "launch.lock"), os.O_RDWR, 0o600)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := lockManagedProfile(lock); err != nil {
+				_ = lock.Close()
+				t.Fatal("failed admission retained the profile lock", err)
+			}
+			(&managedProfile{lock: lock}).close()
+			if raw, err := managedFile(idPath, 64); err != nil || string(raw) != malformed.value {
+				t.Fatalf("invalid identity was replaced: %q %v", raw, err)
+			}
+		})
+	}
+}
 func TestManagedProfileNeverRecreatesLostCustodyOrGoState(t *testing.T) {
 	for _, missing := range []string{"database", "pin", "custody"} {
 		root := t.TempDir()
