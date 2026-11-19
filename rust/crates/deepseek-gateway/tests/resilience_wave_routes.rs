@@ -509,8 +509,11 @@ async fn slice7c_write_gate_validation_and_blocked_safety_floor() {
             "/api/workspace/resilience/waves/admit",
             "/api/workspace/resilience/waves/run",
         ] {
+            // `route_support::unallowed_api_method(method, Method::GET)` answers
+            // 404 for GET and 405 for anything else, mirroring the original
+            // router where only POST was registered on these paths.
             let (st_get, _) = call_json(&app, "GET", uri, None).await;
-            assert_eq!(st_get, StatusCode::METHOD_NOT_ALLOWED, "uri={uri}");
+            assert_eq!(st_get, StatusCode::NOT_FOUND, "uri={uri}");
 
             let (st, body) = post_json(&app, uri, &json!({})).await;
             assert_eq!(st, StatusCode::CONFLICT, "{uri}: {body}");
