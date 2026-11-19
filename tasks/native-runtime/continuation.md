@@ -15403,3 +15403,18 @@ recovery, interrupted historical reads and retirement, a claim that never
 received a dispatch permit, and damaged competing registry paths. The original
 coverage floors and every retained platform case still apply. Exact-source
 cloud verification and full migration acceptance remain open.
+
+The 29f7088 push run 44427218941 passed all 87 scoped Go race families, all
+eight scoped Android SQLite cases, Rust marker publication through search-only
+ancestors, the actual Go/Rust recovery, and Chromium. Its independent Go gate
+measured 18,738 of 19,726 statements (94.9914%), two short of the original
+95%. Windows source dispatch 44427324914 verified creation and replay with the
+actual app. The Rust coverage job in source dispatch 44427339268 passed with
+103,933 of 125,102 lines, above 80%.
+
+Three additional cases exercise settled marker history read failures, a
+current preparation presented to the actual older schema, and a validly signed
+receipt whose marker is not an initial generation. An invalid receipt must
+keep the original dispatch unresolved and cannot create a target record. This
+test batch retains the 87 named race families and both original floors. Device
+and source-CI conclusions belong to their own runs and source revisions.

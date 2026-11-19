@@ -61,6 +61,16 @@ func TestTargetRegistrationMarkerV22UpgradePreservesRegistrationAfterRollback(t 
 	if op, err := control.AdmitTargetMarker(scope, observation, nil, body); !errors.Is(err, ErrTargetMarkerClaim) || op.Claim != nil {
 		t.Fatal("legacy store admitted a new marker", err)
 	}
+	currentStore := targetDeletePromotedStore(t, true)
+	newScope, absent, newBody := absentMarkerFixture(t, currentStore, "issued-by-current-schema", filepath.Join(t.TempDir(), "candidate"))
+	currentClaim, err := currentStore.AdmitTargetMarker(newScope, absent, nil, newBody)
+	if err != nil {
+		t.Fatal("current schema fixture did not admit a claim", err)
+	}
+	prepared, _ := targetMarkerEffectFixture(t, currentClaim, 0)
+	if permit, err := control.BeginTargetMarkerDispatch(prepared); !errors.Is(err, ErrTargetMarkerClaim) || permit != nil {
+		t.Fatal("legacy store authorized a current-protocol preparation", err)
+	}
 
 	badClock := control.now
 	control.now = func() int64 { return -1 }

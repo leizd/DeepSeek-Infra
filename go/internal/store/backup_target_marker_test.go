@@ -30,13 +30,13 @@ func absentMarkerFixture(t *testing.T, control *Control, op, path string) (Backu
 	return scope, read, digest
 }
 
-func targetMarkerEffectFixture(t *testing.T, operation TargetMarkerOperation) (*actionv1.TargetMarkerDispatchRequest, *actionv1.TargetMarkerReceipt) {
+func targetMarkerEffectFixture(t *testing.T, operation TargetMarkerOperation, generation uint64) (*actionv1.TargetMarkerDispatchRequest, *actionv1.TargetMarkerReceipt) {
 	t.Helper()
 	claim := operation.Claim
 	marker, err := json.Marshal(map[string]any{
 		"schemaVersion": 3, "targetId": claim.TargetId, "targetNonce": strings.Repeat("a", 32),
 		"incarnationId": "inc_0123456789abcdef", "ownerInstallationId": "inst_0123456789abcdef",
-		"targetGeneration": 0, "latestCommitHash": strings.Repeat("0", 64),
+		"targetGeneration": generation, "latestCommitHash": strings.Repeat("0", 64),
 		"createdAt": time.Unix(claim.IssuedAtUnix, 0).UTC().Format(time.RFC3339),
 	})
 	if err != nil {
@@ -104,7 +104,7 @@ func TestTargetRegistrationMarkerDispatchIsSingleAndOriginalResultRecoversAfterT
 	if _, found, err := control.PendingTargetMarker(scope.operationID, scope.actor, otherBody); found || !errors.Is(err, ErrMutationRequestReplayConflict) {
 		t.Fatal("pending work accepted a different body", found, err)
 	}
-	dispatch, effect := targetMarkerEffectFixture(t, operation)
+	dispatch, effect := targetMarkerEffectFixture(t, operation, 0)
 	if permit, err := control.BeginTargetMarkerDispatch(&actionv1.TargetMarkerDispatchRequest{}); permit != nil || !errors.Is(err, ErrTargetMarkerClaim) {
 		t.Fatal("an incomplete request obtained a marker permit", err)
 	}
@@ -198,6 +198,12 @@ func TestTargetRegistrationMarkerDispatchIsSingleAndOriginalResultRecoversAfterT
 	if err != nil || record.ID != operation.Claim.TargetId || result.Status != OperatorMutationApplied {
 		t.Fatal("authenticated original effect did not settle", err)
 	}
+	readFault := inventoryReadFault{query: "SELECT execution_epoch,actor,claim,claim_sha256,state", armed: true}
+	installInventoryReadFault(t, recovered, &readFault)
+	if pending, found, err := recovered.PendingTargetMarker(scope.operationID, scope.actor, body); found || pending.Claim != nil ||
+		!errors.Is(err, errInventoryReadInterrupted) || !readFault.injected {
+		t.Fatal("interrupted settled-history read looked like an unused operation", found, err)
+	}
 	current, reply, found, err := recovered.ReplayPublicBackupTargetRegistration(scope.operationID, scope.actor, body)
 	if err != nil || !found || !reflect.DeepEqual(current, record) || reply.Status != OperatorMutationAlreadyApplied {
 		t.Fatal("lost reply did not replay the original committed result", found, err)
@@ -264,7 +270,7 @@ func TestTargetRegistrationMarkerOnlyAnUndispatchedClaimCanAdvanceEpoch(t *testi
 	if err != nil || next.Claim.Fence.ExecutionEpoch != 2 || bytes.Equal(next.ClaimSHA256, operation.ClaimSHA256) {
 		t.Fatal("expired, never-issued permit did not advance independently", err)
 	}
-	dispatch, _ := targetMarkerEffectFixture(t, operation)
+	dispatch, _ := targetMarkerEffectFixture(t, operation, 0)
 	if _, err := control.BeginTargetMarkerDispatch(dispatch); !errors.Is(err, ErrTargetMarkerClaim) {
 		t.Fatal("the expired original action was redispatched", err)
 	}
@@ -353,7 +359,7 @@ func TestTargetRegistrationMarkerAdmissionAndDispatchFaultsPreserveOriginalState
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, _ := targetMarkerEffectFixture(t, operation)
+	request, _ := targetMarkerEffectFixture(t, operation, 0)
 	for _, fault := range []inventoryReadFault{
 		{query: "SELECT execution_epoch,actor,claim,claim_sha256,state"},
 		{query: "UPDATE control_target_marker_operations SET state='DISPATCHED'", exec: true},
@@ -454,10 +460,22 @@ func TestTargetRegistrationMarkerConsumedOperationCannotIssueFreshClaim(t *testi
 	if later, err := control.AdmitTargetMarker(fresh, read, []BackupTargetPathProof{proof}, body); !errors.Is(err, ErrMutationRequestReplayConflict) || later.Claim != nil {
 		t.Fatal("pending claim accepted a different body", err)
 	}
-	prepared, receipt := targetMarkerEffectFixture(t, op)
+	prepared, receipt := targetMarkerEffectFixture(t, op, 1)
 	observed, observation, updated := targetMarkerReadFixture(t, control, op, receipt)
 	if _, _, err := control.RegisterPublicInitializedBackupTarget(observed, observation, nil, digest, updated, nil); !errors.Is(err, ErrTargetMarkerClaim) {
 		t.Fatal("initialization settled without any original effect proof", err)
+	}
+	if _, err := control.BeginTargetMarkerDispatch(prepared); err != nil {
+		t.Fatal("fixture could not establish the authenticated dispatch binding", err)
+	}
+	if _, _, err := control.RegisterPublicInitializedBackupTarget(observed, observation, []BackupTargetPathProof{proof}, digest, updated, receipt); !errors.Is(err, ErrTargetMarkerClaim) {
+		t.Fatal("a signed non-genesis marker settled as a newly created target", err)
+	}
+	if pending, found, err := control.PendingTargetMarker(fresh.operationID, fresh.actor, digest); err != nil || !found || pending.State != "DISPATCHED" {
+		t.Fatal("refused genesis proof discarded the original dispatched action", found, err)
+	}
+	if _, exists, err := control.Get("target", op.Claim.TargetId); err != nil || exists {
+		t.Fatal("refused genesis proof acquired a registration", exists, err)
 	}
 	if err := control.Close(); err != nil {
 		t.Fatal(err)
