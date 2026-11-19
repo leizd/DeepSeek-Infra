@@ -2477,9 +2477,11 @@ pub(crate) fn build_fresh_state_bundle_readonly(
         .filter(|s| is_plain_sha256(s))
         .ok_or_else(|| {
             format!(
-                "AUTHORITY_OBSERVATION_UNAVAILABLE: canonicalDigest={:?} overall={:?}",
+                "AUTHORITY_OBSERVATION_UNAVAILABLE: canonicalDigest={:?} verdict={:?} recoveryState={:?} db={}",
                 authority.get("canonicalDigest"),
-                authority.get("overall")
+                authority.get("verdict"),
+                authority.get("recoveryState"),
+                control_db_path(root).display()
             )
         })?
         .to_string();
