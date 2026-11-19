@@ -167,7 +167,9 @@ fn signed_commit(mut obj: Map<String, Value>) -> Value {
 
 fn seed_object_set_backup(backups_root: &Path, work: &Path) -> (String, String, String) {
     let (identity_secret, recipient) = ephemeral_identity();
-    let backup_id = "bk_obj_s5_1".to_string();
+    // `_session_dir` in backups.py requires `backup_` plus an alphanumeric-only
+    // remainder, so this fixture id has to satisfy the same rule the route checks.
+    let backup_id = "backup_objset51".to_string();
     let app_rel = "payload/projects/p1/note.txt";
     let mem_rel = "payload/memory/facts.json";
     let app_bytes = b"hello object set project\n";
