@@ -9,6 +9,7 @@ import (
 
 	"github.com/leizd/DeepSeek-Infra/go/internal/store"
 	targetmodel "github.com/leizd/DeepSeek-Infra/go/internal/targets"
+	"github.com/leizd/DeepSeek-Infra/go/internal/worker"
 )
 
 func backupTargetRegisterExistingS3(writer http.ResponseWriter, request *http.Request, control *store.Control, input targetmodel.Input, operation, bodySHA string) {
@@ -42,7 +43,9 @@ func backupTargetRegisterExistingS3(writer http.ResponseWriter, request *http.Re
 	defer client.Close()
 	ctx, cancel := context.WithTimeout(request.Context(), 15*time.Second)
 	defer cancel()
-	receipt, err := client.InspectS3BackupTarget(ctx, scope.InspectionRequest(), control.BackupTargetObservationBinding())
+	pinned := control.BackupTargetObservationBinding()
+	binding := worker.ControlSignerBinding{PublicKey: pinned.PublicKey, FleetID: pinned.FleetID, Environment: pinned.Environment}
+	receipt, err := client.InspectS3BackupTarget(ctx, scope.InspectionRequest(), binding)
 	if err != nil {
 		publicTargetRegistrationError(writer, err)
 		return
