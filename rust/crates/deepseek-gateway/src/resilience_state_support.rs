@@ -3733,6 +3733,20 @@ pub(crate) fn observe_risk_snapshot_and_slo(
                     )?
                 }
                 Some(ex) => {
+                    // `observe_risk_snapshot` returns the stored row untouched
+                    // when the incoming snapshot key matches the last one, so a
+                    // repeated assess/plan inside the same second does not
+                    // inflate the count:
+                    //
+                    //   if existing["last_snapshot_observation_key"] == snapshot_observation_key:
+                    //       records.append(_row_to_record(existing)); continue
+                    if ex.last_snapshot_observation_key.as_deref()
+                        == Some(snapshot_obs_key.as_str())
+                    {
+                        records_by_digest
+                            .insert(digest.clone(), risk_obs_row_to_value(&conn, &digest)?);
+                        continue;
+                    }
                     let count = ex.observation_count + 1;
                     let peak = if severity_rank(&severity) > severity_rank(&ex.peak_severity) {
                         severity.clone()
