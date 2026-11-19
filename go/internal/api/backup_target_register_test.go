@@ -545,7 +545,8 @@ func TestTargetRegistrationPublicAdmissionRefusesAuthorityAuthenticationAndInval
 		code            int
 	}{
 		{"", "", 400}, {"[]", "", 400}, {`{"priority":"bad"}`, "", 500}, {`{"kind":"webdav"}`, "", 501},
-		{`{"kind":"s3"}`, "", 503}, {`{"path":"relative"}`, "", 400}, {`{}`, "unreserved", 400},
+		{`{"kind":"s3"}`, "", 400}, {`{"kind":"s3","bucket":"unconfigured"}`, "", 503},
+		{`{"path":"relative"}`, "", 400}, {`{}`, "unreserved", 400},
 		{`{}`, store.PublicTargetOperationPrefix + "bad.dot", 400}, {strings.Repeat("x", 64001), "", 413},
 	} {
 		code, body, _ := publicTargetHTTPRequest(t, server, http.MethodPost, "/api/workspace/backup-targets", row.body, row.operation)

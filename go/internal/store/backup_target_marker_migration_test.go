@@ -122,7 +122,7 @@ func TestTargetRegistrationMarkerV22UpgradePreservesRegistrationAfterRollback(t 
 		t.Fatal(err)
 	}
 	upgraded := reopenTargetDeleteStore(t, path, func() int64 { return 1000 })
-	if upgraded.SchemaVersion() != SchemaV23 {
+	if upgraded.SchemaVersion() != CurrentSchema {
 		t.Fatal("reopening did not restore new schema")
 	}
 	current, _, found, err := upgraded.ReplayPublicBackupTargetRegistration(scope.operationID, scope.actor, body)

@@ -112,6 +112,13 @@ func attachTargetLocationBindingsTx(tx *sql.Tx, id string, bindings map[int64]ta
 		if !exists || operation != binding.operation {
 			return ErrCorruptRecord
 		}
+		if binding.s3 != nil {
+			if previous.Valid || len(encoded) != 0 {
+				return ErrCorruptRecord
+			}
+			seen++
+			continue
+		}
 		binding.locationRequiredByVersion = event > boundary
 		if previous.Valid || len(encoded) != 0 {
 			if !binding.locationRequiredByVersion || !previous.Valid || previous.String == "" || len(encoded) == 0 || len(encoded) > MaxBackupTargetLocationReceiptBytes {

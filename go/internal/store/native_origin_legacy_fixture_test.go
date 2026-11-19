@@ -98,6 +98,17 @@ func dropEmptyTargetRegistrationFixture(t *testing.T, db nativeOriginLegacyFixtu
 func dropEmptyTargetMarkerFixture(t *testing.T, db nativeOriginLegacyFixtureDB) {
 	t.Helper()
 	var exists int
+	if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_schema WHERE type='table' AND name=?", s3TargetRegistrationTable).Scan(&exists); err != nil {
+		t.Fatal(err)
+	}
+	if exists != 0 {
+		if err := retireEmptyS3TargetRegistrationsTx(db); err != nil {
+			t.Fatal("cannot manufacture historical schema from retained S3 registration", err)
+		}
+		if _, err := db.Exec("DELETE FROM schema_migrations WHERE version=24"); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_schema WHERE type='table' AND name=?", targetMarkerTable).Scan(&exists); err != nil {
 		t.Fatal(err)
 	}

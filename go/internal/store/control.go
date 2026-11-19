@@ -563,6 +563,11 @@ func expectedControlUserObjects(schema int) map[string]string {
 			objects[object.name] = object.kind
 		}
 	}
+	if schema >= SchemaV24 {
+		for _, object := range s3TargetRegistrationSchema {
+			objects[object.name] = object.kind
+		}
+	}
 	return objects
 }
 
@@ -886,6 +891,11 @@ func (store *Control) migrateTx(tx *sql.Tx) error {
 	}
 	if store.schema == SchemaV22 {
 		if err := store.migrateToV23Tx(tx); err != nil {
+			return err
+		}
+	}
+	if store.schema == SchemaV23 {
+		if err := store.migrateToV24Tx(tx); err != nil {
 			return err
 		}
 	}
@@ -1237,6 +1247,11 @@ func verifySchemaTx(tx *sql.Tx, schema int) error {
 	}
 	if schema >= SchemaV23 {
 		if err := verifyTargetMarkerSchemaTx(tx); err != nil {
+			return err
+		}
+	}
+	if schema >= SchemaV24 {
+		if err := verifyS3TargetRegistrationSchemaTx(tx); err != nil {
 			return err
 		}
 	}
@@ -2524,6 +2539,11 @@ func (store *Control) Rollback(version int) error {
 	leaseUntil, err := store.assertWriterTx(tx, now)
 	if err != nil {
 		return err
+	}
+	if store.schema >= SchemaV24 {
+		if err := retireEmptyS3TargetRegistrationsTx(tx); err != nil {
+			return err
+		}
 	}
 	if store.schema >= SchemaV23 {
 		if err := retireEmptyTargetMarkersTx(tx); err != nil {

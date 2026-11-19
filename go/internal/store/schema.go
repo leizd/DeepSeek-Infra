@@ -68,7 +68,8 @@ const (
 	SchemaV21      = 21
 	SchemaV22      = 22
 	SchemaV23      = 23
-	CurrentSchema  = SchemaV23
+	SchemaV24      = 24
+	CurrentSchema  = SchemaV24
 )
 
 var controlTableNames = [...]string{

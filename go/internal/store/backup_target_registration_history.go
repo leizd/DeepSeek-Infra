@@ -14,18 +14,17 @@ type targetRegistrationBinding struct {
 	operation                 string
 	revision, generation      int64
 	receipt                   *actionv1.FilesystemBackupTargetInspectionReceipt
+	s3                        *s3TargetRegistrationBinding
 	result                    OperatorMutationResult
 	location                  *actionv1.FilesystemBackupTargetLocationReceipt
 	previousPath              string
 	locationRequiredByVersion bool
 }
 
-func targetRegistrationSchemaActiveTx(tx *sql.Tx) (bool, error) {
+func targetRegistrationSchemaTx(tx *sql.Tx) (int, error) {
 	var schema int
-	if err := tx.QueryRow("PRAGMA user_version").Scan(&schema); err != nil {
-		return false, err
-	}
-	return schema >= SchemaV21, nil
+	err := tx.QueryRow("PRAGMA user_version").Scan(&schema)
+	return schema, err
 }
 
 func targetRegistrationOperationAllowedTx(tx *sql.Tx, operation string, registration bool) error {
@@ -48,8 +47,8 @@ func targetRegistrationOperationAllowedTx(tx *sql.Tx, operation string, registra
 
 func loadTargetRegistrationBindingsTx(tx *sql.Tx, id string) (map[int64]targetRegistrationBinding, error) {
 	bindings := map[int64]targetRegistrationBinding{}
-	active, err := targetRegistrationSchemaActiveTx(tx)
-	if err != nil || !active {
+	schema, err := targetRegistrationSchemaTx(tx)
+	if err != nil || schema < SchemaV21 {
 		return bindings, err
 	}
 	var public, fleet, environment string
@@ -57,7 +56,13 @@ func loadTargetRegistrationBindingsTx(tx *sql.Tx, id string) (map[int64]targetRe
 	if err != nil && err != sql.ErrNoRows {
 		return nil, err
 	}
-	rows, err := tx.Query("SELECT operation_id,revision,public_generation,observation FROM control_target_registrations WHERE target_id=? ORDER BY revision", id)
+	query := "SELECT operation_id,revision,public_generation,observation,NULL FROM control_target_registrations WHERE target_id=? ORDER BY revision"
+	if schema >= SchemaV24 {
+		query = `SELECT r.operation_id,r.revision,r.public_generation,r.observation,s.context_json
+			FROM control_target_registrations r LEFT JOIN control_target_registration_s3 s ON r.operation_id=s.operation_id
+			WHERE r.target_id=? ORDER BY r.revision`
+	}
+	rows, err := tx.Query(query, id)
 	if err != nil {
 		return nil, err
 	}
@@ -65,18 +70,29 @@ func loadTargetRegistrationBindingsTx(tx *sql.Tx, id string) (map[int64]targetRe
 	for rows.Next() {
 		var binding targetRegistrationBinding
 		var encoded []byte
-		if err := rows.Scan(&binding.operation, &binding.revision, &binding.generation, &encoded); err != nil {
+		var s3Context sql.NullString
+		if err := rows.Scan(&binding.operation, &binding.revision, &binding.generation, &encoded, &s3Context); err != nil {
 			return nil, err
 		}
-		binding.receipt = &actionv1.FilesystemBackupTargetInspectionReceipt{}
-		if proto.Unmarshal(encoded, binding.receipt) != nil || verifyTargetObservation(binding.receipt, public, fleet, environment) != nil || binding.receipt.Observation.OperationId != binding.operation {
-			return nil, ErrCorruptRecord
+		var epoch uint64
+		if s3Context.Valid {
+			binding.s3, err = loadS3TargetRegistrationBinding(binding.operation, s3Context.String, encoded, public, fleet, environment)
+			if err != nil {
+				return nil, err
+			}
+			epoch = binding.s3.receipt.Observation.Fence.ExecutionEpoch
+		} else {
+			binding.receipt = &actionv1.FilesystemBackupTargetInspectionReceipt{}
+			if proto.Unmarshal(encoded, binding.receipt) != nil || verifyTargetObservation(binding.receipt, public, fleet, environment) != nil || binding.receipt.Observation.OperationId != binding.operation {
+				return nil, ErrCorruptRecord
+			}
+			epoch = binding.receipt.Observation.Fence.ExecutionEpoch
 		}
 		result, exists, err := readOperatorMutationTx(tx, binding.operation)
 		if err != nil {
 			return nil, err
 		}
-		if !exists || result.Domain != "target" || result.RecordID != id || result.Revision != binding.revision || result.State != "ACTIVE" || result.ActionID != binding.receipt.Observation.Fence.ActionId || result.ExecutionEpoch != binding.receipt.Observation.Fence.ExecutionEpoch {
+		if !exists || result.Domain != "target" || result.RecordID != id || result.Revision != binding.revision || result.State != "ACTIVE" || result.ActionID != binding.operation || result.ExecutionEpoch != epoch {
 			return nil, ErrCorruptRecord
 		}
 		binding.result = result
@@ -110,8 +126,14 @@ func loadTargetRegistrationBindingsTx(tx *sql.Tx, id string) (map[int64]targetRe
 }
 
 func validateTargetRegistrationEvent(binding targetRegistrationBinding, before, event Record, metadata storedRecordMetadata) error {
-	o := binding.receipt.Observation
-	if event.State != "ACTIVE" || event.Revision != binding.revision || o.WriterFencingToken != uint64(metadata.writerToken) || o.ObservedAtUnix > metadata.timestamp || metadata.timestamp-o.ObservedAtUnix > 60 {
+	var writer uint64
+	var observed int64
+	if binding.s3 != nil {
+		writer, observed = binding.s3.receipt.Observation.WriterFencingToken, binding.s3.receipt.Observation.ObservedAtUnix
+	} else {
+		writer, observed = binding.receipt.Observation.WriterFencingToken, binding.receipt.Observation.ObservedAtUnix
+	}
+	if event.State != "ACTIVE" || event.Revision != binding.revision || writer != uint64(metadata.writerToken) || observed > metadata.timestamp || metadata.timestamp-observed > 60 {
 		return ErrCorruptRecord
 	}
 	expected := int64(1)
@@ -126,11 +148,13 @@ func validateTargetRegistrationEvent(binding targetRegistrationBinding, before, 
 	if err != nil || generation != expected || binding.generation != expected {
 		return ErrCorruptRecord
 	}
-	if _, _, err := targetRegistrationDocument(o, event.Payload); err != nil {
-		return ErrCorruptRecord
-	}
-	if err := validateTargetLocationEvent(binding, before, metadata); err != nil {
-		return err
+	if binding.receipt != nil {
+		if _, _, err := targetRegistrationDocument(binding.receipt.Observation, event.Payload); err != nil {
+			return ErrCorruptRecord
+		}
+		if err := validateTargetLocationEvent(binding, before, metadata); err != nil {
+			return err
+		}
 	}
 	digest, err := operatorPayloadDigest(event.Payload)
 	if err != nil || digest != binding.result.PayloadDigest {

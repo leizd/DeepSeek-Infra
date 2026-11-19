@@ -336,6 +336,15 @@ func validatePublicTargetBindingsTx(tx *sql.Tx, id string, bindings map[int64]ta
 		if err != nil {
 			return err
 		}
+		if binding.s3 != nil {
+			if frame != nil {
+				return ErrCorruptRecord
+			}
+			if err := validateS3RegistrationContextTx(tx, id, binding, eventID, recorded, payload); err != nil {
+				return err
+			}
+			continue
+		}
 		required := strings.HasPrefix(binding.operation, PublicTargetOperationPrefix)
 		if !required {
 			if frame != nil {
@@ -454,11 +463,11 @@ func (store *Control) ReplayPublicBackupTargetRegistration(operation, actor, bod
 	if err != nil {
 		return Record{}, OperatorMutationResult{}, false, err
 	}
-	frame, err := decodePublicTargetContext(record.Payload)
-	if err != nil || frame == nil {
-		return Record{}, OperatorMutationResult{}, false, ErrCorruptRecord
+	originalSHA, err := targetRegistrationBodySHATx(tx, store.schema, operation, record.Payload)
+	if err != nil {
+		return Record{}, OperatorMutationResult{}, false, err
 	}
-	if frame.BodySHA256 != bodySHA {
+	if originalSHA != bodySHA {
 		return Record{}, OperatorMutationResult{}, false, ErrMutationRequestReplayConflict
 	}
 	if err := store.finishOperatorMutationTx(tx, context); err != nil {

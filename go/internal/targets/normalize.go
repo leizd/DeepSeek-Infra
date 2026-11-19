@@ -426,7 +426,7 @@ func MarkerIdentity(raw []byte) (string, string, string, error) {
 
 var markerTargetID = regexp.MustCompile(`^target_[a-z0-9][a-z0-9._-]{0,63}$`)
 
-func (i Input) filesystemMetadata() (map[string]any, error) {
+func (i Input) metadata(region, failureDomain, provider, jurisdiction string) (map[string]any, error) {
 	field := func(name, fallback string) string {
 		value := strip(i.value.field(name).strOr())
 		if value == "" {
@@ -455,12 +455,16 @@ func (i Input) filesystemMetadata() (map[string]any, error) {
 		return nil, err
 	}
 	return map[string]any{
-		"label": i.value.field("label").strOr(), "region": field("region", "local"), "failureDomain": field("failureDomain", "local"),
-		"provider": field("provider", "operator-filesystem"), "jurisdiction": field("jurisdiction", "local"), "priority": i.priority,
+		"label": i.value.field("label").strOr(), "region": field("region", region), "failureDomain": field("failureDomain", failureDomain),
+		"provider": field("provider", provider), "jurisdiction": field("jurisdiction", jurisdiction), "priority": i.priority,
 		"costClass": field("costClass", "standard"), "storageCostPerGiBMonth": storage, "egressCostPerGiB": egress,
 		"maxReadBytesPerSecond": read, "maxWriteBytesPerSecond": write, "maxConcurrentTransfers": concurrent,
 		"storageTier": "hot", "restoreLatencyClass": "seconds", "minResidenceSeconds": 0, "retrievalCostPerGiB": nil, "drainState": "active",
 	}, nil
+}
+
+func (i Input) filesystemMetadata() (map[string]any, error) {
+	return i.metadata("local", "local", "operator-filesystem", "local")
 }
 
 func (i Input) ValidateFilesystemMetadata() error {

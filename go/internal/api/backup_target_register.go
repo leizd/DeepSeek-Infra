@@ -62,6 +62,10 @@ func publicTargetRegistrationError(writer http.ResponseWriter, err error) {
 		policyWriteError(writer, 503, "BACKUP_TARGET_INITIALIZATION_UNAVAILABLE", "Backup target initialization could not be authorized")
 	case errors.Is(err, worker.ErrTargetInspectionResponse):
 		policyWriteError(writer, 503, "BACKUP_TARGET_INSPECTION_UNAVAILABLE", "Backup target inspection is unavailable")
+	case errors.Is(err, store.ErrS3BackupTargetLayoutIncomplete):
+		policyWriteError(writer, 503, "S3_BACKUP_TARGET_LAYOUT_INCOMPLETE", "The configured S3 namespace has no complete backup target identity and head")
+	case errors.Is(err, store.ErrS3BackupTargetHeadConflict):
+		policyWriteError(writer, 409, "S3_BACKUP_TARGET_HEAD_CONFLICT", "The observed S3 head conflicts with the retained target history")
 	case errors.Is(err, store.ErrTargetOverlap):
 		policyWriteError(writer, 400, "invalid_payload", "Unsafe backup target: target overlaps a registered target")
 	case errors.Is(err, store.ErrTargetCloneDetected):
@@ -144,7 +148,7 @@ func backupTargetRegister(writer http.ResponseWriter, request *http.Request, con
 		return
 	}
 	if input.Kind() == "s3" || input.Kind() == "s3-compatible" {
-		policyWriteError(writer, 503, "BACKUP_TARGET_REGISTRATION_UNAVAILABLE", "Backup target registration is unavailable for this storage type")
+		backupTargetRegisterExistingS3(writer, request, control, input, operation, bodySHA)
 		return
 	}
 	path := input.Path()

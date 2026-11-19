@@ -197,7 +197,7 @@ func TestTargetRegistrationClosedTransactionsCannotMasqueradeAsMissingState(t *t
 	checks := []func() error{
 		func() error { _, err := targetRegistryDigestTx(tx); return err },
 		func() error { _, err := loadTargetRegistrationBindingsTx(tx, record.ID); return err },
-		func() error { _, err := targetRegistrationSchemaActiveTx(tx); return err },
+		func() error { _, err := targetRegistrationSchemaTx(tx); return err },
 		func() error { return targetRegistrationOperationAllowedTx(tx, "target-inspect-uncommitted", false) },
 		func() error { _, _, err := targetBoundGenerationTx(tx, record); return err },
 		func() error { _, err := nextTargetPublicGenerationTx(tx, record); return err },

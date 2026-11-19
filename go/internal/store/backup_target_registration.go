@@ -317,31 +317,10 @@ func (store *Control) registerInspectedBackupTarget(scope BackupTargetRegistrati
 			return Record{}, OperatorMutationResult{}, err
 		}
 	}
-	revision, generation := int64(1), int64(1)
-	if exists {
-		if existing.Revision == math.MaxInt64 {
-			return Record{}, OperatorMutationResult{}, ErrRevisionConflict
-		}
-		revision = existing.Revision + 1
-		if existing.State != TombstoneState {
-			current, err := targetPublicGeneration(existing)
-			if err != nil || current == math.MaxInt64 {
-				return Record{}, OperatorMutationResult{}, ErrCorruptRecord
-			}
-			generation = current + 1
-		}
-	}
-	body["topologyGeneration"] = generation
-	body["registeredAt"] = time.Unix(context.now, 0).UTC().Format("2006-01-02T15:04:05Z")
-	payload, err := json.Marshal(body)
+	write, err := prepareTargetRegistrationWrite(existing, exists, body, id, context.now)
 	if err != nil {
 		return Record{}, OperatorMutationResult{}, err
 	}
-	write, err := prepareControlRecordWrite(Record{Domain: "target", ID: id, Revision: revision, State: "ACTIVE", Payload: payload}, nil)
-	if err != nil {
-		return Record{}, OperatorMutationResult{}, err
-	}
-	write.targetRegistrationGeneration = generation
 	if err := store.putControlRecordTx(tx, write, context.now); err != nil {
 		return Record{}, OperatorMutationResult{}, err
 	}
@@ -350,16 +329,9 @@ func (store *Control) registerInspectedBackupTarget(scope BackupTargetRegistrati
 		return Record{}, OperatorMutationResult{}, err
 	}
 	result := OperatorMutationResult{Status: OperatorMutationApplied, OperationID: scope.operationID, ActionID: scope.actionID, Actor: scope.actor,
-		Domain: "target", RecordID: id, Revision: revision, State: "ACTIVE", ExecutionEpoch: scope.epoch,
+		Domain: "target", RecordID: id, Revision: write.record.Revision, State: "ACTIVE", ExecutionEpoch: scope.epoch,
 		CutoverRevision: context.cutover.Revision, FencingToken: context.cutover.FencingToken, PayloadDigest: payloadDigest, RequestDigest: digest}
-	if err := insertOperatorMutationTx(tx, result, store.token, context.now); err != nil {
-		return Record{}, OperatorMutationResult{}, err
-	}
-	if _, err := tx.Exec(`INSERT INTO control_target_registration_identity(singleton,signer_public_key,fleet_id,environment)
-        SELECT 1,?,?,? WHERE NOT EXISTS(SELECT 1 FROM control_target_registration_identity)`, store.promotionSignerKey, store.fleetID, store.environment); err != nil {
-		return Record{}, OperatorMutationResult{}, err
-	}
-	if _, err := tx.Exec(`INSERT INTO control_target_registrations(operation_id,target_id,revision,public_generation,observation) VALUES(?,?,?,?,?)`, scope.operationID, id, revision, generation, witness); err != nil {
+	if err := store.insertTargetRegistrationWitnessTx(tx, result, write.targetRegistrationGeneration, witness, context.now); err != nil {
 		return Record{}, OperatorMutationResult{}, err
 	}
 	if len(locationWitness) != 0 {
@@ -374,4 +346,43 @@ func (store *Control) registerInspectedBackupTarget(scope BackupTargetRegistrati
 		return Record{}, OperatorMutationResult{}, err
 	}
 	return write.record, result, nil
+}
+
+func prepareTargetRegistrationWrite(existing Record, exists bool, body map[string]any, id string, now int64) (controlRecordWrite, error) {
+	revision, generation := int64(1), int64(1)
+	if exists {
+		if existing.Revision == math.MaxInt64 {
+			return controlRecordWrite{}, ErrRevisionConflict
+		}
+		revision = existing.Revision + 1
+		if existing.State != TombstoneState {
+			current, err := targetPublicGeneration(existing)
+			if err != nil || current == math.MaxInt64 {
+				return controlRecordWrite{}, ErrCorruptRecord
+			}
+			generation = current + 1
+		}
+	}
+	body["topologyGeneration"] = generation
+	body["registeredAt"] = time.Unix(now, 0).UTC().Format("2006-01-02T15:04:05Z")
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return controlRecordWrite{}, err
+	}
+	write, err := prepareControlRecordWrite(Record{Domain: "target", ID: id, Revision: revision, State: "ACTIVE", Payload: payload}, nil)
+	write.targetRegistrationGeneration = generation
+	return write, err
+}
+
+func (store *Control) insertTargetRegistrationWitnessTx(tx *sql.Tx, result OperatorMutationResult, generation int64, wire []byte, now int64) error {
+	if err := insertOperatorMutationTx(tx, result, store.token, now); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT INTO control_target_registration_identity(singleton,signer_public_key,fleet_id,environment)
+        SELECT 1,?,?,? WHERE NOT EXISTS(SELECT 1 FROM control_target_registration_identity)`, store.promotionSignerKey, store.fleetID, store.environment); err != nil {
+		return err
+	}
+	_, err := tx.Exec(`INSERT INTO control_target_registrations(operation_id,target_id,revision,public_generation,observation) VALUES(?,?,?,?,?)`,
+		result.OperationID, result.RecordID, result.Revision, generation, wire)
+	return err
 }
