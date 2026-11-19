@@ -177,6 +177,12 @@ fn seed_journal_schema(conn: &Connection) {
 /// reader only skips the `immutable=1` URI while the `-wal`/`-shm` side files
 /// exist, and `PRAGMA quick_check` needs the ordinary connection.
 fn seed_control_authority(root: &Path) -> Connection {
+    // A capacity snapshot needs at least one target that actually probes: a
+    // target without a path yields all-null capacity and
+    // `validate_capacity_snapshot` then refuses with
+    // CAPACITY_SNAPSHOT_UNAVAILABLE before the wave state machine is reached.
+    let local_dir = root.join("ext-local");
+    fs::create_dir_all(&local_dir).unwrap();
     fs::create_dir_all(root.join(".backup-control")).unwrap();
     let ctrl = Connection::open(root.join(".backup-control").join("control.sqlite3")).unwrap();
     ctrl.execute_batch("PRAGMA journal_mode=WAL;").unwrap();
@@ -186,6 +192,17 @@ fn seed_control_authority(root: &Path) -> Connection {
          CREATE TABLE IF NOT EXISTS control_authority_head (id INTEGER PRIMARY KEY, authority_generation INTEGER NOT NULL, authority_digest TEXT);
          INSERT OR REPLACE INTO control_authority_head VALUES (1, 1, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
          CREATE TABLE IF NOT EXISTS control_targets (target_id TEXT PRIMARY KEY, payload_json TEXT NOT NULL);",
+    )
+    .unwrap();
+    ctrl.execute(
+        "INSERT OR REPLACE INTO control_targets VALUES ('managed-local', ?)",
+        [json!({
+            "targetId": "managed-local",
+            "kind": "filesystem",
+            "path": local_dir.to_string_lossy(),
+            "enabled": true,
+        })
+        .to_string()],
     )
     .unwrap();
     ctrl
