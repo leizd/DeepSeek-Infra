@@ -244,6 +244,18 @@ fn seed_repair_source_fixture(root: &Path) -> (String, String, String) {
     )
     .unwrap();
 
+    // A filesystem target is only usable when its directory carries the
+    // ownership marker `verify_registered_target_ready` requires. The registry
+    // entries above declare no `targetNonce`, so an empty marker nonce matches
+    // the same empty expectation.
+    for (target_id, dir) in [("t1", &t1_dir), ("t2", &t2_dir)] {
+        fs::write(
+            dir.join(".deepseek-infra-backup-target.json"),
+            serde_json::to_vec(&json!({"targetId": target_id, "targetNonce": ""})).unwrap(),
+        )
+        .unwrap();
+    }
+
     fs::create_dir_all(root.join(".backup-policies")).unwrap();
     fs::write(
         root.join(".backup-policies").join("pol_rep.json"),
