@@ -168,7 +168,30 @@ fn seed_journal_schema(conn: &Connection) {
     .unwrap();
 }
 
-fn seed_repair_source_fixture(root: &Path) -> (String, String, String) {
+/// Seed the control database with a readable authority head.
+///
+/// `build_fresh_state_bundle_readonly` refuses with
+/// `AUTHORITY_OBSERVATION_UNAVAILABLE` unless `control_db_is_healthy` passes and
+/// `control_authority_head` yields a plain sha256, so any test that reaches
+/// `/waves/admit` needs this. The connection is returned so it stays open: the
+/// reader only skips the `immutable=1` URI while the `-wal`/`-shm` side files
+/// exist, and `PRAGMA quick_check` needs the ordinary connection.
+fn seed_control_authority(root: &Path) -> Connection {
+    fs::create_dir_all(root.join(".backup-control")).unwrap();
+    let ctrl = Connection::open(root.join(".backup-control").join("control.sqlite3")).unwrap();
+    ctrl.execute_batch("PRAGMA journal_mode=WAL;").unwrap();
+    ctrl.execute_batch(
+        "CREATE TABLE IF NOT EXISTS control_boot_state (id INTEGER PRIMARY KEY, boot_epoch INTEGER NOT NULL, recovery_state TEXT NOT NULL, reason TEXT);
+         INSERT OR REPLACE INTO control_boot_state VALUES (1, 1, 'active', NULL);
+         CREATE TABLE IF NOT EXISTS control_authority_head (id INTEGER PRIMARY KEY, authority_generation INTEGER NOT NULL, authority_digest TEXT);
+         INSERT OR REPLACE INTO control_authority_head VALUES (1, 1, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+         CREATE TABLE IF NOT EXISTS control_targets (target_id TEXT PRIMARY KEY, payload_json TEXT NOT NULL);",
+    )
+    .unwrap();
+    ctrl
+}
+
+fn seed_repair_source_fixture(root: &Path) -> (String, String, String, Connection) {
     let t1_dir = root.join("ext-t1");
     let t2_dir = root.join("ext-t2");
     fs::create_dir_all(&t1_dir).unwrap();
@@ -274,16 +297,7 @@ fn seed_repair_source_fixture(root: &Path) -> (String, String, String) {
     )
     .unwrap();
 
-    fs::create_dir_all(root.join(".backup-control")).unwrap();
-    let ctrl = Connection::open(root.join(".backup-control").join("control.sqlite3")).unwrap();
-    ctrl.execute_batch(
-        "CREATE TABLE control_boot_state (id INTEGER PRIMARY KEY, boot_epoch INTEGER NOT NULL, recovery_state TEXT NOT NULL, reason TEXT);
-         INSERT INTO control_boot_state VALUES (1, 1, 'active', NULL);
-         CREATE TABLE control_authority_head (id INTEGER PRIMARY KEY, authority_generation INTEGER NOT NULL, authority_digest TEXT);
-         INSERT INTO control_authority_head VALUES (1, 1, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
-         CREATE TABLE control_targets (target_id TEXT PRIMARY KEY, payload_json TEXT NOT NULL);",
-    )
-    .unwrap();
+    let ctrl = seed_control_authority(root);
     ctrl.execute(
         "INSERT INTO control_targets VALUES ('t1', ?)",
         [t1_payload.to_string()],
@@ -295,14 +309,12 @@ fn seed_repair_source_fixture(root: &Path) -> (String, String, String) {
     )
     .unwrap();
 
-    // Readers open the control database read-only, and `open_readonly_sqlite`
-    // uses `immutable=1` when no `-wal`/`-shm` side files exist. Fold the write
-    // log back into the main file first so the authority head seeded above is
-    // visible to those readers instead of sitting in a WAL they cannot see.
-    ctrl.execute_batch("PRAGMA wal_checkpoint(TRUNCATE); PRAGMA journal_mode=DELETE;")
-        .unwrap();
-    drop(ctrl);
-
+    // Readers open the control database read-only. `open_readonly_sqlite` picks
+    // `immutable=1` only when no `-wal`/`-shm` side files exist; with them it
+    // opens a normal read-only connection. `PRAGMA quick_check`, which
+    // `control_db_is_healthy` relies on before it reads the authority head,
+    // needs the ordinary path, so keep the write log in place rather than
+    // folding it away.
     fs::create_dir_all(root.join(".backup-dr")).unwrap();
     let dr = Connection::open(root.join(".backup-dr").join("evidence.sqlite3")).unwrap();
     dr.execute_batch(
@@ -369,7 +381,12 @@ fn seed_repair_source_fixture(root: &Path) -> (String, String, String) {
         .unwrap();
     }
 
-    (obj_digest, obj_rel, t2_dir.to_string_lossy().into_owned())
+    (
+        obj_digest,
+        obj_rel,
+        t2_dir.to_string_lossy().into_owned(),
+        ctrl,
+    )
 }
 
 fn seed_wave_schedule_and_reservations(
@@ -749,7 +766,7 @@ async fn slice7c_execute_dr_drill_repair_and_reconciling_effect_unknown() {
     // 2. End-to-end CREATE_REPAIR_JOB ciphertext streaming + Receipt/Commit v4 + DR ledger + scoped risk clear
     {
         let root = tempfile::tempdir().unwrap();
-        let (_obj_dig, obj_rel, t2_dir_str) = seed_repair_source_fixture(root.path());
+        let (_obj_dig, obj_rel, t2_dir_str, _ctrl) = seed_repair_source_fixture(root.path());
         let (_static_root, _env, app) = build_app(root.path(), Some("python_disabled"));
 
         let (st_plan, plan) = post_json(
@@ -796,6 +813,7 @@ async fn slice7c_waves_admit_stale_replan_predecessor_guard_and_full_run_settlem
     let _lock = EnvLock::acquire();
     let root = tempfile::tempdir().unwrap();
     let (_static_root, _env, app) = build_app(root.path(), Some("python_disabled"));
+    let _ctrl = seed_control_authority(root.path());
 
     // Materialize a START_DR_DRILL action via POST /plan
     let (st_plan, plan) = post_json(
