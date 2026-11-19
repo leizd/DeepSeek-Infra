@@ -353,6 +353,16 @@ pub(crate) fn probe_target_capacity_with_probe(
         }
     }
 
+    // `backup_capacity.get_target_capacity(probe=False)` consults the persisted
+    // observation first and does not branch on the target kind or require a
+    // configured quota, so a filesystem target with a recorded observation must
+    // see it here too.
+    if !probe {
+        if let Some(obs) = target_capacity_observation(control_conn, target_id)? {
+            return Ok(obs);
+        }
+    }
+
     let quota_opt = target
         .get("quotaBytes")
         .and_then(Value::as_i64)
@@ -360,12 +370,6 @@ pub(crate) fn probe_target_capacity_with_probe(
         .map(|quota| quota as u64);
 
     if let Some(quota) = quota_opt {
-        // `backup_capacity.get_target_capacity(probe=False)` consults the
-        // persisted observation first and does not branch on the target kind,
-        // so a non-s3 target with a recorded observation must see it too.
-        if let Some(obs) = target_capacity_observation(control_conn, target_id)? {
-            return Ok(obs);
-        }
         if kind == "s3" {
             return Ok(json!({
                 "targetId": target_id,
