@@ -70,3 +70,84 @@ fn target_marker_files_accept_search_only_ancestors() {
     fs::set_permissions(&parent, permissions).unwrap();
     assert_eq!(observed.unwrap(), Some(b"original".to_vec()));
 }
+
+#[cfg(unix)]
+#[test]
+fn target_marker_files_exclusive_publication_releases_only_complete_bytes() {
+    use std::{fs, os::unix::fs::MetadataExt as _};
+
+    let root = tempfile::tempdir().unwrap();
+    let directory = MarkerDirectory::open(&root.path().canonicalize().unwrap()).unwrap();
+    let marker = root.path().join(MARKER_NAME);
+    let approved = || {
+        if let Ok(metadata) = fs::metadata(&marker) {
+            assert_eq!(metadata.mode() & 0o777, 0);
+            assert_eq!(metadata.len(), b"complete marker".len() as u64);
+            if rustix::process::geteuid().as_raw() != 0 {
+                assert_eq!(
+                    directory.marker(4096).unwrap_err().kind(),
+                    io::ErrorKind::PermissionDenied
+                );
+            }
+        }
+        Ok(())
+    };
+    directory
+        .publish_exclusive_marker(b"complete marker", approved)
+        .unwrap();
+    assert_eq!(fs::metadata(&marker).unwrap().mode() & 0o777, 0o600);
+    assert_eq!(fs::read(&marker).unwrap(), b"complete marker");
+    assert_eq!(
+        directory
+            .publish_exclusive_marker(b"replacement", || Ok(()))
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::AlreadyExists
+    );
+    assert_eq!(fs::read(&marker).unwrap(), b"complete marker");
+}
+
+#[cfg(unix)]
+#[test]
+fn target_marker_files_exclusive_publication_leaves_interruption_unresolved() {
+    use std::{fs, os::unix::fs::MetadataExt as _};
+
+    let root = tempfile::tempdir().unwrap();
+    let directory = MarkerDirectory::open(&root.path().canonicalize().unwrap()).unwrap();
+    let marker = root.path().join(MARKER_NAME);
+    let expired_before_visibility = || {
+        if marker.exists() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "permit expired",
+            ));
+        }
+        Ok(())
+    };
+    assert_eq!(
+        directory
+            .publish_exclusive_marker(b"original", expired_before_visibility)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::PermissionDenied
+    );
+    let before = fs::metadata(&marker).unwrap();
+    assert_eq!(before.mode() & 0o777, 0);
+    if rustix::process::geteuid().as_raw() != 0 {
+        assert_eq!(
+            directory.marker(4096).unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+    }
+    assert_eq!(
+        directory
+            .publish_exclusive_marker(b"new claim", || Ok(()))
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::AlreadyExists
+    );
+    let after = fs::metadata(&marker).unwrap();
+    assert_eq!(before.ino(), after.ino());
+    assert_eq!(before.mode(), after.mode());
+    assert_eq!(before.len(), after.len());
+}

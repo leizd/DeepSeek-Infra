@@ -130,8 +130,12 @@ fn read_effect(
         .ok_or_else(effect_unknown)?;
     #[cfg(unix)]
     {
-        // A worker can exit after publishing the name and before syncing it.
-        // Finish the directory sync and confirm the marker is still observable.
+        // Android exclusive creation can release the mode before syncing it.
+        #[cfg(target_os = "android")]
+        directory
+            .sync_observed_marker_file(&bytes)
+            .map_err(|_| effect_unknown())?;
+        // A worker can exit before syncing the published directory entry.
         directory.sync().map_err(|_| effect_unknown())?;
         if directory
             .marker(wire::MARKER_INITIALIZATION_MAX_JSON)

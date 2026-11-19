@@ -15451,3 +15451,22 @@ another dispatch or publish the marker again. The real TLS process test
 covers a lost response, restart under a successor writer, removal of the live
 marker, legacy recovery and signature corruption. The original coverage and
 exact-source cloud and platform gates apply.
+
+### 2026-11-19 public marker publication on older Android kernels
+
+On 109ad4a, Android dispatch 44433915260 ran all 16 instrumentation cases on
+each emulator. API 26, 28, 30 and 34 passed. API 24 had one failure in
+filesystem target registration. Kernel 3.10 reached the hard-link path and
+the app UID's audit log denied linking the staged public marker file.
+
+On Android's local ext filesystem, when the staged publication is denied
+permission, the worker can reserve the original marker name exclusively
+using a directory-relative file descriptor. The new inode starts without
+access permissions. Rust syncs the complete original bytes, rechecks the
+original permit and pinned directory, sets owner read/write permissions on
+that inode and syncs the file and directory. Existing markers and concurrent
+reservations cannot be replaced. A reserved name is visible to metadata
+lookups before its contents are readable. An interrupted reservation remains
+unresolved and cannot authorize another publication. Ordinary readers must
+never receive partial bytes as a valid marker. The real API 24 package
+workload is required to verify registration, restart and replay.

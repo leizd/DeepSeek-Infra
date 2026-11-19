@@ -159,6 +159,10 @@ impl MarkerDirectory {
     }
 
     pub(super) fn marker(&self, maximum: usize) -> io::Result<Option<Vec<u8>>> {
+        Ok(self.read_marker(maximum)?.map(|(_, bytes)| bytes))
+    }
+
+    fn read_marker(&self, maximum: usize) -> io::Result<Option<(File, Vec<u8>)>> {
         let file = match self.open_marker() {
             Ok(file) => file,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -168,12 +172,22 @@ impl MarkerDirectory {
         if !before.is_file() || before.len() > maximum as u64 {
             return Err(invalid_directory());
         }
+        #[cfg(target_os = "android")]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+            if before.mode() & 0o777 == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "backup target marker publication is incomplete",
+                ));
+            }
+        }
         let mut bytes = Vec::new();
-        file.take(maximum as u64 + 1).read_to_end(&mut bytes)?;
+        (&file).take(maximum as u64 + 1).read_to_end(&mut bytes)?;
         if bytes.len() > maximum || bytes.len() as u64 != before.len() {
             return Err(invalid_directory());
         }
-        Ok(Some(bytes))
+        Ok(Some((file, bytes)))
     }
 
     #[cfg(unix)]
@@ -181,12 +195,23 @@ impl MarkerDirectory {
         self.handle.sync_all()
     }
 
+    #[cfg(target_os = "android")]
+    pub(super) fn sync_observed_marker_file(&self, expected: &[u8]) -> io::Result<()> {
+        let (file, current) = self
+            .read_marker(expected.len())?
+            .ok_or_else(invalid_directory)?;
+        if current.as_slice() != expected {
+            return Err(invalid_directory());
+        }
+        file.sync_all()
+    }
+
     #[cfg(unix)]
     pub(super) fn create_marker(
         &self,
         bytes: &[u8],
         operation_digest: &[u8; 32],
-        before_publish: impl FnOnce() -> io::Result<()>,
+        before_publish: impl Fn() -> io::Result<()>,
     ) -> io::Result<()> {
         use rustix::fs::{AtFlags, Mode, OFlags, fstat, mkdirat, openat, statat, unlinkat};
 
@@ -221,7 +246,21 @@ impl MarkerDirectory {
             file.write_all(bytes)?;
             file.sync_all()?;
             before_publish()?;
-            self.publish_staged(&staging)?;
+            let publication = self.publish_staged(&staging);
+            #[cfg(target_os = "android")]
+            let publication = match publication {
+                // The ext filesystem family enforces Unix inode permissions.
+                // Older Android kernels can lack no-replace rename while the
+                // app is prohibited from creating hard links.
+                Err(error)
+                    if error.kind() == io::ErrorKind::PermissionDenied
+                        && rustix::fs::fstatfs(&self.handle)?.f_type == 0xef53 =>
+                {
+                    self.publish_exclusive_marker(bytes, &before_publish)
+                }
+                result => result,
+            };
+            publication?;
             self.sync()
         })();
         let _ = unlinkat(&staging, "marker", AtFlags::empty());
@@ -235,6 +274,36 @@ impl MarkerDirectory {
             let _ = unlinkat(&self.handle, staging_name.as_str(), AtFlags::REMOVEDIR);
         }
         result
+    }
+
+    #[cfg(any(target_os = "android", all(unix, test)))]
+    fn publish_exclusive_marker(
+        &self,
+        bytes: &[u8],
+        before_publish: impl Fn() -> io::Result<()>,
+    ) -> io::Result<()> {
+        use rustix::fs::{Mode, OFlags, fchmod, openat};
+        use std::os::unix::fs::MetadataExt as _;
+
+        before_publish()?;
+        let mut file: File = openat(
+            &self.handle,
+            MARKER_NAME,
+            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )?
+        .into();
+        // The name belongs to this operation immediately, but ordinary
+        // readers cannot access its contents until the complete bytes are
+        // durable. An interrupted reservation is never replaced or removed.
+        if file.metadata()?.mode() & 0o777 != 0 {
+            return Err(invalid_directory());
+        }
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        before_publish()?;
+        fchmod(&file, Mode::RUSR | Mode::WUSR)?;
+        file.sync_all()
     }
 
     #[cfg(unix)]
