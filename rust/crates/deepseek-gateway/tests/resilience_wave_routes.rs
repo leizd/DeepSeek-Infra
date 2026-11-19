@@ -510,7 +510,7 @@ async fn slice7c_write_gate_validation_and_blocked_safety_floor() {
             "/api/workspace/resilience/waves/run",
         ] {
             let (st_get, _) = call_json(&app, "GET", uri, None).await;
-            assert_eq!(st_get, StatusCode::METHOD_NOT_ALLOWED);
+            assert_eq!(st_get, StatusCode::METHOD_NOT_ALLOWED, "uri={uri}");
 
             let (st, body) = post_json(&app, uri, &json!({})).await;
             assert_eq!(st, StatusCode::CONFLICT, "{uri}: {body}");
