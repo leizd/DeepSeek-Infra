@@ -329,6 +329,7 @@ message FilesystemBackupTargetLocationReceipt {
 service BackupTargetInspection {
   rpc Inspect(InspectFilesystemBackupTargetRequest) returns (FilesystemBackupTargetInspectionReceipt);
   rpc ProbeLocation(ProbeFilesystemBackupTargetLocationRequest) returns (FilesystemBackupTargetLocationReceipt);
+  rpc InspectS3(InspectS3BackupTargetRequest) returns (S3BackupTargetInspectionReceipt);
 }
 
 // The Go target registry reserves a single operation before Rust can prepare an
@@ -404,4 +405,45 @@ service BackupTargetMarkerControl {
   // Only the initial dispatch can acquire this permit. A lost or expired
   // permit leaves the original operation subject to read-only reconciliation.
   rpc BeginDispatch(TargetMarkerDispatchRequest) returns (TargetMarkerDispatchPermit);
+}
+
+// target_identity binds the configured Rust endpoint, region, bucket and prefix.
+// An inspection request carries no endpoint, credentials or write permit.
+message InspectS3BackupTargetRequest {
+  uint32 schema_version = 1;
+  deepseek.common.v1.ActionFence fence = 2;
+  string operation_id = 3;
+  uint64 writer_fencing_token = 4;
+  bytes target_identity = 5;
+}
+
+message S3BackupTargetObjectObservation {
+  bytes json = 1;
+  bytes sha256 = 2;
+  string etag = 3;
+  string version_id = 4;
+}
+
+message S3BackupTargetObservation {
+  uint32 schema_version = 1;
+  deepseek.common.v1.ActionFence fence = 2;
+  string operation_id = 3;
+  uint64 writer_fencing_token = 4;
+  bytes target_identity = 5;
+  string bucket = 6;
+  string prefix = 7;
+  // An absent member records a read of the current provider key. It cannot
+  // settle an uncertain write or authorize another attempt.
+  S3BackupTargetObjectObservation identity = 8;
+  S3BackupTargetObjectObservation head = 9;
+  int64 observed_at_unix = 10;
+  string fleet_id = 11;
+  string environment = 12;
+}
+
+message S3BackupTargetInspectionReceipt {
+  uint32 schema_version = 1;
+  S3BackupTargetObservation observation = 2;
+  bytes signature = 3;
+  string signer_public_key = 4;
 }

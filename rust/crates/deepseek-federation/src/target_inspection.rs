@@ -4,13 +4,37 @@ use deepseek_protocol::{
     backup_target_inspection as wire,
     generated::deepseek::action::v1::{
         FilesystemBackupTargetLocationObservation, FilesystemBackupTargetObservation,
-        TargetMarkerClaim, TargetMarkerEffect, TargetMarkerPreparation, TargetMarkerReceipt,
+        S3BackupTargetObservation, TargetMarkerClaim, TargetMarkerEffect, TargetMarkerPreparation,
+        TargetMarkerReceipt,
     },
 };
 use prost::Message as _;
 use sha2::{Digest as _, Sha256};
 
 impl ControlSigningKey {
+    pub fn sign_s3_backup_target_observation(
+        &self,
+        observation: &S3BackupTargetObservation,
+    ) -> Result<Vec<u8>, FederationIdentityError> {
+        if !wire::valid_s3_observation_shape(observation)
+            || self.binding["fleetId"].as_str() != Some(observation.fleet_id.as_str())
+            || self.binding["environment"].as_str() != Some(observation.environment.as_str())
+            || [&observation.identity, &observation.head]
+                .into_iter()
+                .flatten()
+                .any(|object| {
+                    object.sha256 != Sha256::digest(&object.json).as_slice()
+                        || !serde_json::from_slice::<serde_json::Value>(&object.json)
+                            .is_ok_and(|value| value.is_object())
+                })
+        {
+            return Err(error("BACKUP_TARGET_S3_OBSERVATION_INVALID"));
+        }
+        let mut message = wire::S3_SIGNATURE_DOMAIN.to_vec();
+        message.extend(observation.encode_to_vec());
+        Ok(self.key.sign(&message).to_bytes().to_vec())
+    }
+
     pub fn sign_backup_target_marker_effect(
         &self,
         claim: &TargetMarkerClaim,

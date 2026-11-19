@@ -177,6 +177,8 @@ func TestRustWorkerPromotedControlWritesAndRecoversRealProviders(t *testing.T) {
 			if strconv.Itoa(index) == os.Getenv("DEEPSEEK_TEST_VERSIONED_PROVIDER_INDEX") && version == "" {
 				t.Fatal("versioned provider returned no version")
 			}
+			verifyIsolatedS3TargetInspection(t, ctx, control, coordinator, client, request, endpoint,
+				ControlSignerBinding{PublicKey: public, FleetID: "fleet-a", Environment: "test"}, writerFence)
 			// Exercise the renewable action/resource claim through the same Rust
 			// custody path, without a caller-supplied grant or Go private key.
 			leased := proto.Clone(request).(*actionv1.StorageMutationRequest)
@@ -244,6 +246,83 @@ func TestRustWorkerPromotedControlWritesAndRecoversRealProviders(t *testing.T) {
 			t.Logf("real Go control/provider %d: durable promotion, Rust key custody and signed epoch/grant, TLS, SUCCEEDED, forced restart, unchanged object version", index)
 		})
 	}
+}
+
+func verifyIsolatedS3TargetInspection(t *testing.T, ctx context.Context, control *store.Control, coordinator *action.Coordinator,
+	client *Client, template *actionv1.StorageMutationRequest, endpoint string, binding ControlSignerBinding, writerFence int64) {
+	t.Helper()
+	target, err := hex.DecodeString(template.TargetIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const operation = "target-inspect-s3-provider-layout"
+	request := &actionv1.InspectS3BackupTargetRequest{SchemaVersion: 1, OperationId: operation,
+		Fence: &commonv1.ActionFence{ActionId: operation, ExecutionEpoch: 1}, WriterFencingToken: uint64(writerFence),
+		TargetIdentity: target}
+	rejected := proto.Clone(request).(*actionv1.InspectS3BackupTargetRequest)
+	rejected.TargetIdentity[0] ^= 1
+	if _, err := client.InspectS3BackupTarget(ctx, rejected, binding); err == nil {
+		t.Fatal("Rust inspected a different provider placement")
+	}
+	read := func() *actionv1.S3BackupTargetObservation {
+		t.Helper()
+		receipt, err := client.InspectS3BackupTarget(ctx, request, binding)
+		if err != nil {
+			t.Fatalf("real provider inspection: %v", err)
+		}
+		return receipt.Observation
+	}
+	empty := read()
+	if empty.Bucket != template.Bucket || empty.Prefix != template.Prefix || empty.Identity != nil || empty.Head != nil {
+		t.Fatal("fresh provider prefix did not return signed absence of both keys")
+	}
+
+	const incarnation = "inc_abcdef1234567890"
+	put := func(name, key string, document map[string]any) {
+		t.Helper()
+		raw, err := json.MarshalIndent(document, "", "  ")
+		if err != nil {
+			t.Fatal(err)
+		}
+		payload := append(raw, '\n')
+		digest := sha256.Sum256(payload)
+		command := proto.Clone(template).(*actionv1.StorageMutationRequest)
+		command.Fence = &commonv1.ActionFence{ActionId: name, ExecutionEpoch: 1}
+		command.OperationId, command.RequestId, command.Nonce = randomHex64(t), randomHex64(t), randomHex64(t)
+		command.ObjectKey, command.Payload, command.ExpectedLength = key, payload, uint64(len(payload))
+		command.PayloadDigest = hex.EncodeToString(digest[:])
+		if err := control.Put(store.Record{Domain: "action", ID: name, Revision: 1, ExecutionEpoch: 1, State: "PENDING"}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := coordinator.ExecuteStorageAction(ctx, name, command); err != nil {
+			t.Fatalf("seed actual provider metadata: %v", err)
+		}
+	}
+	const identityKey, headKey = "control/identity.json", "control/head.json"
+	put("go-provider-layout-identity", identityKey, map[string]any{
+		"schemaVersion": 3, "targetId": "target_abcdef123456", "kind": "s3", "bucket": template.Bucket,
+		"prefix": template.Prefix, "incarnationId": incarnation, "ownerInstallationId": "inst_fixture",
+		"createdAt": "2026-11-19T00:00:00Z",
+	})
+	partial := read()
+	if partial.Identity == nil || partial.Head != nil {
+		t.Fatal("the provider identity and absent head were not observed separately")
+	}
+	put("go-provider-layout-head", headKey, map[string]any{"schemaVersion": 1, "targetGeneration": 0,
+		"latestCommitHash": strings.Repeat("0", 64), "incarnationId": incarnation})
+	complete := read()
+	for key, object := range map[string]*actionv1.S3BackupTargetObjectObservation{identityKey: complete.Identity, headKey: complete.Head} {
+		status, body, etag, version := readIsolatedS3(t, endpoint, template.Bucket, template.Prefix, key)
+		digest := sha256.Sum256(body)
+		if status != http.StatusOK || object == nil || !bytes.Equal(object.Json, body) ||
+			!bytes.Equal(object.Sha256, digest[:]) || object.Etag != etag || object.VersionId != version {
+			t.Fatalf("signed %s does not match the actual provider bytes and version", key)
+		}
+	}
+	if _, found, err := control.Get("action", operation); err != nil || found {
+		t.Fatalf("the observation was recorded as an action mutation: found=%v err=%v", found, err)
+	}
+	t.Log("legacy S3 layout bytes, ETags and versions verified through the real Rust custody path")
 }
 
 func provisionNativeControlSigner(t *testing.T, workerBinary, root string) (string, string, string) {

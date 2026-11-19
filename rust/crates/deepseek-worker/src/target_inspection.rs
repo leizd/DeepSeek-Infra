@@ -9,8 +9,8 @@ use deepseek_protocol::{
         BackupTargetLocationState, FilesystemBackupTargetInspectionReceipt,
         FilesystemBackupTargetLocationObservation, FilesystemBackupTargetLocationReceipt,
         FilesystemBackupTargetObservation, InspectFilesystemBackupTargetRequest,
-        ProbeFilesystemBackupTargetLocationRequest,
-        backup_target_inspection_server::BackupTargetInspection,
+        InspectS3BackupTargetRequest, ProbeFilesystemBackupTargetLocationRequest,
+        S3BackupTargetInspectionReceipt, backup_target_inspection_server::BackupTargetInspection,
     },
 };
 use sha2::{Digest as _, Sha256};
@@ -28,6 +28,9 @@ const MAX_MARKER_BYTES: usize = wire::MAX_MARKER_BYTES;
 mod marker;
 #[path = "target_path_resolution.rs"]
 mod path_resolution;
+#[cfg(feature = "s3")]
+#[path = "target_s3_observation.rs"]
+mod s3_observation;
 
 #[derive(Debug)]
 pub(crate) struct LocationPolicy {
@@ -334,6 +337,23 @@ impl WorkerRpcService {
 
 #[tonic::async_trait]
 impl BackupTargetInspection for WorkerRpcService {
+    async fn inspect_s3(
+        &self,
+        request: Request<InspectS3BackupTargetRequest>,
+    ) -> Result<Response<S3BackupTargetInspectionReceipt>, Status> {
+        self.target_inspection_caller(&request)?;
+        #[cfg(feature = "s3")]
+        {
+            self.inspect_configured_s3_target(request).await
+        }
+        #[cfg(not(feature = "s3"))]
+        {
+            Err(Status::unavailable(
+                "BACKUP_TARGET_S3_TRANSPORT_UNAVAILABLE",
+            ))
+        }
+    }
+
     async fn inspect(
         &self,
         request: Request<InspectFilesystemBackupTargetRequest>,

@@ -222,7 +222,7 @@ pub struct WorkerRpcService {
     pub(crate) media_journal: Option<Arc<Mutex<crate::media_journal::MediaJournal>>>,
     pub(crate) target_inspection: Option<Arc<crate::target_inspection::LocationPolicy>>,
     #[cfg(feature = "s3")]
-    transport: Option<Arc<deepseek_storage::s3::S3Transport>>,
+    pub(crate) transport: Option<Arc<deepseek_storage::s3::S3Transport>>,
 }
 
 impl std::fmt::Debug for WorkerRpcService {

@@ -73,3 +73,27 @@ func (client *Client) ProbeFilesystemBackupTargetLocation(ctx context.Context, i
 	}
 	return proto.Clone(response).(*actionv1.FilesystemBackupTargetLocationReceipt), nil
 }
+
+func (client *Client) InspectS3BackupTarget(ctx context.Context, input *actionv1.InspectS3BackupTargetRequest, binding ControlSignerBinding) (*actionv1.S3BackupTargetInspectionReceipt, error) {
+	if ctx == nil || store.ValidateBackupTargetS3Request(input) != nil || !validObservationBinding(binding) {
+		return nil, ErrTargetInspectionResponse
+	}
+	if client == nil || !client.tlsSecured || !client.bearerAttached || client.targetInspection == nil {
+		return nil, ErrWorkerTLSRequired
+	}
+	request := proto.Clone(input).(*actionv1.InspectS3BackupTargetRequest)
+	bounded, cancel := context.WithTimeout(ctx, targetObservationTimeout)
+	defer cancel()
+	outgoing, err := client.outgoingContext(bounded, "")
+	if err != nil {
+		return nil, err
+	}
+	response, err := client.targetInspection.InspectS3(outgoing, request, grpc.MaxCallRecvMsgSize(store.MaxBackupTargetS3ReceiptBytes))
+	if err != nil {
+		return nil, fmt.Errorf("S3 target inspection transport: %w", err)
+	}
+	if err := store.VerifyBackupTargetS3Receipt(request, response, observationContext(binding)); err != nil {
+		return nil, errors.Join(ErrTargetInspectionResponse, err)
+	}
+	return proto.Clone(response).(*actionv1.S3BackupTargetInspectionReceipt), nil
+}

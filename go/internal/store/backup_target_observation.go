@@ -24,9 +24,14 @@ type BackupTargetObservationContext struct {
 }
 
 func validBackupTargetReadRequest(version uint32, fence *commonv1.ActionFence, operation, path string, writer uint64, messages ...proto.Message) bool {
+	return validBackupTargetReadScope(version, fence, operation, writer, messages...) &&
+		filepath.IsAbs(path) && len(path) <= 32768 && !strings.ContainsRune(path, 0)
+}
+
+func validBackupTargetReadScope(version uint32, fence *commonv1.ActionFence, operation string, writer uint64, messages ...proto.Message) bool {
 	return version == 1 && internalprotocol.ValidateFence(fence) == nil && fence.ExecutionEpoch <= math.MaxInt64 &&
 		operation == fence.ActionId && strings.HasPrefix(operation, targetInspectionOperationPrefix) && len(operation) <= 128 &&
-		writer > 0 && writer <= math.MaxInt64 && filepath.IsAbs(path) && len(path) <= 32768 && !strings.ContainsRune(path, 0) && nativeKnown(messages...)
+		writer > 0 && writer <= math.MaxInt64 && nativeKnown(messages...)
 }
 
 func ValidateBackupTargetInspectionRequest(request *actionv1.InspectFilesystemBackupTargetRequest) error {

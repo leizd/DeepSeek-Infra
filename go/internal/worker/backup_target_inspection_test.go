@@ -38,6 +38,7 @@ type observationPeer struct {
 	state           actionv1.BackupTargetLocationState
 	alterInspection func(*actionv1.FilesystemBackupTargetInspectionReceipt)
 	alterLocation   func(*actionv1.FilesystemBackupTargetLocationReceipt)
+	alterS3         func(*actionv1.S3BackupTargetInspectionReceipt)
 }
 
 func (peer *observationPeer) authorize(ctx context.Context) error {
@@ -95,6 +96,82 @@ func (peer *observationPeer) ProbeLocation(ctx context.Context, request *actionv
 		peer.alterLocation(receipt)
 	}
 	return receipt, nil
+}
+
+func (peer *observationPeer) InspectS3(ctx context.Context, request *actionv1.InspectS3BackupTargetRequest) (*actionv1.S3BackupTargetInspectionReceipt, error) {
+	if err := peer.authorize(ctx); err != nil {
+		return nil, err
+	}
+	o := &actionv1.S3BackupTargetObservation{SchemaVersion: 1, Fence: request.Fence, OperationId: request.OperationId,
+		WriterFencingToken: request.WriterFencingToken, TargetIdentity: request.TargetIdentity, Bucket: "isolated-target",
+		Prefix: "test/prefix", ObservedAtUnix: time.Now().Unix(), FleetId: peer.binding.FleetID, Environment: peer.binding.Environment}
+	if !peer.absent {
+		body := []byte("{\"targetId\":\"target_fixture\"}\n")
+		digest := sha256.Sum256(body)
+		o.Identity = &actionv1.S3BackupTargetObjectObservation{Json: body, Sha256: digest[:], Etag: "\"fixture\"", VersionId: "v1"}
+	}
+	wire, _ := proto.MarshalOptions{Deterministic: true}.Marshal(o)
+	receipt := &actionv1.S3BackupTargetInspectionReceipt{SchemaVersion: 1, Observation: o, SignerPublicKey: peer.binding.PublicKey,
+		Signature: ed25519.Sign(peer.private, append([]byte("deepseek-infra:backup-target-s3-observation-v1\x00"), wire...))}
+	if peer.alterS3 != nil {
+		peer.alterS3(receipt)
+	}
+	return receipt, nil
+}
+
+func TestS3BackupTargetInspectionRequiresTLSAndAuthenticProviderBytes(t *testing.T) {
+	public, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding := ControlSignerBinding{PublicKey: base64.RawURLEncoding.EncodeToString(public), FleetID: "fleet-fixture", Environment: "test"}
+	op := "target-inspect-s3-fixture"
+	placement := sha256.Sum256([]byte("isolated test placement"))
+	request := &actionv1.InspectS3BackupTargetRequest{SchemaVersion: 1, OperationId: op,
+		Fence: &commonv1.ActionFence{ActionId: op, ExecutionEpoch: 2}, WriterFencingToken: 9, TargetIdentity: placement[:]}
+	ctx := context.Background()
+	if _, err := (&Client{}).InspectS3BackupTarget(ctx, request, binding); !errors.Is(err, ErrWorkerTLSRequired) {
+		t.Fatal(err)
+	}
+	peer := &observationPeer{private: private, binding: binding}
+	client := targetObservationTLSClient(t, peer)
+	if _, err := client.InspectS3BackupTarget(ctx, request, ControlSignerBinding{}); !errors.Is(err, ErrTargetInspectionResponse) {
+		t.Fatal(err)
+	}
+	receipt, err := client.InspectS3BackupTarget(ctx, request, binding)
+	if err != nil || receipt.GetObservation().GetIdentity().GetVersionId() != "v1" ||
+		receipt.GetObservation().GetHead() != nil || peer.calls.Load() != 1 {
+		t.Fatalf("valid metadata could not be inspected: %v", err)
+	}
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := client.InspectS3BackupTarget(cancelled, request, binding); status.Code(err) != codes.Canceled {
+		t.Fatalf("transport did not preserve cancellation: %v", err)
+	}
+	conflicting := metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+tlsTestSecret)
+	if _, err := client.InspectS3BackupTarget(conflicting, request, binding); !errors.Is(err, ErrWorkerTLSConfigInvalid) {
+		t.Fatalf("conflicting transport credentials accepted: %v", err)
+	}
+	for name, alter := range map[string]func(*actionv1.S3BackupTargetInspectionReceipt){
+		"placement": func(value *actionv1.S3BackupTargetInspectionReceipt) { value.Observation.TargetIdentity[0] ^= 1 },
+		"body":      func(value *actionv1.S3BackupTargetInspectionReceipt) { value.Observation.Identity.Json[1] ^= 1 },
+		"weak-etag": func(value *actionv1.S3BackupTargetInspectionReceipt) {
+			value.Observation.Identity.Etag = "W/\"fixture\""
+		},
+		"version": func(value *actionv1.S3BackupTargetInspectionReceipt) {
+			value.Observation.Identity.VersionId = "invalid\n"
+		},
+		"future":    func(value *actionv1.S3BackupTargetInspectionReceipt) { value.Observation.ObservedAtUnix += 120 },
+		"signature": func(value *actionv1.S3BackupTargetInspectionReceipt) { value.Signature[0] ^= 1 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			peer := &observationPeer{private: private, binding: binding, alterS3: alter}
+			client := targetObservationTLSClient(t, peer)
+			if _, err := client.InspectS3BackupTarget(ctx, request, binding); !errors.Is(err, ErrTargetInspectionResponse) {
+				t.Fatalf("invalid S3 read evidence was accepted: %v", err)
+			}
+		})
+	}
 }
 
 func targetObservationTLSClient(t *testing.T, peer *observationPeer) *Client {

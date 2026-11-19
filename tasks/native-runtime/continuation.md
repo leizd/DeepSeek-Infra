@@ -15483,3 +15483,16 @@ The regression stops the gRPC server first, then requires successful
 shutdown notification, a closed listener and release of the SQLite
 writer. The full-workspace coverage gate binds its report to this source
 and uses the original threshold.
+
+### 2026-11-19 S3 backup target metadata observations
+
+The retained registration oracle identified the provider's identity and head
+objects and two identity acknowledgement-loss cases. The native reader now
+uses the configured Rust placement to read those same keys, retains the real
+bytes, ETag and version, and rechecks provider metadata before signing. The
+Go client verifies the receipt over the authenticated worker transport.
+Absence, stale writer binding, damaged JSON and a placement mismatch cannot
+settle a provider write. The existing real-provider control workload checks
+empty, identity-only and complete layouts against independent MinIO reads.
+Public S3 registration, capability probes and durable effect settlement
+remain open.

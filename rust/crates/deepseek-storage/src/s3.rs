@@ -5,7 +5,8 @@ mod http;
 
 use std::{fmt, net::IpAddr, time::Duration};
 
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
+use deepseek_protocol::backup_target_inspection::S3_METADATA_MAX_JSON;
 use futures_util::TryStreamExt;
 use object_store::{
     Attribute, Attributes, GetOptions, GetResult, ObjectStore, PutMode, PutOptions, RetryConfig,
@@ -66,6 +67,17 @@ pub struct ObjectObservation {
     pub claimed_fencing_token: Option<String>,
     pub claimed_request_id: Option<String>,
     pub claimed_nonce: Option<String>,
+}
+
+/// The complete bytes and metadata returned together by one provider GET.
+pub struct ObservedTargetObject {
+    pub bytes: Bytes,
+    pub observation: ObjectObservation,
+}
+
+pub struct ObservedTargetObjects {
+    pub identity: Option<ObservedTargetObject>,
+    pub head: Option<ObservedTargetObject>,
 }
 
 #[derive(Clone)]
@@ -136,6 +148,7 @@ pub struct S3Transport {
     bucket: String,
     prefix: String,
     target_identity: [u8; 32],
+    target_observation: tokio::sync::Semaphore,
 }
 
 impl fmt::Debug for S3Transport {
@@ -204,6 +217,7 @@ impl S3Transport {
             bucket,
             prefix: config.prefix,
             target_identity,
+            target_observation: tokio::sync::Semaphore::new(1),
         })
     }
 
@@ -342,6 +356,62 @@ impl S3Transport {
             Err(_) => return Err(S3Error::ReadFailed),
         };
         object_observation(&response).map(Some)
+    }
+
+    pub async fn observe_backup_target(&self) -> Result<ObservedTargetObjects, S3Error> {
+        const IDENTITY: &str = "control/identity.json";
+        const HEAD: &str = "control/head.json";
+        let _permit = self
+            .target_observation
+            .try_acquire()
+            .map_err(|_| S3Error::ReadFailed)?;
+        let identity = self.read_backup_target_object(IDENTITY).await?;
+        let head = self.read_backup_target_object(HEAD).await?;
+
+        // Compare both current provider entries after reading the pair. Reading
+        // a historical object version cannot establish today's target layout.
+        let current_identity = self.stat(IDENTITY).await?;
+        let current_head = self.stat(HEAD).await?;
+        if current_identity.as_ref() != identity.as_ref().map(|value| &value.observation)
+            || current_head.as_ref() != head.as_ref().map(|value| &value.observation)
+        {
+            return Err(S3Error::IntegrityMismatch);
+        }
+        Ok(ObservedTargetObjects { identity, head })
+    }
+
+    async fn read_backup_target_object(
+        &self,
+        key: &str,
+    ) -> Result<Option<ObservedTargetObject>, S3Error> {
+        let path = exact_path(&self.object_key(key)?)?;
+        let response = match self.store.get_opts(&path, GetOptions::default()).await {
+            Ok(response) => response,
+            Err(object_store::Error::NotFound { .. }) => return Ok(None),
+            Err(_) => return Err(S3Error::ReadFailed),
+        };
+        let observation = object_observation(&response)?;
+        if !(2..=S3_METADATA_MAX_JSON as u64).contains(&observation.length)
+            || response.range != (0..observation.length)
+        {
+            return Err(S3Error::IntegrityMismatch);
+        }
+        let length = observation.length as usize;
+        let mut bytes = BytesMut::with_capacity(length);
+        let mut stream = response.into_stream();
+        while let Some(chunk) = stream.try_next().await.map_err(|_| S3Error::ReadFailed)? {
+            if chunk.len() > length - bytes.len() {
+                return Err(S3Error::IntegrityMismatch);
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        if bytes.len() != length {
+            return Err(S3Error::IntegrityMismatch);
+        }
+        Ok(Some(ObservedTargetObject {
+            bytes: bytes.freeze(),
+            observation,
+        }))
     }
 
     /// Requires fresh/empty staging at offset zero. Success verifies the received stream
