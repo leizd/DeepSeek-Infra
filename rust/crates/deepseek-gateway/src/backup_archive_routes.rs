@@ -1591,9 +1591,11 @@ pub(crate) fn inspect_projected_restore_tree(
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
-    let extracted_tree_digest = tree_digest(extracted)?;
-    let manifest_digest = sha256_file(&extracted.join("manifest.json"))
-        .map_err(|_| route_support::unhandled_error())?;
+    let extracted_tree_digest = tree_digest(extracted)
+        .map_err(|err| AppError::invalid_payload(format!("tree_digest: {}", err.message)))?;
+    let manifest_digest = sha256_file(&extracted.join("manifest.json")).map_err(|err| {
+        AppError::invalid_payload(format!("manifest.json in {}: {err}", extracted.display()))
+    })?;
 
     let mut plan = Map::new();
     plan.insert(
