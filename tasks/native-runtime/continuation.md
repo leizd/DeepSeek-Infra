@@ -15432,3 +15432,22 @@ rejects partial or conflicting entries. Tests cover a reopened journal and
 concurrent competing contents. Public marker publication requires an atomic
 no-replace filesystem operation. API 24 must execute the whole packaged
 registration and restart sequence before this change qualifies that device.
+
+### 2026-11-19 durable filesystem marker receipts
+
+Rust retains the exact signed effect receipt in its private journal before
+the RPC can return it. Reconciliation binds the original claim and dispatch
+permit, checks the preparation digest and verifies the retained signature
+against the pinned custody key and the current writer scope. A valid receipt
+remains evidence of the original effect when the live marker has moved.
+Go still requires a fresh signed observation of the original directory and
+marker bytes before it can commit registration.
+
+An older operation without a retained receipt requires positive observation
+of the prepared marker. On Unix, Rust syncs the pinned target directory and
+checks the marker again before signing that observation. A damaged receipt or
+an unobservable effect remains unresolved. Reconciliation cannot issue
+another dispatch or publish the marker again. The real TLS process test
+covers a lost response, restart under a successor writer, removal of the live
+marker, legacy recovery and signature corruption. The original coverage and
+exact-source cloud and platform gates apply.

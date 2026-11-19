@@ -165,7 +165,7 @@ func TestRustTargetObservationGoClientAgainstRealCustodyAndFilesystem(t *testing
 	}
 	t.Log("actual Rust custody and TLS observation verified; original bytes retained; no marker initialization or effect epoch admission")
 
-	operation, marker := initializePhysicalTargetWithLostReply(t, processCtx, client, binding, empty, &expectedClaim)
+	operation, lostReceipt := initializePhysicalTargetWithLostReply(t, processCtx, client, binding, empty, &expectedClaim)
 	if !dispatched.Load() || controlCalls.Load() != 1 {
 		t.Fatal("Rust did not obtain exactly one authenticated dispatch permit", controlCalls.Load())
 	}
@@ -173,8 +173,8 @@ func TestRustTargetObservationGoClientAgainstRealCustodyAndFilesystem(t *testing
 	restarted, _ := startTargetObservationWorker(t, processCtx, binary, workerEnv, managed, "8", expires)
 	operation.State = "DISPATCHED"
 	receipt, err := restarted.ResolveTargetMarker(processCtx, operation, 8)
-	if err != nil || receipt.Effect == nil || receipt.SignerPublicKey != binding.PublicKey ||
-		!proto.Equal(receipt.Effect.Fence, operation.Claim.Fence) || !bytes.Equal(receipt.Effect.MarkerJson, marker) ||
+	if err != nil || !proto.Equal(receipt, lostReceipt) || receipt.SignerPublicKey != binding.PublicKey ||
+		!proto.Equal(receipt.Effect.Fence, operation.Claim.Fence) ||
 		!bytes.Equal(receipt.Effect.ClaimSha256, operation.ClaimSHA256) || !bytes.Equal(receipt.Effect.DirectoryIdentity, operation.Claim.DirectoryIdentity) {
 		t.Fatal("Rust restart did not recover original marker effect", err)
 	}
@@ -187,14 +187,71 @@ func TestRustTargetObservationGoClientAgainstRealCustodyAndFilesystem(t *testing
 		t.Fatal("Go could not verify original Rust effect signature", err)
 	}
 	after, err := os.ReadFile(filepath.Join(empty, ".deepseek-infra-backup-target.json"))
-	if err != nil || !bytes.Equal(marker, after) {
+	if err != nil || !bytes.Equal(receipt.Effect.MarkerJson, after) {
 		t.Fatal("reconciliation changed the physical marker", err)
 	}
+	verifyTargetMarkerReceiptHistory(t, processCtx, restarted, binding, operation, lostReceipt, managed)
 	operation.State = "CLAIMED"
 	if _, err := restarted.ResolveTargetMarker(processCtx, operation, 8); status.Code(err) != codes.FailedPrecondition || controlCalls.Load() != 1 {
 		t.Fatal("successor sent another dispatch for an old writer", err, controlCalls.Load())
 	}
 	t.Log("isolated mTLS fixture: real Rust marker persisted before lost reply; new writer recovered the original signed effect")
+}
+
+func verifyTargetMarkerReceiptHistory(t *testing.T, ctx context.Context, client *Client, binding ControlSignerBinding,
+	operation store.TargetMarkerOperation, expected *actionv1.TargetMarkerReceipt, managed string) {
+	t.Helper()
+	claim := operation.Claim
+	marker := filepath.Join(claim.CanonicalPath, ".deepseek-infra-backup-target.json")
+	moved := filepath.Join(claim.CanonicalPath, "displaced-marker.json")
+	if err := os.Rename(marker, moved); err != nil {
+		t.Fatal(err)
+	}
+	historical, err := client.ResolveTargetMarker(ctx, operation, 8)
+	if err != nil || !proto.Equal(historical, expected) {
+		t.Fatal("retained Rust receipt depended on the live marker", err)
+	}
+	current, err := client.InspectFilesystemBackupTarget(ctx, &actionv1.InspectFilesystemBackupTargetRequest{
+		SchemaVersion: 1, OperationId: claim.OperationId, Fence: claim.Fence, WriterFencingToken: 8,
+		Path: claim.RequestedPath, RequireFullContainment: true,
+	}, binding)
+	if err != nil || current.Observation.MarkerPresent || !bytes.Equal(current.Observation.DirectoryIdentity, claim.DirectoryIdentity) {
+		t.Fatal("historical receipt did not preserve independent live observation", err)
+	}
+	paths, err := filepath.Glob(filepath.Join(managed, "state", "backup-target-markers-v1", "*.receipt.pb"))
+	if err != nil || len(paths) != 1 {
+		t.Fatal("expected one durable receipt for the original operation", err)
+	}
+	if err := os.Remove(paths[0]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.ResolveTargetMarker(ctx, operation, 8); status.Code(err) != codes.Unavailable {
+		t.Fatal("absence of the live marker and receipt settled the original effect", err)
+	}
+	if err := os.Rename(moved, marker); err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := client.ResolveTargetMarker(ctx, operation, 8)
+	if err != nil || !proto.Equal(legacy, expected) {
+		t.Fatal("legacy dispatched operation could not recover the observed marker", err)
+	}
+	corrupted := proto.Clone(expected).(*actionv1.TargetMarkerReceipt)
+	corrupted.Signature[0] ^= 1
+	damaged, err := proto.MarshalOptions{Deterministic: true}.Marshal(corrupted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths[0], damaged, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.ResolveTargetMarker(ctx, operation, 8); status.Code(err) != codes.Unavailable {
+		t.Fatal("invalid retained signature was accepted or replaced", err)
+	}
+	got, err := os.ReadFile(paths[0])
+	if err != nil || !bytes.Equal(got, damaged) {
+		t.Fatal("reconciliation overwrote a damaged receipt", err)
+	}
+	t.Log("retained Rust marker receipt survived live marker removal; legacy proof recovered; corrupt receipt denied")
 }
 
 func startTargetObservationWorker(t *testing.T, processCtx context.Context, binary string, env []string, managed, writer string, expires time.Time) (*Client, func()) {
@@ -394,17 +451,20 @@ print(json.dumps({'pythonVersion':sys.version.split()[0],'cases':out}))`
 
 type discardMarkerReply struct {
 	actionv1.BackupTargetMarkerWorkerClient
+	receipt *actionv1.TargetMarkerReceipt
 }
 
-func (client discardMarkerReply) Initialize(ctx context.Context, request *actionv1.TargetMarkerClaim, options ...grpc.CallOption) (*actionv1.TargetMarkerReceipt, error) {
-	if _, err := client.BackupTargetMarkerWorkerClient.Initialize(ctx, request, options...); err != nil {
+func (client *discardMarkerReply) Initialize(ctx context.Context, request *actionv1.TargetMarkerClaim, options ...grpc.CallOption) (*actionv1.TargetMarkerReceipt, error) {
+	receipt, err := client.BackupTargetMarkerWorkerClient.Initialize(ctx, request, options...)
+	if err != nil {
 		return nil, err
 	}
+	client.receipt = receipt
 	return nil, status.Error(codes.Unavailable, "fixture discarded successful Rust marker reply")
 }
 
 func initializePhysicalTargetWithLostReply(t *testing.T, ctx context.Context, client *Client, binding ControlSignerBinding,
-	directory string, expected *atomic.Pointer[actionv1.TargetMarkerClaim]) (store.TargetMarkerOperation, []byte) {
+	directory string, expected *atomic.Pointer[actionv1.TargetMarkerClaim]) (store.TargetMarkerOperation, *actionv1.TargetMarkerReceipt) {
 	t.Helper()
 	const operation = "target-inspect-public-v1-physical-reply-loss"
 	fence := &commonv1.ActionFence{ActionId: operation, ExecutionEpoch: 3}
@@ -430,13 +490,15 @@ func initializePhysicalTargetWithLostReply(t *testing.T, ctx context.Context, cl
 	active := store.TargetMarkerOperation{Claim: claim, ClaimSHA256: digest[:], State: "CLAIMED"}
 	expected.Store(claim)
 	faulted := *client
-	faulted.targetMarker = discardMarkerReply{client.targetMarker}
+	discarded := &discardMarkerReply{BackupTargetMarkerWorkerClient: client.targetMarker}
+	faulted.targetMarker = discarded
 	if _, err := faulted.ResolveTargetMarker(ctx, active, 7); status.Convert(err).Message() != "fixture discarded successful Rust marker reply" {
 		t.Fatal("call did not complete real marker publication before the reply fault", err)
 	}
 	marker, err := os.ReadFile(filepath.Join(directory, ".deepseek-infra-backup-target.json"))
-	if err != nil || !json.Valid(marker) {
+	if err != nil || !json.Valid(marker) || discarded.receipt == nil || discarded.receipt.Effect == nil ||
+		!bytes.Equal(marker, discarded.receipt.Effect.MarkerJson) {
 		t.Fatal("marker was not durably present after response loss", err)
 	}
-	return active, marker
+	return active, discarded.receipt
 }

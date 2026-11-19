@@ -177,6 +177,11 @@ impl MarkerDirectory {
     }
 
     #[cfg(unix)]
+    pub(super) fn sync(&self) -> io::Result<()> {
+        self.handle.sync_all()
+    }
+
+    #[cfg(unix)]
     pub(super) fn create_marker(
         &self,
         bytes: &[u8],
@@ -217,7 +222,7 @@ impl MarkerDirectory {
             file.sync_all()?;
             before_publish()?;
             self.publish_staged(&staging)?;
-            self.handle.sync_all()
+            self.sync()
         })();
         let _ = unlinkat(&staging, "marker", AtFlags::empty());
         if statat(

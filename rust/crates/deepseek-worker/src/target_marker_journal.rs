@@ -1,7 +1,7 @@
 use super::{claim_denied, effect_unknown, wire};
 use crate::managed_profile::sync_directory;
 use deepseek_protocol::generated::deepseek::action::v1::{
-    TargetMarkerClaim, TargetMarkerDispatchPermit, TargetMarkerPreparation,
+    TargetMarkerClaim, TargetMarkerDispatchPermit, TargetMarkerPreparation, TargetMarkerReceipt,
 };
 use prost::Message as _;
 use serde::Serialize;
@@ -315,6 +315,47 @@ impl MarkerJournal {
             return Err(effect_unknown());
         }
         Ok(prepared)
+    }
+
+    fn receipt_path(&self, claim: &TargetMarkerClaim) -> Result<PathBuf, Status> {
+        let fence = claim.fence.as_ref().ok_or_else(effect_unknown)?;
+        let name = entry_name(&claim.operation_id, fence.execution_epoch);
+        Ok(self.root.join(format!("{name}.receipt.pb")))
+    }
+
+    pub(super) fn retain_receipt(
+        &self,
+        claim: &TargetMarkerClaim,
+        receipt: &TargetMarkerReceipt,
+    ) -> Result<(), Status> {
+        let bytes = receipt.encode_to_vec();
+        if bytes.len() > wire::MARKER_EFFECT_MAX_WIRE {
+            return Err(effect_unknown());
+        }
+        self.publish_exact(&self.receipt_path(claim)?, &bytes)
+            .map_err(|_| effect_unknown())
+    }
+
+    pub(super) fn retained_receipt(
+        &self,
+        prepared: &TargetMarkerPreparation,
+    ) -> Result<Option<TargetMarkerReceipt>, Status> {
+        let claim = prepared.claim.as_ref().ok_or_else(effect_unknown)?;
+        let path = self.receipt_path(claim)?;
+        match fs::symlink_metadata(&path) {
+            Ok(_) => (),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(_) => return Err(effect_unknown()),
+        }
+        let bytes =
+            read_entry(&path, wire::MARKER_EFFECT_MAX_WIRE).map_err(|_| effect_unknown())?;
+        let receipt: TargetMarkerReceipt = decode_exact(&bytes)?;
+        let effect = receipt.effect.as_ref().ok_or_else(effect_unknown)?;
+        if effect.preparation_sha256.as_slice() != preparation_digest(prepared).as_slice() {
+            return Err(effect_unknown());
+        }
+        sync_directory(&self.root).map_err(|_| effect_unknown())?;
+        Ok(Some(receipt))
     }
 }
 

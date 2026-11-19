@@ -4,7 +4,7 @@ use deepseek_protocol::{
     backup_target_inspection as wire,
     generated::deepseek::action::v1::{
         FilesystemBackupTargetLocationObservation, FilesystemBackupTargetObservation,
-        TargetMarkerClaim, TargetMarkerEffect, TargetMarkerPreparation,
+        TargetMarkerClaim, TargetMarkerEffect, TargetMarkerPreparation, TargetMarkerReceipt,
     },
 };
 use prost::Message as _;
@@ -12,6 +12,34 @@ use sha2::{Digest as _, Sha256};
 
 impl ControlSigningKey {
     pub fn sign_backup_target_marker_effect(
+        &self,
+        claim: &TargetMarkerClaim,
+        effect: &TargetMarkerEffect,
+    ) -> Result<Vec<u8>, FederationIdentityError> {
+        let message = self.backup_target_marker_effect_message(claim, effect)?;
+        Ok(self.key.sign(&message).to_bytes().to_vec())
+    }
+
+    pub fn verify_backup_target_marker_receipt(
+        &self,
+        claim: &TargetMarkerClaim,
+        receipt: &TargetMarkerReceipt,
+    ) -> Result<(), FederationIdentityError> {
+        let invalid = || error("BACKUP_TARGET_MARKER_EFFECT_INVALID");
+        if receipt.signer_public_key != self.public_key() {
+            return Err(invalid());
+        }
+        let effect = receipt.effect.as_ref().ok_or_else(invalid)?;
+        let message = self.backup_target_marker_effect_message(claim, effect)?;
+        let signature =
+            ed25519_dalek::Signature::from_slice(&receipt.signature).map_err(|_| invalid())?;
+        self.key
+            .verifying_key()
+            .verify_strict(&message, &signature)
+            .map_err(|_| invalid())
+    }
+
+    fn backup_target_marker_effect_message(
         &self,
         claim: &TargetMarkerClaim,
         effect: &TargetMarkerEffect,
@@ -42,7 +70,7 @@ impl ControlSigningKey {
         }
         let mut message = wire::MARKER_EFFECT_SIGNATURE_DOMAIN.to_vec();
         message.extend(effect.encode_to_vec());
-        Ok(self.key.sign(&message).to_bytes().to_vec())
+        Ok(message)
     }
 
     pub fn sign_backup_target_location(

@@ -1,4 +1,4 @@
-//! One fenced Rust marker publication, followed by read-only reconciliation.
+//! One fenced Rust marker publication and a durable receipt for reconciliation.
 use super::{LocationPolicy, observation_path, wire};
 use crate::{
     AgentExecutionControl, WorkerAuthorityConfig, WorkerRpcService,
@@ -13,6 +13,7 @@ use deepseek_protocol::generated::deepseek::action::v1::{
 use prost::Message as _;
 use sha2::{Digest as _, Sha256};
 use std::{io, path::Path, sync::Arc, time::Duration};
+use tokio::sync::OwnedSemaphorePermit;
 use tonic::{Request, Response, Status};
 
 #[path = "target_marker_journal.rs"]
@@ -23,6 +24,11 @@ use journal::preparation_digest;
 #[cfg(test)]
 #[path = "target_marker_tests.rs"]
 mod tests;
+
+enum MarkerProof {
+    Observed(TargetMarkerEffect),
+    Retained(TargetMarkerReceipt),
+}
 
 fn claim_denied() -> Status {
     Status::failed_precondition("BACKUP_TARGET_MARKER_CLAIM_DENIED")
@@ -122,6 +128,20 @@ fn read_effect(
         .map_err(|_| effect_unknown())?
         .filter(|bytes| bytes == &prepared.marker_json)
         .ok_or_else(effect_unknown)?;
+    #[cfg(unix)]
+    {
+        // A worker can exit after publishing the name and before syncing it.
+        // Finish the directory sync and confirm the marker is still observable.
+        directory.sync().map_err(|_| effect_unknown())?;
+        if directory
+            .marker(wire::MARKER_INITIALIZATION_MAX_JSON)
+            .map_err(|_| effect_unknown())?
+            .as_deref()
+            != Some(bytes.as_slice())
+        {
+            return Err(effect_unknown());
+        }
+    }
     open_directory(policy, claim).map_err(|_| effect_unknown())?;
     Ok(TargetMarkerEffect {
         schema_version: 1,
@@ -141,7 +161,7 @@ impl LocationPolicy {
         self.marker_journal.as_ref().ok_or_else(claim_denied)
     }
 
-    fn marker_gate(&self) -> Result<tokio::sync::OwnedSemaphorePermit, Status> {
+    fn marker_gate(&self) -> Result<OwnedSemaphorePermit, Status> {
         self.readers
             .clone()
             .try_acquire_owned()
@@ -169,32 +189,57 @@ impl WorkerRpcService {
         request: &Request<T>,
         claim: &TargetMarkerClaim,
         current_writer: u64,
-        effect: TargetMarkerEffect,
+        proof: MarkerProof,
+        gate: OwnedSemaphorePermit,
     ) -> Result<Response<TargetMarkerReceipt>, Status> {
         self.target_inspection_caller(request)?;
-        let worker = self.worker.lock().await;
-        let authority = worker.agent_node_authority()?;
+        let authority = self.worker.lock().await.agent_node_authority()?;
         if !authority_binds(&authority, claim, current_writer) {
             return Err(effect_unknown());
         }
-        let signer = self
-            .control_signer
-            .as_ref()
-            .ok_or_else(effect_unknown)?
-            .lock()
-            .await;
-        if signer.key.public_key() != authority.signer_public_key {
-            return Err(effect_unknown());
-        }
-        let signature = signer
-            .key
-            .sign_backup_target_marker_effect(claim, &effect)
-            .map_err(|_| effect_unknown())?;
-        Ok(Response::new(TargetMarkerReceipt {
-            effect: Some(effect),
-            signature,
-            signer_public_key: signer.key.public_key(),
-        }))
+        let receipt = {
+            let signer = self
+                .control_signer
+                .as_ref()
+                .ok_or_else(effect_unknown)?
+                .lock()
+                .await;
+            let signer_public_key = signer.key.public_key();
+            if signer_public_key != authority.signer_public_key {
+                return Err(effect_unknown());
+            }
+            match proof {
+                MarkerProof::Retained(receipt) => {
+                    signer
+                        .key
+                        .verify_backup_target_marker_receipt(claim, &receipt)
+                        .map_err(|_| effect_unknown())?;
+                    return Ok(Response::new(receipt));
+                }
+                MarkerProof::Observed(effect) => {
+                    let signature = signer
+                        .key
+                        .sign_backup_target_marker_effect(claim, &effect)
+                        .map_err(|_| effect_unknown())?;
+                    TargetMarkerReceipt {
+                        effect: Some(effect),
+                        signature,
+                        signer_public_key,
+                    }
+                }
+            }
+        };
+        let policy = self.target_inspection.clone().ok_or_else(effect_unknown)?;
+        let claim = claim.clone();
+        let receipt = tokio::task::spawn_blocking(move || {
+            let _gate = gate;
+            policy.marker_journal()?.retain_receipt(&claim, &receipt)?;
+            Ok::<_, Status>(receipt)
+        })
+        .await
+        .map_err(|_| effect_unknown())??;
+        self.target_inspection_caller(request)?;
+        Ok(Response::new(receipt))
     }
 }
 
@@ -252,8 +297,7 @@ impl BackupTargetMarkerWorker for WorkerRpcService {
             return Err(effect_unknown());
         }
         let original = claim.clone();
-        let effect = tokio::task::spawn_blocking(move || {
-            let _gate = gate;
+        let (effect, gate) = tokio::task::spawn_blocking(move || {
             policy.marker_journal()?.accept(&original, &permit)?;
             directory
                 .create_marker(&prepared.marker_json, &digest, || {
@@ -266,12 +310,18 @@ impl BackupTargetMarkerWorker for WorkerRpcService {
                     Ok(())
                 })
                 .map_err(|_| effect_unknown())?;
-            read_effect(&policy, &prepared)
+            Ok::<_, Status>((read_effect(&policy, &prepared)?, gate))
         })
         .await
         .map_err(|_| effect_unknown())??;
-        self.marker_receipt(&request, claim, claim.writer_fencing_token, effect)
-            .await
+        self.marker_receipt(
+            &request,
+            claim,
+            claim.writer_fencing_token,
+            MarkerProof::Observed(effect),
+            gate,
+        )
+        .await
     }
 
     async fn reconcile(
@@ -301,24 +351,25 @@ impl BackupTargetMarkerWorker for WorkerRpcService {
         let original_fence = fence.clone();
         let digest = input.claim_sha256.clone();
         let writer = input.current_writer_fencing_token;
-        let (claim, effect) = tokio::task::spawn_blocking(move || {
-            let _gate = gate;
-            let prepared = policy.marker_journal()?.dispatched(
-                &operation,
-                original_fence.execution_epoch,
-                &digest,
-            )?;
+        let (claim, proof, gate) = tokio::task::spawn_blocking(move || {
+            let journal = policy.marker_journal()?;
+            let prepared =
+                journal.dispatched(&operation, original_fence.execution_epoch, &digest)?;
             let claim = prepared.claim.as_ref().ok_or_else(effect_unknown)?;
             if !authority_binds(&authority, claim, writer)
                 || claim.fence.as_ref() != Some(&original_fence)
             {
                 return Err(effect_unknown());
             }
-            Ok::<_, Status>((claim.clone(), read_effect(&policy, &prepared)?))
+            let proof = match journal.retained_receipt(&prepared)? {
+                Some(receipt) => MarkerProof::Retained(receipt),
+                None => MarkerProof::Observed(read_effect(&policy, &prepared)?),
+            };
+            Ok::<_, Status>((claim.clone(), proof, gate))
         })
         .await
         .map_err(|_| effect_unknown())??;
-        self.marker_receipt(&request, &claim, input.current_writer_fencing_token, effect)
+        self.marker_receipt(&request, &claim, writer, proof, gate)
             .await
     }
 }
