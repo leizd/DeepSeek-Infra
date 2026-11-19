@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -66,6 +67,55 @@ func TestServerConfigurationAndLifecycleFailClosed(t *testing.T) {
 			server.Close()
 			t.Fatal("bad configuration accepted")
 		}
+	}
+}
+
+func TestStopBeforeServeClosesListenerAndReleasesStore(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "go-a2a")
+	tasks, err := Open(dir, time.Now, 45*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = tasks.Close() })
+	listener, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	run := &RPCServer{server: grpc.NewServer(), address: listener.Addr().String(), done: make(chan error, 1)}
+	run.server.Stop()
+	finished := make(chan struct{})
+	run.serve(listener, tasks, finished)
+	select {
+	case err, ok := <-run.Done():
+		if !ok || err != nil {
+			t.Fatalf("stopped server reported shutdown failure: %v, notified: %v", err, ok)
+		}
+	default:
+		t.Fatal("serve did not send a shutdown result")
+	}
+	select {
+	case _, ok := <-run.Done():
+		if ok {
+			t.Fatal("serve sent more than one shutdown result")
+		}
+	default:
+		t.Fatal("server completion channel remained open")
+	}
+	select {
+	case <-finished:
+	default:
+		t.Fatal("serve did not release the cancellation watcher")
+	}
+	if err := listener.SetDeadline(time.Now()); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("stopped server retained its listener: %v", err)
+	}
+	reopened, err := Open(dir, time.Now, 45*time.Second)
+	if err != nil {
+		t.Fatalf("stopped server retained the A2A writer: %v", err)
+	}
+	if err := reopened.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 

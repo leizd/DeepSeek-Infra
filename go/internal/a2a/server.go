@@ -78,16 +78,7 @@ func StartRPC(ctx context.Context, cfg RPCConfig) (*RPCServer, error) {
 	agentv1.RegisterA2ATaskControlServer(server, &taskService{store: tasks})
 	run := &RPCServer{server: server, address: listener.Addr().String(), done: make(chan error, 1)}
 	finished := make(chan struct{})
-	go func() {
-		err := server.Serve(listener)
-		if errors.Is(err, grpc.ErrServerStopped) {
-			err = nil
-		}
-		err = errors.Join(err, tasks.Close())
-		run.done <- err
-		close(run.done)
-		close(finished)
-	}()
+	go run.serve(listener, tasks, finished)
 	go func() {
 		select {
 		case <-ctx.Done():
@@ -96,6 +87,17 @@ func StartRPC(ctx context.Context, cfg RPCConfig) (*RPCServer, error) {
 		}
 	}()
 	return run, nil
+}
+
+func (s *RPCServer) serve(listener net.Listener, tasks *Store, finished chan<- struct{}) {
+	err := s.server.Serve(listener)
+	if errors.Is(err, grpc.ErrServerStopped) {
+		err = nil
+	}
+	err = errors.Join(err, tasks.Close())
+	s.done <- err
+	close(s.done)
+	close(finished)
 }
 
 // Recheck certificate expiry on every RPC, including an already-open TLS

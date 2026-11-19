@@ -15470,3 +15470,16 @@ lookups before its contents are readable. An interrupted reservation remains
 unresolved and cannot authorize another publication. Ordinary readers must
 never receive partial bytes as a valid marker. The real API 24 package
 workload is required to verify registration, restart and replay.
+
+### 2026-11-19 A2A shutdown before serving
+
+The 97e423e exact Go coverage profile measured 18,740 of 19,726
+statements. Its Go sources match a8f0eae, which covered 18,741. The
+only differing covered statement handles gRPC stopping before Serve
+begins. Fast cancellation allowed either goroutine to win that race.
+
+The real server and the new regression use the same serve lifecycle.
+The regression stops the gRPC server first, then requires successful
+shutdown notification, a closed listener and release of the SQLite
+writer. The full-workspace coverage gate binds its report to this source
+and uses the original threshold.
