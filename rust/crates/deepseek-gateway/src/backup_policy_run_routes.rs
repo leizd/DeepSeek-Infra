@@ -24,7 +24,7 @@ use axum::routing::any;
 use deepseek_core::version_info;
 use deepseek_policy::app_error::{AppError, codes};
 use deepseek_policy::backup_mirror::{fsync_dir, sha256_file};
-use deepseek_policy::backup_projection::{FileRecord, snapshot_root};
+use deepseek_policy::backup_projection::{FileRecord, sha256_bytes, snapshot_root};
 use deepseek_policy::backup_retention::chrono;
 use deepseek_policy::backup_unlock::{
     BACKUP_SCHEMA, PACKAGE_PURPOSE, encrypt_tree_zip_native,
@@ -575,7 +575,9 @@ fn write_frozen_run_plan(
     backup_id: &str,
     context: &BackupContext,
 ) -> Result<(), AppError> {
-    let slot_digest = hex_digest(format!("{}|{}", claim.policy_id, claim.schedule_slot).as_bytes());
+    // `backup_target_store.commit_slot_digest` is
+    // `sha256(schedule_slot.encode()).hexdigest()` over the slot alone.
+    let slot_digest = sha256_bytes(claim.schedule_slot.as_bytes());
     let plan_dir = root.join(".backup-run-plans").join(&claim.policy_id);
     fs::create_dir_all(&plan_dir).map_err(|_| route_support::unhandled_error())?;
 
@@ -601,7 +603,7 @@ fn write_frozen_run_plan(
     let mut hash_material = plan.as_object().cloned().unwrap_or_default();
     hash_material.remove("createdAt");
     hash_material.remove("backupId");
-    let run_plan_digest = hex_digest(dumps_compact(&Value::Object(hash_material)).as_bytes());
+    let run_plan_digest = sha256_bytes(dumps_compact(&Value::Object(hash_material)).as_bytes());
     if let Some(obj) = plan.as_object_mut() {
         obj.insert("runPlanDigest".into(), Value::String(run_plan_digest));
     }
@@ -1220,7 +1222,7 @@ fn run_with_target_lease(args: &LeaseRunArgs<'_>) -> Result<Value, AppError> {
     });
     let receipt_bytes =
         serde_json::to_vec_pretty(&receipt).map_err(|_| route_support::unhandled_error())?;
-    let receipt_digest = hex_digest(&receipt_bytes);
+    let receipt_digest = sha256_bytes(&receipt_bytes);
     let receipt_path = target_root
         .join("receipts")
         .join(format!("{backup_id}.json"));
@@ -1241,7 +1243,11 @@ fn run_with_target_lease(args: &LeaseRunArgs<'_>) -> Result<Value, AppError> {
     cmap.insert("previousCommitHash".into(), json!(prev_commit));
     cmap.insert("targetGeneration".into(), json!(target_gen));
     let mut commit_obj: Map<String, Value> = cmap.into_iter().collect();
-    let commit_hash = hex_digest(dumps_compact(&Value::Object(commit_obj.clone())).as_bytes());
+    // `backup_publish._commit_hash` is `sha256(_stable_json(body)).hexdigest()`.
+    // `hex_digest` only hex-encodes its input, so it produced a hex dump of the
+    // JSON instead of a digest; the validator recomputed a real sha256 and every
+    // marker was rejected as uncommitted.
+    let commit_hash = sha256_bytes(dumps_compact(&Value::Object(commit_obj.clone())).as_bytes());
     commit_obj.insert("commitHash".into(), Value::String(commit_hash.clone()));
 
     let commit_path = target_root
