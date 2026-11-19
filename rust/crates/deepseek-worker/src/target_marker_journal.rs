@@ -78,6 +78,33 @@ fn read(path: &Path, limit: usize) -> io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
+fn read_entry(path: &Path, limit: usize) -> io::Result<Vec<u8>> {
+    if !fs::symlink_metadata(path)?.is_dir() {
+        return read(path, limit);
+    }
+    read(&path.join("contents"), limit).map_err(|error| {
+        if error.kind() == io::ErrorKind::NotFound {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "backup target marker journal entry is incomplete",
+            )
+        } else {
+            error
+        }
+    })
+}
+
+fn entry_matches(path: &Path, bytes: &[u8]) -> io::Result<bool> {
+    match read_entry(path, bytes.len()) {
+        Ok(existing) if existing == bytes => Ok(true),
+        Ok(_) => Err(io::Error::other(
+            "backup target marker journal entry conflicts",
+        )),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
 fn decode_exact<T: prost::Message + Default>(bytes: &[u8]) -> Result<T, Status> {
     let decoded = T::decode(bytes).map_err(|_| effect_unknown())?;
     if decoded.encode_to_vec() != bytes {
@@ -122,20 +149,57 @@ impl MarkerJournal {
         })
     }
 
+    #[cfg(not(target_os = "android"))]
     fn publish_exact(&self, path: &Path, bytes: &[u8]) -> io::Result<()> {
+        if entry_matches(path, bytes)? {
+            return sync_directory(&self.root);
+        }
         let mut temporary = tempfile::NamedTempFile::new_in(&self.root)?;
         temporary.write_all(bytes)?;
         temporary.as_file().sync_all()?;
         match temporary.persist_noclobber(path) {
             Ok(persisted) => persisted.sync_all()?,
-            Err(error) if error.error.kind() == io::ErrorKind::AlreadyExists => {
-                if read(path, bytes.len())? != bytes {
-                    return Err(io::Error::other(
-                        "backup target marker journal entry conflicts",
-                    ));
+            Err(error) => {
+                if error.error.kind() != io::ErrorKind::AlreadyExists
+                    || !entry_matches(path, bytes)?
+                {
+                    return Err(error.error);
                 }
             }
-            Err(error) => return Err(error.error),
+        }
+        sync_directory(&self.root)
+    }
+
+    #[cfg(target_os = "android")]
+    fn publish_exact(&self, path: &Path, bytes: &[u8]) -> io::Result<()> {
+        self.publish_directory_entry(path, bytes)
+    }
+
+    #[cfg(any(target_os = "android", all(unix, test)))]
+    fn publish_directory_entry(&self, path: &Path, bytes: &[u8]) -> io::Result<()> {
+        use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+
+        if entry_matches(path, bytes)? {
+            return sync_directory(&self.root);
+        }
+        let staging = tempfile::Builder::new()
+            .prefix(".marker-entry-")
+            .permissions(fs::Permissions::from_mode(0o700))
+            .tempdir_in(&self.root)?;
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(staging.path().join("contents"))?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        sync_directory(staging.path())?;
+        // A complete entry is a nonempty directory. POSIX will not replace it
+        // with another directory, including on Android kernels without the
+        // no-replace file rename and where the app UID cannot make hard links.
+        match fs::rename(staging.path(), path) {
+            Err(error) if !entry_matches(path, bytes)? => return Err(error),
+            _ => (),
         }
         sync_directory(&self.root)
     }
@@ -151,7 +215,7 @@ impl MarkerJournal {
             Ok(value.to_owned())
         };
         let file = self.root.join("installation.id");
-        let value = match read(&file, 128) {
+        let value = match read_entry(&file, 128) {
             Ok(value) => return parse(&value),
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 match read(&self.legacy_installation, 128) {
@@ -230,14 +294,14 @@ impl MarkerJournal {
     ) -> Result<TargetMarkerPreparation, Status> {
         let name = entry_name(operation, epoch);
         let prepared: TargetMarkerPreparation = decode_exact(
-            &read(
+            &read_entry(
                 &self.root.join(format!("{name}.prepared.pb")),
                 PREPARATION_LIMIT,
             )
             .map_err(|_| effect_unknown())?,
         )?;
         let permit: TargetMarkerDispatchPermit = decode_exact(
-            &read(&self.root.join(format!("{name}.permit.pb")), 128)
+            &read_entry(&self.root.join(format!("{name}.permit.pb")), 128)
                 .map_err(|_| effect_unknown())?,
         )?;
         let claim = prepared.claim.as_ref().ok_or_else(effect_unknown)?;
@@ -251,5 +315,55 @@ impl MarkerJournal {
             return Err(effect_unknown());
         }
         Ok(prepared)
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn target_marker_journal_preserves_legacy_and_incomplete_entries() {
+        let root = tempfile::tempdir().unwrap();
+        let canonical = root.path().canonicalize().unwrap();
+        let journal = MarkerJournal::new(&canonical, &canonical).unwrap();
+        let legacy = journal.root.join("legacy.pb");
+        fs::write(&legacy, b"legacy").unwrap();
+        journal.publish_directory_entry(&legacy, b"legacy").unwrap();
+        assert!(journal.publish_directory_entry(&legacy, b"other!").is_err());
+        assert!(legacy.is_file());
+        assert_eq!(read_entry(&legacy, 16).unwrap(), b"legacy");
+
+        let incomplete = journal.root.join("incomplete.pb");
+        fs::create_dir(&incomplete).unwrap();
+        assert_eq!(
+            journal
+                .publish_directory_entry(&incomplete, b"repair")
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert!(!incomplete.join("contents").exists());
+    }
+
+    #[test]
+    fn target_marker_journal_directory_entry_cannot_be_replaced() {
+        let root = tempfile::tempdir().unwrap();
+        let canonical = root.path().canonicalize().unwrap();
+        let journal = MarkerJournal::new(&canonical, &canonical).unwrap();
+        let path = journal.root.join("original.pb");
+        let (first, second) = std::thread::scope(|threads| {
+            let first = threads.spawn(|| journal.publish_directory_entry(&path, b"first"));
+            let second = journal.publish_directory_entry(&path, b"other");
+            (first.join().unwrap(), second)
+        });
+        let retained = match (first, second) {
+            (Ok(()), Err(_)) => b"first",
+            (Err(_), Ok(())) => b"other",
+            other => panic!("expected one immutable entry: {other:?}"),
+        };
+        let reopened = MarkerJournal::new(&canonical, &canonical).unwrap();
+        assert_eq!(read_entry(&path, 16).unwrap().as_slice(), retained);
+        reopened.publish_directory_entry(&path, retained).unwrap();
     }
 }

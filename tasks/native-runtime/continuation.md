@@ -15418,3 +15418,17 @@ receipt whose marker is not an initial generation. An invalid receipt must
 keep the original dispatch unresolved and cannot create a target record. This
 test batch retains the 87 named race families and both original floors. Device
 and source-CI conclusions belong to their own runs and source revisions.
+
+Android run 44428500768 retried dependency resolution on 29f7088. Both APKs
+matched their device readbacks. API 26, 28, 30 and 34 each passed all 16 cases.
+API 24 on kernel 3.10 passed the original 15 and returned
+BACKUP_TARGET_MARKER_EFFECT_UNKNOWN on the valid new registration. The device
+audit recorded SELinux refusing a hard link to the worker's private staging
+file immediately before this result.
+
+Android private journal entries can now be published by atomically renaming a
+synced nonempty directory. The worker reads retained regular-file entries and
+rejects partial or conflicting entries. Tests cover a reopened journal and
+concurrent competing contents. Public marker publication requires an atomic
+no-replace filesystem operation. API 24 must execute the whole packaged
+registration and restart sequence before this change qualifies that device.
