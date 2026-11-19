@@ -113,12 +113,17 @@ async fn forecast_returns_unconstrained_local_and_constrained_quota_target() {
         Connection::open(root.path().join(".backup-dr").join("evidence.sqlite3")).unwrap();
     dr_conn
         .execute_batch(
-            "CREATE TABLE logical_recovery_copies (
+            // `backup_dr_ledger` names this table `recovery_point_copies`; it is
+            // what both the ledger writer (INSERT at backup_dr_ledger.py:1093)
+            // and the capacity fallback read. A `logical_recovery_copies` table
+            // is never consulted, so the used-bytes fallback saw nothing.
+            "CREATE TABLE recovery_point_copies (
                 policy_id TEXT, backup_id TEXT, target_id TEXT,
-                recoverable INTEGER, state TEXT, metadata_json TEXT
+                object_set_digest TEXT, recoverable INTEGER, state TEXT,
+                metadata_json TEXT
              );
-             INSERT INTO logical_recovery_copies VALUES
-                ('pol_1', 'b1', 'target_fast', 1, 'healthy', '{\"ciphertextBytes\":920}');",
+             INSERT INTO recovery_point_copies VALUES
+                ('pol_1', 'b1', 'target_fast', NULL, 1, 'healthy', '{\"ciphertextBytes\":920}');",
         )
         .unwrap();
 
@@ -260,11 +265,11 @@ async fn simulate_and_explain_evaluate_topology_and_action_reasons() {
              INSERT INTO control_targets VALUES
                 ('target-a', '{\"targetId\":\"target-a\",\"kind\":\"filesystem\",\"status\":\"active\"}'),
                 ('target-b', '{\"targetId\":\"target-b\",\"kind\":\"filesystem\",\"status\":\"active\"}');
-             CREATE TABLE backup_target_capacity (
+             CREATE TABLE target_capacity_observations (
                 observation_id TEXT, target_id TEXT, observed_at TEXT,
                 total_bytes INTEGER, used_bytes INTEGER, free_bytes INTEGER, payload_json TEXT
              );
-             INSERT INTO backup_target_capacity VALUES
+             INSERT INTO target_capacity_observations VALUES
                 ('o1', 'target-a', '2026-11-18T00:00:00Z', 1000, 900, 100,
                  '{\"targetId\":\"target-a\",\"totalBytes\":1000,\"usedBytes\":900,\"freeBytes\":100,\"freePercent\":10.0}'),
                 ('o2', 'target-b', '2026-11-18T00:00:00Z', 1000, 100, 900,
