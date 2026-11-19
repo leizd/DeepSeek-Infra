@@ -2549,7 +2549,11 @@ pub(crate) fn build_fresh_state_bundle_readonly(
     }
     let capacity = json!({"targets": cap_targets});
     if !validate_capacity_snapshot(&capacity) {
-        return Err("CAPACITY_SNAPSHOT_UNAVAILABLE".to_string());
+        return Err(format!(
+            "CAPACITY_SNAPSHOT_UNAVAILABLE: target_ids={:?} targets={}",
+            target_ids,
+            dumps_compact(&capacity)
+        ));
     }
 
     let mut running_effects = Vec::new();
