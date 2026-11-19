@@ -1591,11 +1591,14 @@ pub(crate) fn inspect_projected_restore_tree(
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
-    let extracted_tree_digest = tree_digest(extracted)
-        .map_err(|err| AppError::invalid_payload(format!("tree_digest: {}", err.message)))?;
-    let manifest_digest = sha256_file(&extracted.join("manifest.json")).map_err(|err| {
-        AppError::invalid_payload(format!("manifest.json in {}: {err}", extracted.display()))
-    })?;
+    let extracted_tree_digest = tree_digest(extracted)?;
+    // `backup_incremental_restore.materialize_chain` only populates
+    // `manifest.json` in `output_root` when there is no projection: the
+    // projection branch moves `projection.output_files` into the output tree and
+    // returns the manifest in memory. The oracle derives `manifestDigest` from
+    // that returned manifest (`_inspect_verified_tree(manifest, ...)`), so a
+    // projected tree has no file to hash and must use the same in-memory body.
+    let manifest_digest = hex_digest(&Sha256::digest(dumps_compact(&manifest).as_bytes()));
 
     let mut plan = Map::new();
     plan.insert(
