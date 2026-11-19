@@ -249,9 +249,16 @@ async fn rag_reindex_rebuilds_files_memories_and_media_and_rejects_bad_action() 
     std::fs::create_dir_all(root.path().join(".media").join("segments")).unwrap();
     std::fs::write(
         root.path().join(".media").join("library.json"),
-        serde_json::to_vec(&json!([
+        serde_json::to_vec(&json!({
+            // `media.library._write_store` writes
+            // `{"schemaVersion": "media-library.v1", "media": [...]}`. A bare
+            // array is a syntax error to the reader, which treats it as an
+            // empty store, so the media counts below would silently be zero.
+            "schemaVersion": "media-library.v1",
+            "media": [
             {"mediaId": "media_one", "type": "pdf", "title": "Spec", "status": "ready", "path": "objects/media_one/source.pdf", "createdAt": "2026-11-18T00:00:00Z", "updatedAt": "2026-11-18T00:00:00Z"}
-        ]))
+        ]
+        }))
         .unwrap(),
     )
     .unwrap();
