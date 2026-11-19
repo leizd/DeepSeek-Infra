@@ -252,8 +252,8 @@ jobs:
           python scripts/capture_evidence_context.py --version "$(cat VERSION)" --out artifacts/native-target-registration-android/source-context.json
           cd go
           go test -tags=deepseek_android,sqlite3_flock -race -json -count=1 -timeout=7m \
-            -run '^(TestTargetRegistrationMarker|TestTargetRegistrationPublicRechecksCurrentRecordAfterVerifyingPathProofs$)' \
-            ./internal/store | tee ../artifacts/native-target-registration-android/target-registration.jsonl
+            -run '^(TestTargetRegistrationMarker|TestTargetRegistrationPublicRechecksCurrentRecordAfterVerifyingPathProofs$|TestTargetRegistrationS3|TestManagedProfileRejectsMalformedPublishedIdentity$|TestAndroidProfileValueConfirmsOnlyOriginalBytesAfterLegacyUpgrade$)' \
+            ./internal/store ./internal/launch ./internal/profilevalue | tee ../artifacts/native-target-registration-android/target-registration.jsonl
       - name: Return Android SQLite registration report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -341,7 +341,7 @@ jobs:
           set -o pipefail
           npm ci --prefix frontend
           npm run check --prefix frontend
-          python -m pip install -r requirements-browser.txt
+          python -m pip install -r requirements-browser.txt -r requirements-s3-e2e.txt
           python -m playwright install --with-deps chromium
           cargo build --locked --manifest-path rust/Cargo.toml -p deepseek-worker -p deepseek-gateway --bins --all-features
           bin="$RUNNER_TEMP/native-target-application"
@@ -359,6 +359,14 @@ jobs:
           python scripts/verify_native_target_registration_browser.py \
             --bin-dir "$RUNNER_TEMP/native-target-application" \
             --out artifacts/native-target-filesystem-development/browser-registration.json
+      - name: Register an existing S3 namespace and replay through the native application
+        timeout-minutes: 7
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/target-registration-chromium
+        run: |
+          python scripts/verify_native_s3_target_registration.py \
+            --bin-dir "$RUNNER_TEMP/native-target-application" \
+            --out artifacts/native-target-filesystem-development/s3-browser-registration.json
       - name: Return only exact-source observation reports
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

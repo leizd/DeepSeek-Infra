@@ -98,9 +98,13 @@ func TestTargetRegistrationS3KeepsOriginalVersionAndReplaysAfterTakeover(t *test
 		}
 	}
 	secondScope, newer := s3RegistrationStoreFixture(t, control, "s3-second", "target_s3", 3)
+	staleScope, stale := s3RegistrationStoreFixture(t, control, "s3-stale", "target_s3", 4)
 	second, err := control.RegisterObservedS3BackupTarget(secondScope, newer)
 	if err != nil || second.Revision != 2 || publicTargetGeneration(t, second) != 2 {
 		t.Fatal(second, err)
+	}
+	if _, err := control.RegisterObservedS3BackupTarget(staleScope, stale); !errors.Is(err, ErrRevisionConflict) {
+		t.Fatal("a stale registry snapshot reached publication", err)
 	}
 	if _, err := control.DeleteBackupTarget("s3-delete", "s3-delete", "operator:test", first.ID); err != nil {
 		t.Fatal(err)
@@ -157,26 +161,56 @@ func TestTargetRegistrationS3RejectsUnboundPartialAndInvalidProviderLayout(t *te
 }
 
 func TestTargetRegistrationS3ContextCannotBeChangedOrLoseItsSignedBinding(t *testing.T) {
-	control := targetDeletePromotedStore(t, true)
-	scope, proof := s3RegistrationStoreFixture(t, control, "s3-bound-context", "target_s3", 0)
-	_, err := control.RegisterObservedS3BackupTarget(scope, proof)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := control.db.Exec("UPDATE control_target_registration_s3 SET context_json='{}'"); err == nil {
-		t.Fatal("S3 custody became mutable")
-	}
-	if _, err := control.db.Exec("DROP TRIGGER control_target_registration_s3_no_update"); err != nil {
-		t.Fatal(err)
-	}
-	frame := scope.frame
-	frame.BodySHA256 = strings.Repeat("f", 64)
-	raw, _ := json.Marshal(frame)
-	if _, err := control.db.Exec("UPDATE control_target_registration_s3 SET context_json=?", string(raw)); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, _, err := control.ReplayPublicBackupTargetRegistration(scope.operation, scope.actor, frame.BodySHA256); !errors.Is(err, ErrCorruptRecord) {
-		t.Fatal("altered request bytes passed history validation", err)
+	for _, mode := range []string{"update", "delete"} {
+		t.Run(mode, func(t *testing.T) {
+			control := targetDeletePromotedStore(t, true)
+			scope, proof := s3RegistrationStoreFixture(t, control, "s3-bound-context", "target_s3", 0)
+			if _, err := control.RegisterObservedS3BackupTarget(scope, proof); err != nil {
+				t.Fatal(err)
+			}
+			frame := scope.frame
+			query := "DELETE FROM control_target_registration_s3 WHERE operation_id=?"
+			args := []any{scope.operation}
+			if mode == "update" {
+				frame.BodySHA256 = strings.Repeat("f", 64)
+				raw, err := json.Marshal(frame)
+				if err != nil {
+					t.Fatal(err)
+				}
+				query = "UPDATE control_target_registration_s3 SET context_json=? WHERE operation_id=?"
+				args = []any{string(raw), scope.operation}
+			}
+			if _, err := control.db.Exec(query, args...); err == nil {
+				t.Fatal("S3 custody became mutable")
+			}
+			tx, err := control.db.Begin()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer tx.Rollback()
+			trigger := "control_target_registration_s3_no_" + mode
+			var schema string
+			if err := tx.QueryRow("SELECT sql FROM sqlite_schema WHERE name=?", trigger).Scan(&schema); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tx.Exec("DROP TRIGGER " + trigger); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tx.Exec(query, args...); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tx.Exec(schema); err != nil {
+				t.Fatal(err)
+			}
+			if err := tx.Commit(); err != nil {
+				t.Fatal(err)
+			}
+			// The schema is restored so this reaches retained witness and
+			// request-digest validation with corrupt historical content.
+			if _, _, _, err := control.ReplayPublicBackupTargetRegistration(scope.operation, scope.actor, frame.BodySHA256); !errors.Is(err, ErrCorruptRecord) {
+				t.Fatal("altered or missing context passed history validation", err)
+			}
+		})
 	}
 }
 

@@ -124,6 +124,7 @@ func TestTargetRegistrationQueryFailuresPreserveOriginalRowsAndReplay(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
+	const witnessesQuery = "FROM control_target_registrations r LEFT JOIN control_target_registration_s3 s"
 	faults := []inventoryReadFault{
 		{query: "PRAGMA user_version"},
 		{query: "SELECT signer_public_key,fleet_id,environment FROM control_target_registration_identity"},
@@ -133,9 +134,9 @@ func TestTargetRegistrationQueryFailuresPreserveOriginalRowsAndReplay(t *testing
 		{query: "FROM targets ORDER BY id", malformed: true},
 		{query: "SELECT DISTINCT record_id FROM control_events WHERE domain='target'"},
 		{query: "SELECT DISTINCT record_id FROM control_events WHERE domain='target'", cursor: true},
-		{query: "SELECT operation_id,revision,public_generation,observation FROM control_target_registrations"},
-		{query: "SELECT operation_id,revision,public_generation,observation FROM control_target_registrations", cursor: true},
-		{query: "SELECT operation_id,revision,public_generation,observation FROM control_target_registrations", malformed: true},
+		{query: witnessesQuery},
+		{query: witnessesQuery, cursor: true},
+		{query: witnessesQuery, malformed: true},
 		{query: "SELECT COUNT(*) FROM control_operator_mutations o JOIN control_events e"},
 		{query: "FROM targets WHERE id = ?"},
 	}
