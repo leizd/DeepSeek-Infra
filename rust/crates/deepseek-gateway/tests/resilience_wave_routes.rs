@@ -337,17 +337,29 @@ fn seed_repair_source_fixture(root: &Path) -> (String, String, String) {
         rusqlite::params![payload.len() as i64, payload.len() as i64],
     )
     .unwrap();
-    dr.execute(
-        "INSERT INTO recovery_point_copies (
-            target_id, policy_id, backup_id, committed_at, recoverable,
-            state, object_set_digest, role, metadata_json
-         ) VALUES (
-            't1', 'pol_rep', 'bk_1', '2026-11-18T01:00:00Z',
-            1, 'healthy', ?, 'primary', '{}'
-         )",
-        [&obj_digest],
-    )
-    .unwrap();
+    // `pol_rep` requires `minCommittedCopies: 2` across two failure domains, so
+    // the ledger must already hold both copies: the verifier reads the ledger
+    // and never writes a copy itself (`resilience_outcome_verifier` and
+    // `verify_action_outcome` both only filter the rows they are given). t1 is
+    // the primary; t2 is the copy the repair is asked to restore.
+    for (target, role, fd) in [("t1", "primary", "fd-a"), ("t2", "replica", "fd-b")] {
+        dr.execute(
+            "INSERT INTO recovery_point_copies (
+                target_id, policy_id, backup_id, committed_at, recoverable,
+                state, object_set_digest, role, metadata_json
+             ) VALUES (
+                ?, 'pol_rep', 'bk_1', '2026-11-18T01:00:00Z',
+                1, 'healthy', ?, ?, ?
+             )",
+            rusqlite::params![
+                target,
+                &obj_digest,
+                role,
+                format!("{{\"failureDomain\":\"{fd}\"}}")
+            ],
+        )
+        .unwrap();
+    }
 
     (obj_digest, obj_rel, t2_dir.to_string_lossy().into_owned())
 }
@@ -810,7 +822,7 @@ async fn slice7c_waves_admit_stale_replan_predecessor_guard_and_full_run_settlem
     .await;
     assert_eq!(st_stale, StatusCode::OK, "{stale_res}");
     assert_eq!(stale_res["admitted"], false);
-    assert_eq!(stale_res["status"], "PAUSED_REPLAN");
+    assert_eq!(stale_res["status"], "PAUSED_REPLAN", "{stale_res}");
     assert_eq!(stale_res["reason"], "STALE");
 
     let sconn = Connection::open(
