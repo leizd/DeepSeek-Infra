@@ -1745,6 +1745,13 @@ fn action_target_ids(actions: &[Value]) -> Vec<String> {
         .into_iter()
         .flatten()
         {
+            // `resilience_fresh_state._action_target_ids` is
+            // `str(value or "").strip()`, so a JSON null collapses to the empty
+            // string and is dropped. `value_str` renders null as the literal
+            // "None", which is truthy and would have been kept as a target id.
+            if !python_truthy(cand) {
+                continue;
+            }
             let trimmed = value_str(cand).trim().to_string();
             if !trimmed.is_empty() {
                 ids.insert(trimmed);
@@ -2549,11 +2556,7 @@ pub(crate) fn build_fresh_state_bundle_readonly(
     }
     let capacity = json!({"targets": cap_targets});
     if !validate_capacity_snapshot(&capacity) {
-        return Err(format!(
-            "CAPACITY_SNAPSHOT_UNAVAILABLE: target_ids={:?} targets={}",
-            target_ids,
-            dumps_compact(&capacity)
-        ));
+        return Err("CAPACITY_SNAPSHOT_UNAVAILABLE".to_string());
     }
 
     let mut running_effects = Vec::new();
