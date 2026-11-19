@@ -295,6 +295,14 @@ fn seed_repair_source_fixture(root: &Path) -> (String, String, String) {
     )
     .unwrap();
 
+    // Readers open the control database read-only, and `open_readonly_sqlite`
+    // uses `immutable=1` when no `-wal`/`-shm` side files exist. Fold the write
+    // log back into the main file first so the authority head seeded above is
+    // visible to those readers instead of sitting in a WAL they cannot see.
+    ctrl.execute_batch("PRAGMA wal_checkpoint(TRUNCATE); PRAGMA journal_mode=DELETE;")
+        .unwrap();
+    drop(ctrl);
+
     fs::create_dir_all(root.join(".backup-dr")).unwrap();
     let dr = Connection::open(root.join(".backup-dr").join("evidence.sqlite3")).unwrap();
     dr.execute_batch(
