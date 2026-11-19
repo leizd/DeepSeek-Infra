@@ -686,11 +686,12 @@ async fn slice7c_execute_dr_drill_repair_and_reconciling_effect_unknown() {
                 "INSERT INTO resilience_actions (
                     action_id, action_type, created_by, input_risk_digest, plan_digest,
                     state, parameters_json, owner_instance_id, lease_until, claim_token,
-                    execution_epoch, created_at, updated_at
+                    execution_epoch, effect_class, created_at, updated_at
                  ) VALUES (
                     'act_reconcile_missing', 'CREATE_REPAIR_JOB', 'crashed-worker', ?, ?,
                     'RECONCILING', '{\"policyId\":\"pol_rep\",\"backupId\":\"bk_1\",\"target\":\"t2\"}',
-                    'dead-node', '2000-01-01T00:00:00Z', 'tok', 1, '2026-11-18T10:00:00Z', '2026-11-18T10:00:00Z'
+                    'dead-node', '2000-01-01T00:00:00Z', 'tok', 1, 'REMOTE_MUTATION',
+                    '2026-11-18T10:00:00Z', '2026-11-18T10:00:00Z'
                  )",
                 [&dig, &dig],
             )
