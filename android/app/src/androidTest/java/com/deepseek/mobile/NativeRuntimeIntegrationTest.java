@@ -12,6 +12,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.platform.app.InstrumentationRegistry;
 
 import org.json.JSONArray;
+import org.json.JSONException;
 import org.json.JSONObject;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -19,6 +20,7 @@ import org.junit.runner.RunWith;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.InetAddress;
@@ -57,7 +59,12 @@ public class NativeRuntimeIntegrationTest {
             connection.getOutputStream().close();
         }
         try {
-            assertEquals("HTTP " + method + " " + path, expected, connection.getResponseCode());
+            int status = connection.getResponseCode();
+            String description = "HTTP " + method + " " + path;
+            if (status != expected && status >= 400) {
+                description += errorCode(connection.getErrorStream());
+            }
+            assertEquals(description, expected, status);
             if (operationId != null) {
                 assertEquals(operationId, connection.getHeaderField("X-DeepSeek-Operation-Id"));
             }
@@ -71,6 +78,27 @@ public class NativeRuntimeIntegrationTest {
             }
         } finally {
             connection.disconnect();
+        }
+    }
+
+    private static String errorCode(InputStream response) {
+        if (response == null) {
+            return "";
+        }
+        try (InputStream input = response) {
+            byte[] bytes = new byte[1024];
+            int size = 0;
+            while (size < bytes.length) {
+                int count = input.read(bytes, size, bytes.length - size);
+                if (count <= 0) {
+                    break;
+                }
+                size += count;
+            }
+            String code = new JSONObject(new String(bytes, 0, size, StandardCharsets.UTF_8)).optString("code");
+            return code.matches("[A-Za-z][A-Za-z0-9_]{0,79}") ? " [" + code + "]" : "";
+        } catch (IOException | JSONException ignored) {
+            return "";
         }
     }
 

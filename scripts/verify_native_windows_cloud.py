@@ -48,6 +48,16 @@ class RegisteredFilesystemTarget:
     marker_sha256: str
 
 
+@dataclass(frozen=True)
+class InitializedFilesystemTarget:
+    body: bytes
+    reply: bytes
+    operation: str
+    directory: Path
+    target_id: str
+    marker_sha256: str
+
+
 def require_cloud_windows(environment: dict[str, str], system: str) -> None:
     expected = {"GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted", "RUNNER_OS": "Windows",
                 "GITHUB_REPOSITORY": "leizd/DeepSeek-Infra"}
@@ -226,7 +236,8 @@ def target_body(path: Path) -> bytes:
     return json.dumps({"path": str(path), "label": "Windows target fixture"}, separators=(",", ":")).encode()
 
 
-def target_witnesses(profile: Path, operations: tuple[str, str], writer_fence: int) -> dict[str, str]:
+def target_witnesses(profile: Path, operations: tuple[str, str], writer_fence: int,
+                     initialized: InitializedFilesystemTarget) -> dict[str, str]:
     database = profile / "go-control/control.sqlite3"
     with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True, timeout=3)) as db:
         rows = db.execute(
@@ -236,13 +247,29 @@ def target_witnesses(profile: Path, operations: tuple[str, str], writer_fence: i
                USING (operation_id) ORDER BY r.revision"""
         ).fetchall()
         relocations = db.execute("SELECT operation_id,observation FROM control_target_registration_locations").fetchall()
-    if (len(rows) != 2 or len(relocations) != 1 or relocations[0][0] != operations[1] or not relocations[0][1]
-            or any(row[:4] != (operations[index], TARGET_ID, index + 1, index + 1)
-                   or not row[4] or row[5:] != (operations[index], 1, writer_fence)
-                   for index, row in enumerate(rows))):
+        marker_effects = db.execute(
+            "SELECT operation_id,execution_epoch,state,claim_sha256,preparation_sha256,receipt FROM control_target_marker_operations"
+        ).fetchall()
+    required = (*operations, initialized.operation)
+    by_operation = {row[0]: row for row in rows}
+    if (len(rows) != len(required) or set(by_operation) != set(required)
+            or len(relocations) != 1 or relocations[0][0] != operations[1] or not relocations[0][1]
+            or any(by_operation[op][:4] != (op, TARGET_ID, index + 1, index + 1)
+                   or not by_operation[op][4] or by_operation[op][5:] != (op, 1, writer_fence)
+                   for index, op in enumerate(operations))):
         raise RuntimeError("WINDOWS_TARGET_REGISTRATION_WITNESS_INVALID")
-    return {"registration": hashlib.sha256(rows[0][4]).hexdigest(), "move": hashlib.sha256(rows[1][4]).hexdigest(),
-            "oldLocation": hashlib.sha256(relocations[0][1]).hexdigest()}
+    row = by_operation[initialized.operation]
+    if (row[:4] != (initialized.operation, initialized.target_id, 1, 1) or not row[4]
+            or row[5:] != (initialized.operation, 1, writer_fence) or len(marker_effects) != 1
+            or marker_effects[0][:3] != (initialized.operation, 1, "SETTLED")
+            or any(not isinstance(value, bytes) or len(value) != 32 for value in marker_effects[0][3:5])
+            or not marker_effects[0][5]):
+        raise RuntimeError("WINDOWS_TARGET_INITIALIZATION_WITNESS_INVALID")
+    return {"registration": hashlib.sha256(by_operation[operations[0]][4]).hexdigest(),
+            "move": hashlib.sha256(by_operation[operations[1]][4]).hexdigest(),
+            "oldLocation": hashlib.sha256(relocations[0][1]).hexdigest(),
+            "initialization": hashlib.sha256(row[4]).hexdigest(),
+            "markerEffect": hashlib.sha256(marker_effects[0][5]).hexdigest()}
 
 
 def verify_windows_target_registration(origin: str, token: str, root: Path) -> RegisteredFilesystemTarget:
@@ -301,16 +328,59 @@ def verify_windows_target_registration(origin: str, token: str, root: Path) -> R
                                       moved, hashlib.sha256(marker).hexdigest())
 
 
-def verify_windows_target_restart(origin: str, token: str, target: RegisteredFilesystemTarget) -> None:
+def verify_windows_target_initialization(origin: str, token: str, root: Path) -> InitializedFilesystemTarget:
+    target = root / "Uninitialized Disk"
+    target.mkdir()
+    marker_path = target / TARGET_MARKER
+    invalid = json.dumps({"path": str(target), "maxConcurrentTransfers": -1}).encode()
+    status, response, _ = post_target(origin, token, invalid)
+    if status != 400 or json.loads(response).get("code") != "invalid_payload" or marker_path.exists():
+        raise RuntimeError("WINDOWS_INVALID_TARGET_METADATA_CREATED_MARKER")
+    body = target_body(target)
+    status, reply, operation = post_target(origin, token, body)
+    info = json.loads(reply)
+    target_id = info.get("targetId", "")
+    if (status != 200 or not re.fullmatch(r"target-inspect-public-v1-[0-9a-f]{32}", operation)
+            or not re.fullmatch(r"target_[0-9a-f]{12}", target_id)
+            or info.get("path") != str(target.resolve(strict=True))
+            or info.get("topologyGeneration") != 1 or "_nativeTargetRegistrationV1" in info):
+        raise RuntimeError("WINDOWS_TARGET_INITIALIZATION_FAILED")
+    raw = marker_path.read_bytes()
+    marker = json.loads(raw)
+    nonce = marker.get("targetNonce", "")
+    if (marker.get("schemaVersion") != 3 or marker.get("targetId") != target_id
+            or nonce != info.get("targetNonce") or not re.fullmatch(r"[0-9a-f]{32}", nonce)
+            or not re.fullmatch(r"inc_[0-9a-f]{16}", marker.get("incarnationId", ""))
+            or not re.fullmatch(r"inst_[0-9a-f]{16}", marker.get("ownerInstallationId", ""))
+            or marker.get("targetGeneration") != 0 or marker.get("latestCommitHash") != "0" * 64
+            or marker.get("createdAt") != info.get("createdAt")):
+        raise RuntimeError("WINDOWS_TARGET_INITIAL_MARKER_INVALID")
+    return InitializedFilesystemTarget(body, reply, operation, target, target_id, hashlib.sha256(raw).hexdigest())
+
+
+def verify_windows_target_restart(origin: str, token: str, target: RegisteredFilesystemTarget,
+                                  initialized: InitializedFilesystemTarget) -> None:
     status, replay, echoed = post_target(origin, token, target.original_body, target.operations[0])
     listed = json.loads(request(origin, TARGETS, token))
     targets = listed.get("targets")
+    expected = {TARGET_ID, initialized.target_id}
     if (status != 200 or replay != target.original_reply or echoed != target.operations[0]
-            or not isinstance(targets, list) or len(targets) != 1 or listed.get("health") != []
-            or targets[0].get("path") != str(target.moved.resolve(strict=True)) or targets[0].get("targetId") != TARGET_ID
-            or targets[0].get("topologyGeneration") != 2 or "_nativeTargetRegistrationV1" in targets[0]
+            or not isinstance(targets, list) or len(targets) != 2 or listed.get("health") != []
+            or {row.get("targetId") for row in targets} != expected or any("_nativeTargetRegistrationV1" in row for row in targets)
             or hashlib.sha256((target.moved / TARGET_MARKER).read_bytes()).hexdigest() != target.marker_sha256):
         raise RuntimeError("WINDOWS_TARGET_REGISTRATION_RESTART_FAILED")
+    locations = {row["targetId"]: (row.get("path"), row.get("topologyGeneration")) for row in targets}
+    if locations != {TARGET_ID: (str(target.moved.resolve(strict=True)), 2),
+                     initialized.target_id: (str(initialized.directory.resolve(strict=True)), 1)}:
+        raise RuntimeError("WINDOWS_TARGET_REGISTRATION_RESTART_FAILED")
+    status, replay, echoed = post_target(origin, token, initialized.body, initialized.operation)
+    if status != 200 or replay != initialized.reply or echoed != initialized.operation:
+        raise RuntimeError("WINDOWS_TARGET_INITIALIZATION_REPLAY_FAILED")
+    changed = json.dumps({"path": str(initialized.directory), "label": "Changed target fixture"}).encode()
+    status, response, _ = post_target(origin, token, changed, initialized.operation)
+    if (status != 409 or json.loads(response).get("code") != "mutation_request_replay_conflict"
+            or hashlib.sha256((initialized.directory / TARGET_MARKER).read_bytes()).hexdigest() != initialized.marker_sha256):
+        raise RuntimeError("WINDOWS_TARGET_INITIALIZATION_CONFLICT_FAILED")
 
 
 def profile_proof(profile: Path) -> dict[str, Any]:
@@ -438,7 +508,9 @@ def main() -> int:
             file_id = validate_window_receipt(json.loads(receipt_path.read_text()))
             report["targetRegistrationStage"] = "register-and-move"
             target = verify_windows_target_registration(origin, token, target_root)
-            witnesses = target_witnesses(profile, target.operations, initial["writerFence"])
+            report["targetRegistrationStage"] = "initialize"
+            initialized = verify_windows_target_initialization(origin, token, target_root)
+            witnesses = target_witnesses(profile, target.operations, initial["writerFence"], initialized)
             report["targetRegistrationStage"] = "close-and-restart"
             close_window(process, view, {row["pid"] for row in first})
             report["firstWindowCloseStoppedNativeTree"] = True
@@ -454,12 +526,13 @@ def main() -> int:
                 raise RuntimeError("WINDOWS_RESTART_DID_NOT_ADVANCE_ORIGINAL_WRITER")
             if request(origin, "/api/file-source?" + urlencode(dict(fileId=file_id)), token) != ORIGINAL:
                 raise RuntimeError("WINDOWS_RESTART_LOST_ORIGINAL_FILE")
-            verify_windows_target_restart(origin, token, target)
-            if target_witnesses(profile, target.operations, initial["writerFence"]) != witnesses:
+            verify_windows_target_restart(origin, token, target, initialized)
+            if target_witnesses(profile, target.operations, initial["writerFence"], initialized) != witnesses:
                 raise RuntimeError("WINDOWS_TARGET_REGISTRATION_WITNESS_CHANGED_AFTER_RESTART")
             report.update(targetRegistrationStage="completed", filesystemTargetHTTPQualified=True,
                           targetCaseAliasCanonicalized=True, targetExtendedOverlapRefused=True, targetJunctionRefused=True,
                           targetOriginalHTTPReplyReplayed=True, targetMarkerSha256=target.marker_sha256,
+                          targetInitializationAndReplayQualified=True, initializedTargetMarkerSha256=initialized.marker_sha256,
                           targetWitnessSha256=witnesses)
             close_window(process, view, {row["pid"] for row in second})
             report.update(status="PASS", restartedProcesses=second, restartedWindow=view, restartedNativeOrigin=restarted,

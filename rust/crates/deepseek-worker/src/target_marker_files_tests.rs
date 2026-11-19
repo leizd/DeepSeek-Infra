@@ -51,3 +51,22 @@ fn target_marker_files_do_not_follow_links_to_a_different_directory() {
     assert_eq!(fs::read(&other).unwrap(), b"untouched");
     assert!(marker.symlink_metadata().unwrap().file_type().is_symlink());
 }
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[test]
+fn target_marker_files_accept_search_only_ancestors() {
+    use std::{fs, os::unix::fs::PermissionsExt};
+
+    let root = tempfile::tempdir().unwrap();
+    let parent = root.path().canonicalize().unwrap().join("search-only");
+    let target = parent.join("target");
+    fs::create_dir_all(&target).unwrap();
+    let permissions = fs::metadata(&parent).unwrap().permissions();
+    fs::set_permissions(&parent, fs::Permissions::from_mode(0o100)).unwrap();
+    let observed = MarkerDirectory::open(&target).and_then(|directory| {
+        directory.create_marker(b"original", &[7; 32], || Ok(()))?;
+        directory.marker(4096)
+    });
+    fs::set_permissions(&parent, permissions).unwrap();
+    assert_eq!(observed.unwrap(), Some(b"original".to_vec()));
+}

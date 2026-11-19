@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -17,6 +18,7 @@ import (
 	"github.com/leizd/DeepSeek-Infra/go/internal/config"
 	actionv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/actionv1"
 	"github.com/leizd/DeepSeek-Infra/go/internal/store"
+	"github.com/leizd/DeepSeek-Infra/go/internal/worker"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -142,6 +144,16 @@ func TestTargetRegistrationMarkerHTTPRecoversOriginalRequestAfterEffectReplyLoss
 		return publicTargetHTTPRequest(t, server, http.MethodPost, endpoint, string(body), operation)
 	}
 	digest := sha256.Sum256(request)
+	ca := os.Getenv(worker.EnvWorkerTLSCAFile)
+	missingCA := filepath.Join(base, "missing-ca.pem")
+	beforeUnavailable := peer.calls.Load()
+	t.Setenv(worker.EnvWorkerTLSCAFile, missingCA)
+	if code, response, _ := invoke(request); code != http.StatusServiceUnavailable ||
+		!bytes.Contains(response, []byte("BACKUP_TARGET_INSPECTION_UNAVAILABLE")) ||
+		peer.calls.Load() != beforeUnavailable || peer.marker.initialized.Load() != 0 {
+		t.Fatal("unavailable worker trust admitted a new effect", code, string(response))
+	}
+	t.Setenv(worker.EnvWorkerTLSCAFile, ca)
 	peer.marker.observationFault.Store(markerCompetingUnavailable)
 	if code, _, _ := invoke(request); code != http.StatusServiceUnavailable || peer.marker.initialized.Load() != 0 {
 		t.Fatal("a competing-read failure admitted an effect", code)
@@ -158,6 +170,14 @@ func TestTargetRegistrationMarkerHTTPRecoversOriginalRequestAfterEffectReplyLoss
 	if _, exists, err := control.Get("target", pending.Claim.TargetId); exists || err != nil {
 		t.Fatal("uncertain marker appeared as a registered target", exists, err)
 	}
+	beforeUnavailable = peer.calls.Load()
+	t.Setenv(worker.EnvWorkerTLSCAFile, missingCA)
+	if code, response, header := invoke(request); code != http.StatusServiceUnavailable || header != operation ||
+		!bytes.Contains(response, []byte("BACKUP_TARGET_MARKER_EFFECT_UNKNOWN")) ||
+		peer.calls.Load() != beforeUnavailable || peer.marker.reconciled.Load() != 0 || peer.marker.initialized.Load() != 1 {
+		t.Fatal("unavailable worker trust discarded the original pending effect", code, string(response))
+	}
+	t.Setenv(worker.EnvWorkerTLSCAFile, ca)
 	changed, _ := json.Marshal(map[string]any{"path": path, "label": "Changed"})
 	if code, _, _ := invoke(changed); code != http.StatusConflict || peer.marker.reconciled.Load() != 0 {
 		t.Fatal("changed request was allowed to reconcile", code)

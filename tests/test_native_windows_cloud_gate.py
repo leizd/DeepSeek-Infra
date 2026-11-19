@@ -13,6 +13,7 @@ import pytest
 import yaml
 
 from scripts.verify_native_windows_cloud import (
+    InitializedFilesystemTarget,
     TARGET_ID,
     active_owned_pids,
     canonical_source,
@@ -112,7 +113,7 @@ def test_native_shutdown_cannot_hide_a_retained_child_after_its_parent_exits() -
     assert active_owned_pids(known_tree, inventory[1:]) == set()
 
 
-def test_target_witnesses_require_the_original_registration_and_relocation(tmp_path: Path) -> None:
+def test_target_witnesses_require_original_registration_relocation_and_initialization(tmp_path: Path) -> None:
     directory = tmp_path / "go-control"
     directory.mkdir()
     with closing(sqlite3.connect(directory / "control.sqlite3")) as database:
@@ -125,6 +126,9 @@ def test_target_witnesses_require_the_original_registration_and_relocation(tmp_p
                 operation_id TEXT, action_id TEXT, execution_epoch INTEGER, writer_fencing_token INTEGER
             );
             CREATE TABLE control_target_registration_locations (operation_id TEXT, observation BLOB);
+            CREATE TABLE control_target_marker_operations (
+                operation_id TEXT, execution_epoch INTEGER, state TEXT, claim_sha256 BLOB, preparation_sha256 BLOB, receipt BLOB
+            );
             """
         )
         operations = ("first-registration", "relocation")
@@ -133,18 +137,37 @@ def test_target_witnesses_require_the_original_registration_and_relocation(tmp_p
                              (operation, TARGET_ID, revision, revision, operation.encode()))
             database.execute("INSERT INTO control_operator_mutations VALUES (?,?,?,?)", (operation, operation, 1, 4))
         database.execute("INSERT INTO control_target_registration_locations VALUES (?,?)", (operations[1], b"signed-location-example"))
+        initialized = InitializedFilesystemTarget(b"body", b"reply", "initialization", tmp_path / "uninitialised",
+                                                  "target_0123456789ab", "1" * 64)
+        database.execute("INSERT INTO control_target_registrations VALUES (?,?,?,?,?)",
+                         (initialized.operation, initialized.target_id, 1, 1, b"signed-initial-observation"))
+        database.execute("INSERT INTO control_operator_mutations VALUES (?,?,?,?)",
+                         (initialized.operation, initialized.operation, 1, 4))
+        database.execute("INSERT INTO control_target_marker_operations VALUES (?,?,?,?,?,?)",
+                         (initialized.operation, 1, "SETTLED", b"c" * 32, b"p" * 32, b"signed-marker-receipt"))
         database.commit()
-        assert target_witnesses(tmp_path, operations, 4) == {
+        expected = {
             "registration": hashlib.sha256(operations[0].encode()).hexdigest(),
             "move": hashlib.sha256(operations[1].encode()).hexdigest(),
             "oldLocation": hashlib.sha256(b"signed-location-example").hexdigest(),
+            "initialization": hashlib.sha256(b"signed-initial-observation").hexdigest(),
+            "markerEffect": hashlib.sha256(b"signed-marker-receipt").hexdigest(),
         }
+        assert target_witnesses(tmp_path, operations, 4, initialized) == expected
         with pytest.raises(RuntimeError, match="WINDOWS_TARGET_REGISTRATION_WITNESS_INVALID"):
-            target_witnesses(tmp_path, operations, 5)
+            target_witnesses(tmp_path, operations, 5, initialized)
+        database.execute("UPDATE control_target_marker_operations SET state='DISPATCHED', receipt=NULL")
+        database.commit()
+        with pytest.raises(RuntimeError, match="WINDOWS_TARGET_INITIALIZATION_WITNESS_INVALID"):
+            target_witnesses(tmp_path, operations, 4, initialized)
+        database.execute("UPDATE control_target_marker_operations SET state='SETTLED', receipt=?", (b"changed-marker-receipt",))
+        database.commit()
+        changed = target_witnesses(tmp_path, operations, 4, initialized)
+        assert changed == dict(expected, markerEffect=hashlib.sha256(b"changed-marker-receipt").hexdigest())
         database.execute("UPDATE control_target_registration_locations SET operation_id=?", (operations[0],))
         database.commit()
         with pytest.raises(RuntimeError, match="WINDOWS_TARGET_REGISTRATION_WITNESS_INVALID"):
-            target_witnesses(tmp_path, operations, 4)
+            target_witnesses(tmp_path, operations, 4, initialized)
 
 
 def source_tree(tmp_path: Path) -> tuple[Path, str]:

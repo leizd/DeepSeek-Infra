@@ -30,18 +30,26 @@ impl MarkerDirectory {
         use rustix::fs::{Mode, OFlags, open, openat};
         use std::path::Component;
 
-        let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+        let directory_flags = OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        let search_flags = directory_flags | OFlags::PATH;
+        #[cfg(not(any(target_os = "linux", target_os = "android")))]
+        let search_flags = directory_flags | OFlags::RDONLY;
         let mut parts = path.components();
         if parts.next() != Some(Component::RootDir) {
             return Err(invalid_directory());
         }
-        let mut dir = open("/", flags, Mode::empty())?;
+        let mut dir = open("/", search_flags, Mode::empty())?;
         for part in parts {
             let Component::Normal(name) = part else {
                 return Err(invalid_directory());
             };
-            dir = openat(&dir, name, flags, Mode::empty())?;
+            dir = openat(&dir, name, search_flags, Mode::empty())?;
         }
+        // Android app directories can have search-only ancestors. Keep the
+        // path walk pinned and open the final directory for marker I/O and sync.
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        let dir = openat(&dir, ".", directory_flags | OFlags::RDONLY, Mode::empty())?;
         Ok(Self { handle: dir.into() })
     }
 

@@ -88,6 +88,11 @@ func TestTargetRegistrationMarkerDispatchIsSingleAndOriginalResultRecoversAfterT
 	if err != nil || operation.State != "CLAIMED" || operation.Claim.Fence.ExecutionEpoch != 1 {
 		t.Fatal("legal absent target failed admission", err)
 	}
+	commitFault := inventoryReadFault{commit: true, armed: true}
+	installInventoryReadFault(t, control, &commitFault)
+	if read, err := control.AdmitTargetMarker(scope, absent, nil, body); err == nil || read.Claim != nil || !commitFault.injected {
+		t.Fatal("an interrupted repeat admission returned the original claim as confirmed", err)
+	}
 	same, err := control.AdmitTargetMarker(scope, absent, nil, body)
 	if err != nil || !proto.Equal(operation.Claim, same.Claim) {
 		t.Fatal("admission changed the original action fence", err)
@@ -100,6 +105,16 @@ func TestTargetRegistrationMarkerDispatchIsSingleAndOriginalResultRecoversAfterT
 		t.Fatal("pending work accepted a different body", found, err)
 	}
 	dispatch, effect := targetMarkerEffectFixture(t, operation)
+	if permit, err := control.BeginTargetMarkerDispatch(&actionv1.TargetMarkerDispatchRequest{}); permit != nil || !errors.Is(err, ErrTargetMarkerClaim) {
+		t.Fatal("an incomplete request obtained a marker permit", err)
+	}
+	observedScope, firstRead, firstDocument := targetMarkerReadFixture(t, control, operation, effect)
+	if _, _, err := control.RegisterPublicInitializedBackupTarget(observedScope, firstRead, nil, body, firstDocument, effect); !errors.Is(err, ErrTargetMarkerClaim) {
+		t.Fatal("an effect could settle before authorizing its dispatch", err)
+	}
+	if pending, found, err := control.PendingTargetMarker(scope.operationID, scope.actor, body); err != nil || !found || pending.State != "CLAIMED" {
+		t.Fatal("premature settlement disturbed the original claim", found, err)
+	}
 	badDispatch := proto.Clone(dispatch).(*actionv1.TargetMarkerDispatchRequest)
 	badDispatch.Claim.Nonce[31] ^= 1
 	if _, err := control.BeginTargetMarkerDispatch(badDispatch); !errors.Is(err, ErrTargetMarkerClaim) {
@@ -414,6 +429,11 @@ func TestTargetRegistrationMarkerConsumedOperationCannotIssueFreshClaim(t *testi
 		t.Fatal(err)
 	}
 	_, absent, _ := absentMarkerFixture(t, control, "consumed", scope.requestedPath)
+	historyFault := inventoryReadFault{query: "SELECT operation_id, domain, record_id, record_revision", armed: true}
+	installInventoryReadFault(t, control, &historyFault)
+	if op, err := control.AdmitTargetMarker(scope, absent, nil, body); !errors.Is(err, errInventoryReadInterrupted) || op.Claim != nil || !historyFault.injected {
+		t.Fatal("could not distinguish inaccessible operator history from an unused operation", err)
+	}
 	if op, err := control.AdmitTargetMarker(scope, absent, nil, body); !errors.Is(err, ErrMutationRequestReplayConflict) || op.Claim != nil {
 		t.Fatal("a consumed public request authorized a new filesystem effect", err)
 	}

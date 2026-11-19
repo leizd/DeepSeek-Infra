@@ -15378,3 +15378,28 @@ endpoint. After restarting the native runtime, the test requires the exact
 original HTTP response and marker bytes, one registry entry, and a conflict for
 a changed body submitted with the original operation ID. It joins the
 existing five-emulator cloud workload without changing the other test cases.
+
+### 2026-11-19 packaged filesystem marker diagnosis and verification
+
+On e82adb1, push run 44288612019 passed all 87 Go race families, the eight
+scoped Android SQLite cases, and the real Rust custody and Chromium workloads.
+The original complete Go gate measured 18,729 of 19,726 statements, or
+94.9458%, leaving 11 statements to the 95% floor.
+
+On 18852f6, Android dispatch 44290312113 built and verified both installed
+APKs on each emulator. Each raw instrumentation log recorded 16 tests and
+one failure at the added target registration. The first invalid request
+returned 503. The worker opened every directory component for reading.
+Linux and Android now pin ancestors with search handles and open the final
+directory from that handle for marker I/O and sync. This preserves no-follow
+resolution and the final directory access and identity checks. The Android
+fixture retains its assertions and reports a bounded error code on mismatch.
+
+The Windows app workload now also initializes an empty directory, validates
+the marker and the Go receipt, restarts the native application, and verifies
+the exact replay, a changed-body refusal, and retained marker bytes. The Go
+regressions cover unavailable worker trust before admission and during
+recovery, interrupted historical reads and retirement, a claim that never
+received a dispatch permit, and damaged competing registry paths. The original
+coverage floors and every retained platform case still apply. Exact-source
+cloud verification and full migration acceptance remain open.

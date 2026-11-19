@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"errors"
 	"path/filepath"
 	"reflect"
@@ -13,6 +14,24 @@ func TestTargetRegistrationMarkerV22UpgradePreservesRegistrationAfterRollback(t 
 	original, _, err := control.RegisterPublicInspectedBackupTarget(scope, observation, nil, nil, body, document)
 	if err != nil {
 		t.Fatal(err)
+	}
+	for _, fault := range []inventoryReadFault{
+		{query: "SELECT sql FROM sqlite_schema WHERE name=? AND type=?", armed: true},
+		{query: "SELECT COUNT(*) FROM control_target_marker_operations", armed: true},
+		{query: "DROP table control_target_marker_operations", exec: true, armed: true},
+	} {
+		installInventoryReadFault(t, control, &fault)
+		withRegistrationRollback(t, control, func(tx *sql.Tx) {
+			retireErr := retireEmptyTargetMarkersTx(tx)
+			if !fault.injected || (!errors.Is(retireErr, errInventoryReadInterrupted) && !errors.Is(retireErr, ErrForeignRuntimeStore)) {
+				t.Fatal("marker history retirement hid a storage failure", fault.query, retireErr)
+			}
+		})
+		withRegistrationRollback(t, control, func(tx *sql.Tx) {
+			if err := verifyTargetMarkerSchemaTx(tx); err != nil {
+				t.Fatal("interrupted retirement left an incomplete marker schema", fault.query, err)
+			}
+		})
 	}
 	tx, err := control.db.Begin()
 	if err != nil {

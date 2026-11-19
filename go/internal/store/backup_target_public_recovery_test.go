@@ -401,4 +401,8 @@ func TestTargetRegistrationPublicInvalidLegacyPathDoesNotDisappearFromSnapshot(t
 	if _, _, err := control.RegisterPublicInspectedBackupTarget(scope, receipt, nil, nil, body, document); !errors.Is(err, ErrCorruptRecord) {
 		t.Fatal("registration committed without resolving every competitor", err)
 	}
+	initialization, absent, digest := absentMarkerFixture(t, control, "unresolved-marker-competitor", filepath.Join(t.TempDir(), "empty"))
+	if operation, err := control.AdmitTargetMarker(initialization, absent, nil, digest); !errors.Is(err, ErrCorruptRecord) || operation.Claim != nil {
+		t.Fatal("an unresolved legacy path admitted marker creation", err)
+	}
 }
