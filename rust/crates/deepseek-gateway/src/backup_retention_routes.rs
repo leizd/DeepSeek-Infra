@@ -575,13 +575,12 @@ fn assert_catalog_committed(root: &Path) -> Result<(), AppError> {
                 .iter()
                 .map(|m| {
                     format!(
-                        "{}[valid={} id={:?}]",
+                        "{}[valid={} claimed={} recomputed={} doc={}]",
                         m.relative_path,
                         commit_marker_valid(&m.document),
-                        m.document
-                            .get("backupId")
-                            .map(value_str)
-                            .unwrap_or_default()
+                        m.commit_hash(),
+                        crate::backup_commit::commit_hash(&m.document),
+                        deepseek_policy::python_json::dumps_compact(&m.document)
                     )
                 })
                 .collect();
