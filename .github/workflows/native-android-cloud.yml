@@ -39,10 +39,23 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+      # Gradle User Home caching is enabled so the plugin classpath is not
+      # re-downloaded on every run. Maven Central answers this runner's cold-start
+      # burst of parallel requests with `429 Too Many Requests`, which Gradle then
+      # records as "Could not find" for every affected artifact, failing the build
+      # before compilation starts.
+      #
+      # `cache-provider: basic` keeps the store on the standard GitHub Actions
+      # cache rather than the action's default enhanced (commercial) service, and
+      # `cache-read-only: false` is explicit because the default is `true` for any
+      # non-default branch - this workflow only ever runs on such branches, so the
+      # default would read an entry that is never written.
       - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
         with:
           gradle-version: "8.9"
-          cache-disabled: true
+          cache-provider: basic
+          cache-read-only: false
+          cache-cleanup: never
       - uses: dtolnay/rust-toolchain@69084b241933c14c2fa24234c4596f11a2655339 # 1.85.0
         with:
           toolchain: "1.85.0"
