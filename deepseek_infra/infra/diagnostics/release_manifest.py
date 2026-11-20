@@ -27,6 +27,13 @@ from deepseek_infra.infra.diagnostics.evidence_inventory import evidence_paths
 SCHEMA_VERSION = "release-manifest.v3"
 _CHUNK = 1024 * 1024
 
+# The Rust floor the release manifest records. It must equal the value CI
+# enforces, which is `RUST_COVERAGE_CURRENT_FLOOR` in
+# `scripts/run_rust_coverage.py`; that ladder raises the floor in stages toward
+# 95% and `tests/test_release_manifest_floor.py` pins the two together so a
+# stage advance cannot leave this one behind.
+RUST_COVERAGE_FLOOR = 82.0
+
 
 def sha256_of(path: Path) -> str:
     digest = hashlib.sha256()
@@ -119,7 +126,7 @@ def build_manifest(
         "python": python_version,
         "coverageGate": coverage_gate,
         "pythonCoverage": {"percent": python_coverage, "gate": coverage_gate},
-        "rustCoverage": {"linePercent": rust_coverage, "minimumPercent": 80.0},
+        "rustCoverage": {"linePercent": rust_coverage, "minimumPercent": RUST_COVERAGE_FLOOR},
         "rustTestCount": rust_test_count,
         "parityCounts": dict(parity_counts or {}),
         "architectureDecisionSha256": architecture_decision_sha256,

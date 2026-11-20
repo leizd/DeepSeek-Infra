@@ -23,6 +23,18 @@ GENERATED_PROTO_COVERAGE_OMIT = (
     r"[/\\]target[/\\].*[/\\]build[/\\]deepseek-protocol-[^/\\]+[/\\]out[/\\]deepseek\.[^/\\]+\.v1\.rs$"
 )
 
+# The Rust workspace is being raised from an 80% floor to a 95% floor in stages.
+# Each stage is a committed floor, not an aspiration: the number here is what CI
+# enforces, so coverage can never regress across a stage boundary. The final
+# stage is the target; once it is reached the ladder collapses to that constant.
+#
+# Stage 1 starts at the current measured value rounded up, so the floor is
+# immediately binding rather than sitting slack under the existing 80%.
+RUST_COVERAGE_STAGE_FLOORS: tuple[float, ...] = (82.0, 85.0, 88.0, 91.0, 95.0)
+RUST_COVERAGE_TARGET = RUST_COVERAGE_STAGE_FLOORS[-1]
+# The stage currently enforced by CI. Advancing this is what raises the floor.
+RUST_COVERAGE_CURRENT_FLOOR = RUST_COVERAGE_STAGE_FLOORS[0]
+
 TEST_INVENTORY_COMMAND = [
     "cargo", "llvm-cov", "--locked", "--profile", "coverage", "--manifest-path", "rust/Cargo.toml",
     "--workspace", "--all-features", "--no-report", "--", "--list", "--format", "terse",
@@ -114,7 +126,7 @@ def _coverage_metric(totals: dict[str, Any], name: str) -> dict[str, float | int
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Enforce and record complete Rust workspace line coverage")
-    parser.add_argument("--threshold", type=float, default=80.0)
+    parser.add_argument("--threshold", type=float, default=RUST_COVERAGE_CURRENT_FLOOR)
     parser.add_argument("--artifact-out", type=Path, default=ROOT / "artifacts" / "rust-coverage.json")
     parser.add_argument("--lcov-out", type=Path, default=ROOT / "artifacts" / "rust-coverage.lcov")
     parser.add_argument(

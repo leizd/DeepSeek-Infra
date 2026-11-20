@@ -1737,7 +1737,6 @@ jobs:
       - name: Enforce Rust workspace line coverage
         run: >-
           python scripts/run_rust_coverage.py
-          --threshold 80
           --artifact-out artifacts/rust-coverage.json
           --lcov-out artifacts/rust-coverage.lcov
           --evidence-out docs/evidence/rust-coverage-v$RELEASE_VERSION.json

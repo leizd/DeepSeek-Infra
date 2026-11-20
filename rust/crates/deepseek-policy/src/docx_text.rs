@@ -1333,3 +1333,164 @@ fn format_clock(hour: u32, minute: u32, second: u32, micros: u32) -> String {
         format!("{base}.{micros:06}")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write;
+
+    use zip::write::FileOptions;
+    use zip::{CompressionMethod, ZipWriter};
+
+    use super::{extract_docx_text, extract_epub_text, extract_pptx_text};
+
+    const W_NS: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+
+    fn office_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut writer = ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let opts = FileOptions::default().compression_method(CompressionMethod::Stored);
+        for (name, content) in entries {
+            writer.start_file(*name, opts).unwrap();
+            writer.write_all(content).unwrap();
+        }
+        writer.finish().unwrap().into_inner()
+    }
+
+    fn document_xml(body: &str) -> Vec<u8> {
+        format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\
+             <w:document xmlns:w=\"{W_NS}\"><w:body>{body}</w:body></w:document>"
+        )
+        .into_bytes()
+    }
+
+    /// Measured against `deepseek_infra.infra.rag.files.extract_docx_text`, which
+    /// returns `'Hello world\nSecond\ttabbed\nA1\tB1\nA2\tB2'` for this input.
+    #[test]
+    fn docx_paragraphs_tables_and_tabs_match_the_oracle() {
+        let body = concat!(
+            "<w:p><w:r><w:t>Hello world</w:t></w:r></w:p>",
+            "<w:p><w:r><w:t>Second</w:t></w:r><w:r><w:tab/><w:t>tabbed</w:t></w:r></w:p>",
+            "<w:tbl>",
+            "<w:tr><w:tc><w:p><w:r><w:t>A1</w:t></w:r></w:p></w:tc>",
+            "<w:tc><w:p><w:r><w:t>B1</w:t></w:r></w:p></w:tc></w:tr>",
+            "<w:tr><w:tc><w:p><w:r><w:t>A2</w:t></w:r></w:p></w:tc>",
+            "<w:tc><w:p><w:r><w:t>B2</w:t></w:r></w:p></w:tc></w:tr>",
+            "</w:tbl>",
+            "<w:p/>",
+        );
+        let data = office_zip(&[("word/document.xml", &document_xml(body))]);
+        assert_eq!(
+            extract_docx_text(&data).unwrap(),
+            "Hello world\nSecond\ttabbed\nA1\tB1\nA2\tB2"
+        );
+    }
+
+    /// A line break inside a run is a newline, and surrounding whitespace is
+    /// trimmed per paragraph, which is what `paragraph_text` does.
+    #[test]
+    fn docx_line_breaks_and_trimming() {
+        let body = "<w:p><w:r><w:t>  padded  </w:t></w:r></w:p>\
+                    <w:p><w:r><w:t>one</w:t><w:br/><w:t>two</w:t></w:r></w:p>";
+        let data = office_zip(&[("word/document.xml", &document_xml(body))]);
+        assert_eq!(extract_docx_text(&data).unwrap(), "padded\none\ntwo");
+    }
+
+    /// Headers and footers are appended after the body in sorted name order, so
+    /// `word/footer1.xml` precedes `word/header1.xml`. The oracle returns
+    /// `'body\n\nfooter\n\nheader'` for this input.
+    #[test]
+    fn docx_headers_and_footers_follow_the_body() {
+        let body = "<w:p><w:r><w:t>body</w:t></w:r></w:p>";
+        let header = document_xml("<w:p><w:r><w:t>header</w:t></w:r></w:p>");
+        let footer = document_xml("<w:p><w:r><w:t>footer</w:t></w:r></w:p>");
+        let data = office_zip(&[
+            ("word/document.xml", &document_xml(body)),
+            ("word/header1.xml", &header),
+            ("word/footer1.xml", &footer),
+        ]);
+        assert_eq!(
+            extract_docx_text(&data).unwrap(),
+            "body\n\nfooter\n\nheader"
+        );
+    }
+
+    /// A ZIP without `word/document.xml` extracts nothing rather than failing:
+    /// the loop skips names that are not present.
+    #[test]
+    fn docx_without_document_xml_yields_empty_text() {
+        let data = office_zip(&[("unrelated.txt", b"nothing")]);
+        assert_eq!(extract_docx_text(&data).unwrap(), "");
+    }
+
+    /// Bytes that are not a ZIP at all are `Invalid docx file`.
+    #[test]
+    fn docx_rejects_a_non_zip_payload() {
+        let error = extract_docx_text(b"not a zip").unwrap_err();
+        assert_eq!(error.message, "Invalid docx file");
+        assert_eq!(error.status, 422);
+    }
+
+    /// Malformed XML inside a valid ZIP is `Invalid docx XML`, which the oracle
+    /// also raises for this input; the non-ZIP case above is the `... file` one.
+    #[test]
+    fn docx_rejects_malformed_xml() {
+        let data = office_zip(&[("word/document.xml", b"<w:document><unclosed>")]);
+        let error = extract_docx_text(&data).unwrap_err();
+        assert_eq!(error.message, "Invalid docx XML");
+        assert_eq!(error.status, 422);
+    }
+
+    fn slide_xml(text: &str) -> Vec<u8> {
+        format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?><p:sld xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\" \
+             xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\">\
+             <p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>{text}</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>"
+        )
+        .into_bytes()
+    }
+
+    /// Slides are ordered by their numeric suffix, not by ZIP entry order, and
+    /// each block carries its visible page number. The oracle returns
+    /// `'[PPTX 第 1 页]\none\n\n[PPTX 第 2 页]\ntwo\n\n[PPTX 第 3 页]\nten'`.
+    #[test]
+    fn pptx_slides_are_numbered_in_numeric_order() {
+        let data = office_zip(&[
+            ("ppt/slides/slide10.xml", &slide_xml("ten")),
+            ("ppt/slides/slide2.xml", &slide_xml("two")),
+            ("ppt/slides/slide1.xml", &slide_xml("one")),
+        ]);
+        assert_eq!(
+            extract_pptx_text(&data).unwrap(),
+            "[PPTX 第 1 页]\none\n\n[PPTX 第 2 页]\ntwo\n\n[PPTX 第 3 页]\nten"
+        );
+    }
+
+    /// A package with no slides is not an error; it simply has no text.
+    #[test]
+    fn pptx_without_slides_yields_empty_text() {
+        let data = office_zip(&[("unrelated.txt", b"nothing")]);
+        assert_eq!(extract_pptx_text(&data).unwrap(), "");
+    }
+
+    #[test]
+    fn pptx_rejects_a_non_zip_payload() {
+        let error = extract_pptx_text(b"not a zip").unwrap_err();
+        assert_eq!(error.message, "Invalid pptx file");
+    }
+
+    fn container_opf() -> Vec<u8> {
+        b"<?xml version=\"1.0\"?><package/>".to_vec()
+    }
+
+    #[test]
+    fn epub_rejects_a_non_zip_payload() {
+        let error = extract_epub_text(b"not a zip").unwrap_err();
+        assert_eq!(error.message, "Invalid epub file");
+    }
+
+    #[test]
+    fn epub_without_chapters_yields_empty_text() {
+        let data = office_zip(&[("META-INF/container.xml", &container_opf())]);
+        assert_eq!(extract_epub_text(&data).unwrap(), "");
+    }
+}
