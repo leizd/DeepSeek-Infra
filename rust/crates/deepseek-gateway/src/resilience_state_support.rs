@@ -2482,15 +2482,7 @@ pub(crate) fn build_fresh_state_bundle_readonly(
         .get("canonicalDigest")
         .and_then(Value::as_str)
         .filter(|s| is_plain_sha256(s))
-        .ok_or_else(|| {
-            format!(
-                "AUTHORITY_OBSERVATION_UNAVAILABLE: canonicalDigest={:?} verdict={:?} recoveryState={:?} db={}",
-                authority.get("canonicalDigest"),
-                authority.get("verdict"),
-                authority.get("recoveryState"),
-                control_db_path(root).display()
-            )
-        })?
+        .ok_or_else(|| "AUTHORITY_OBSERVATION_UNAVAILABLE".to_string())?
         .to_string();
 
     let risk = evaluate_risk_snapshot_readonly(root, true, now_secs, now_iso)

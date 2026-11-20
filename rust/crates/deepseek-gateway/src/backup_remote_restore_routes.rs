@@ -2959,27 +2959,9 @@ fn materialize_federated_restore(
 
     let (kind, secret) = consume_secret(restore_id, None)?;
     let secret_str = secret.as_str()?.to_string();
-    // TEMPORARY DIAGNOSTIC: name the failing stage instead of collapsing every
-    // internal failure into "Server error".
-    macro_rules! stage {
-        ($name:expr, $body:expr) => {
-            match $body {
-                Ok(v) => v,
-                Err(err) => {
-                    return Err(AppError {
-                        message: format!("materialize stage {}: {}", $name, err.message),
-                        code: err.code,
-                        status: err.status,
-                    });
-                }
-            }
-        };
-    }
     let res = (|| -> Result<Value, AppError> {
-        let materialized = stage!(
-            "materialize_restore_session",
-            materialize_restore_session(root, restore_id, &kind, &secret_str, false)
-        );
+        let materialized =
+            materialize_restore_session(root, restore_id, &kind, &secret_str, false)?;
         let current =
             read_remote_restore_session(root, restore_id)?.unwrap_or_else(|| session.clone());
         let extracted = PathBuf::from(truthy_str(materialized.get("tree")));
@@ -3014,7 +2996,7 @@ fn materialize_federated_restore(
             .get("manifest")
             .cloned()
             .unwrap_or_else(|| json!({}));
-        let archive_sha = stage!("tree_digest", tree_digest(&extracted));
+        let archive_sha = tree_digest(&extracted)?;
         let meta = InspectMeta {
             restore_id,
             archive_sha256: archive_sha,
@@ -3023,35 +3005,20 @@ fn materialize_federated_restore(
             protection,
         };
         if let Some(proj_rep) = materialized.get("projection").filter(|v| v.is_object()) {
-            stage!(
-                "inspect_projected_restore_tree",
-                inspect_projected_restore_tree(
-                    root,
-                    manifest,
-                    &extracted,
-                    &session_dir,
-                    proj_rep,
-                    meta,
-                )
-            );
+            let _ = inspect_projected_restore_tree(
+                root,
+                manifest,
+                &extracted,
+                &session_dir,
+                proj_rep,
+                meta,
+            )?;
         } else {
-            stage!(
-                "inspect_verified_tree",
-                inspect_verified_tree(root, manifest, &extracted, &session_dir, meta)
-            );
+            let _ = inspect_verified_tree(root, manifest, &extracted, &session_dir, meta)?;
         }
-        stage!(
-            "put_secret_bytes",
-            put_secret_bytes(restore_id, &kind, secret.as_slice())
-        );
-        stage!(
-            "advance_federated_phase",
-            advance_federated_phase(root, restore_id, "preparing")
-        );
-        let prepared = stage!(
-            "prepare_restore",
-            prepare_restore(root, restore_id, payload)
-        );
+        put_secret_bytes(restore_id, &kind, secret.as_slice())?;
+        advance_federated_phase(root, restore_id, "preparing")?;
+        let prepared = prepare_restore(root, restore_id, payload)?;
         let mut s_mut = read_remote_restore_session(root, restore_id)?.unwrap_or(current);
         let fed_phase = prepared
             .get("phase")
