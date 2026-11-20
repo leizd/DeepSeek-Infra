@@ -75,6 +75,7 @@ func TestNativeWindowLoadsAuthenticatedReactAndRunsFileWorkload(t *testing.T) {
                 const uploaded=await fetch('/api/file-text',{method:'POST',body:form});receipt.uploadStatus=uploaded.status;
                 const body=await uploaded.json();const file=(body.files||[])[0];receipt.fileId=!!file?.fileId;
                 if(file?.fileId){
+                    receipt.retainedFileId=file.fileId;
                     const reader=await fetch('/api/file-reader',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({fileId:file.fileId})});
                     receipt.readerStatus=reader.status;receipt.readerText=(await reader.text()).includes('Native desktop upload 2026');
                     const source=await fetch('/api/file-source?fileId='+encodeURIComponent(file.fileId));receipt.sourceStatus=source.status;receipt.originalEqual=(await source.text())===original;

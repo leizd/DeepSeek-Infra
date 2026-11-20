@@ -7,12 +7,17 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+tempfile = "=3.27.0"
 zeroize = "=1.9.0"
 deepseek-core = { path = "../deepseek-core" }
 deepseek-mcp = { path = "../deepseek-mcp" }
 deepseek-policy = { path = "../deepseek-policy" }
 deepseek-rag = { path = "../deepseek-rag" }
 deepseek-protocol = { path = "../deepseek-protocol" }
+# The backup catalog validates the frozen `object-set-v1` commitment with the same
+# implementation the storage plane writes; a second copy would be a second thing to
+# get wrong. Only the lightweight, feature-free part of the crate is used here.
+deepseek-storage = { path = "../deepseek-storage" }
 tonic = { workspace = true, features = ["tls"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -21,6 +26,7 @@ tokio = { workspace = true, features = ["fs", "macros", "rt-multi-thread", "sign
 axum = { workspace = true }
 async-stream = "0.3"
 bytes = "1"
+base64.workspace = true
 futures-core = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 blake2 = { workspace = true }
@@ -31,12 +37,13 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 reqwest = { version = "=0.12.28", default-features = false, features = ["rustls-tls-webpki-roots", "stream", "blocking"] }
 rusqlite = { workspace = true }
+regex = { workspace = true }
 
 [dev-dependencies]
+prost.workspace = true
 rcgen = "=0.13.2"
 deepseek-browser = { path = "../deepseek-browser" }
 rusqlite = { workspace = true }
-tempfile = "3.27.0"
 tokio = { workspace = true }
 tower = { workspace = true }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }

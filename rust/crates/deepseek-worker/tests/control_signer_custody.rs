@@ -1,8 +1,10 @@
 use deepseek_federation::create_control_signer_bundle;
 use deepseek_protocol::ActionFence;
 use deepseek_protocol::generated::deepseek::action::v1::{
-    AdmitStatus, ControlSigningPurpose, InstallAuthoritativeEpochRequest, SignControlRequest,
-    StorageConditionType, StorageMutationRequest, StoragePrecondition,
+    AdmitStatus, ControlSignerBindingRequest, ControlSigningPurpose,
+    InstallAuthoritativeEpochRequest, SignControlRequest, StorageConditionType,
+    StorageMutationRequest, StoragePrecondition,
+    control_signer_bootstrap_server::ControlSignerBootstrap as BootstrapRpc,
     control_signer_server::ControlSigner as SignerRpc, worker_server::Worker as WorkerRpc,
 };
 use deepseek_worker::{
@@ -796,5 +798,135 @@ fn agent_execution_control_rejects_external_or_ambiguous_configuration() {
             .map(|value| value.to_string())
             .ok_or(std::env::VarError::NotPresent))
         .is_err()
+    );
+}
+
+fn binding_query(config: &WorkerAuthorityConfig) -> ControlSignerBindingRequest {
+    ControlSignerBindingRequest {
+        schema_version: 1,
+        fleet_id: config.fleet_id.clone(),
+        environment: config.environment.clone(),
+        fencing_token: config.fencing_token as u64,
+        expected_signer_public_key: config.signer_public_key.clone(),
+    }
+}
+fn custody_file_hashes(root: &Path) -> std::collections::BTreeMap<std::path::PathBuf, String> {
+    use sha2::{Digest, Sha256};
+    fn visit(
+        root: &Path,
+        here: &Path,
+        out: &mut std::collections::BTreeMap<std::path::PathBuf, String>,
+    ) {
+        for entry in fs::read_dir(here).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                visit(root, &path, out);
+            } else {
+                out.insert(
+                    path.strip_prefix(root).unwrap().to_owned(),
+                    format!("{:x}", Sha256::digest(fs::read(&path).unwrap())),
+                );
+            }
+        }
+    }
+    let mut out = Default::default();
+    visit(root, root, &mut out);
+    out
+}
+#[tokio::test]
+async fn binding_discovery_retains_custody_without_signing_or_journal_mutation() {
+    let (root, config, env) = setup();
+    let svc = service(root.path(), &config, &env);
+    let before = custody_file_hashes(root.path());
+    for pin in [String::new(), config.signer_public_key.clone()] {
+        let mut query = binding_query(&config);
+        query.expected_signer_public_key = pin;
+        let reply = svc.get_binding(auth(query)).await.unwrap().into_inner();
+        assert_eq!(reply.schema_version, 1);
+        assert_eq!(reply.signer_public_key, config.signer_public_key);
+        assert_eq!(reply.fleet_id, config.fleet_id);
+        assert_eq!(reply.environment, config.environment);
+        assert_eq!(reply.fencing_token, 1);
+        assert!(!reply.signer_key_id.is_empty());
+    }
+    assert_eq!(custody_file_hashes(root.path()), before);
+}
+#[tokio::test]
+async fn binding_discovery_refuses_foreign_scope_and_untrusted_callers() {
+    let (root, config, env) = setup();
+    let svc = service(root.path(), &config, &env);
+    let before = custody_file_hashes(root.path());
+    assert_eq!(
+        svc.get_binding(Request::new(binding_query(&config)))
+            .await
+            .unwrap_err()
+            .code(),
+        Code::Unauthenticated
+    );
+    for change in [
+        "schema",
+        "empty-fleet",
+        "empty-environment",
+        "zero-fence",
+        "overflow-fence",
+        "foreign-fleet",
+        "foreign-environment",
+        "stale-fence",
+        "foreign-pin",
+    ] {
+        let mut q = binding_query(&config);
+        match change {
+            "schema" => q.schema_version = 2,
+            "empty-fleet" => q.fleet_id.clear(),
+            "empty-environment" => q.environment.clear(),
+            "zero-fence" => q.fencing_token = 0,
+            "overflow-fence" => q.fencing_token = u64::MAX,
+            "foreign-fleet" => q.fleet_id = "foreign".into(),
+            "foreign-environment" => q.environment = "foreign".into(),
+            "stale-fence" => q.fencing_token = 2,
+            _ => q.expected_signer_public_key = "foreign".into(),
+        }
+        let code = svc.get_binding(auth(q)).await.unwrap_err().code();
+        assert!(matches!(
+            code,
+            Code::InvalidArgument | Code::FailedPrecondition
+        ));
+    }
+    assert_eq!(custody_file_hashes(root.path()), before);
+    let wrong_role = WorkerRpcService::new_with_authenticator(
+        Worker::new(),
+        Arc::new(StaticTokenAuthenticator::new(
+            TOKEN,
+            CallerIdentity {
+                service_name: "worker".into(),
+                role: "worker".into(),
+            },
+        )),
+    );
+    assert_eq!(
+        wrong_role
+            .get_binding(auth(binding_query(&config)))
+            .await
+            .unwrap_err()
+            .code(),
+        Code::PermissionDenied
+    );
+    let absent = WorkerRpcService::new_with_authenticator(
+        Worker::new(),
+        Arc::new(StaticTokenAuthenticator::new(
+            TOKEN,
+            CallerIdentity {
+                service_name: "go-control-plane".into(),
+                role: "controller".into(),
+            },
+        )),
+    );
+    assert_eq!(
+        absent
+            .get_binding(auth(binding_query(&config)))
+            .await
+            .unwrap_err()
+            .code(),
+        Code::Unavailable
     );
 }

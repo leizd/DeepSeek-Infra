@@ -42,11 +42,13 @@ const BEARER: &str = "mirror-integration-bearer-0123456789";
 struct ControlPlane {
     address: String,
     task: tokio::task::JoinHandle<()>,
+    calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
 struct Recipients {
     body: Value,
     expect_bearer: Option<String>,
+    calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
 #[tonic::async_trait]
@@ -69,6 +71,7 @@ impl ControlPlaneService for Recipients {
         &self,
         request: tonic::Request<BackupPolicyRecipientsRequest>,
     ) -> Result<tonic::Response<BackupPolicyRecipientsResponse>, tonic::Status> {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         if let Some(expected) = &self.expect_bearer {
             if request
                 .metadata()
@@ -112,25 +115,112 @@ impl Drop for ControlPlane {
 
 impl ControlPlane {
     fn start(body: Value, expect_bearer: Option<String>) -> Self {
+        Self::start_with_tls(body, expect_bearer, None)
+    }
+
+    fn start_with_tls(
+        body: Value,
+        expect_bearer: Option<String>,
+        tls: Option<tonic::transport::ServerTlsConfig>,
+    ) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind control plane");
-        let address = format!("http://{}", listener.local_addr().expect("local addr"));
+        let scheme = if tls.is_some() { "https" } else { "http" };
+        let address = format!("{scheme}://{}", listener.local_addr().expect("local addr"));
         listener.set_nonblocking(true).unwrap();
         let listener = tokio::net::TcpListener::from_std(listener).unwrap();
         let incoming = futures_util::stream::unfold(listener, |listener| async move {
             let accepted = listener.accept().await.map(|(socket, _)| socket);
             Some((accepted, listener))
         });
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let observed = std::sync::Arc::clone(&calls);
         let task = tokio::spawn(async move {
-            tonic::transport::Server::builder()
+            let mut builder = tonic::transport::Server::builder();
+            if let Some(tls) = tls {
+                builder = builder.tls_config(tls).unwrap();
+            }
+            builder
                 .add_service(ControlPlaneServer::new(Recipients {
                     body,
                     expect_bearer,
+                    calls: observed,
                 }))
                 .serve_with_incoming(incoming)
                 .await
                 .unwrap();
         });
-        Self { address, task }
+        Self {
+            address,
+            task,
+            calls,
+        }
+    }
+}
+
+struct PrivateControlIdentity {
+    directory: tempfile::TempDir,
+    tls: tonic::transport::ServerTlsConfig,
+    client: Vec<(&'static str, String)>,
+}
+
+fn private_control_identity() -> PrivateControlIdentity {
+    let directory = tempfile::tempdir().unwrap();
+    let mut authority = rcgen::CertificateParams::default();
+    authority.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+    authority.key_usages = vec![
+        rcgen::KeyUsagePurpose::KeyCertSign,
+        rcgen::KeyUsagePurpose::CrlSign,
+    ];
+    let authority_key = rcgen::KeyPair::generate().unwrap();
+    let authority = authority.self_signed(&authority_key).unwrap();
+    let mut server = rcgen::CertificateParams::new(vec!["control.native".into()]).unwrap();
+    server.key_usages = vec![rcgen::KeyUsagePurpose::DigitalSignature];
+    server.extended_key_usages = vec![rcgen::ExtendedKeyUsagePurpose::ServerAuth];
+    let server_key = rcgen::KeyPair::generate().unwrap();
+    let server = server
+        .signed_by(&server_key, &authority, &authority_key)
+        .unwrap();
+    let mut client = rcgen::CertificateParams::new(vec!["mirror-client".into()]).unwrap();
+    client.key_usages = vec![rcgen::KeyUsagePurpose::DigitalSignature];
+    client.extended_key_usages = vec![rcgen::ExtendedKeyUsagePurpose::ClientAuth];
+    let client_key = rcgen::KeyPair::generate().unwrap();
+    let client = client
+        .signed_by(&client_key, &authority, &authority_key)
+        .unwrap();
+    let ca_file = directory.path().join("ca.pem");
+    let cert_file = directory.path().join("client.pem");
+    let key_file = directory.path().join("client.key");
+    std::fs::write(&ca_file, authority.pem()).unwrap();
+    std::fs::write(&cert_file, client.pem()).unwrap();
+    std::fs::write(&key_file, client_key.serialize_pem()).unwrap();
+    let tls = tonic::transport::ServerTlsConfig::new()
+        .identity(tonic::transport::Identity::from_pem(
+            server.pem(),
+            server_key.serialize_pem(),
+        ))
+        .client_ca_root(tonic::transport::Certificate::from_pem(authority.pem()));
+    let client = vec![
+        (
+            "DEEPSEEK_GO_CONTROL_RPC_TLS_CA_FILE",
+            ca_file.to_string_lossy().into_owned(),
+        ),
+        (
+            "DEEPSEEK_GO_CONTROL_RPC_TLS_CERT_FILE",
+            cert_file.to_string_lossy().into_owned(),
+        ),
+        (
+            "DEEPSEEK_GO_CONTROL_RPC_TLS_KEY_FILE",
+            key_file.to_string_lossy().into_owned(),
+        ),
+        (
+            "DEEPSEEK_GO_CONTROL_RPC_TLS_SERVER_NAME",
+            "control.native".into(),
+        ),
+    ];
+    PrivateControlIdentity {
+        directory,
+        tls,
+        client,
     }
 }
 
@@ -539,6 +629,119 @@ async fn a_legal_upload_is_sealed_listed_and_current() {
     assert_eq!(generations, 1);
 
     let _ = std::fs::remove_dir_all(&root);
+}
+
+#[tokio::test]
+async fn private_control_transport_preserves_sealing_and_refuses_http_fallback() {
+    let _lock = EnvLock::acquire();
+    let root = tempfile::tempdir().unwrap();
+    let PrivateControlIdentity {
+        directory,
+        tls,
+        client,
+    } = private_control_identity();
+    let mut decoy_body = recipients_body(&[RECIPIENT], &[&[RECIPIENT]]);
+    decoy_body["authoritative"] = json!(false);
+    let public = ControlPlane::start(decoy_body, Some(BEARER.into()));
+    let private = ControlPlane::start_with_tls(
+        recipients_body(&[RECIPIENT], &[&[RECIPIENT]]),
+        Some(BEARER.into()),
+        Some(tls),
+    );
+    let mut settings = vec![
+        ("DEEPSEEK_RUNTIME_MODE", "python_disabled"),
+        ("DEEPSEEK_INFRA_ROOT", root.path().to_str().unwrap()),
+        ("GO_CONTROL_ADDR", public.address.as_str()),
+        ("DEEPSEEK_GO_CONTROL_RPC_URL", private.address.as_str()),
+        ("DEEPSEEK_INTERNAL_BEARER", BEARER),
+    ];
+    settings.extend(client.iter().map(|(name, value)| (*name, value.as_str())));
+    let _environment = Env::set(&settings);
+    let upload = json!({
+        "envelope": envelope("private-sealed"), "sourceEpoch": "epoch-private",
+        "clientReplicaId": "replica-private", "clientSequence": 1,
+        "acknowledgedAt": "2026-09-30T12:00:00Z",
+    });
+    let path = "/api/workspace/backup-mirrors/mirror_private/frontend";
+    let (status, body) = send(create_app(), "PUT", path, Some(upload.to_string())).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "private recipient RPC did not preserve sealing: {body}"
+    );
+    let metadata: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(metadata["creationVerified"], true);
+    let head = root.path().join(".backup-mirror/mirror_private/HEAD.json");
+    let retained = std::fs::read(&head).unwrap();
+    let (status, body) = send(
+        create_app(),
+        "GET",
+        "/api/workspace/backup-mirrors/mirror_private",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        serde_json::from_str::<Value>(&body).unwrap()["status"],
+        "current"
+    );
+    assert!(private.calls.load(std::sync::atomic::Ordering::SeqCst) >= 2);
+    assert_eq!(public.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+    let malformed_ca = directory.path().join("malformed.pem");
+    std::fs::write(&malformed_ca, "not a certificate").unwrap();
+    let cleartext = private.address.replacen("https://", "http://", 1);
+    for (key, value) in [
+        (
+            "DEEPSEEK_GO_CONTROL_RPC_TLS_CA_FILE",
+            malformed_ca.to_str().unwrap(),
+        ),
+        (
+            "DEEPSEEK_GO_CONTROL_RPC_TLS_SERVER_NAME",
+            "untrusted.native",
+        ),
+        ("DEEPSEEK_GO_CONTROL_RPC_URL", cleartext.as_str()),
+        (
+            "DEEPSEEK_INTERNAL_BEARER",
+            "incorrect-native-mirror-bearer-over-32-bytes",
+        ),
+    ] {
+        let _fault = Env::set(&[(key, value)]);
+        let mut next = upload.clone();
+        next["envelope"] = envelope("refused-update");
+        next["clientSequence"] = json!(2);
+        let (status, body) = send(create_app(), "PUT", path, Some(next.to_string())).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{key}: {body}");
+        assert_eq!(
+            serde_json::from_str::<Value>(&body).unwrap()["code"],
+            "NATIVE_MIRROR_RECIPIENT_SOURCE_UNAVAILABLE"
+        );
+        assert_eq!(
+            std::fs::read(&head).unwrap(),
+            retained,
+            "refused private transport changed the generation"
+        );
+        assert_eq!(
+            public.calls.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "explicit private failure contacted the public endpoint"
+        );
+    }
+    let (status, body) = send(create_app(), "PUT", path, Some(upload.to_string())).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        serde_json::from_str::<Value>(&body).unwrap()["idempotent"],
+        true
+    );
+    assert_eq!(
+        std::fs::read_dir(
+            root.path()
+                .join(".backup-mirror/mirror_private/generations")
+        )
+        .unwrap()
+        .count(),
+        1
+    );
 }
 
 /// A corrupt recovery fence must never be interpreted as permission to publish.

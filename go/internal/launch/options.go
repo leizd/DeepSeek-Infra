@@ -130,18 +130,11 @@ func (options Options) Apply(plan Plan) Plan {
 	if options.AuthDisabled {
 		values["AUTH_DISABLED"] = "1"
 	}
-	env := make([]string, 0, len(plan.Env)+len(values))
-	for _, value := range plan.Env {
-		key, _, _ := strings.Cut(value, "=")
-		if _, replaced := values[key]; !replaced {
-			env = append(env, value)
-		}
-	}
+	overrides := make([]string, 0, len(values))
 	for _, key := range []string{"HOST", "PORT", "DEEPSEEK_API_KEY", "TAVILY_API_KEY", "OCR_ENABLED", "AUTH_DISABLED"} {
-		env = append(env, key+"="+values[key])
+		overrides = append(overrides, key+"="+values[key])
 	}
-	plan.Env = env
-	return plan
+	return withProductionEnvironment(plan, overrides)
 }
 
 // PromptAPIKey retains the mobile console's optional setup. An empty answer

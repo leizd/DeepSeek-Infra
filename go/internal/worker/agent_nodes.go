@@ -2,6 +2,8 @@ package worker
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
 
@@ -131,20 +133,39 @@ func agentTaskRole(role string) bool {
 func (client *Client) QueryAgentNodeEffect(ctx context.Context, query *agentv1.QueryAgentNodeEffectRequest) (*agentv1.AgentNodeEffectMetadata, error) {
 	if query == nil || query.Fence == nil || query.Fence.ActionId == "" || query.Fence.ExecutionEpoch == 0 ||
 		query.RunId == "" || query.NodeId == "" || !strings.HasPrefix(query.OperationId, "agent-node-") ||
-		len(query.OperationId) != 75 || !nodeOutcomeHex(query.OperationId[11:]) {
+		len(query.OperationId) != 75 || !nodeOutcomeHex(query.OperationId[11:]) ||
+		(query.ExpectedReceiptSha256 != "" && !nodeOutcomeHex(query.ExpectedReceiptSha256)) {
 		return nil, ErrInvalidWorkerResponse
 	}
 	outbound, err := client.agentNodeContext(ctx)
 	if err != nil {
 		return nil, err
 	}
-	result, err := client.nodes.QueryEffect(outbound, query)
+	var result *agentv1.QueryAgentNodeEffectResponse
+	if query.ExpectedReceiptSha256 != "" {
+		result, err = client.nodes.ReadRetainedEffect(outbound, query)
+	} else {
+		result, err = client.nodes.QueryEffect(outbound, query)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("worker node query transport: %w", err)
 	}
 	if result == nil || len(result.ProtoReflect().GetUnknown()) != 0 || (!result.Found && result.Effect != nil) ||
 		(result.Found && !validAgentNodeEffect(result.Effect, query.Fence, query.OperationId, query.RunId, query.NodeId)) {
 		return nil, ErrInvalidWorkerResponse
+	}
+	if query.ExpectedReceiptSha256 != "" {
+		if !result.Found || result.Effect == nil || result.Effect.OutcomeReceipt == nil {
+			return nil, ErrInvalidWorkerResponse
+		}
+		raw, err := proto.MarshalOptions{Deterministic: true}.Marshal(result.Effect.OutcomeReceipt)
+		if err != nil {
+			return nil, ErrInvalidWorkerResponse
+		}
+		sum := sha256.Sum256(raw)
+		if hex.EncodeToString(sum[:]) != query.ExpectedReceiptSha256 {
+			return nil, ErrInvalidWorkerResponse
+		}
 	}
 	return result.Effect, nil
 }

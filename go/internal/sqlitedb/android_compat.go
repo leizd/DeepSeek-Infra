@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/ncruces/go-sqlite3"
 	sqlitedriver "github.com/ncruces/go-sqlite3/driver"
@@ -88,6 +89,9 @@ func NewConnector(dsn string) (driver.Connector, error) {
 	query.Del("_defensive")
 	query.Del("_dqs")
 	query["_pragma"] = pragmas
+	if err := configureAndroidVFS(query); err != nil {
+		return nil, err
+	}
 	uri.RawQuery = query.Encode()
 	connector, err := (&sqlitedriver.SQLite{}).OpenConnector(uri.String())
 	if err != nil {
@@ -120,6 +124,17 @@ type configuredConnector struct {
 func (connector configuredConnector) Connect(ctx context.Context) (driver.Conn, error) {
 	connection, err := connector.Connector.Connect(ctx)
 	if err != nil {
+		var code sqlite3.ExtendedErrorCode
+		if errors.As(err, &code) {
+			var errno syscall.Errno
+			osCause := "UNAVAILABLE"
+			// Full SQLite errors and code values both support ExtendedErrorCode.
+			// Missing OS evidence must remain unknown; it is not measured errno0.
+			if errors.As(err, &errno) {
+				osCause = strconv.FormatUint(uint64(errno), 10)
+			}
+			return nil, fmt.Errorf("Android SQLite connection (code=%d errno=%s): %w", code, osCause, err)
+		}
 		return nil, err
 	}
 	if err := connector.initialize(connection.(sqlitedriver.Conn).Raw()); err != nil {

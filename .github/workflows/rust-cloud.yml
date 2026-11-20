@@ -21,7 +21,7 @@ jobs:
   rust-cloud:
     name: Rust ${{ matrix.mode }}
     runs-on: ubuntu-22.04
-    timeout-minutes: 90
+    timeout-minutes: ${{ matrix.mode == 'checks' && 120 || 90 }}
     strategy:
       fail-fast: false
       matrix:
@@ -48,6 +48,8 @@ jobs:
         run: |
           mkdir -p artifacts/rust-cloud
           python scripts/capture_evidence_context.py --version "$(cat VERSION)" --out "$DEEPSEEK_EVIDENCE_SOURCE_CONTEXT"
+      - name: Verify production runtime source inventory
+        run: python scripts/production_runtime_inventory.py --check
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "24"
@@ -61,7 +63,13 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install --yes --no-install-recommends poppler-utils tesseract-ocr tesseract-ocr-eng
-          python -m pip install -r requirements.txt -r requirements-ocr.txt
+          python -m pip install -r requirements.txt -r requirements-ocr.txt -r requirements-dev.txt
+          python -c "from fastapi.testclient import TestClient"
+          python -m pip install -r requirements-native-protocol.txt
+      - name: Verify private-port preflight against live listeners and retained TIME_WAIT
+        if: matrix.mode == 'checks'
+        run: |
+          python -m pytest tests/test_native_media_patch_verifier.py -k loopback_preflight --no-cov -p no:cacheprovider --junitxml=artifacts/rust-cloud/loopback-preflight.xml
       - uses: dtolnay/rust-toolchain@69084b241933c14c2fa24234c4596f11a2655339 # 1.85.0
         with:
           toolchain: "1.85.0"
@@ -111,10 +119,156 @@ jobs:
           test "$(go env GOVERSION)" = "go1.27.1"
           go mod download
           go mod verify
+      - name: Exercise compact PATCH contracts and streamed result failures in Go
+        if: matrix.mode == 'checks'
+        working-directory: go
+        timeout-minutes: 15
+        run: |
+          set -o pipefail
+          CGO_ENABLED=0 go test -v -count=1 -timeout=10m -run 'CompactPatch|FlatPatch|PatchResult|^TestMediaPublicTLSSeparatesTheTwoSignedServerErrorEffects$' ./internal/media ./internal/worker ./internal/store ./internal/api 2>&1 | tee ../artifacts/rust-cloud/compact-patch-go.log
       - name: Build the production Rust worker and custody provisioner on the cloud runner
         if: matrix.mode == 'checks'
         run: |
           python scripts/rust_build.py --toolchain 1.85.0 -- build --locked -p deepseek-worker -p deepseek-gateway --bins --all-features 2>&1 | tee artifacts/rust-cloud/agent-worker-build.log
+      - name: Verify default native startup from an empty profile without offline seeding
+        if: matrix.mode == 'checks'
+        timeout-minutes: 15
+        run: |
+          set -o pipefail
+          python scripts/verify_native_default_bootstrap.py --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --out artifacts/rust-cloud/default-bootstrap 2>&1 | tee artifacts/rust-cloud/default-bootstrap.log
+      - name: Preserve early default native startup evidence
+        if: always() && matrix.mode == 'checks'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: rust-cloud-default-bootstrap-${{ github.sha }}
+          path: |
+            artifacts/rust-cloud/default-bootstrap
+            artifacts/rust-cloud/source-context.json
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Verify retained Skill online request composition and HTTP lifecycle
+        if: matrix.mode == 'checks'
+        run: |
+          set -euo pipefail
+          python tasks/native-runtime/skills_online_payload_oracle.py --output "$RUNNER_TEMP/skills-online-payloads.json"
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          assert Path(os.environ['RUNNER_TEMP'],'skills-online-payloads.json').read_bytes()==Path('rust/crates/deepseek-policy/tests/fixtures/skills_online_payloads.json').read_bytes()
+          PY
+          python tasks/native-runtime/skills_run_routes_e2e.py --gateway "$CARGO_TARGET_DIR/debug/deepseek-gateway" --output artifacts/rust-cloud/skills-run-routes.json 2>&1 | tee artifacts/rust-cloud/skills-routes.log
+
+      - name: Preserve retained Skill request and HTTP evidence
+        if: always() && matrix.mode == 'checks'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: rust-cloud-skills-routes-${{ github.sha }}
+          path: |
+            artifacts/rust-cloud/skills-run-routes.json
+            artifacts/rust-cloud/skills-routes.log
+            artifacts/rust-cloud/source-context.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Verify authenticated retained media reads through default native startup and restart
+        if: matrix.mode == 'checks'
+        timeout-minutes: 45
+        run: |
+          set -o pipefail
+          python scripts/verify_native_media_reads.py --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --out artifacts/rust-cloud/media-library-read-process 2>&1 | tee artifacts/rust-cloud/media-library-read-process.log
+      - name: Preserve authenticated media read process evidence
+        if: always() && matrix.mode == 'checks'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: rust-cloud-media-library-read-process-${{ github.sha }}
+          path: |
+            artifacts/rust-cloud/media-library-read-process
+            artifacts/rust-cloud/source-context.json
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Verify authenticated media metadata patch through the default native launcher
+        if: matrix.mode == 'checks'
+        timeout-minutes: 15
+        run: |
+          set -o pipefail
+          python scripts/verify_native_media_patch.py --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --out artifacts/rust-cloud/media-patch-process 2>&1 | tee artifacts/rust-cloud/media-patch-process.log
+          python scripts/verify_native_media_patch.py --retained-mutation-cases --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --out artifacts/rust-cloud/media-patch-process/retained-writes 2>&1 | tee artifacts/rust-cloud/media-retained-writes.log
+          python scripts/verify_native_media_patch.py --patch-input-cases --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --out artifacts/rust-cloud/media-patch-process/input 2>&1 | tee artifacts/rust-cloud/media-patch-input.log
+      - name: Preserve authenticated media patch process evidence
+        if: always() && matrix.mode == 'checks'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: rust-cloud-media-patch-process-${{ github.sha }}
+          path: |
+            artifacts/rust-cloud/media-patch-process
+            artifacts/rust-cloud/source-context.json
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Verify retained large media record through compact signed PATCH and streamed result
+        if: matrix.mode == 'checks'
+        timeout-minutes: 15
+        run: |
+          set -o pipefail
+          python scripts/verify_native_media_patch.py --large-record-case --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --out artifacts/rust-cloud/media-large-record-process 2>&1 | tee artifacts/rust-cloud/media-large-record-process.log
+      - name: Preserve real large record PATCH process evidence
+        if: always() && matrix.mode == 'checks'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: rust-cloud-media-large-record-${{ github.sha }}
+          path: |
+            artifacts/rust-cloud/media-large-record-process/*.json
+            artifacts/rust-cloud/media-large-record-process/*.txt
+            artifacts/rust-cloud/media-large-record-process/*.log
+            artifacts/rust-cloud/source-context.json
+            artifacts/rust-cloud/compact-patch-go.log
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Exercise worker-only media timing environment propagation
+        if: matrix.mode == 'checks'
+        working-directory: go
+        timeout-minutes: 5
+        run: |
+          set -o pipefail
+          mkdir -p ../artifacts/rust-cloud/media-capacity-process
+          CGO_ENABLED=0 go test -v -count=1 -timeout=2m -run '^TestMediaPhaseTimingOnlyReachesWorker$' ./internal/launch 2>&1 | tee ../artifacts/rust-cloud/media-capacity-process/phase-environment-go.log
+      - name: Verify retained large media library through actual native HTTP
+        if: matrix.mode == 'checks'
+        timeout-minutes: 15
+        env:
+          DEEPSEEK_MEDIA_PHASE_TIMING: "1"
+        run: |
+          set -o pipefail
+          python scripts/verify_native_media_patch.py --large-library-case --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --out artifacts/rust-cloud/media-capacity-process 2>&1 | tee artifacts/rust-cloud/media-capacity-process.log
+      - name: Preserve real media capacity process evidence
+        if: always() && matrix.mode == 'checks'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: rust-cloud-media-capacity-${{ github.sha }}
+          path: |
+            artifacts/rust-cloud/media-capacity-process/*.json
+            artifacts/rust-cloud/media-capacity-process/*.txt
+            artifacts/rust-cloud/media-capacity-process/*.log
+            artifacts/rust-cloud/source-context.json
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Verify media metadata ordering and maximum legal JSON through native HTTP
+        if: matrix.mode == 'checks'
+        timeout-minutes: 15
+        run: |
+          set -o pipefail
+          for scenario in top-level nested array truncated maximum-array; do
+            python scripts/verify_native_media_patch.py --metadata-order-case "$scenario" --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --out "artifacts/rust-cloud/media-metadata-cases/$scenario" 2>&1 | tee "artifacts/rust-cloud/media-metadata-$scenario.log"
+          done
+      - name: Preserve authenticated media input semantics evidence
+        if: always() && matrix.mode == 'checks'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: rust-cloud-media-metadata-cases-${{ github.sha }}
+          path: |
+            artifacts/rust-cloud/media-metadata-cases
+            artifacts/rust-cloud/source-context.json
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Verify real UTC Go authority and Rust custody signing over TLS and process restart
         if: matrix.mode == 'checks'
         run: |
@@ -123,6 +277,36 @@ jobs:
         if: matrix.mode == 'checks'
         run: |
           python scripts/verify_native_agent_public_driver.py --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --provisioner "$CARGO_TARGET_DIR/debug/deepseek-control-signer-init" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --out artifacts/rust-cloud/agent-public-driver 2>&1 | tee artifacts/rust-cloud/agent-public-driver.log
+      - name: Verify real Go preview and Rust recovery preparation with atomic commit
+        if: matrix.mode == 'checks'
+        timeout-minutes: 8
+        run: |
+          set -o pipefail
+          python scripts/verify_native_agent_public_driver.py --recovery-preparation --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --provisioner "$CARGO_TARGET_DIR/debug/deepseek-control-signer-init" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --out artifacts/rust-cloud/agent-recovery-preparation 2>&1 | tee artifacts/rust-cloud/agent-recovery-preparation.log
+      - name: Verify actual recovery synthesis with original Rust outputs and fresh Go fencing
+        if: matrix.mode == 'checks'
+        timeout-minutes: 8
+        run: |
+          set -o pipefail
+          python scripts/verify_native_agent_public_driver.py --recovery-driving --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --provisioner "$CARGO_TARGET_DIR/debug/deepseek-control-signer-init" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --out artifacts/rust-cloud/agent-recovery-driving 2>&1 | tee artifacts/rust-cloud/agent-recovery-driving.log
+      - name: Verify task rerun progress with retained outputs and optional synthesis
+        if: matrix.mode == 'checks'
+        timeout-minutes: 12
+        run: |
+          set -o pipefail
+          python scripts/verify_native_agent_public_driver.py --recovery-rerun-matrix --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --provisioner "$CARGO_TARGET_DIR/debug/deepseek-control-signer-init" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --out artifacts/rust-cloud/agent-recovery-rerun 2>&1 | tee artifacts/rust-cloud/agent-recovery-rerun.log
+      - name: Verify actual Rust HTTP rerun admission and refusal matrix
+        if: matrix.mode == 'checks'
+        timeout-minutes: 12
+        run: |
+          set -o pipefail
+          python scripts/verify_native_agent_public_driver.py --public-recovery-rerun-matrix --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --provisioner "$CARGO_TARGET_DIR/debug/deepseek-control-signer-init" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --out artifacts/rust-cloud/agent-public-recovery-rerun 2>&1 | tee artifacts/rust-cloud/agent-public-recovery-rerun.log
+      - name: Verify actual public completed resume and all synthesis aliases
+        if: matrix.mode == 'checks'
+        timeout-minutes: 12
+        run: |
+          set -o pipefail
+          python scripts/verify_native_agent_public_driver.py --public-recovery-completion-matrix --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --provisioner "$CARGO_TARGET_DIR/debug/deepseek-control-signer-init" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --out artifacts/rust-cloud/agent-public-recovery-completion 2>&1 | tee artifacts/rust-cloud/agent-public-recovery-completion.log
       - name: Verify all retained presets through actual native public creation
         if: matrix.mode == 'checks'
         run: |
@@ -148,13 +332,40 @@ jobs:
         timeout-minutes: 8
         run: |
           python scripts/verify_native_agent_daemon_public.py --runtime-update --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --provisioner "$CARGO_TARGET_DIR/debug/deepseek-control-signer-init" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --out artifacts/rust-cloud/agent-runtime-update 2>&1 | tee artifacts/rust-cloud/agent-runtime-update.log
+      - name: Prepare the pinned Chromium and its Linux dependencies
+        if: matrix.mode == 'checks'
+        timeout-minutes: 10
+        run: |
+          sudo tee /etc/apt/apt.conf.d/80-deepseek-cloud-network >/dev/null <<'APT'
+          Acquire::Retries "2";
+          Acquire::http::Timeout "30";
+          Acquire::https::Timeout "30";
+          APT
+          python -m pip install --timeout 30 --retries 2 -r requirements-browser.txt
+          python -m playwright install --with-deps chromium
       - name: Verify the built React browser through actual native Agent execution
         if: matrix.mode == 'checks'
         timeout-minutes: 10
         run: |
-          python -m pip install -r requirements-browser.txt
-          python -m playwright install --with-deps chromium
           python scripts/verify_native_agent_daemon_public.py --browser --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --provisioner "$CARGO_TARGET_DIR/debug/deepseek-control-signer-init" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --out artifacts/rust-cloud/agent-native-browser 2>&1 | tee artifacts/rust-cloud/agent-native-browser.log
+      - name: Verify actual React task rerun with native recovery custody and reload
+        if: matrix.mode == 'checks'
+        timeout-minutes: 10
+        run: |
+          set -o pipefail
+          python scripts/verify_native_agent_daemon_public.py --browser --browser-recovery --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --provisioner "$CARGO_TARGET_DIR/debug/deepseek-control-signer-init" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --out artifacts/rust-cloud/agent-native-browser-recovery 2>&1 | tee artifacts/rust-cloud/agent-native-browser-recovery.log
+      - name: Verify signed provider rejection with actual public resume and rerun
+        if: matrix.mode == 'checks'
+        timeout-minutes: 15
+        run: |
+          set -o pipefail
+          python scripts/verify_native_agent_failed_tasks.py --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --provisioner "$CARGO_TARGET_DIR/debug/deepseek-control-signer-init" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --out artifacts/rust-cloud/agent-native-failed-task-recovery 2>&1 | tee artifacts/rust-cloud/agent-native-failed-task-recovery.log
+      - name: Verify conclusive planner and synthesis rejection with actual public resume
+        if: matrix.mode == 'checks'
+        timeout-minutes: 20
+        run: |
+          set -o pipefail
+          python scripts/verify_native_agent_terminal_failures.py --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --provisioner "$CARGO_TARGET_DIR/debug/deepseek-control-signer-init" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --out artifacts/rust-cloud/agent-native-terminal-failure 2>&1 | tee artifacts/rust-cloud/agent-native-terminal-failure.log
       - name: Install pinned coverage tooling on the cloud runner
         if: matrix.mode == 'coverage'
         run: |

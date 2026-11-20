@@ -1,0 +1,411 @@
+{
+  "schemaVersion": 1,
+  "originalSourceCommit": "f842fce572c4c7d38a8121066af9324cfd679b29",
+  "originalSourceTree": "cf39b90a77bdcb27ae61c084c45db838411269c0",
+  "originalInputHashes": {
+    "deepseek_infra/infra/media/library.py": "1b1ae1f169609b0f83606c142726d2361902d4515845ed4465d9f93f69b2f7dd",
+    "deepseek_infra/infra/media/schema.py": "4f990bd8b4445ffb6848a79cde4a96a8b0ec7cdca56ff00744b93cb3f28fc3ec",
+    "deepseek_infra/infra/workspace/home.py": "168285af51872493b31d9bd4384fe7623effd9fb136d14f4881c793098d40b61",
+    "deepseek_infra/infra/workspace/schema.py": "c70355ea7f1b8ff2da52cb405d394b54c96f6e08a3401a06a0a9ada87cf638f0",
+    "deepseek_infra/web/routes/media.py": "3fa95a21bed557b18067316bcd1b4bc68cc6a1cd021ad3740d8ae8e47e2ac64b",
+    "deepseek_infra/web/routes/workspace.py": "d4aaf7c9eddd56a709858f7b8b3417242942d349ed3d437c9c15e428c436acdd",
+    "deepseek_infra/web/server.py": "5e215105ccea71c55132b36a2fb11a9a52be85108b62495ef65a6b3c6286a275",
+    "deepseek_infra/web/http_utils.py": "3a9b2b597b588d4a4dfd0e7fd9a3cae9e06b3121e461afedd562b00708a363af",
+    "deepseek_infra/core/config.py": "7c42e2a9379f195507ab3b68af705c9eb9b548aa98af572ffd8cf0222557cecb"
+  },
+  "pythonVersion": "3.13.5",
+  "unicodeVersion": "15.1.0",
+  "actualOriginalLoopbackRequests": 18,
+  "actualAuthenticatedRequests": 16,
+  "unauthorized": {
+    "uri": "/api/media",
+    "status": 401,
+    "body": {
+      "error": "Auth required",
+      "code": "unauthorized"
+    },
+    "bodyJson": "{\"error\":\"Auth required\",\"code\":\"unauthorized\"}",
+    "bodySha256": "7839bbb4362202487a845cce649515313af47ea13a010d14866b216865c47c13"
+  },
+  "workspaceHomeUnauthorized": {
+    "uri": "/api/workspace/home?limit=1",
+    "status": 401,
+    "body": {
+      "error": "Auth required",
+      "code": "unauthorized"
+    },
+    "bodyJson": "{\"error\":\"Auth required\",\"code\":\"unauthorized\"}",
+    "bodySha256": "7839bbb4362202487a845cce649515313af47ea13a010d14866b216865c47c13"
+  },
+  "variants": [
+    {
+      "name": "off_window_and_segment_encoding",
+      "document": "{\"media\":[{\"mediaId\":\"visible\",\"type\":\"pdf\",\"path\":\"page.pdf\",\"createdAt\":\"fixed\",\"updatedAt\":\"\\ud800\\udc00\",\"metadata\":{\"huge\":18446744073709551617}},{\"mediaId\":\"unencodable\",\"type\":\"image\",\"path\":\"image.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"\\ud800\",\"metadata\":{\"retained\":NaN}}]}",
+      "documentSha256": "c058ddceb54c140c674e28befb9ac73256cee85de7d361be14402648a9f3dbdf",
+      "results": {
+        "collection": {
+          "uri": "/api/media",
+          "status": 500,
+          "body": {
+            "error": "Server error",
+            "code": "internal"
+          },
+          "bodyJson": "{\"error\":\"Server error\",\"code\":\"internal\"}",
+          "bodySha256": "6b4c12ad302a7239bff387d08fce340729b6fb60097839db4eea9a12fa79cc77"
+        },
+        "filter": {
+          "uri": "/api/media?type=pdf",
+          "status": 200,
+          "body": {
+            "ok": true,
+            "media": [
+              {
+                "mediaId": "visible",
+                "projectId": "",
+                "type": "pdf",
+                "title": "Untitled media",
+                "mimeType": "application/pdf",
+                "path": "page.pdf",
+                "source": {},
+                "status": "pending",
+                "createdAt": "fixed",
+                "updatedAt": "\ud800\udc00",
+                "metadata": {
+                  "huge": 18446744073709551617
+                }
+              }
+            ]
+          },
+          "bodyJson": "{\"ok\":true,\"media\":[{\"mediaId\":\"visible\",\"projectId\":\"\",\"type\":\"pdf\",\"title\":\"Untitled media\",\"mimeType\":\"application/pdf\",\"path\":\"page.pdf\",\"source\":{},\"status\":\"pending\",\"createdAt\":\"fixed\",\"updatedAt\":\"\ud800\udc00\",\"metadata\":{\"huge\":18446744073709551617}}]}",
+          "bodySha256": "97e3f512b061c2da4ddd3dff3c7ec91eda4d1b42ee7a2ba7d55de511385865d9"
+        },
+        "visible": {
+          "uri": "/api/media/visible",
+          "status": 200,
+          "body": {
+            "ok": true,
+            "media": {
+              "mediaId": "visible",
+              "projectId": "",
+              "type": "pdf",
+              "title": "Untitled media",
+              "mimeType": "application/pdf",
+              "path": "page.pdf",
+              "source": {},
+              "status": "pending",
+              "createdAt": "fixed",
+              "updatedAt": "\ud800\udc00",
+              "metadata": {
+                "huge": 18446744073709551617
+              }
+            }
+          },
+          "bodyJson": "{\"ok\":true,\"media\":{\"mediaId\":\"visible\",\"projectId\":\"\",\"type\":\"pdf\",\"title\":\"Untitled media\",\"mimeType\":\"application/pdf\",\"path\":\"page.pdf\",\"source\":{},\"status\":\"pending\",\"createdAt\":\"fixed\",\"updatedAt\":\"\ud800\udc00\",\"metadata\":{\"huge\":18446744073709551617}}}",
+          "bodySha256": "014863297d67a13e7095517539438c8b63a67397f19feeaaa1e20963e50f984c"
+        },
+        "unencodable": {
+          "uri": "/api/media/unencodable",
+          "status": 500,
+          "body": {
+            "error": "Server error",
+            "code": "internal"
+          },
+          "bodyJson": "{\"error\":\"Server error\",\"code\":\"internal\"}",
+          "bodySha256": "6b4c12ad302a7239bff387d08fce340729b6fb60097839db4eea9a12fa79cc77"
+        },
+        "segments": {
+          "uri": "/api/media/unencodable/segments",
+          "status": 200,
+          "body": {
+            "ok": true,
+            "segments": []
+          },
+          "bodyJson": "{\"ok\":true,\"segments\":[]}",
+          "bodySha256": "e01d191b7311bf27c82c756b44b12569dc77528fe10a961380d9fa9045567a5f"
+        },
+        "window_one": {
+          "uri": "/api/workspace/home?limit=1",
+          "status": 200,
+          "body": {
+            "ok": true,
+            "media": [
+              {
+                "mediaId": "visible",
+                "projectId": "",
+                "type": "pdf",
+                "title": "Untitled media",
+                "mimeType": "application/pdf",
+                "path": "page.pdf",
+                "source": {},
+                "status": "pending",
+                "createdAt": "fixed",
+                "updatedAt": "\ud800\udc00",
+                "metadata": {
+                  "huge": 18446744073709551617
+                }
+              }
+            ],
+            "count": 2
+          },
+          "bodyJson": "{\"ok\":true,\"media\":[{\"mediaId\":\"visible\",\"projectId\":\"\",\"type\":\"pdf\",\"title\":\"Untitled media\",\"mimeType\":\"application/pdf\",\"path\":\"page.pdf\",\"source\":{},\"status\":\"pending\",\"createdAt\":\"fixed\",\"updatedAt\":\"\ud800\udc00\",\"metadata\":{\"huge\":18446744073709551617}}],\"count\":2}",
+          "bodySha256": "c415ca7929674ed0bc16e7b93ce6645ab297c2fbf489ea94f8a9c347d742f4c9",
+          "originalWholeBodySha256": "ee23f63098becfc86534093f8d596d0412d384db6c8de8e925656a4e88d04771",
+          "bodyComparisonScope": [
+            "ok",
+            "recent.media",
+            "counts.media"
+          ]
+        },
+        "window_two": {
+          "uri": "/api/workspace/home?limit=2",
+          "status": 500,
+          "body": {
+            "error": "Server error",
+            "code": "internal"
+          },
+          "bodyJson": "{\"error\":\"Server error\",\"code\":\"internal\"}",
+          "bodySha256": "6b4c12ad302a7239bff387d08fce340729b6fb60097839db4eea9a12fa79cc77"
+        }
+      }
+    },
+    {
+      "name": "scalar_sort_and_normalization",
+      "document": "{\"media\":[{\"mediaId\":\"media_bmp\",\"type\":\"image\",\"path\":\"image.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"\\ue000\",\"source\":{\"parts\":[Infinity,[\"\\ud800\"],{\"z\":1,\"a\":2},null]}},{\"mediaId\":\"\\u001cfirst\\u001c\",\"type\":\"\",\"path\":\"page.pdf\",\"createdAt\":\"fixed\",\"updatedAt\":\"\\ud800\\udc00\",\"title\":\"report.pdf/.\"},{\"mediaId\":\"media_tie\",\"type\":\"\",\"path\":\"clip.mkv\",\"createdAt\":\"fixed\",\"updatedAt\":\"\\ud800\\udc00\",\"title\":\"clip.m\\u212av\",\"mimeType\":\"application/octet-stream\"}]}",
+      "documentSha256": "b67bf41f4971d01607b23c1b847b8bc48b12ac8ef5920d0bec07e4fef785f7ca",
+      "results": {
+        "collection": {
+          "uri": "/api/media",
+          "status": 200,
+          "body": {
+            "ok": true,
+            "media": [
+              {
+                "mediaId": "first",
+                "projectId": "",
+                "type": "pdf",
+                "title": "report.pdf/.",
+                "mimeType": "application/pdf",
+                "path": "page.pdf",
+                "source": {},
+                "status": "pending",
+                "createdAt": "fixed",
+                "updatedAt": "\ud800\udc00",
+                "metadata": {}
+              },
+              {
+                "mediaId": "media_tie",
+                "projectId": "",
+                "type": "video",
+                "title": "clip.m\u212av",
+                "mimeType": "application/octet-stream",
+                "path": "clip.mkv",
+                "source": {},
+                "status": "pending",
+                "createdAt": "fixed",
+                "updatedAt": "\ud800\udc00",
+                "metadata": {}
+              },
+              {
+                "mediaId": "media_bmp",
+                "projectId": "",
+                "type": "image",
+                "title": "Untitled media",
+                "mimeType": "image/png",
+                "path": "image.png",
+                "source": {
+                  "parts": [
+                    "inf",
+                    "['\\ud800']",
+                    "{'z': 1, 'a': 2}"
+                  ]
+                },
+                "status": "pending",
+                "createdAt": "fixed",
+                "updatedAt": "\ue000",
+                "metadata": {}
+              }
+            ]
+          },
+          "bodyJson": "{\"ok\":true,\"media\":[{\"mediaId\":\"first\",\"projectId\":\"\",\"type\":\"pdf\",\"title\":\"report.pdf/.\",\"mimeType\":\"application/pdf\",\"path\":\"page.pdf\",\"source\":{},\"status\":\"pending\",\"createdAt\":\"fixed\",\"updatedAt\":\"\ud800\udc00\",\"metadata\":{}},{\"mediaId\":\"media_tie\",\"projectId\":\"\",\"type\":\"video\",\"title\":\"clip.m\u212av\",\"mimeType\":\"application/octet-stream\",\"path\":\"clip.mkv\",\"source\":{},\"status\":\"pending\",\"createdAt\":\"fixed\",\"updatedAt\":\"\ud800\udc00\",\"metadata\":{}},{\"mediaId\":\"media_bmp\",\"projectId\":\"\",\"type\":\"image\",\"title\":\"Untitled media\",\"mimeType\":\"image/png\",\"path\":\"image.png\",\"source\":{\"parts\":[\"inf\",\"['\\\\ud800']\",\"{'z': 1, 'a': 2}\"]},\"status\":\"pending\",\"createdAt\":\"fixed\",\"updatedAt\":\"\ue000\",\"metadata\":{}}]}",
+          "bodySha256": "d4ec56cbb7e78b8f3b75475acace3d7d94f3eff7d5dd1fc312fbe03543dba8d0"
+        },
+        "filter": {
+          "uri": "/api/media?type=video",
+          "status": 200,
+          "body": {
+            "ok": true,
+            "media": [
+              {
+                "mediaId": "media_tie",
+                "projectId": "",
+                "type": "video",
+                "title": "clip.m\u212av",
+                "mimeType": "application/octet-stream",
+                "path": "clip.mkv",
+                "source": {},
+                "status": "pending",
+                "createdAt": "fixed",
+                "updatedAt": "\ud800\udc00",
+                "metadata": {}
+              }
+            ]
+          },
+          "bodyJson": "{\"ok\":true,\"media\":[{\"mediaId\":\"media_tie\",\"projectId\":\"\",\"type\":\"video\",\"title\":\"clip.m\u212av\",\"mimeType\":\"application/octet-stream\",\"path\":\"clip.mkv\",\"source\":{},\"status\":\"pending\",\"createdAt\":\"fixed\",\"updatedAt\":\"\ud800\udc00\",\"metadata\":{}}]}",
+          "bodySha256": "76687681df85e5584f31f52ce53351496a27bd7144ddaf130d6c3999dd631174"
+        },
+        "window_one": {
+          "uri": "/api/workspace/home?limit=1",
+          "status": 200,
+          "body": {
+            "ok": true,
+            "media": [
+              {
+                "mediaId": "first",
+                "projectId": "",
+                "type": "pdf",
+                "title": "report.pdf/.",
+                "mimeType": "application/pdf",
+                "path": "page.pdf",
+                "source": {},
+                "status": "pending",
+                "createdAt": "fixed",
+                "updatedAt": "\ud800\udc00",
+                "metadata": {}
+              }
+            ],
+            "count": 3
+          },
+          "bodyJson": "{\"ok\":true,\"media\":[{\"mediaId\":\"first\",\"projectId\":\"\",\"type\":\"pdf\",\"title\":\"report.pdf/.\",\"mimeType\":\"application/pdf\",\"path\":\"page.pdf\",\"source\":{},\"status\":\"pending\",\"createdAt\":\"fixed\",\"updatedAt\":\"\ud800\udc00\",\"metadata\":{}}],\"count\":3}",
+          "bodySha256": "3e3af20191170f53ea32ffbadabb879bdf073999abd31549b51a08d4236a6482",
+          "originalWholeBodySha256": "0bf510240f80f45cc4b3240475a1d52dcc9e72932f6915351010fff1f740a2d2",
+          "bodyComparisonScope": [
+            "ok",
+            "recent.media",
+            "counts.media"
+          ]
+        },
+        "window_all": {
+          "uri": "/api/workspace/home?limit=3",
+          "status": 200,
+          "body": {
+            "ok": true,
+            "media": [
+              {
+                "mediaId": "first",
+                "projectId": "",
+                "type": "pdf",
+                "title": "report.pdf/.",
+                "mimeType": "application/pdf",
+                "path": "page.pdf",
+                "source": {},
+                "status": "pending",
+                "createdAt": "fixed",
+                "updatedAt": "\ud800\udc00",
+                "metadata": {}
+              },
+              {
+                "mediaId": "media_tie",
+                "projectId": "",
+                "type": "video",
+                "title": "clip.m\u212av",
+                "mimeType": "application/octet-stream",
+                "path": "clip.mkv",
+                "source": {},
+                "status": "pending",
+                "createdAt": "fixed",
+                "updatedAt": "\ud800\udc00",
+                "metadata": {}
+              },
+              {
+                "mediaId": "media_bmp",
+                "projectId": "",
+                "type": "image",
+                "title": "Untitled media",
+                "mimeType": "image/png",
+                "path": "image.png",
+                "source": {
+                  "parts": [
+                    "inf",
+                    "['\\ud800']",
+                    "{'z': 1, 'a': 2}"
+                  ]
+                },
+                "status": "pending",
+                "createdAt": "fixed",
+                "updatedAt": "\ue000",
+                "metadata": {}
+              }
+            ],
+            "count": 3
+          },
+          "bodyJson": "{\"ok\":true,\"media\":[{\"mediaId\":\"first\",\"projectId\":\"\",\"type\":\"pdf\",\"title\":\"report.pdf/.\",\"mimeType\":\"application/pdf\",\"path\":\"page.pdf\",\"source\":{},\"status\":\"pending\",\"createdAt\":\"fixed\",\"updatedAt\":\"\ud800\udc00\",\"metadata\":{}},{\"mediaId\":\"media_tie\",\"projectId\":\"\",\"type\":\"video\",\"title\":\"clip.m\u212av\",\"mimeType\":\"application/octet-stream\",\"path\":\"clip.mkv\",\"source\":{},\"status\":\"pending\",\"createdAt\":\"fixed\",\"updatedAt\":\"\ud800\udc00\",\"metadata\":{}},{\"mediaId\":\"media_bmp\",\"projectId\":\"\",\"type\":\"image\",\"title\":\"Untitled media\",\"mimeType\":\"image/png\",\"path\":\"image.png\",\"source\":{\"parts\":[\"inf\",\"['\\\\ud800']\",\"{'z': 1, 'a': 2}\"]},\"status\":\"pending\",\"createdAt\":\"fixed\",\"updatedAt\":\"\ue000\",\"metadata\":{}}],\"count\":3}",
+          "bodySha256": "a0d38329d084a99c04bda9e02d27a242abce13966d7ca4e201ddf400ef991172",
+          "originalWholeBodySha256": "c198f3e19a1827a1d6046398c6b32bc6ff75358392e16da02db144363d15b20a",
+          "bodyComparisonScope": [
+            "ok",
+            "recent.media",
+            "counts.media"
+          ]
+        }
+      }
+    },
+    {
+      "name": "normalization_precedes_encoding",
+      "document": "{\"media\":[{\"mediaId\":\"unencodable\",\"type\":\"image\",\"path\":\"image.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"z\",\"metadata\":{\"retained\":Infinity}},{\"mediaId\":\"invalid_public_path\",\"type\":\"image\",\"path\":\"./C:/x.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"a\"}]}",
+      "documentSha256": "a0f49a128de2569a2728d543b1ebdf14304a6c3c65c9ac97c6c60620152a21ca",
+      "results": {
+        "collection": {
+          "uri": "/api/media",
+          "status": 400,
+          "body": {
+            "error": "Media path must be relative to the media library",
+            "code": "invalid_payload"
+          },
+          "bodyJson": "{\"error\":\"Media path must be relative to the media library\",\"code\":\"invalid_payload\"}",
+          "bodySha256": "fbb5f007d78a9f47eb10f333029be290efd035986a2739b81ebefbc19becf88e"
+        },
+        "window_one": {
+          "uri": "/api/workspace/home?limit=1",
+          "status": 400,
+          "body": {
+            "error": "Media path must be relative to the media library",
+            "code": "invalid_payload"
+          },
+          "bodyJson": "{\"error\":\"Media path must be relative to the media library\",\"code\":\"invalid_payload\"}",
+          "bodySha256": "fbb5f007d78a9f47eb10f333029be290efd035986a2739b81ebefbc19becf88e"
+        },
+        "unencodable": {
+          "uri": "/api/media/unencodable",
+          "status": 500,
+          "body": {
+            "error": "Server error",
+            "code": "internal"
+          },
+          "bodyJson": "{\"error\":\"Server error\",\"code\":\"internal\"}",
+          "bodySha256": "6b4c12ad302a7239bff387d08fce340729b6fb60097839db4eea9a12fa79cc77"
+        },
+        "segments": {
+          "uri": "/api/media/unencodable/segments",
+          "status": 200,
+          "body": {
+            "ok": true,
+            "segments": []
+          },
+          "bodyJson": "{\"ok\":true,\"segments\":[]}",
+          "bodySha256": "e01d191b7311bf27c82c756b44b12569dc77528fe10a961380d9fa9045567a5f"
+        },
+        "invalid_public_path": {
+          "uri": "/api/media/invalid_public_path",
+          "status": 400,
+          "body": {
+            "error": "Media path must be relative to the media library",
+            "code": "invalid_payload"
+          },
+          "bodyJson": "{\"error\":\"Media path must be relative to the media library\",\"code\":\"invalid_payload\"}",
+          "bodySha256": "fbb5f007d78a9f47eb10f333029be290efd035986a2739b81ebefbc19becf88e"
+        }
+      }
+    }
+  ],
+  "originalProofSha256": "f6de7d61b220d8bce25804a5175beb418b0a497f42b9a7a8982b55e53fe912d1"
+}

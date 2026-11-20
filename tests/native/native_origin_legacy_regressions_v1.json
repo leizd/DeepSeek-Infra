@@ -1,0 +1,31 @@
+{
+  "schema": "native-origin-legacy-regressions-v1",
+  "sourceFailureRun": 39553156963,
+  "sourceFailureJob": 119066758869,
+  "tests": [
+    "TestActionAdmissionV4UpgradePreservesHistoryAndRollsBackOnFailure",
+    "TestActionReconciliationMigrationDoesNotLegalizeOldStateEdges",
+    "TestActionReconciliationV5UnknownTakeoverStillResolves",
+    "TestActionReconciliationV5UpgradePreservesHistory",
+    "TestActionVerificationUpgradeDoesNotLegalizePreV7Phases",
+    "TestActionVerificationV6UpgradeIsAtomicAndPreservesRecovery",
+    "TestControlAuthorityV7UpgradeIsAtomicAndPreservesHistory",
+    "TestControlMigratesFromV2ToOperationJournal",
+    "TestCutoverJournalRejectsMutationAndControlMigratesFromV1",
+    "TestExportSnapshotIsStableAndRollbackDropsRecords",
+    "TestOperationStatusV8UpgradePreservesTheJournal",
+    "TestReconcilingInvariantV5IllegalEdgeStaysIllegal",
+    "TestStorageDispatchV3UpgradePreservesHistoryAndFailedClaim",
+    "TestV10InventoryMigrationRetainsShadowHistoryWithoutForgingAttestation",
+    "TestV11StoreMigratesToTheHandbackSchemaWithoutInventingHistory",
+    "TestV12ImportMigratesWithoutInventingLiveSourceBinding",
+    "TestV12PromotedImportCannotUpgradeWithoutLiveSourceBinding",
+    "TestV14MigrationPreservesOlderRecordsWithoutInventingHealth",
+    "TestV15MigrationPreservesRecordsAndVerifiesTheJournal",
+    "TestV16CancellationMigrationPreservesActiveLeaseAndImmutableHistory",
+    "TestV16StoreOpenMigratesFailureLeaseAndPreservesOriginalCustody",
+    "TestV17FailureMigrationPreservesRowsThenSettlesVerifiedPhase",
+    "TestV9UnsignedPromotionHistoryCannotBeUpgradedAsSigned"
+  ],
+  "originalAssertionsRetained": true
+}

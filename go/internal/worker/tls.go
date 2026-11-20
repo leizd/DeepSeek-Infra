@@ -13,6 +13,7 @@ import (
 
 	actionv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/actionv1"
 	agentv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/agentv1"
+	mediav1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/mediav1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 )
@@ -148,7 +149,11 @@ func DialTLS(cfg TLSDialConfig) (*Client, error) {
 	return &Client{
 		rpc:            actionv1.NewWorkerClient(connection),
 		signer:         actionv1.NewControlSignerClient(connection),
+		bootstrap:      actionv1.NewControlSignerBootstrapClient(connection),
+		origin:         actionv1.NewNativeOriginCustodyClient(connection),
 		nodes:          agentv1.NewAgentNodeWorkerClient(connection),
+		media:          mediav1.NewMediaMutationWorkerClient(connection),
+		mediaCreation:  mediav1.NewMediaCreationPayloadsClient(connection),
 		connection:     connection,
 		tlsSecured:     true,
 		bearerAttached: true,

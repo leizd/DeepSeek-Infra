@@ -13,16 +13,19 @@ import (
 // Server is a running control listener. Done delivers one terminal error (nil on
 // normal cancellation) after the HTTP server and its owned store have closed.
 type Server struct {
-	address   string
-	done      chan error
-	stopRPC   func()
-	agentDone <-chan struct{}
+	address    string
+	rpcAddress string
+	done       chan error
+	stopRPC    func()
+	agentDone  <-chan struct{}
+	mediaDone  <-chan struct{}
 }
 
-func (runtime *Server) Addr() string       { return runtime.address }
-func (runtime *Server) Done() <-chan error { return runtime.done }
+func (runtime *Server) Addr() string            { return runtime.address }
+func (runtime *Server) Done() <-chan error      { return runtime.done }
+func (runtime *Server) InternalRPCAddr() string { return runtime.rpcAddress }
 
-func (runtime *Server) supervise(ctx context.Context, cancel context.CancelFunc, server *http.Server, served <-chan error, control *store.Control, renewEvery time.Duration) {
+func (runtime *Server) supervise(ctx context.Context, cancel context.CancelFunc, server *http.Server, served <-chan error, control *store.Control, renewEvery time.Duration, remainingListeners int) {
 	var ticks <-chan time.Time
 	if control != nil {
 		ticker := time.NewTicker(renewEvery)
@@ -34,14 +37,13 @@ func (runtime *Server) supervise(ctx context.Context, cancel context.CancelFunc,
 	var renewCtx context.Context
 	cancelRenewal := func() {}
 	var terminal error
-	serveFinished := false
 monitor:
 	for {
 		select {
 		case <-ctx.Done():
 			break monitor
 		case err := <-served:
-			serveFinished = true
+			remainingListeners--
 			terminal = fmt.Errorf("control listener stopped: %w", err)
 			break monitor
 		case <-ticks:
@@ -91,14 +93,18 @@ monitor:
 		terminal = errors.Join(terminal, err, server.Close())
 	}
 	stop()
-	if !serveFinished {
+	for remainingListeners > 0 {
 		<-served
+		remainingListeners--
 	}
 	if renewal != nil {
 		<-renewal
 	}
 	if runtime.agentDone != nil {
 		<-runtime.agentDone
+	}
+	if runtime.mediaDone != nil {
+		<-runtime.mediaDone
 	}
 	if control != nil {
 		terminal = errors.Join(terminal, control.Close())

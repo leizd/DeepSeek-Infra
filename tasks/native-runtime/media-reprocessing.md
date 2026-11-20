@@ -1,0 +1,268 @@
+# Current checkpoint: preserve the cloud fixture file set, 2026-11-01
+
+Source9ace5f9 recovery run41280484842 completes all nine original cases, but
+all12 new matrix cells fail before PROCESS execution because their downloaded
+file set lacks the source-built ui/.vite/manifest.json. Its hash/size/path are
+present in the retained producer receipt. The pinned artifact uploader excludes
+hidden files by default. This is a fixture-transfer failure, not24 qualified
+crash cases; the exact file-set check correctly refuses incomplete input.
+
+The follow-up enables hidden-file inclusion only for the existing dedicated
+cloud binary/UI fixture path. The producer includes exactly the two built native
+programs and the built UI; no runtime profile, private signing state or cache is
+copied. Exact source/tree/run/attempt, all members, hashes, ELF headers, linkage,
+timeouts, original9, all24 PROCESS cases and original coverage floors remain
+required. An offline regression executes the actual consumer with inert files:
+the original transfer fails at the same file-set assertion; corrected transfer
+succeeds, and five missing/extra/modified/mixed/duplicate inputs remain refused.
+These are Python verifier tests, never locally built/executed native programs.
+
+The cumulative source also contains thea8c0241 AppKit/WebKit implementation.
+Both real Mac architecture tests, persistent/retained UI functionality, complete
+exact-source CI/Evidence and the full product ownership/recovery/feature/package/
+zero-Python/server-TypeScript/security/performance matrix remain open. All broad
+readiness flags stay false and the migration remains ACTIVE/NOT_READY.
+
+Artifact semantics: [pinned upload-artifact documentation](https://github.com/actions/upload-artifact/blob/ea165f8d65b6e75b540449e92b4886f43607fa02/README.md).
+
+# Standalone native media reprocessing
+
+<!-- docs-language-switcher:start -->
+[中文](../../README.md) / [English](../../README.en.md)
+<!-- docs-language-switcher:end -->
+
+## Complete recovery corpus partition, 2026-11-01
+
+At7478c31, original9 and11 actual SQLite cases pass, including five final
+publications that reuse the initial inode and remain unchanged on recovery.
+The serial20-minute limit interrupts video-final; the remaining listener stops
+SQLiteVec preflight. The full24-case gate has not passed. The follow-up requires
+all backend/kind pairs on independent cloud runners, max four in parallel, with
+both phases and the original20-minute per-cell cap. All29 other original steps
+and the60-minute original job remain. A final required gate checks all24
+same-source/tree/run/attempt cases plus original9 and original identity/effect/
+publication evidence. Binaries, built UI and compiler outputs remain in the
+cloud; exact binary and UI hashes are checked before each application starts.
+Selected cells report only selected-case success. Full pipeline and all other
+product/platform requirements remain NOT_READY.
+
+
+## Original PROCESS publication sequence, 2026-11-01
+
+The f12d170 recovery run41261832532 retains original9 PASS and only2/24
+PROCESS PASS (webpage-processing on each backend). Both final cases fail;
+20 were not executed. A final inode can reuse the initial inode after two
+atomic replacements. The follow-up observes the processing predecessor and
+unchanged original operation/epoch/claim/outer plan/inner preparation before
+accepting a distinct final inode. Missing phases, in-place writes, changed
+bindings and mixed file versions remain refused. The actual24-case cloud
+corpus, all original gates and the full product requirements remain pending.
+Offline218 PASS/three original host skips is separate evidence. NOT_READY.
+
+
+
+This is one unfinished part of the complete server, desktop, Android and
+background Rust/Go migration. Overall readiness remains **NOT_READY**. Source
+implementation, source generation, a scoped runtime probe, full source CI and a
+PR merge candidate are separate evidence scopes.
+
+## Contract and ownership
+
+The existing public `POST /api/media/{id}/process` retains its media identity,
+source path and creation timestamp. It uses PROCESS kind3 and its own
+`media-process-<32 lowercase hex>` operation. Go admits the typed force/OCR
+options and log-safe correlation identifier, owns its lease and immutable control
+row, and reconciles only that original operation. Rust owns the preparation,
+library publication, source read, segment replacement and local index effects.
+No CREATE staging, new source publication, new action/epoch during recovery,
+shared SQLite writer or production Python fallback is introduced.
+
+The signed processed result binds the original fence, exact typed record and
+segment bytes, private preparation digest and index count. A present empty
+segment array has zero serialized bytes and the SHA-256 of empty bytes. The
+separate retained-result RPC must verify both payloads and the count before a
+public response. A processor error with a retained failed record is APPLIED with
+the original public error; it is never a no-effect REFUSED result.
+Go also requires the APPLIED unsigned receipt digest to equal its original
+dispatch preparation digest. Even a valid signature cannot substitute another
+private preparation or index count after that permit.
+
+Rust snapshots exact original segment file bytes/presence, the selected index
+column codecs and their actual vector rows, and any source bytes used by the
+original processor. The source is read-only input. Audio/video and webpages with
+imported text do not acquire a new source-file dependency. Processing cannot
+recreate a deleted source. The index filter retains the original rule: delete
+only collection `media`, the media identity and, when nonempty, its project.
+Other projects and collections remain untouched.
+The original stored chunk column remains a signed INTEGER in the private
+snapshot, including negative legacy values; it is not narrowed to the unsigned
+enumeration used for newly generated chunks.
+
+Force first clears the selected index and segments. Success then replaces the
+segments and index; a known processing failure retains the failed record and
+the original stale count metadata while leaving the force-cleared stores empty.
+A non-force processor failure preserves the old segments and index. Disabled
+indexing does not gain permission to modify an old index. Configuration captured
+in the preparation is not reinterpreted during recovery.
+
+Each SQLite phase uses a FULL transaction and its original preparation marker.
+Recovery compares actual stored rows/vectors and exact segment bytes. A replay
+of an earlier clear phase cannot erase final rows or segments. Only the exact
+original processing/final library witness permits continuing local effects.
+A still-old library, conflicting bytes, an unconfirmed effect or a missing
+provider result remains unresolved; none authorizes another business request.
+Segment replacement uses a temporary file in the same directory, explicit file
+and applicable directory synchronization and read-back confirmation. The
+[pinned tempfile contract](https://docs.rs/tempfile/3.27.0/tempfile/struct.NamedTempFile.html#method.persist)
+requires synchronization in addition to replacement. Physical power loss and
+Windows/Android durability still require their own platform evidence.
+
+## Evidence boundaries
+
+- Protocol source `7c1a6b12` and source-generation run41175785006 passed. Four
+  reviewed Go/descriptor/manifest outputs were received without tools, binaries
+  or caches, and the historical PATCH bytes/digest were preserved.
+  Signed-row contract `6e5d9b72` and source-generation run41179849284 also passed,
+  including signed64-bit boundary round trips and the same historical digest.
+- Parent `c4aae0c0` passed97 scoped Go/race families,47 Rust media tests, six
+  actual JSON processing creations and the known failed PDF case. Its actual
+  standalone force probe failed. The historical observer did not retain that
+  failure's numeric status; no status is inferred as an observation.
+- Original full source CI at `4688a38c` passed37 jobs and50 verified Evidence
+  artifacts. Default Go is16247/17098=95.022810%, Android Go16566/17436=95.010323%,
+  Rust91757/111671=82.167259%, and Python branch coverage83517/87385=95.573611%.
+  Both complete Go race corpora were independently checked. This older source
+  does not qualify this implementation or any PR merge candidate.
+- This implementation adds eight mandatory Go test families, expanding the
+  scoped inventory from97 to105 without removing an old test. Rust tests cover
+  six media kinds, force/non-force failures, exact before codecs, project and
+  collection scope, source/segment/index conflicts, original local phases and
+  lost terminal commit. These tests remain unqualified until this source runs
+  in the cloud. Synthetic fault phases are not actual SIGKILL evidence.
+- The real HTTP observer now retains numeric force failures before assertions,
+  independently reads every ready record and force result/segments, and requires
+  a whole-launcher restart with unchanged records, segments, index and sources.
+  Existing35 multipart cases and56 earlier restart observations stay required.
+
+## Current exact-source evidence and external crash probe
+
+Source `020065e4948f49b21beac2f33ed1e65f9069456f` passed both independent
+105-family Go/race corpora (605 tests/subtests and all four packages each),
+53 Rust media tests including all six standalone PROCESS families, and both
+qualified targeted retained-source EIO cases. Its complete original15-crate
+Rust workflow passed1672 tests, with only the existing disposable-Redis ignore;
+independently summed LCOV is94389/114522=82.419971708493%, above the original80%
+floor. Its actual six JSON processing creations, six standalone force200
+responses, independent public reads and complete launcher processing restart
+passed while preserving the existing35 multipart/56 earlier read observations.
+The full source CI is [run41195790266](https://github.com/leizd/DeepSeek-Infra/actions/runs/41195790266);
+it remains a separate qualification and is not a PR merge-candidate check.
+
+The external PROCESS recovery observer adds24 cloud-only cases: all six media
+kinds on SQLite and SQLiteVec, at both the intermediate processing-library and
+final-library publication. A calibrated official tracer delays the actual
+post-rename sync return for five seconds without substituting a return value.
+The observer kills the real native process group, then requires autonomous
+settlement of the same original action/epoch, claim, plan and signed outcome;
+no second public write is sent. Source bytes/inode/mtime, foreign records and
+segments, unrelated exact index columns and namespace metadata must survive.
+SQLiteVec checks actual vector bytes and scalar bindings. Public record/segment
+reads must match the independent original ASGI oracle, and a further complete
+restart must preserve files, index and settled receipt without reprocessing.
+These new actual crash cases remain **CLOUD_PENDING** until this exact candidate
+runs. Offline observer tests do not qualify a native crash or SQLiteVec HTTP.
+
+This probe does not yet cover every clear/segment/index commit boundary,
+physical power loss, Windows/Android durability, all configuration/provider/OCR
+paths or the entire processing pipeline. Those requirements remain open.
+
+## Original Go floor correction
+
+Full CI41195790266 at020065e has now ended: native-Go measured
+16416/17293=94.928583820043%, below the unchanged95% floor by13 covered
+statements. The downstream Evidence/RC gates failed and Android-Go coverage did
+not run. The new child only extends existing Go tests to cover secured/bounded
+result reads, valid hashes on malformed typed contents, changed intent digests,
+unavailable control before RPC, and store-level PROCESS plan binding and
+historical settlement/replay. No production code, original test family, filter,
+pin, schema, signature or coverage denominator is changed. All new runtime and
+coverage results remain CLOUD_PENDING. Parent7228a63a's separate actual crash
+run41197847611 cannot be assigned to this exact child.
+
+## External observer RED and correction
+
+The verified164 reports from source7228a63a/run41197847611 retain two new
+PROCESS failures before admission: the media-only HTTP helper refuses the
+control health path. Use the existing bounded general control observer instead;
+the media whitelist stays strict. The older PATCH case reached real publication
+with original DISPATCHED/APPLYING witnesses, then hit ProcessLookupError before
+complete process exit. The reports do not identify which racing signal/cleanup
+call raised it, and do not prove successful recovery.
+
+The correction uses original-process pidfds, checks start ticks before/after
+binding, refuses disappeared pause targets, and only tolerates independently
+confirmed exit for termination. Root-launcher-last ordering and explicit worker
+SIGKILL-delivery/every-original-exit evidence prevent weaker crash claims. Tracer
+cleanup still waits on the original Popen handle after an ESRCH race. The
+[Python pidfd contract](https://docs.python.org/3.11/library/os.html#os.pidfd_open)
+and [signal contract](https://docs.python.org/3.11/library/signal.html#signal.pidfd_send_signal)
+are Linux-only observer APIs; no application hook, syscall result substitution,
+production dependency or control/data authority change is added. Ten focused
+offline regressions reproduced the failures; actual24-case re-execution and the
+inherited Go coverage regressions remain CLOUD_PENDING at this exact source.
+
+## Original PROCESS index phase markers
+
+The parent8b run41203337217 passes all nine original recovery steps. Both new
+backend cases reach real SIGKILL and automatic original-operation APPLIED, then
+fail full rag_meta equality. They do not establish the24-case corpus. The actual
+production index transaction adds two phase markers for the original operation;
+an offline reproduction confirms these legitimate additions fail that equality.
+The prior report lacks raw before/after index metadata, so a new cloud run must
+confirm the actual values rather than inferring complete success from APPLIED.
+
+The corrected observer accepts only the exact original operation's new clear and
+final keys with its original preparation SHA256, rejects preexisting/rebound/
+missing/extra markers, and retains all namespace values and foreign markers.
+Foreign project rows and vector bytes remain protected even for the same media
+ID. Snapshot reports are written before assertions. The full178-case offline
+observer suite passes175 with the original3 host skips; production source and
+all workflow cases/filters/floors are unchanged. All24 actual crash cases, later
+commit boundaries and complete child-source qualification remain CLOUD_PENDING.
+
+## Inner preparation versus outer planned outcome
+
+The parentb98 recovery report retains both index snapshots for each failing
+backend. All original metadata is unchanged; exactly clear/final markers for
+the original operation are added. Their common digest is not the outer journal
+preparation_sha256. The original plan's processed.preparation_sha256 binds the
+inner process.pb file, as the production index transaction requires.
+
+The corrected read-only observer decodes the frozen existing Protobuf plan,
+checks its outer digest, operation, request-intent digest and original fences,
+and verifies the actual private file's bounded bytes against the inner digest.
+It never obtains the accepted hash from the index being checked. The observed
+inner hash is immutable before/after the real kill and complete restarts. No raw
+private payload or signing key is exported. Existing namespace and cross-project
+row/vector protections remain. The202-case offline corpus passes199 with the
+original3 host skips; all24 actual new-source crash cases remain CLOUD_PENDING.
+There is no production dependency, workflow/floor/filter/pin or protocol change.
+
+## Remaining acceptance
+
+Exact-source compilation,105 Go/race families, all Rust tests and original
+coverage floors, actual force/restart and process-kill reconciliation are still
+required. Native SQLiteVec HTTP/configuration/disabled-index behavior, binary
+PDF/OCR, hosted OCR credential overrides and telemetry, embedding providers,
+original errors/capacity behavior and backup interactions remain required.
+Caller OCR credential overrides are explicitly unavailable until a separate
+Rust-custody transport exists; keys are neither silently ignored for requested
+OCR nor put in immutable Go intents.
+
+The full production ownership/cutover, server/desktop/Android/background feature
+matrix, MCP test engine, zero-Python workloads, platform/provider recovery,
+security, performance, exact source CI/Evidence and release requirements remain
+open. The user has retained the original MCP test-engine requirement without a
+Python exception. Builds/tests/images remain in GitHub Actions; the local dirty
+workspace is preserved. No main merge, release, production data operation or PR
+outside the scheduled daily09:00 batch is part of this change.

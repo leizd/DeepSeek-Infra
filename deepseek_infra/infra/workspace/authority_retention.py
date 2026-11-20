@@ -30,6 +30,7 @@ from deepseek_infra.infra.workspace import (
     backup_dr_readiness,
     backups,
 )
+from deepseek_infra.infra.native_runtime.authority import assert_python_writer_allowed
 
 RETENTION_POLICY_VERSION = 1
 AUTHORITY_CHECKPOINT_SCHEMA_VERSION = 1
@@ -143,6 +144,7 @@ def get_authority_retention_policy() -> dict[str, Any]:
 
 def put_authority_retention_policy(payload: dict[str, Any]) -> dict[str, Any]:
     """Persist an updated retention policy."""
+    assert_python_writer_allowed("authority_retention_store")
     normalized = normalize_retention_policy(payload)
     path = _policy_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -164,6 +166,7 @@ def build_authority_retention_checkpoint(
     created_at: str | None = None,
 ) -> dict[str, Any]:
     """Build an AuthorityCheckpoint v1 retention artifact."""
+    assert_python_writer_allowed("authority_retention_store")
     gen = int(checkpoint_generation)
     if gen < 1:
         raise AppError("checkpointGeneration must be >= 1", code=ErrorCode.INVALID_PAYLOAD, status=400)
@@ -645,6 +648,7 @@ def execute_compaction(
     dry_run: bool = False,
 ) -> dict[str, Any]:
     """Execute safe authority history compaction through the RetentionJob state machine (P0-4)."""
+    assert_python_writer_allowed("authority_retention_store")
     job_id = f"job_ret_{uuid.uuid4().hex[:12]}"
     now = _utc_iso()
 

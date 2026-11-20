@@ -9,7 +9,7 @@ import (
 	"github.com/leizd/DeepSeek-Infra/go/internal/store"
 )
 
-const DefaultStartupWait = 35 * time.Second
+const DefaultStartupWait = config.ControlWriterStartupWait
 
 // StartWithWriterWait waits only for an existing writer lease to release or
 // expire. Every retry uses the normal durable claim; no fence or epoch is reset.

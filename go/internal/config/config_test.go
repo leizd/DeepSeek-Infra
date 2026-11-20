@@ -115,3 +115,26 @@ func TestLoadPinsAgentOutcomeCustodyKey(t *testing.T) {
 		t.Fatal("absent outcome trust was defaulted")
 	}
 }
+
+func TestManagedExpectedWriterFenceIsExplicitAndStrict(t *testing.T) {
+	t.Setenv("DEEPSEEKD_MODE", ModeAuthoritative)
+	t.Setenv("DEEPSEEKD_PRODUCTION_STORE", t.TempDir())
+	t.Setenv("DEEPSEEKD_SHADOW_STORE", "")
+	t.Setenv("DEEPSEEKD_EXPECTED_WRITER_FENCE", "2")
+	cfg, err := Load()
+	if err != nil || cfg.ExpectedWriterFence != 2 {
+		t.Fatal("valid managed writer fence refused")
+	}
+	for _, value := range []string{"", "0", "-1", " 2", "9223372036854775808"} {
+		t.Setenv("DEEPSEEKD_EXPECTED_WRITER_FENCE", value)
+		if _, err = Load(); err == nil {
+			t.Fatal("invalid writer fence admitted")
+		}
+	}
+	t.Setenv("DEEPSEEKD_MODE", ModeShadow)
+	t.Setenv("DEEPSEEKD_PRODUCTION_STORE", "")
+	t.Setenv("DEEPSEEKD_EXPECTED_WRITER_FENCE", "2")
+	if _, err = Load(); err == nil {
+		t.Fatal("managed writer fence admitted in shadow mode")
+	}
+}

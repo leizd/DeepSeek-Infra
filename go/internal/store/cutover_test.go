@@ -393,6 +393,7 @@ func TestCutoverJournalRejectsMutationAndControlMigratesFromV1(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	dropEmptyNativeOriginFixture(t, db)
 	for _, statement := range []string{
 		"DROP TABLE IF EXISTS control_operator_mutations",
 		"DROP TABLE IF EXISTS backup_target_health",

@@ -14,8 +14,10 @@ type agentNodeClient interface {
 	ExecuteTask(context.Context, *agentv1.ExecuteAgentTaskRequest, ...grpc.CallOption) (*agentv1.AgentNodeEffectMetadata, error)
 	ExecuteSynthesis(context.Context, *agentv1.ExecuteAgentTaskRequest, ...grpc.CallOption) (*agentv1.AgentNodeEffectMetadata, error)
 	QueryEffect(context.Context, *agentv1.QueryAgentNodeEffectRequest, ...grpc.CallOption) (*agentv1.QueryAgentNodeEffectResponse, error)
+	ReadRetainedEffect(context.Context, *agentv1.QueryAgentNodeEffectRequest, ...grpc.CallOption) (*agentv1.QueryAgentNodeEffectResponse, error)
 	ProjectPlan(context.Context, *agentv1.ProjectAgentPlanRequest, ...grpc.CallOption) (*agentv1.AgentPlanProjectionReceipt, error)
 	ProjectSynthesis(context.Context, *agentv1.ProjectAgentSynthesisRequest, ...grpc.CallOption) (*agentv1.AgentSynthesisProjectionReceipt, error)
+	ProjectFailure(context.Context, *agentv1.ProjectAgentFailureRequest, ...grpc.CallOption) (*agentv1.AgentFailureProjectionReceipt, error)
 }
 
 var _ agentNodeClient = (agentv1.AgentNodeWorkerClient)(nil)

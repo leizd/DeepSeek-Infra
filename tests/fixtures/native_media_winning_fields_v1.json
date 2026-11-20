@@ -1,0 +1,423 @@
+{
+  "schemaVersion": 1,
+  "sourceCommit": "f000759b44d5fb939c84e652866fca82cf47f517",
+  "originalReaderSha256": "1b1ae1f169609b0f83606c142726d2361902d4515845ed4465d9f93f69b2f7dd",
+  "originalSchemaSha256": "4f990bd8b4445ffb6848a79cde4a96a8b0ec7cdca56ff00744b93cb3f28fc3ec",
+  "caseCount": 10,
+  "cases": [
+    {
+      "name": "last_title_replaces_surrogate",
+      "document": "{\"media\":[{\"mediaId\":\"media_kept\",\"type\":\"image\",\"title\":\"original\",\"path\":\"image.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"fixed\",\"title\":\"\\uD800\",\"title\":\"winner\"}]}",
+      "documentSha256": "6d4aa20d971e53a0f1a839d1a83cefec7c9ba7a4c09ff426fe15f4623fdaffc1",
+      "storedRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "winner",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "publicRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "winner",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "readerError": null,
+      "publicUtf8Serializable": true,
+      "bodySha256": "f1a3350ca209c6909f917430f9e31b913c154fdf263006aca061e536760764d9"
+    },
+    {
+      "name": "last_metadata_replaces_nonfinite",
+      "document": "{\"media\":[{\"mediaId\":\"media_kept\",\"type\":\"image\",\"title\":\"original\",\"path\":\"image.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"fixed\",\"metadata\":{\"bad\":NaN},\"metadata\":{\"kept\":1}}]}",
+      "documentSha256": "cb3b77837fe86e66ad68546e34408c5cdde2ccebf018fd96e7edb89c73799213",
+      "storedRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {
+            "kept": 1
+          }
+        }
+      ],
+      "publicRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {
+            "kept": 1
+          }
+        }
+      ],
+      "readerError": null,
+      "publicUtf8Serializable": true,
+      "bodySha256": "d9d2a3a965d868b2f43a6454fe136ef18a204c290cd904e714d3a2905fb5a414"
+    },
+    {
+      "name": "last_metadata_key_replaces_surrogate",
+      "document": "{\"media\":[{\"mediaId\":\"media_kept\",\"type\":\"image\",\"title\":\"original\",\"path\":\"image.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"fixed\",\"metadata\":{\"kept\":\"\\uD800\",\"kept\":\"winner\"}}]}",
+      "documentSha256": "2b556840524a5f9db64c82526979ff9ed481563c6b23c3e523483c92dc95ebf0",
+      "storedRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {
+            "kept": "winner"
+          }
+        }
+      ],
+      "publicRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {
+            "kept": "winner"
+          }
+        }
+      ],
+      "readerError": null,
+      "publicUtf8Serializable": true,
+      "bodySha256": "faf19ddc0bff53ea3145df3d98e9df2857fa32b1e0b92c0fd37920f35d373622"
+    },
+    {
+      "name": "mime_raw_path_0",
+      "document": "{\"media\":[{\"mediaId\":\"media_kept\",\"type\":\"image\",\"title\":\"original\",\"path\":\"image.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"fixed\",\"path\":\"file.png/\"}]}",
+      "documentSha256": "e26459cd0a2faf285d3b4e727cc567f32879eb4ac64e9a9b38278a6581937fbe",
+      "storedRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "application/octet-stream",
+          "path": "file.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "publicRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "application/octet-stream",
+          "path": "file.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "readerError": null,
+      "publicUtf8Serializable": true,
+      "bodySha256": "94e795a7dcc6850106f50862e6c6aa0cbe0219382c4754e475ec05b82d746b88"
+    },
+    {
+      "name": "mime_raw_path_1",
+      "document": "{\"media\":[{\"mediaId\":\"media_kept\",\"type\":\"image\",\"title\":\"original\",\"path\":\"image.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"fixed\",\"path\":\"dir/file.pdf/.\"}]}",
+      "documentSha256": "ff97fb6c42ef75cff7523f73b7e64aac86d806d74dc7eba8bc662b05c390de17",
+      "storedRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "application/octet-stream",
+          "path": "dir/file.pdf",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "publicRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "application/octet-stream",
+          "path": "dir/file.pdf",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "readerError": null,
+      "publicUtf8Serializable": true,
+      "bodySha256": "9f5ce4caa00b47c4759d8a45155d7effd86e84ad9035240ffd2832c2be4e0cfe"
+    },
+    {
+      "name": "mime_raw_path_2",
+      "document": "{\"media\":[{\"mediaId\":\"media_kept\",\"type\":\"image\",\"title\":\"original\",\"path\":\"image.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"fixed\",\"path\":\"file.PNG \"}]}",
+      "documentSha256": "bdf947455f8e11b373d77026a570211d43cb0c010883a71497449d7dcf3e9f9d",
+      "storedRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "application/octet-stream",
+          "path": "file.PNG",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "publicRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "application/octet-stream",
+          "path": "file.PNG",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "readerError": null,
+      "publicUtf8Serializable": true,
+      "bodySha256": "a0a1ee1978efdbbc7dbeb544a79e9738b317440781c21a6439c0c4371ebb53c8"
+    },
+    {
+      "name": "mime_raw_path_3",
+      "document": "{\"media\":[{\"mediaId\":\"media_kept\",\"type\":\"image\",\"title\":\"original\",\"path\":\"image.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"fixed\",\"path\":\"dir/file.png//\"}]}",
+      "documentSha256": "57b995d848b198080f2ed44b1acda7159eb90db5352de6416fde3851f9e741e7",
+      "storedRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "application/octet-stream",
+          "path": "dir/file.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "publicRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "application/octet-stream",
+          "path": "dir/file.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "readerError": null,
+      "publicUtf8Serializable": true,
+      "bodySha256": "5c64bf03d641ed54ce3db8b50d4bf832c7d2da960eaccdcf1eaef8f5c44bd16f"
+    },
+    {
+      "name": "last_media_replaces_first_nan",
+      "document": "{\"media\":[{\"mediaId\":\"discarded\",\"type\":\"image\",\"metadata\":{\"kept\":NaN}}],\"media\":[{\"mediaId\":\"media_kept\",\"type\":\"image\",\"title\":\"winner\",\"path\":\"image.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"fixed\"}]}",
+      "documentSha256": "8da59bd0e22ac8f9bb38bdb32592929f0ad8e5c28c446b32a30d03b1417e29db",
+      "storedRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "winner",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "publicRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "winner",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "readerError": null,
+      "publicUtf8Serializable": true,
+      "bodySha256": "f1a3350ca209c6909f917430f9e31b913c154fdf263006aca061e536760764d9"
+    },
+    {
+      "name": "last_media_replaces_first_surrogate",
+      "document": "{\"media\":[{\"mediaId\":\"discarded\",\"type\":\"image\",\"metadata\":{\"kept\":\"\\uD800\"}}],\"media\":[{\"mediaId\":\"media_kept\",\"type\":\"image\",\"title\":\"winner\",\"path\":\"image.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"fixed\"}]}",
+      "documentSha256": "b0f791c61fad13858f0ebf5a083a9d6f1c69335da57786bd380903c2626ea51c",
+      "storedRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "winner",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "publicRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "winner",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "readerError": null,
+      "publicUtf8Serializable": true,
+      "bodySha256": "f1a3350ca209c6909f917430f9e31b913c154fdf263006aca061e536760764d9"
+    },
+    {
+      "name": "last_media_replaces_first_deep",
+      "document": "{\"media\":[{\"mediaId\":\"discarded\",\"type\":\"image\",\"metadata\":{\"kept\":[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[0]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]}}],\"media\":[{\"mediaId\":\"media_kept\",\"type\":\"image\",\"title\":\"winner\",\"path\":\"image.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"fixed\"}]}",
+      "documentSha256": "2d5a7a5907aee0689cc38b98a3535a651545a1aa64f5b43d0536803f1837a151",
+      "storedRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "winner",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "publicRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "winner",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "readerError": null,
+      "publicUtf8Serializable": true,
+      "bodySha256": "f1a3350ca209c6909f917430f9e31b913c154fdf263006aca061e536760764d9"
+    }
+  ],
+  "clock": {
+    "rows": [
+      {
+        "mediaId": "kept",
+        "projectId": "",
+        "type": "image",
+        "title": "Untitled media",
+        "mimeType": "image/png",
+        "path": "image.png",
+        "source": {},
+        "status": "pending",
+        "createdAt": "clock-second",
+        "updatedAt": "clock-second",
+        "metadata": {}
+      }
+    ],
+    "clockCalls": 2,
+    "status": "ACTUAL_ORIGINAL_CLOCK_BEFORE_INVALID_PATH",
+    "sourceCommit": "f000759b44d5fb939c84e652866fca82cf47f517",
+    "schemaSha256": "4f990bd8b4445ffb6848a79cde4a96a8b0ec7cdca56ff00744b93cb3f28fc3ec",
+    "librarySha256": "1b1ae1f169609b0f83606c142726d2361902d4515845ed4465d9f93f69b2f7dd",
+    "nativeClockComparisonExecuted": false,
+    "fullMigrationQualified": false,
+    "document": "{\"media\": [{\"mediaId\": \"invalid\", \"type\": \"image\", \"path\": \"/escape.png\"}, {\"mediaId\": \"kept\", \"type\": \"image\", \"path\": \"image.png\"}]}",
+    "documentSha256": "5cb0b51b7bced3658bf4b1630ecb01a22bcf4ae9b6ec79bd3a5a0783d8252a0c"
+  }
+}

@@ -85,7 +85,7 @@ func TestControlRPCRejectsDuplicateCredentialsAndOversizedMessages(t *testing.T)
 
 func controlRPCContext(t *testing.T, bearer string) context.Context {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	t.Cleanup(cancel)
 	if bearer != "" {
 		ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+bearer)

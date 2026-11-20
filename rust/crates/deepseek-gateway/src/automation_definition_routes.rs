@@ -135,7 +135,7 @@ pub(crate) fn find_automation(automation_id: &str) -> Result<Value, AppError> {
 
 /// `registry.update_automation`. The body is already known to be an object.
 /// Ownership is checked after the id check and before any filesystem touch.
-fn update_automation(automation_id: &str, patch: &Value) -> Result<Value, AppError> {
+pub(crate) fn update_automation(automation_id: &str, patch: &Value) -> Result<Value, AppError> {
     let safe_id = validate_workspace_id(automation_id, "automation id")?;
     if !crate::python_is_de_authorised() {
         return Err(write_not_owned());
@@ -202,7 +202,7 @@ pub(crate) fn create_automation(payload: &Value) -> Result<Value, AppError> {
 
 /// `registry.delete_automation`. A missing id returns `deleted: 0` and does
 /// not rewrite the file. Removing one or more visible rows returns `deleted: 1`.
-fn delete_automation(automation_id: &str) -> Result<Value, AppError> {
+pub(crate) fn delete_automation(automation_id: &str) -> Result<Value, AppError> {
     let safe_id = validate_workspace_id(automation_id, "automation id")?;
     if !crate::python_is_de_authorised() {
         return Err(write_not_owned());
@@ -669,7 +669,7 @@ fn env_bool(name: &str, default: bool) -> bool {
     }
 }
 
-fn server_error() -> AppError {
+pub(crate) fn server_error() -> AppError {
     AppError {
         status: 500,
         code: codes::INTERNAL,

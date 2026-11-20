@@ -52,3 +52,12 @@ test-artifacts
 outputs
 scripts
 .github
+
+# Only this static golden fixture is a Rust compile-time builder input.
+!evals/
+evals/*
+!evals/golden/
+evals/golden/*
+!evals/golden/skills/
+evals/golden/skills/*
+!evals/golden/skills/skill_eval_cases.jsonl

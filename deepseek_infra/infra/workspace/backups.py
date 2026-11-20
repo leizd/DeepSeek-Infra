@@ -29,6 +29,7 @@ from typing import Any, BinaryIO, Callable, Literal, Protocol, cast
 from deepseek_infra.core import config
 from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.infra.workspace import backup_crypto, backup_pack, backup_projection, mutation_gate
+from deepseek_infra.infra.native_runtime.authority import assert_python_writer_allowed
 
 BACKUP_SCHEMA = "deepseek-workspace-backup.v1"
 FRONTEND_SCHEMA_VERSION = 1
@@ -742,6 +743,7 @@ def capabilities() -> dict[str, Any]:
 
 
 def create_session(payload: dict[str, Any]) -> dict[str, Any]:
+    assert_python_writer_allowed("restore_staging_store")
     context = _context_from_payload(payload)
     protection = _protection_from_payload(payload)
     backup_id = f"backup_{uuid.uuid4().hex[:16]}"
@@ -768,6 +770,7 @@ def create_session(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def put_session_secret(session_id: str, payload: dict[str, Any]) -> dict[str, object]:
+    assert_python_writer_allowed("restore_staging_store")
     kind = str(payload.get("kind") or "")
     secret = str(payload.get("secret") or "")
     if not (session_id.startswith("backup_") or session_id.startswith("restore_")):
@@ -780,10 +783,12 @@ def put_session_secret(session_id: str, payload: dict[str, Any]) -> dict[str, ob
 
 
 def generate_recovery_identity() -> dict[str, Any]:
+    assert_python_writer_allowed("restore_staging_store")
     return {"ok": True, **backup_crypto.generate_identity(), "displayedOnce": True}
 
 
 def put_frontend_state(backup_id: str, envelope: dict[str, Any]) -> dict[str, Any]:
+    assert_python_writer_allowed("restore_staging_store")
     session = _load_session(backup_id)
     if session["phase"] not in {"preparing", "quiescing"}:
         raise AppError("Backup no longer accepts frontend state", code=ErrorCode.INVALID_REQUEST, status=409)
@@ -800,6 +805,7 @@ def finalize_session(
     owner_restore_id: str | None = None,
     cancel_event: threading.Event | None = None,
 ) -> dict[str, Any]:
+    assert_python_writer_allowed("restore_staging_store")
     session = _load_session(backup_id)
     context = _context_from_payload(session["context"])
     plan_raw = session.get("contributorPlan")
@@ -924,6 +930,7 @@ def backup_path(backup_id: str) -> Path:
 
 
 def delete_backup(backup_id: str) -> bool:
+    assert_python_writer_allowed("restore_staging_store")
     session = _load_session(backup_id)
     path = Path(str(session.get("path") or ""))
     if path.is_file() and path.parent.resolve() == BACKUP_DIR.resolve():
@@ -933,6 +940,7 @@ def delete_backup(backup_id: str) -> bool:
 
 
 def inspect_archive(source: Path | bytes, *, filename: str = "workspace.dsibackup") -> dict[str, Any]:
+    assert_python_writer_allowed("restore_staging_store")
     RESTORE_DIR.mkdir(parents=True, exist_ok=True)
     restore_id = f"restore_{uuid.uuid4().hex[:16]}"
     restore_root = RESTORE_DIR / restore_id
@@ -1017,6 +1025,7 @@ def _unlock_sealed_frontend(root: Path, kind: backup_crypto.SecretKind, secret: 
 
 
 def unlock_restore(restore_id: str) -> dict[str, Any]:
+    assert_python_writer_allowed("restore_staging_store")
     root = _restore_root(restore_id)
     plan_path = root / "plan.json"
     upload_path = root / "upload.json"
@@ -1345,6 +1354,7 @@ def prepare_restore(
 ) -> dict[str, Any]:
     """Build and verify every target contributor without touching live data."""
 
+    assert_python_writer_allowed("restore_staging_store")
     if mode not in {"merge", "project-copy", "replace-empty"}:
         raise AppError("Unsupported restore mode", code=ErrorCode.INVALID_PAYLOAD)
     root = _restore_root(restore_id)
@@ -1553,6 +1563,7 @@ def prepare_restore(
 
 
 def frontend_prepared(restore_id: str, *, digest: str) -> dict[str, Any]:
+    assert_python_writer_allowed("restore_staging_store")
     root = _restore_root(restore_id)
     journal_path = root / "transaction.json"
     transaction = _read_json(journal_path)
@@ -1593,6 +1604,7 @@ def commit_restore(
     the second call confirms that switch and commits the backend.
     """
 
+    assert_python_writer_allowed("restore_staging_store")
     root = _restore_root(restore_id)
     journal_path = root / "transaction.json"
     gate_root = RESTORE_DIR.parent
@@ -1713,6 +1725,7 @@ def commit_restore(
 
 
 def complete_restore(restore_id: str, *, frontend_digest: str | None = None) -> dict[str, Any]:
+    assert_python_writer_allowed("restore_staging_store")
     root = _restore_root(restore_id)
     journal_path = root / "transaction.json"
     gate_root = RESTORE_DIR.parent
@@ -1743,6 +1756,7 @@ def complete_restore(restore_id: str, *, frontend_digest: str | None = None) -> 
 
 
 def abort_restore(restore_id: str) -> dict[str, Any]:
+    assert_python_writer_allowed("restore_staging_store")
     root = _restore_root(restore_id)
     gate_root = RESTORE_DIR.parent
     with mutation_gate.exclusive_gate(gate_root):
@@ -1787,6 +1801,7 @@ def list_restores() -> dict[str, Any]:
 
 
 def delete_restore(restore_id: str) -> bool:
+    assert_python_writer_allowed("restore_staging_store")
     root = _restore_root(restore_id)
     metadata_path = next((root / name for name in ("transaction.json", "plan.json", "upload.json") if (root / name).is_file()), None)
     if metadata_path is None:
@@ -1803,6 +1818,7 @@ def delete_restore(restore_id: str) -> bool:
 
 
 def cleanup_restores(*, now: float | None = None) -> dict[str, Any]:
+    assert_python_writer_allowed("restore_staging_store")
     current = time.time() if now is None else now
     deleted: list[str] = []
     for item in list_restores()["restores"]:
@@ -1823,6 +1839,7 @@ def cleanup_restores(*, now: float | None = None) -> dict[str, Any]:
 def recover_interrupted_restores() -> dict[str, Any]:
     """Reconcile durable journals after a process or machine crash."""
 
+    assert_python_writer_allowed("restore_staging_store")
     RESTORE_DIR.mkdir(parents=True, exist_ok=True)
     recovered: list[str] = []
     committed: list[str] = []

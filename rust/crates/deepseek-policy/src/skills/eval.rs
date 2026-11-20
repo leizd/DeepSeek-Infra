@@ -167,7 +167,7 @@ fn load_file(path: &Path) -> Vec<Value> {
 
 /// `load_eval_cases`: the golden corpus first, then the user file, deduped by `caseId`.
 pub fn cases(r: &Registry) -> Value {
-    let mut all = load_file(&r.root.join(GOLDEN_CASES));
+    let mut all = load_file(&r.bundle_root.join(GOLDEN_CASES));
     all.extend(load_file(&user_path(r)));
     json!(dedupe(all))
 }

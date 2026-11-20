@@ -1,0 +1,593 @@
+"""Real PROCESS SIGKILL/reconciliation at processing and final library publications.
+
+The external tracer delays only the real post-rename file-sync return. It never
+substitutes application results or edits a running runtime's databases. Original
+Python runs only as an isolated offline fixture/oracle before native ownership.
+"""
+from __future__ import annotations
+
+import argparse
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
+from datetime import datetime, timezone
+from functools import lru_cache
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import signal
+import socket
+import sqlite3
+import struct
+import subprocess
+import sys
+import tempfile
+from typing import Any
+
+import verify_native_media_create as create
+import verify_native_media_processing as processing
+import verify_native_media_recovery as recovery
+
+ROOT = Path(__file__).resolve().parents[1]
+PHASES = ("processing", "final")
+KINDS = ("webpage", "image", "screenshot", "pdf", "audio", "video")
+BOUND = 4 * 1024**2
+PROCESS_IMMUTABLE_RUST = (*recovery.IMMUTABLE_RUST, "processPreparationSha256")
+require = recovery.require
+digest = recovery.digest
+
+
+def selected_kinds(kind: str | None) -> tuple[str, ...]:
+    if kind is None:
+        return KINDS
+    require(type(kind) is str and kind in KINDS, "MEDIA_PROCESS_CRASH_KIND_INVALID")
+    return (kind,)
+
+
+@lru_cache(maxsize=1)
+def process_plan_types() -> tuple[Any, Any]:
+    from google.protobuf import descriptor_pool, message_factory
+    import native_runtime_contract
+
+    files = native_runtime_contract.load_binary_descriptor(ROOT / "proto/generated/descriptor.pb")
+    pool = descriptor_pool.DescriptorPool()
+    pending = {item.name: item for item in files.file}
+    loaded: set[str] = set()
+    while pending:
+        ready = [name for name, item in pending.items() if set(item.dependency) <= loaded]
+        require(bool(ready), "MEDIA_PROCESS_CRASH_PLAN_DESCRIPTOR_INCOMPLETE")
+        for name in ready:
+            pool.Add(pending.pop(name))
+            loaded.add(name)
+    claim = message_factory.GetMessageClass(pool.FindMessageTypeByName("deepseek.media.v1.MediaPatchClaim"))
+    outcome = message_factory.GetMessageClass(pool.FindMessageTypeByName("deepseek.media.v1.MediaPatchOutcome"))
+    return claim, outcome
+
+
+def process_journal_snapshot(root: Path, allow_empty: bool = False) -> dict[str, Any] | None:
+    """Bind index phase markers to the inner private file, through the original outer plan."""
+    snapshot = recovery.journal_snapshot(root, allow_empty=allow_empty, mutation="process")
+    if snapshot is None:
+        return None
+    paths = list(root.rglob("media-effects.sqlite3"))
+    require(len(paths) == 1, "MEDIA_RUST_JOURNAL_REQUIRED")
+    with closing(recovery.readonly(paths[0], root)) as db:
+        rows = db.execute("SELECT operation_id,claim,planned FROM media_operations LIMIT 2").fetchall()
+    require(len(rows) == 1, "MEDIA_ORIGINAL_RUST_ROW_REQUIRED")
+    operation, raw_claim, raw_plan = rows[0]
+    require(operation == snapshot["operationId"] and isinstance(raw_claim, bytes) and isinstance(raw_plan, bytes)
+            and 0 < len(raw_claim) <= BOUND and 0 < len(raw_plan) <= BOUND
+            and digest(raw_claim) == snapshot["claimSha256"]
+            and digest(raw_plan) == snapshot["plannedSha256"] == snapshot["preparationSha256"],
+            "MEDIA_PROCESS_CRASH_OUTER_PLAN_REBOUND")
+    from google.protobuf.message import DecodeError
+
+    claim_type, plan_type = process_plan_types()
+    try:
+        claim, plan = claim_type.FromString(raw_claim), plan_type.FromString(raw_plan)
+    except DecodeError as error:
+        raise create.patch.ProbeFailure("MEDIA_PROCESS_CRASH_PLAN_PROTOBUF_INVALID") from error
+    process_kind = claim.intent.DESCRIPTOR.fields_by_name["kind"].enum_type.values_by_name["MEDIA_MUTATION_KIND_PROCESS"].number
+    applied = plan.DESCRIPTOR.fields_by_name["state"].enum_type.values_by_name["MEDIA_PATCH_EFFECT_STATE_APPLIED"].number
+    require(claim.schema_version == claim.intent.schema_version == plan.schema_version == 1
+            and claim.intent.operation_id == claim.fence.action_id == plan.operation_id == operation
+            and claim.intent.kind == process_kind and claim.fence.execution_epoch > 0
+            and plan.original_fence == claim.fence and plan.processed.original_fence == claim.fence
+            and plan.request_sha256 == claim.request_sha256 and len(plan.request_sha256) == 32
+            and digest(claim.intent.SerializeToString(deterministic=True)) == claim.request_sha256.hex()
+            and plan.before_sha256.hex() == snapshot["beforeSha256"]
+            and plan.after_sha256.hex() == snapshot["afterSha256"]
+            and plan.state == applied and not plan.signature and plan.HasField("processed") and not plan.HasField("created"),
+            "MEDIA_PROCESS_CRASH_TYPED_PLAN_REBOUND")
+    inner = plan.processed.preparation_sha256
+    require(len(inner) == 32, "MEDIA_PROCESS_CRASH_PRIVATE_PREPARATION_DIGEST_INVALID")
+    private_paths = [p for p in root.rglob("process.pb") if p.parent.name == operation]
+    require(len(private_paths) == 1, "MEDIA_PROCESS_CRASH_PRIVATE_PREPARATION_REQUIRED")
+    private = recovery.owned_file(private_paths[0], root)
+    with private.open("rb") as stream:
+        private_bytes = stream.read(BOUND + 1)
+    require(0 < len(private_bytes) <= BOUND, "MEDIA_PROCESS_CRASH_PRIVATE_PREPARATION_BOUND")
+    require(digest(private_bytes) == inner.hex(), "MEDIA_PROCESS_CRASH_PRIVATE_PREPARATION_CHANGED")
+    return dict(snapshot, processPreparationSha256=inner.hex())
+
+
+def held_phase(raw: bytes, journal: dict[str, Any], control: dict[str, Any], media_id: str, phase: str) -> bool:
+    """Require a real, bound publication; an old library is not completion evidence."""
+    require(phase in PHASES, "MEDIA_PROCESS_CRASH_PHASE_INVALID")
+    require(len(raw) <= BOUND, "MEDIA_PROCESS_CRASH_LIBRARY_BOUND")
+    library = json.loads(raw)
+    require(isinstance(library, dict) and isinstance(library.get("media"), list), "MEDIA_PROCESS_CRASH_LIBRARY_INVALID")
+    records = library["media"]
+    require(all(isinstance(row, dict) for row in records), "MEDIA_PROCESS_CRASH_RECORD_INVALID")
+    matches = [row for row in records if row.get("mediaId") == media_id]
+    require(len(matches) == 1, "MEDIA_PROCESS_CRASH_TARGET_AMBIGUOUS")
+    if (phase == "processing" and matches[0].get("status") != "processing") or (
+        phase == "final" and digest(raw) != journal.get("afterSha256")
+    ):
+        return False
+    require(journal.get("state") == "APPLYING" and control.get("state") == "DISPATCHED", "MEDIA_PROCESS_CRASH_TERMINAL_PRECEDED_HOLD")
+    operation = journal.get("operationId")
+    require(isinstance(operation, str) and re.fullmatch(r"media-process-[0-9a-f]{32}", operation), "MEDIA_PROCESS_CRASH_OPERATION_INVALID")
+    marker = library.get("nativePublication")
+    require(isinstance(marker, dict), "MEDIA_PROCESS_CRASH_PUBLICATION_MARKER_MISSING")
+    require(operation == control.get("operationId") == control.get("actionId") == marker.get("operationId") == marker.get("actionId"),
+            "MEDIA_PROCESS_CRASH_OPERATION_REBOUND")
+    epoch, encoded = marker.get("executionEpoch"), marker.get("requestSha256")
+    require(type(epoch) is int and type(control.get("epoch")) is int and epoch == control["epoch"], "MEDIA_PROCESS_CRASH_EPOCH_REBOUND")
+    require(isinstance(encoded, list) and len(encoded) == 32 and all(type(v) is int and 0 <= v <= 255 for v in encoded),
+            "MEDIA_PROCESS_CRASH_DIGEST_INVALID")
+    require(bytes(encoded).hex() == control.get("requestSha256"), "MEDIA_PROCESS_CRASH_REQUEST_REBOUND")
+    require((phase == "processing" and digest(raw) != journal["afterSha256"]) or (
+        phase == "final" and matches[0].get("status") == "ready"
+    ), "MEDIA_PROCESS_CRASH_PHASE_WITNESS_DIFFERS")
+    return True
+
+
+class PublicationObserver:
+    """Witness each replacement against its live predecessor, before inode reuse."""
+
+    def __init__(self, initial: dict[str, Any], media_id: str, phase: str):
+        require(phase in PHASES, "MEDIA_PROCESS_CRASH_PHASE_INVALID")
+        self.initial, self.media_id, self.phase = dict(initial), media_id, phase
+        self.processing: dict[str, Any] | None = None
+        self.predecessor = dict(initial)
+
+    def observe(self, raw: bytes, journal: dict[str, Any], control: dict[str, Any], witness: dict[str, Any]) -> bool:
+        require(witness.get("sha256") == digest(raw), "MEDIA_PROCESS_CRASH_PUBLICATION_BYTES_REBOUND")
+        if held_phase(raw, journal, control, self.media_id, "processing"):
+            require(witness["inode"] != self.initial["inode"], "MEDIA_PROCESS_CRASH_REAL_RENAME_NOT_OBSERVED")
+            if self.processing is None:
+                self.processing = dict(publication=dict(witness), go=dict(control), rust=dict(journal))
+            else:
+                require(self.processing["publication"] == witness
+                        and recovery.same_original(self.processing["go"], control, recovery.IMMUTABLE_GO)
+                        and recovery.same_original(self.processing["rust"], journal, PROCESS_IMMUTABLE_RUST),
+                        "MEDIA_PROCESS_CRASH_PROCESSING_PREDECESSOR_CHANGED")
+            return self.phase == "processing"
+        if self.phase != "final" or not held_phase(raw, journal, control, self.media_id, "final"):
+            return False
+        if self.processing is None:
+            raise create.patch.ProbeFailure("MEDIA_PROCESS_CRASH_PROCESSING_PREDECESSOR_NOT_OBSERVED")
+        require(recovery.same_original(self.processing["go"], control, recovery.IMMUTABLE_GO)
+                and recovery.same_original(self.processing["rust"], journal, PROCESS_IMMUTABLE_RUST),
+                "MEDIA_PROCESS_CRASH_PHASE_ORIGINAL_REBOUND")
+        self.predecessor = dict(self.processing["publication"])
+        require(witness["inode"] != self.predecessor["inode"], "MEDIA_PROCESS_CRASH_REAL_RENAME_NOT_OBSERVED")
+        return True
+
+
+def read_publication(path: Path, profile: Path) -> tuple[bytes, dict[str, Any]] | None:
+    """Read bytes and identity from one descriptor; retry a concurrent replacement."""
+    path = recovery.owned_file(path, profile)
+    with path.open("rb") as stream:
+        before = os.fstat(stream.fileno())
+        raw = stream.read(BOUND + 1)
+        after = os.fstat(stream.fileno())
+    require(len(raw) <= BOUND, "MEDIA_PROCESS_CRASH_LIBRARY_BOUND")
+    current = path.stat()
+    identities = [(stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns) for stat in (before, after, current)]
+    if identities[0] != identities[1] or identities[1] != identities[2]:
+        return None
+    return raw, dict(sha256=digest(raw), inode=after.st_ino, mtimeNs=after.st_mtime_ns)
+
+
+def require_recovered(before_go: dict[str, Any], before_rust: dict[str, Any], after_go: dict[str, Any],
+                      after_rust: dict[str, Any], writer_before: int, writer_after: int) -> None:
+    preparation = before_rust.get("processPreparationSha256")
+    require(isinstance(preparation, str) and re.fullmatch(r"[0-9a-f]{64}", preparation) is not None,
+            "MEDIA_PROCESS_CRASH_PRIVATE_PREPARATION_DIGEST_INVALID")
+    require(type(writer_before) is type(writer_after) is int and writer_after > writer_before,
+            "MEDIA_PROCESS_CRASH_WRITER_NOT_ADVANCED")
+    require(recovery.same_original(before_go, after_go, recovery.IMMUTABLE_GO)
+            and recovery.same_original(before_rust, after_rust, PROCESS_IMMUTABLE_RUST),
+            "MEDIA_PROCESS_CRASH_ORIGINAL_REBOUND")
+    require(after_go.get("state") == after_rust.get("state") == "APPLIED", "MEDIA_PROCESS_CRASH_ORIGINAL_NOT_RECONCILED")
+    outcome = after_go.get("outcomeSha256")
+    require(isinstance(outcome, str) and re.fullmatch(r"[0-9a-f]{64}", outcome)
+            and outcome == after_rust.get("outcomeSha256"), "MEDIA_PROCESS_CRASH_SIGNED_OUTCOME_DIFFERS")
+
+
+def file_witness(path: Path, profile: Path) -> dict[str, Any]:
+    path = recovery.owned_file(path, profile)
+    stat = path.stat()
+    require(stat.st_size <= BOUND, "MEDIA_PROCESS_CRASH_FIXTURE_FILE_BOUND")
+    return dict(sha256=digest(path.read_bytes()), inode=stat.st_ino, mtimeNs=stat.st_mtime_ns)
+
+
+def retained_files(profile: Path, media_id: str) -> dict[str, dict[str, Any]]:
+    paths = list((profile / ".media/objects").rglob("*"))
+    paths.extend((profile / ".media/segments").glob("*.json"))
+    require(len(paths) <= 100, "MEDIA_PROCESS_CRASH_FIXTURE_FILE_COUNT_BOUND")
+    require(all(not path.is_symlink() for path in paths), "MEDIA_PROCESS_CRASH_FIXTURE_LINK_REFUSED")
+    return {path.relative_to(profile).as_posix(): file_witness(path, profile) for path in paths
+            if path.is_file() and path != profile / f".media/segments/{media_id}.json"}
+
+
+def index_snapshot(profile: Path, backend: str) -> dict[str, Any]:
+    require(backend in {"sqlite", "sqlite_vec"}, "MEDIA_PROCESS_CRASH_BACKEND_INVALID")
+    path = recovery.owned_file(profile / ".local-rag/rag.sqlite3", profile)
+    require(path.stat().st_size <= BOUND, "MEDIA_PROCESS_CRASH_INDEX_BOUND")
+    with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=2)) as db:
+        db.row_factory = sqlite3.Row
+        if backend == "sqlite_vec":
+            import sqlite_vec
+            db.enable_load_extension(True)
+            sqlite_vec.load(db)
+            db.enable_load_extension(False)
+            require(db.execute("SELECT vec_version()").fetchone()[0] == "v0.1.9", "MEDIA_PROCESS_CRASH_VECTOR_VERSION_DIFFERS")
+        rows = [dict(row) for row in db.execute("SELECT * FROM rag_items ORDER BY item_id LIMIT 1001")]
+        require(0 < len(rows) <= 1000, "MEDIA_PROCESS_CRASH_INDEX_ROWS_BOUND")
+        meta = dict(db.execute("SELECT key,value FROM rag_meta ORDER BY key LIMIT 101").fetchall())
+        require(len(meta) <= 100, "MEDIA_PROCESS_CRASH_INDEX_META_BOUND")
+        vectors = None if backend == "sqlite" else [dict(row) for row in db.execute(
+            "SELECT rowid,item_id,collection,source_id,project_id,scope,embedding FROM rag_vec ORDER BY rowid LIMIT 1001")]
+    if vectors is not None:
+        require(len(vectors) == len(rows), "MEDIA_PROCESS_CRASH_VECTOR_COUNT_DIFFERS")
+        by_id = {row["rowid"]: row for row in vectors}
+        require(len(by_id) == len(vectors), "MEDIA_PROCESS_CRASH_VECTOR_ID_COLLISION")
+        for row in rows:
+            vector = by_id.get(row["vector_id"])
+            if vector is None:
+                raise create.patch.ProbeFailure("MEDIA_PROCESS_CRASH_VECTOR_MISSING")
+            require(all(vector[key] == row[key] for key in ["item_id", "collection", "source_id", "project_id", "scope"]),
+                    "MEDIA_PROCESS_CRASH_VECTOR_BINDING_DIFFERS")
+            embedding = json.loads(row["embedding"])
+            require(vector["embedding"] == struct.pack("<" + "f" * len(embedding), *embedding), "MEDIA_PROCESS_CRASH_VECTOR_BYTES_DIFFER")
+        vectors = [{**row, "embedding": row["embedding"].hex()} for row in vectors]
+    return dict(rows=rows, metadata=meta, vectors=vectors)
+
+
+def require_unrelated_index(before: dict[str, Any], after: dict[str, Any], media_id: str,
+                            original_process: dict[str, Any] | None = None, *, project_id: str = "") -> None:
+    def unrelated(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [row for row in rows if not (row["collection"] == "media" and row["source_id"] == media_id
+                                           and (not project_id or row["project_id"] == project_id))]
+    expected_metadata = dict(before["metadata"])
+    if original_process is not None:
+        operation, preparation = original_process.get("operationId"), original_process.get("processPreparationSha256")
+        require(isinstance(operation, str) and re.fullmatch(r"media-process-[0-9a-f]{32}", operation) is not None
+                and isinstance(preparation, str) and re.fullmatch(r"[0-9a-f]{64}", preparation) is not None,
+                "MEDIA_PROCESS_CRASH_INDEX_ORIGINAL_BINDING_INVALID")
+        for phase in ("clear", "final"):
+            key = f"native_media_process:{operation}:{phase}"
+            require(key not in expected_metadata, "MEDIA_PROCESS_CRASH_INDEX_ORIGINAL_MARKER_PREEXISTED")
+            expected_metadata[key] = preparation
+    require(unrelated(before["rows"]) == unrelated(after["rows"]), "MEDIA_PROCESS_CRASH_UNRELATED_ROWS_CHANGED")
+    require(expected_metadata == after["metadata"], "MEDIA_PROCESS_CRASH_NAMESPACE_METADATA_CHANGED")
+    if before["vectors"] is not None:
+        require(after["vectors"] is not None and unrelated(before["vectors"]) == unrelated(after["vectors"]),
+                "MEDIA_PROCESS_CRASH_UNRELATED_VECTORS_CHANGED")
+
+
+class Runtime:
+    def __init__(self, binaries: Path, profile: Path, port: int, backend: str, dimensions: int, out: Path, report: dict[str, Any]):
+        self.binaries, self.profile, self.port, self.out, self.report = binaries, profile, port, out, report
+        self.origin = f"http://127.0.0.1:{port}"
+        self.child: subprocess.Popen[bytes] | None = None
+        self.identities: list[dict[str, Any]] = []
+        self.env = {key: value for key, value in os.environ.items() if key in {
+            "PATH", "HOME", "LANG", "LC_ALL", "TZ", "SSL_CERT_FILE", "SSL_CERT_DIR", "TMPDIR"}}
+        self.env.update(DEEPSEEK_NATIVE_BIN=str(binaries), DEEPSEEK_INFRA_ROOT=str(profile),
+                        DEEPSEEK_INFRA_STATIC_DIR=str(ROOT / "static"), LOCAL_RAG_ENABLED="true",
+                        LOCAL_RAG_BACKEND=backend, LOCAL_RAG_EMBEDDING_PROVIDER="hash", LOCAL_RAG_EMBEDDING_DIMENSIONS=str(dimensions))
+
+    def launch(self, label: str) -> str:
+        if sys.platform != "linux" or os.environ.get("GITHUB_ACTIONS") != "true":
+            raise create.patch.ProbeFailure("MEDIA_PROCESS_CRASH_VERIFICATION_IS_CLOUD_ONLY")
+        require(self.child is None, "MEDIA_PROCESS_CRASH_DUPLICATE_LAUNCH")
+        with (self.out / (label + ".log")).open("wb") as log:
+            self.child = subprocess.Popen([str(self.binaries / "deepseek-launch"), "--server", "--no-prompt", "--port", str(self.port)],
+                                          cwd=self.profile.parent, env=self.env, stdout=log, stderr=subprocess.STDOUT)
+        create.patch.bootstrap.wait_public(self.origin, self.child)
+        self.identities = [{**row, "startTicks": create.patch.reads.process_identity(row["pid"])}
+                           for row in create.patch.bootstrap.process_roles(self.child.pid)]
+        require(len(self.identities) == 7 and {row["executable"] for row in self.identities}
+                == {"deepseek-launch", "deepseekd", "deepseek-worker", "deepseek-gateway"}, "MEDIA_PROCESS_CRASH_NATIVE_ROLES_DIFFER")
+        require(all(row["startTicks"] is not None for row in self.identities), "MEDIA_PROCESS_CRASH_NATIVE_PID_MISSING")
+        self.report[label + "Processes"] = list(self.identities)
+        token = recovery.owned_file(self.profile / ".auth-token", self.profile).read_text().strip()
+        require(re.fullmatch(r"[0-9a-f]{64}", token), "MEDIA_PROCESS_CRASH_AUTH_INVALID")
+        status, raw, _ = create.patch.exchange(self.origin, "/api/control/status", "GET", token)
+        require(status == 200 and json.loads(raw).get("ok") is True, "MEDIA_PROCESS_CRASH_CONTROL_UNHEALTHY")
+        return token
+
+    def stop(self) -> None:
+        if self.child is None:
+            return
+        if sys.platform != "linux":
+            raise create.patch.ProbeFailure("MEDIA_PROCESS_CRASH_NATIVE_SIGNAL_REQUIRES_LINUX")
+        for row in self.identities:
+            if create.patch.reads.process_identity(row["pid"]) == row["startTicks"] and recovery.proc_state(row["pid"]) == "T":
+                recovery.signal_owned(row, signal.SIGCONT)
+        create.patch.reads.stop(self.child, self.identities)
+        self.child, self.identities = None, []
+
+    def kill(self, worker: dict[str, Any]) -> None:
+        if sys.platform != "linux":
+            raise create.patch.ProbeFailure("MEDIA_PROCESS_CRASH_NATIVE_SIGNAL_REQUIRES_LINUX")
+        if self.child is None:
+            raise create.patch.ProbeFailure("MEDIA_PROCESS_CRASH_LAUNCHER_MISSING")
+        launcher_pid = self.child.pid
+        peers = [row for row in self.identities if row != worker]
+        self.report["observerPhase"] = "stopping-original-peers"
+        for row in sorted(peers, key=lambda row: row["executable"] != "deepseek-launch"):
+            recovery.signal_owned(row, signal.SIGSTOP)
+        recovery.wait_for(lambda: all(recovery.proc_state(row["pid"]) == "T" for row in peers), 5, "MEDIA_PROCESS_CRASH_PEERS_NOT_STOPPED")
+        self.report["observerPhase"] = "killing-original-processes"
+        for row in [worker] + sorted(peers, key=lambda row: (row["executable"] == "deepseek-launch", row["pid"] == launcher_pid)):
+            delivered = recovery.signal_owned(row, signal.SIGKILL)
+            self.report.setdefault("killSignals", []).append(dict(pid=row["pid"], startTicks=row["startTicks"], signalDelivered=delivered))
+            if row == worker:
+                require(delivered, "MEDIA_PROCESS_CRASH_WORKER_EXITED_BEFORE_SIGKILL")
+                self.report["workerSIGKILLDelivered"] = True
+        require(self.child.wait(timeout=5) == -signal.SIGKILL, "MEDIA_PROCESS_CRASH_LAUNCHER_NOT_KILLED")
+        recovery.wait_for(lambda: all(recovery.exited(row) for row in self.identities), 5, "MEDIA_PROCESS_CRASH_PROCESS_SURVIVED")
+        self.report["allOriginalProcessesExited"] = True
+        self.report["observerPhase"] = "original-processes-exited"
+        self.child, self.identities = None, []
+
+
+def public_result(runtime: Runtime, token: str, expected: dict[str, Any], reference: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    media_id = expected["media"]["mediaId"]
+    status, body, _ = create.exchange(runtime.origin, "/api/media/" + media_id, "GET", token)
+    segment_status, payload, _ = create.exchange(runtime.origin, "/api/media/" + media_id + "/segments", "GET", token)
+    require(status == segment_status == 200 and body.get("ok") is True, "MEDIA_PROCESS_CRASH_PUBLIC_READ_FAILED")
+    media, segments = body["media"], payload["segments"]
+    suffix = Path(media["path"]).suffix
+    require(create.same_json(create.canonical_media(media, suffix), create.canonical_media(expected["forced"]["media"], suffix)),
+            "MEDIA_PROCESS_CRASH_PUBLIC_RECORD_DIFFERS")
+    indexed = processing.read_index(runtime.profile, reference["ragDatabaseRelativePath"], media)
+    processing.compare_processing(media, segments, indexed, expected, True)
+    return body, payload
+
+
+def run_case(args: argparse.Namespace, binaries: Path, scratch: Path, oracle: Path, reference: dict[str, Any],
+             expected: dict[str, Any], phase: str, report: dict[str, Any]) -> None:
+    media_id = expected["media"]["mediaId"]
+    out = args.out / (expected["type"] + "-" + phase)
+    out.mkdir()
+    profile = scratch / out.name / "profile"
+    profile.parent.mkdir()
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+    dimensions = len(json.loads(expected["indexedRows"][0]["embedding"]))
+    runtime = Runtime(binaries, profile, port, args.backend, dimensions, out, report)
+    tracer: subprocess.Popen[bytes] | None = None
+    try:
+        runtime.launch("empty-launch")
+        require(create.patch.reads.media_snapshot(profile) is None, "MEDIA_PROCESS_CRASH_PROFILE_NOT_EMPTY")
+        runtime.stop()
+        for name in (".media", ".local-rag"):
+            require(not (profile / name).exists(), "MEDIA_PROCESS_CRASH_SEED_WOULD_REPLACE_STATE")
+            shutil.copytree(oracle / name, profile / name)
+        original_files = retained_files(profile, media_id)
+        original_index = index_snapshot(profile, args.backend)
+        (out / "index-before-process.json").write_text(json.dumps(original_index, ensure_ascii=True, indent=2) + "\n", encoding="utf8")
+        token = runtime.launch("mutation-launch")
+        writer_before = create.patch.reads.writer(profile)[0]
+        library = recovery.owned_file(profile / ".media/library.json", profile)
+        before_library = file_witness(library, profile)
+        report["initialPublication"] = dict(before_library)
+        publication = PublicationObserver(before_library, media_id, phase)
+        other_media = [row for row in json.loads(library.read_bytes())["media"] if row["mediaId"] != media_id]
+        worker = next(row for row in runtime.identities if row["executable"] == "deepseek-worker")
+        with (out / "trace-stderr.log").open("wb") as log:
+            command = recovery.trace_command(args.strace, library, profile, out / "publication-syscalls.log", delay_seconds=5)
+            tracer = subprocess.Popen(command + ["-p", str(worker["pid"])], stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        tracer_pid = tracer.pid
+
+        def attached() -> int | None:
+            tasks = list(Path(f"/proc/{worker['pid']}/task").iterdir())
+            try:
+                ok = all(f"TracerPid:\t{tracer_pid}" in (task / "status").read_text() for task in tasks)
+            except FileNotFoundError:
+                return None
+            return len(tasks) if tasks and ok else None
+
+        report["tracedWorkerThreads"] = recovery.wait_for(attached, 5, "MEDIA_PROCESS_CRASH_ATTACH_FAILED")
+
+        def observed() -> Any:
+            journal = process_journal_snapshot(profile, allow_empty=True)
+            control = recovery.control_snapshot(profile, True)
+            if journal is None or control is None or journal["state"] == "PREPARED":
+                return None
+            observed_file = read_publication(library, profile)
+            if observed_file is None:
+                return None
+            raw, witness = observed_file
+            if not publication.observe(raw, journal, control, witness):
+                return None
+            return journal, control, raw, witness
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            report.update(writeRequestsSent=1, writeRequestsAfterRestart=0)
+            response = pool.submit(create.exchange, runtime.origin, "/api/media/" + media_id + "/process?force=true", "POST", token, {})
+            before_rust, before_go, held_bytes, at_crash = recovery.wait_for(observed, 15, "MEDIA_PROCESS_CRASH_PUBLICATION_NOT_HELD")
+            require(not response.done(), "MEDIA_PROCESS_CRASH_RESPONSE_PRECEDED_KILL")
+            require(before_go["claimWriterFence"] == writer_before, "MEDIA_PROCESS_CRASH_ORIGINAL_WRITER_DIFFERS")
+            require([row for row in json.loads(held_bytes)["media"] if row["mediaId"] != media_id] == other_media,
+                    "MEDIA_PROCESS_CRASH_UNRELATED_MEDIA_CHANGED")
+            report.update(beforeCrashGo=before_go, beforeCrashRust=before_rust, publicationAtCrash=at_crash,
+                          publicationPredecessor=publication.predecessor, processingPhaseObserved=publication.processing,
+                          realRenameObserved=True, heldPhase=phase, interruptedOutcome="EFFECT_UNKNOWN")
+            (out / "at-crash-library.json").write_bytes(held_bytes)
+            runtime.kill(worker)
+            recovery.stop_trace(tracer)
+            tracer = None
+            try:
+                status, body, headers = response.result(timeout=12)
+                report.update(interruptedRequestHTTPStatus=status, interruptedBody=body,
+                              interruptedOperationHeader=headers.get("x-deepseek-operation-id"))
+            except Exception as error:
+                report["interruptedRequestException"] = type(error).__name__
+        require(retained_files(profile, media_id) == original_files, "MEDIA_PROCESS_CRASH_SOURCE_OR_FOREIGN_SEGMENTS_CHANGED")
+        crashed_go = recovery.control_snapshot(profile)
+        crashed_rust = process_journal_snapshot(profile)
+        require(crashed_go is not None and crashed_rust is not None and crashed_go["state"] == "DISPATCHED"
+                and crashed_rust["state"] == "APPLYING", "MEDIA_PROCESS_CRASH_PRETERMINAL_ORIGINAL_MISSING")
+        require(recovery.same_original(before_go, crashed_go, recovery.IMMUTABLE_GO)
+                and recovery.same_original(before_rust, crashed_rust, PROCESS_IMMUTABLE_RUST), "MEDIA_PROCESS_CRASH_IDENTITY_CHANGED_BEFORE_RESTART")
+        token = runtime.launch("recovery-launch")
+
+        def reconciled() -> Any:
+            go = recovery.control_snapshot(profile)
+            rust = process_journal_snapshot(profile)
+            if go is None or rust is None:
+                raise create.patch.ProbeFailure("MEDIA_PROCESS_CRASH_ORIGINAL_DISAPPEARED")
+            require(recovery.same_original(before_go, go, recovery.IMMUTABLE_GO)
+                    and recovery.same_original(before_rust, rust, PROCESS_IMMUTABLE_RUST), "MEDIA_PROCESS_CRASH_RECONCILIATION_REBOUND")
+            report.update(afterRestartGo=go, afterRestartRust=rust)
+            return (go, rust) if go["state"] == rust["state"] == "APPLIED" else None
+
+        after_go, after_rust = recovery.wait_for(reconciled, 25, "MEDIA_PROCESS_CRASH_ORIGINAL_NOT_AUTOMATICALLY_RECONCILED")
+        writer_after = create.patch.reads.writer(profile)[0]
+        require_recovered(before_go, before_rust, after_go, after_rust, writer_before, writer_after)
+        require(digest(library.read_bytes()) == before_rust["afterSha256"], "MEDIA_PROCESS_CRASH_FINAL_LIBRARY_NOT_ORIGINAL_PLAN")
+        if phase == "final":
+            recovery.require_same_publication(at_crash, file_witness(library, profile))
+        final_public = public_result(runtime, token, expected, reference)
+        final_index = index_snapshot(profile, args.backend)
+        (out / "index-after-recovery.json").write_text(json.dumps(final_index, ensure_ascii=True, indent=2) + "\n", encoding="utf8")
+        require_unrelated_index(original_index, final_index, media_id, before_rust, project_id=expected["media"].get("projectId", ""))
+        require(retained_files(profile, media_id) == original_files, "MEDIA_PROCESS_CRASH_RECOVERY_RECREATED_SOURCE")
+        final_library = file_witness(library, profile)
+        final_segments = file_witness(profile / f".media/segments/{media_id}.json", profile)
+        (out / "after-recovery-library.json").write_bytes(library.read_bytes())
+        runtime.stop()
+        token = runtime.launch("retained-launch")
+        retained_go, retained_rust = recovery.control_snapshot(profile), process_journal_snapshot(profile)
+        if retained_go is None or retained_rust is None:
+            raise create.patch.ProbeFailure("MEDIA_PROCESS_CRASH_RETAINED_ORIGINAL_MISSING")
+        require_recovered(before_go, before_rust, retained_go, retained_rust, writer_before, create.patch.reads.writer(profile)[0])
+        require(retained_go == after_go and retained_rust == after_rust, "MEDIA_PROCESS_CRASH_RETAINED_RECEIPT_CHANGED")
+        require(public_result(runtime, token, expected, reference) == final_public, "MEDIA_PROCESS_CRASH_RETAINED_PUBLIC_READ_CHANGED")
+        require(index_snapshot(profile, args.backend) == final_index, "MEDIA_PROCESS_CRASH_RESTART_REINDEXED")
+        require(file_witness(library, profile) == final_library
+                and file_witness(profile / f".media/segments/{media_id}.json", profile) == final_segments,
+                "MEDIA_PROCESS_CRASH_RESTART_REPUBLISHED_FILES")
+        require(retained_files(profile, media_id) == original_files, "MEDIA_PROCESS_CRASH_RESTART_SOURCE_CHANGED")
+        report.update(status="PASS", semanticStageReached=True, originalOperationId=before_go["operationId"],
+                      writerBefore=writer_before, writerAfter=writer_after, originalSignedOutcomeRetained=True,
+                      originalOperationRepeated=False, originalSourceIdentityRetained=True, unrelatedMediaAndIndexRetained=True,
+                      actualVectorBytesAndBindingsVerified=args.backend == "sqlite_vec", originalNamespaceMetadataRetained=True,
+                      independentPublicReadsAndOriginalOracleVerified=True, retainedAcrossAnotherCompleteRestart=True,
+                      publicationAfterRecovery=final_library, segmentsAfterRecovery=final_segments)
+    except Exception as error:
+        report.update(failureCode=str(error)[:300], exceptionType=type(error).__name__)
+        raise
+    finally:
+        try:
+            if tracer is not None:
+                recovery.stop_trace(tracer)
+        finally:
+            try:
+                runtime.stop()
+            finally:
+                (out / "result.json").write_text(json.dumps(report, ensure_ascii=True, indent=2) + "\n", encoding="utf8")
+
+
+def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
+    require(sys.platform == "linux" and os.environ.get("GITHUB_ACTIONS") == "true", "MEDIA_PROCESS_CRASH_VERIFICATION_IS_CLOUD_ONLY")
+    kinds = selected_kinds(getattr(args, "media_kind", None))
+    source = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+    require(source == os.environ.get("GITHUB_SHA"), "MEDIA_PROCESS_CRASH_SOURCE_DIFFERS")
+    require(not subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=no"], cwd=ROOT), "MEDIA_PROCESS_CRASH_SOURCE_DIRTY")
+    require(args.strace.is_file(), "MEDIA_PROCESS_CRASH_STRACE_REQUIRED")
+    report.update(sourceCommit=source, sourceTree=subprocess.check_output(["git", "rev-parse", "HEAD^{tree}"], cwd=ROOT, text=True).strip(),
+                  straceVersion=subprocess.check_output([str(args.strace), "--version"], text=True).splitlines()[0],
+                  straceSha256=digest(args.strace.read_bytes()))
+    for port in (8090, 50052):
+        recovery.require_port_available(port)
+    with tempfile.TemporaryDirectory(prefix="native-media-process-crash-") as temporary:
+        scratch = Path(temporary)
+        report["traceQualification"] = recovery.qualify_trace(args.strace, scratch, args.out, delay_seconds=5)
+        binaries, oracle = scratch / "bin", scratch / "oracle"
+        binaries.mkdir()
+        (scratch / "go-tmp").mkdir()
+        environment = create.patch.signing.cache_environment(ROOT, env=create.patch.signing.child_environment(dict(os.environ)), target_dir=args.go_cache)
+        environment.update(CGO_ENABLED="0", GOTOOLCHAIN="local", GOMAXPROCS="2", GOPROXY="off", GOSUMDB="off",
+                           GOWORK="off", GOCACHE=str(args.go_cache.resolve()), GOTMPDIR=str(scratch / "go-tmp"))
+        require(subprocess.check_output(["go", "version"], env=environment, text=True).startswith(
+            "go version " + create.patch.signing.GO_VERSION + " "), "MEDIA_PROCESS_CRASH_GO_PIN_DIFFERS")
+        for name in ("deepseekd", "deepseek-launch"):
+            create.patch.signing.record_command(["go", "build", "-p=2", "-o", str(binaries / name), "./cmd/" + name],
+                                                ROOT / "go", environment, args.out, "build-" + name, timeout=600)
+        for name, original in (("deepseek-worker", args.worker), ("deepseek-gateway", args.edge)):
+            (binaries / name).symlink_to(original.resolve(strict=True))
+        reference = processing.original(oracle, args.out / "original-processing.log", args.backend)
+        (args.out / "original-processing.json").write_text(json.dumps(reference, ensure_ascii=True, indent=2) + "\n", encoding="utf8")
+        cases = {row["type"]: row for row in reference["cases"]}
+        require(set(cases) == set(KINDS), "MEDIA_PROCESS_CRASH_ORIGINAL_KINDS_MISSING")
+        for kind in kinds:
+            for phase in PHASES:
+                case = dict(status="FAIL", mediaKind=kind, phase=phase, backend=args.backend,
+                            sourceCommit=source, runId=os.environ.get("GITHUB_RUN_ID"), fullMigrationQualified=False)
+                report["cases"].append(case)
+                run_case(args, binaries, scratch, oracle, reference, cases[kind], phase, case)
+        require(len(report["cases"]) == len(kinds) * len(PHASES) and all(case["status"] == "PASS" for case in report["cases"]),
+                "MEDIA_PROCESS_CRASH_CASES_INCOMPLETE")
+        complete_backend = kinds == KINDS
+        report.update(status="PASS", selectedProcessingAndFinalPublicationSIGKILLQualified=True,
+                      actualProcessingAndFinalPublicationSIGKILLQualified=complete_backend,
+                      originalOperationAutonomousRecoveryQualified=complete_backend, actualNativeBackendQualified=args.backend,
+                      nativeSQLiteVecStandaloneForceRecoveryHTTPQualified=complete_backend and args.backend == "sqlite_vec",
+                      selectedMediaKinds=list(kinds), requiredCases=len(kinds) * len(PHASES), completedCases=len(report["cases"]))
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--worker", type=Path, required=True)
+    parser.add_argument("--edge", type=Path, required=True)
+    parser.add_argument("--strace", type=Path, required=True)
+    parser.add_argument("--go-cache", type=Path, required=True)
+    parser.add_argument("--backend", choices=("sqlite", "sqlite_vec"), required=True)
+    parser.add_argument("--media-kind", choices=KINDS, help="One required matrix cell; omitted retains the complete six-kind backend corpus")
+    parser.add_argument("--out", type=Path, required=True)
+    args = parser.parse_args()
+    kinds = selected_kinds(args.media_kind)
+    args.out.mkdir(parents=True, exist_ok=True)
+    report: dict[str, Any] = dict(kind="native-media-process-crash-v1", status="FAIL", cases=[], backend=args.backend,
+                                 sourceCommit=os.environ.get("GITHUB_SHA"), runId=os.environ.get("GITHUB_RUN_ID"),
+                                 event=os.environ.get("GITHUB_EVENT_NAME"), attempt=os.environ.get("GITHUB_RUN_ATTEMPT"),
+                                 actualProcessingAndFinalPublicationSIGKILLQualified=False, originalOperationAutonomousRecoveryQualified=False,
+                                  selectedProcessingAndFinalPublicationSIGKILLQualified=False, selectedMediaKinds=list(kinds),
+                                  requiredCases=len(kinds) * len(PHASES),
+                                 nativeSQLiteVecStandaloneForceRecoveryHTTPQualified=False, allProcessingCrashPhasesQualified=False,
+                                 scope="Six standalone force/read/recovery kinds on one backend at two real library-publication boundaries only",
+                                 physicalPowerLossQualified=False, fullProcessingPipelineQualified=False, fullMigrationQualified=False,
+                                 readiness="NOT_READY", checkedAt=datetime.now(timezone.utc).isoformat())
+    if args.media_kind is not None:
+        report["scope"] = "One explicit original media kind on one backend at both actual library-publication boundaries; the full matrix is still required"
+    try:
+        run(args, report)
+    except Exception as error:
+        report.update(failureCode=str(error)[:300], exceptionType=type(error).__name__)
+    (args.out / "result.json").write_text(json.dumps(report, ensure_ascii=True, indent=2) + "\n", encoding="utf8")
+    print(json.dumps(report, ensure_ascii=True), flush=True)
+    return 0 if report["status"] == "PASS" else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

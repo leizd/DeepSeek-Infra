@@ -405,6 +405,48 @@ def _policy_recipient_read_rpc(document: dict[str, Any], service: dict[str, Any]
     return True
 
 
+def _control_binding_read(document: dict[str, Any]) -> bool:
+    """Only public loaded signer metadata is exempt from per-action fencing.
+
+    This is an authenticated read, with no signing, admission or journal payload.
+    The exact service and both message shapes are checked so a similarly named
+    mutation cannot inherit the exception. Existing frozen formats stay intact.
+    """
+    if document["package"] != "deepseek.action.v1":
+        return False
+    services = [item for item in document["services"] if item["name"] == "ControlSignerBootstrap"]
+    if len(services) != 1 or services[0].get("options_hex", "") or len(services[0]["rpcs"]) != 1:
+        return False
+    rpc = services[0]["rpcs"][0]
+    if (rpc["name"], rpc["request"], rpc["response"]) != (
+        "GetBinding", "ControlSignerBindingRequest", "ControlSignerBindingResponse"
+    ) or any(rpc.get(key, False) for key in ("client_streaming", "server_streaming", "options_hex")):
+        return False
+    shapes = {
+        "ControlSignerBindingRequest": {
+            ("schema_version", 1, "uint32", "singular"), ("fleet_id", 2, "string", "singular"),
+            ("environment", 3, "string", "singular"), ("fencing_token", 4, "uint64", "singular"),
+            ("expected_signer_public_key", 5, "string", "singular"),
+        },
+        "ControlSignerBindingResponse": {
+            ("schema_version", 1, "uint32", "singular"), ("signer_public_key", 2, "string", "singular"),
+            ("signer_key_id", 3, "string", "singular"), ("fleet_id", 4, "string", "singular"),
+            ("environment", 5, "string", "singular"), ("fencing_token", 6, "uint64", "singular"),
+        },
+    }
+    messages = {item["name"]: item for item in document["messages"]}
+    for name, expected in shapes.items():
+        message = messages.get(name)
+        if message is None or message.get("oneofs") or message.get("options_hex", ""):
+            return False
+        fields = message["fields"]
+        actual = {(item["name"], int(item["number"]), item["type"], item.get("label", "singular")) for item in fields}
+        if actual != expected or len(fields) != len(expected) or any(item.get("options_hex", "") for item in fields):
+            return False
+    usages = [method for service in document["services"] for method in service["rpcs"] if method["request"] in shapes or method["response"] in shapes]
+    return usages == [rpc]
+
+
 def validate_descriptor_invariants(descriptor: dict[str, Any]) -> None:
     fence_found = False
     unknown_found = False
@@ -442,7 +484,8 @@ def validate_descriptor_invariants(descriptor: dict[str, Any]) -> None:
                 fence_found = True
             nested = [item for item in message["fields"] if item["type"].endswith("ActionFence")]
             if message["name"].endswith("Request") or message["name"].endswith("Result"):
-                if message["name"] not in {"HealthRequest", "ShadowEvaluateRequest"} and not nested:
+                public_binding_read = message["name"] == "ControlSignerBindingRequest" and _control_binding_read(document)
+                if message["name"] not in {"HealthRequest", "ShadowEvaluateRequest"} and not nested and not public_binding_read:
                     if "fence" not in field_names and not {"action_id", "execution_epoch"} <= field_names:
                         if document["package"] not in {"deepseek.common.v1", "deepseek.control.v1"}:
                             raise ContractError(f"{message['name']} must bind an ActionFence")

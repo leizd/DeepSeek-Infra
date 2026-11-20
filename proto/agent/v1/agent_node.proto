@@ -84,6 +84,7 @@ service AgentNodeControl {
   rpc SettleSynthesis(SettleAgentSynthesisRequest) returns (SettleAgentSynthesisResponse);
   rpc SettleTask(SettleAgentTaskRequest) returns (SettleAgentTaskResponse);
   rpc CompleteTasks(CompleteAgentTasksRequest) returns (CompleteAgentTasksResponse);
+  rpc SettleFailure(SettleAgentFailureRequest) returns (SettleAgentFailureResponse);
 }
 
 message ExecuteAgentPlanRequest {
@@ -131,6 +132,8 @@ message AgentNodeOutcomeEvidence {
   string fleet_id = 18;
   string environment = 19;
   AgentTaskOutputMetadata task_output = 20;
+  // Conclusive planner/synthesis rejection only; absent for all older receipts.
+  AgentProviderFailureMetadata failure = 21;
 }
 
 // Signature covers the canonical protobuf encoding of evidence with the fixed
@@ -147,6 +150,9 @@ message QueryAgentNodeEffectRequest {
   deepseek.common.v1.ActionFence fence = 2;
   string run_id = 3;
   string node_id = 4;
+  // A Go-retained proof requires this exact existing Rust journal document.
+  // Missing custody must not be recreated by a lookup or takeover.
+  string expected_receipt_sha256 = 5;
 }
 
 message QueryAgentNodeEffectResponse {
@@ -161,13 +167,17 @@ service AgentNodeWorker {
   // Private Rust-to-Rust custody preparation only. No provider effect is admitted.
   // Credentials must never be forwarded to the Go control plane or public events.
   rpc PrepareCredentials(PrepareAgentCredentialsRequest) returns (PrepareAgentCredentialsResponse);
+  rpc PrepareRecoveryProgress(PrepareAgentRecoveryProgressRequest) returns (AgentRecoveryProgressReceipt);
   rpc ExecutePlan(ExecuteAgentPlanRequest) returns (AgentNodeEffectMetadata);
   rpc ExecuteTask(ExecuteAgentTaskRequest) returns (AgentNodeEffectMetadata);
   // Only synthesis-phase claims with the Go-selected synthesizer node are valid.
   rpc ExecuteSynthesis(ExecuteAgentTaskRequest) returns (AgentNodeEffectMetadata);
   rpc QueryEffect(QueryAgentNodeEffectRequest) returns (QueryAgentNodeEffectResponse);
+  // Requires expected_receipt_sha256 and never creates an outcome signature.
+  rpc ReadRetainedEffect(QueryAgentNodeEffectRequest) returns (QueryAgentNodeEffectResponse);
   rpc ProjectPlan(ProjectAgentPlanRequest) returns (AgentPlanProjectionReceipt);
   rpc ProjectSynthesis(ProjectAgentSynthesisRequest) returns (AgentSynthesisProjectionReceipt);
+  rpc ProjectFailure(ProjectAgentFailureRequest) returns (AgentFailureProjectionReceipt);
 }
 
 message PrepareAgentCredentialsRequest {
@@ -213,6 +223,13 @@ message AgentCredentialObjectReference {
 message PrepareAgentCredentialsResponse {
   AgentCredentialScope scope = 1;
   AgentCredentialObjectReference object = 2;
+  // Present only for recovery preparation. Rust stores the complete request,
+  // canonical context and ordered initial public bodies; Go sees references
+  // only and must atomically commit them under its live fence and exact CAS.
+  AgentArtifactReference prepared_request = 3;
+  AgentArtifactReference recovery_context = 4;
+  string recovery_context_sha256 = 5;
+  repeated AgentArtifactReference recovery_event_bodies = 6;
 }
 
 // The caller selects only a node ID. Task text and dependencies come from the
@@ -488,5 +505,138 @@ message CommitAgentRunRecoveryResponse {
 service AgentRunRecoveryControl {
   rpc Preview(PreviewAgentRunRecoveryRequest) returns (PreviewAgentRunRecoveryResponse);
   rpc Commit(CommitAgentRunRecoveryRequest) returns (CommitAgentRunRecoveryResponse);
+  rpc PreviewProgress(PreviewAgentRecoveryProgressRequest) returns (PreviewAgentRecoveryProgressResponse);
+  rpc CommitProgress(CommitAgentRecoveryProgressRequest) returns (CommitAgentRunRecoveryResponse);
 }
 
+// The selected task phase is already independently terminated. This context
+// authorizes no provider effect; it binds the two ordered public events which
+// finish a task rerun or prepare its separately admitted synthesis.
+message AgentRecoveryProgressContext {
+  uint32 schema_version = 1;
+  string run_id = 2;
+  uint64 generation = 3;
+  uint64 metadata_epoch = 4;
+  int64 expected_index = 5;
+  uint64 runtime_revision = 6;
+  AgentArtifactReference request = 7;
+  string recovery_context_sha256 = 8;
+  string task_action_id = 9;
+  int64 task_action_revision = 10;
+  int64 task_metadata_index = 11;
+  string role = 12;
+  bool synthesize = 13;
+  repeated AgentRunRecoveryEffectSource outputs = 14;
+}
+
+message AgentRecoveryProgressEvidence {
+  uint32 schema_version = 1;
+  AgentRecoveryProgressContext context = 2;
+  AgentArtifactReference note_body = 3;
+  AgentArtifactReference next_body = 4;
+  string fleet_id = 5;
+  string environment = 6;
+}
+
+// A separate Rust signature purpose prevents using planning, task or synthesis
+// receipts to fabricate the post-task note/reset/done boundary.
+message AgentRecoveryProgressReceipt {
+  uint32 schema_version = 1;
+  AgentRecoveryProgressEvidence evidence = 2;
+  bytes signature = 3;
+  string signer_public_key = 4;
+}
+
+message PreviewAgentRecoveryProgressRequest {
+  uint32 schema_version = 1;
+  string run_id = 2;
+  deepseek.common.v1.ActionFence metadata_fence = 3;
+  int64 expected_index = 4;
+  uint64 runtime_revision = 5;
+  AgentArtifactReference request = 6;
+}
+
+message PreviewAgentRecoveryProgressResponse {
+  bool authoritative = 1;
+  AgentRecoveryProgressContext context = 2;
+}
+
+message PrepareAgentRecoveryProgressRequest {
+  uint32 schema_version = 1;
+  AgentRecoveryProgressContext context = 2;
+  deepseek.common.v1.ActionFence fence = 3;
+}
+
+message CommitAgentRecoveryProgressRequest {
+  uint32 schema_version = 1;
+  string operation_id = 2;
+  string actor = 3;
+  string run_id = 4;
+  deepseek.common.v1.ActionFence metadata_fence = 5;
+  int64 expected_index = 6;
+  uint64 runtime_revision = 7;
+  AgentArtifactReference request = 8;
+  AgentRecoveryProgressReceipt receipt = 9;
+}
+
+
+// No provider error text or credentials enter Go. Rust creates this only after a
+// complete bounded 400/401/402/422/429 error response. EOF, redirects, 5xx and
+// unrecognized responses remain EFFECT_UNKNOWN, never a failure receipt.
+message AgentProviderFailureMetadata {
+  uint32 schema_version = 1;
+  uint32 http_status = 2;
+  string response_sha256 = 3;
+}
+
+// Historical Rust custody is queried using its ORIGINAL operation and fence.
+// Settlement is separately bound to the current authoritative Go claim.
+message ProjectAgentFailureRequest {
+  uint32 schema_version = 1;
+  QueryAgentNodeEffectRequest source = 2;
+  deepseek.common.v1.ActionFence settlement_fence = 3;
+  int64 settlement_writer_token = 4;
+  uint64 metadata_epoch = 5;
+  int64 expected_index = 6;
+}
+
+// Dedicated proof purpose: cannot authorize success, task settlement or dispatch.
+message AgentFailureProjectionEvidence {
+  uint32 schema_version = 1;
+  string source_receipt_sha256 = 2;
+  deepseek.common.v1.ActionFence settlement_fence = 3;
+  int64 settlement_writer_token = 4;
+  string run_id = 5;
+  AgentRunExecutionPhase phase = 6;
+  uint64 metadata_epoch = 7;
+  int64 expected_index = 8;
+  AgentArtifactReference error_body = 9;
+  string fleet_id = 10;
+  string environment = 11;
+}
+
+message AgentFailureProjectionReceipt {
+  uint32 schema_version = 1;
+  AgentFailureProjectionEvidence evidence = 2;
+  bytes signature = 3;
+  string signer_public_key = 4;
+}
+
+// One Go transaction appends the signed error reference, marks only the proved
+// action FAILED, terminates its lease, releases its resource and records replay.
+message SettleAgentFailureRequest {
+  uint32 schema_version = 1;
+  string operation_id = 2;
+  string actor = 3;
+  deepseek.common.v1.ActionFence fence = 4;
+  string run_id = 5;
+  string owner = 6;
+  string claim_token = 7;
+  AgentFailureProjectionReceipt projection = 8;
+}
+
+message SettleAgentFailureResponse {
+  bool already_applied = 1;
+  AgentRunSnapshot run = 2;
+  string action_state = 3;
+}

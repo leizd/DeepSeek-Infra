@@ -221,6 +221,46 @@ fn parse_multipart(
     Ok((files, ocr_enabled, api_key))
 }
 
+/// Extract the uploaded archive part from a `multipart/form-data` request up to `max_bytes`.
+pub(crate) fn parse_first_backup_multipart(
+    content_type: &str,
+    body: &[u8],
+    max_bytes: usize,
+) -> Result<(String, Vec<u8>), AppError> {
+    let boundary = boundary_parameter(content_type)
+        .ok_or_else(|| invalid("Upload body is not multipart/form-data"))?;
+    if boundary.is_empty() {
+        return Err(invalid("Upload body is not multipart/form-data"));
+    }
+    let parts = split_parts(body, &boundary)?;
+    let mut fallback: Option<(String, Vec<u8>)> = None;
+    for part in parts {
+        let disposition = header_value(&part.headers, "content-disposition").unwrap_or_default();
+        let Some(raw_name) = filename_parameter(&disposition) else {
+            continue;
+        };
+        let filename = clean_filename(&raw_name);
+        if filename.is_empty() {
+            continue;
+        }
+        if part.body.len() > max_bytes {
+            return Err(AppError {
+                message: "Backup archive is too large".to_string(),
+                code: codes::UPLOAD_TOO_LARGE,
+                status: 413,
+            });
+        }
+        let field_name = name_parameter(&disposition);
+        if field_name == "backup" {
+            return Ok((filename, part.body));
+        }
+        if fallback.is_none() {
+            fallback = Some((filename, part.body));
+        }
+    }
+    fallback.ok_or_else(|| invalid("Missing uploaded backup archive"))
+}
+
 fn boundary_parameter(content_type: &str) -> Option<String> {
     let (media, parameters) = split_content_type(content_type);
     if media != "multipart/form-data" {

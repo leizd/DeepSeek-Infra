@@ -42,6 +42,7 @@ var controlDomainOrder = [...]string{
 }
 
 type OpenOptions struct {
+	NativeOrigin *NativeOriginBootstrap
 	Path         string
 	Owner        string
 	Now          func() int64
@@ -57,6 +58,7 @@ type OpenOptions struct {
 	PromotionSignerPublicKey string
 	// AgentOutcomeSignerPublicKey pins Rust historical outcome custody. Empty refuses ingestion.
 	AgentOutcomeSignerPublicKey string
+	MediaOutcomeSignerPublicKey string
 	FleetID                     string
 	Environment                 string
 }
@@ -88,6 +90,9 @@ type Snapshot struct {
 }
 
 type Control struct {
+	nativeOrigin          *nativeOriginPreparation
+	fileGuard             sqlitedb.NativeControlGuard
+	nativeNew             bool
 	mu                    sync.Mutex
 	path                  string
 	databasePath          string
@@ -103,6 +108,7 @@ type Control struct {
 	authorizeCutover      bool
 	promotionSignerKey    string
 	agentOutcomeSignerKey string
+	mediaOutcomeSignerKey string
 	fleetID               string
 	environment           string
 }
@@ -156,22 +162,56 @@ func OpenControl(opts OpenOptions) (*Control, error) {
 	if statErr == nil && info.IsDir() {
 		return nil, fmt.Errorf("%w: database path is a directory", ErrForeignRuntimeStore)
 	}
+	nativeOrigin, err := prepareNativeOrigin(opts, resolved, databasePath, statErr)
+	if err != nil {
+		return nil, err
+	}
 	if databaseExisted {
 		initialized, err := validateExistingControlMarker(databasePath)
 		if err != nil {
 			return nil, err
 		}
 		databaseExisted = initialized
-	} else if statErr != nil {
-		file, err := os.OpenFile(databasePath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
-		if err != nil {
-			return nil, err
-		}
-		if err := file.Close(); err != nil {
-			return nil, err
+		if initialized && nativeOrigin != nil {
+			if err := validateNativeExisting(databasePath, nativeOrigin); err != nil {
+				return nil, err
+			}
 		}
 	}
 
+	// A retained Rust publication proves that an initialized Go database
+	// already existed. Truncation or an empty SQLite container is loss of
+	// authority, never the crash-before-creation recovery case.
+	if nativeOrigin != nil && nativeOrigin.state.Publication != nil && !databaseExisted {
+		return nil, ErrNativeOrigin
+	}
+	fileGuard, err := sqlitedb.PrepareControlFile(databasePath, opts.AuthorizeCutover || opts.NativeOrigin != nil, errors.Is(statErr, os.ErrNotExist))
+	if err != nil {
+		return nil, err
+	}
+	opened := false
+	defer func() {
+		if !opened {
+			_ = fileGuard.Close()
+		}
+	}()
+	// Preserve the original read-only foreign-store refusal before acquiring a
+	// writable descriptor, then repeat admission under the native file guard.
+	// A legacy writer could have changed the file between preflight and locking.
+	if databaseExisted {
+		initialized, err := validateExistingControlMarker(databasePath)
+		if err != nil {
+			return nil, err
+		}
+		if !initialized {
+			return nil, ErrForeignRuntimeStore
+		}
+		if nativeOrigin != nil {
+			if err := validateNativeExisting(databasePath, nativeOrigin); err != nil {
+				return nil, err
+			}
+		}
+	}
 	db, err := sqlitedb.Open(controlDatabaseDSN(databasePath))
 	if err != nil {
 		return nil, err
@@ -197,6 +237,9 @@ func OpenControl(opts OpenOptions) (*Control, error) {
 		leaseSeconds = 30
 	}
 	store := &Control{
+		nativeOrigin:          nativeOrigin,
+		fileGuard:             fileGuard,
+		nativeNew:             nativeOrigin != nil && !databaseExisted,
 		path:                  resolved,
 		databasePath:          databasePath,
 		owner:                 opts.Owner,
@@ -206,6 +249,7 @@ func OpenControl(opts OpenOptions) (*Control, error) {
 		authorizeCutover:      opts.AuthorizeCutover,
 		promotionSignerKey:    opts.PromotionSignerPublicKey,
 		agentOutcomeSignerKey: opts.AgentOutcomeSignerPublicKey,
+		mediaOutcomeSignerKey: opts.MediaOutcomeSignerPublicKey,
 		fleetID:               opts.FleetID,
 		environment:           opts.Environment,
 	}
@@ -213,6 +257,11 @@ func OpenControl(opts OpenOptions) (*Control, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := store.finishNativeOrigin(nativeOrigin); err != nil {
+		_ = store.Close()
+		return nil, err
+	}
+	opened = true
 	return store, nil
 }
 
@@ -263,7 +312,27 @@ func controlDatabaseURLForOS(databasePath string, query url.Values, goos string)
 func validateExistingControlMarker(databasePath string) (bool, error) {
 	// Identity checks stay on a read-only connection so a foreign database cannot
 	// be mutated by WAL or writer-lease side effects before it is rejected.
-	db, err := sqlitedb.Open(readOnlyControlDatabaseDSN(databasePath))
+	dsn := readOnlyControlDatabaseDSN(databasePath)
+	if info, err := os.Lstat(databasePath + "-wal"); err == nil {
+		if !info.Mode().IsRegular() {
+			return false, ErrForeignRuntimeStore
+		}
+		if shm, err := os.Lstat(databasePath + "-shm"); err == nil && !shm.Mode().IsRegular() {
+			return false, ErrForeignRuntimeStore
+		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return false, err
+		}
+		// A retained reader can keep committed schema and provenance in the WAL
+		// after the writer exits. immutable=1 would silently ignore those commits.
+		// Preserve that WAL and read it through SQLite's ordinary read-only path.
+		query := hardenedControlQuery()
+		query.Set("mode", "ro")
+		query.Set("_query_only", "1")
+		dsn = controlDatabaseURL(databasePath, query)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return false, err
+	}
+	db, err := sqlitedb.Open(dsn)
 	if err != nil {
 		return false, err
 	}
@@ -450,6 +519,23 @@ func expectedControlUserObjects(schema int) map[string]string {
 			kind := "trigger"
 			if name == operatorMutationTable {
 				kind = "table"
+			}
+			objects[name] = kind
+		}
+	}
+	if schema >= SchemaV18 {
+		objects["control_native_origin"] = "table"
+		objects["control_native_origin_no_delete"] = "trigger"
+		objects["control_native_origin_publication_once"] = "trigger"
+	}
+	if schema >= SchemaV19 {
+		for name := range mediaPatchSchemaObjects {
+			kind := "trigger"
+			if name == "control_media_operations" {
+				kind = "table"
+			}
+			if name == "control_media_one_publication" {
+				kind = "index"
 			}
 			objects[name] = kind
 		}
@@ -742,6 +828,26 @@ func (store *Control) migrateTx(tx *sql.Tx) error {
 			return err
 		}
 	}
+	if store.schema == SchemaV16 {
+		if err := store.migrateToV17Tx(tx); err != nil {
+			return err
+		}
+	}
+	if store.schema == SchemaV17 {
+		if err := store.migrateToV18Tx(tx); err != nil {
+			return err
+		}
+	}
+	if store.schema == SchemaV18 {
+		if err := store.migrateToV19Tx(tx); err != nil {
+			return err
+		}
+	}
+	if store.schema == SchemaV19 {
+		if err := store.migrateToV20Tx(tx); err != nil {
+			return err
+		}
+	}
 	return verifySchemaTx(tx, store.schema)
 }
 
@@ -814,6 +920,14 @@ func (store *Control) migrateToV2Tx(tx *sql.Tx) error {
 		return ErrWriterFenceHeld
 	}
 	for _, domain := range controlDomainOrder {
+		previousOwner, transfer := OwnerPython, CutoverGenesisTransferID
+		if store.nativeNew {
+			previousOwner = RuntimeGo
+			transfer = nativeTransfer(store.nativeOrigin.receipt) + "-pending"
+			if store.token != 1 {
+				return ErrNativeOrigin
+			}
+		}
 		if _, err := tx.Exec(
 			`INSERT INTO control_cutover(
 				domain, state, revision, epoch, fencing_token, previous_owner, owner,
@@ -822,9 +936,9 @@ func (store *Control) migrateToV2Tx(tx *sql.Tx) error {
 			domain,
 			string(CutoverShadow),
 			store.token,
-			OwnerPython,
-			OwnerPython,
-			CutoverGenesisTransferID,
+			previousOwner,
+			previousOwner,
+			transfer,
 			store.token,
 			now,
 		); err != nil {
@@ -837,11 +951,11 @@ func (store *Control) migrateToV2Tx(tx *sql.Tx) error {
 				previous_owner, owner, writer_fencing_token, recorded_at
 			) VALUES(?, ?, '', ?, 0, 1, 0, 1, 0, ?, ?, ?, ?, ?)`,
 			domain,
-			CutoverGenesisTransferID,
+			transfer,
 			string(CutoverShadow),
 			store.token,
-			OwnerPython,
-			OwnerPython,
+			previousOwner,
+			previousOwner,
 			store.token,
 			now,
 		); err != nil {
@@ -1060,6 +1174,16 @@ func verifySchemaTx(tx *sql.Tx, schema int) error {
 	if schema < SchemaV1 || schema > CurrentSchema {
 		return ErrForeignRuntimeStore
 	}
+	if schema >= SchemaV18 {
+		if err := verifyNativeOriginSchemaTx(tx); err != nil {
+			return err
+		}
+	}
+	if schema >= SchemaV19 {
+		if err := verifyMediaPatchSchemaTx(tx, schema); err != nil {
+			return err
+		}
+	}
 	tables := append(append([]string(nil), controlTableNames[:]...), "control_events")
 	if schema >= SchemaV2 {
 		tables = append(tables, "control_cutover", "control_cutover_events")
@@ -1072,7 +1196,11 @@ func verifySchemaTx(tx *sql.Tx, schema int) error {
 			return err
 		}
 	}
-	if schema >= SchemaV16 {
+	if schema >= SchemaV17 {
+		if err := verifyActionFailureSchemaTx(tx); err != nil {
+			return err
+		}
+	} else if schema >= SchemaV16 {
 		if err := verifyActionCancellationSchemaTx(tx); err != nil {
 			return err
 		}
@@ -1258,7 +1386,7 @@ func (store *Control) Close() error {
 		store.token,
 	)
 	closeErr := store.db.Close()
-	return errors.Join(releaseErr, closeErr)
+	return errors.Join(releaseErr, closeErr, store.fileGuard.Close())
 }
 
 func (store *Control) Writer() WriterLease {
@@ -1386,6 +1514,7 @@ func (store *Control) putLeasedControlRecord(record Record, dispatch *StorageDis
 type controlRecordWrite struct {
 	agentEvent                  bool
 	agentRecovery               bool
+	agentRecoveryProgress       bool
 	agentExecution              bool
 	agentNodeDispatch           bool
 	agentNodeOutcome            bool
@@ -1394,6 +1523,7 @@ type controlRecordWrite struct {
 	agentTaskSettlement         bool
 	agentPlanSettlement         bool
 	agentSynthesisSettlement    bool
+	agentFailureSettlement      bool
 	record                      Record
 	table                       string
 	intentJSON                  []byte
@@ -1478,6 +1608,29 @@ func (store *Control) putControlRecordTx(tx *sql.Tx, write controlRecordWrite, n
 		if changedAgentRecoveryScope(existing, record) && !write.agentRecovery {
 			return ErrAgentRunRecoveryRequired
 		}
+		if changedRecoveryProgress(existing, record) && !write.agentRecoveryProgress && !write.agentRecovery {
+			return ErrAgentRunRecoveryRequired
+		}
+		if changedRecoveryProgress(existing, record) && write.agentRecoveryProgress {
+			if err := agentRecoveryProgressUnreservedTx(tx, record.ID); err != nil {
+				return err
+			}
+			previous, err := decodeAgentMetadata(existing)
+			if err != nil {
+				return err
+			}
+			next, err := decodeAgentMetadata(record)
+			if err != nil || next.RecoveryProgress == nil {
+				return ErrAgentRunRecoveryRequired
+			}
+			expected, err := store.agentRecoveryProgressContextTx(tx, previous, record.ExecutionEpoch)
+			if err != nil {
+				return err
+			}
+			if err := store.verifyRecoveryProgressReceipt(next.RecoveryProgress.Receipt, expected); err != nil {
+				return err
+			}
+		}
 	}
 	if record.Domain == "action" && !write.agentExecution &&
 		(nativeAgentExecution(record.Payload) || exists && nativeAgentExecution(existing.Payload)) {
@@ -1521,6 +1674,14 @@ func (store *Control) putControlRecordTx(tx *sql.Tx, write controlRecordWrite, n
 			return err
 		}
 	}
+	if record.Domain == "action" && !write.agentFailureSettlement {
+		var beforeFields, afterFields map[string]json.RawMessage
+		_ = json.Unmarshal(existing.Payload, &beforeFields)
+		_ = json.Unmarshal(record.Payload, &afterFields)
+		if !bytes.Equal(beforeFields[agentFailureSettlementField], afterFields[agentFailureSettlementField]) {
+			return ErrAgentRunExecutionRequired
+		}
+	}
 	if record.Domain == "action" && !write.agentSynthesisSettlement {
 		var beforeFields, afterFields map[string]json.RawMessage
 		_ = json.Unmarshal(existing.Payload, &beforeFields)
@@ -1562,6 +1723,12 @@ func (store *Control) putControlRecordTx(tx *sql.Tx, write controlRecordWrite, n
 		}
 	}
 	legal := LegalTransition(record.Domain, from, record.State)
+	if write.agentFailureSettlement {
+		if !exists || !nativeAgentFailureSettlementEdge(existing, record) {
+			return ErrAgentRunExecutionRequired
+		}
+		legal = true
+	}
 	if write.agentSynthesisSettlement {
 		if !exists || !nativeAgentSynthesisSettlementEdge(existing, record) {
 			return ErrAgentRunExecutionRequired
@@ -1864,6 +2031,12 @@ func validateControlHistory(tx *sql.Tx, latest Record) error {
 			var beforeFields, afterFields map[string]json.RawMessage
 			_ = json.Unmarshal(final.Payload, &beforeFields)
 			_ = json.Unmarshal(event.Payload, &afterFields)
+			if !bytes.Equal(beforeFields[agentFailureSettlementField], afterFields[agentFailureSettlementField]) {
+				if !nativeAgentFailureSettlementEdge(final, event) {
+					return ErrCorruptRecord
+				}
+				legal = true
+			}
 			if !bytes.Equal(beforeFields[agentSynthesisSettlementField], afterFields[agentSynthesisSettlementField]) {
 				if !nativeAgentSynthesisSettlementEdge(final, event) {
 					return ErrCorruptRecord
@@ -2041,7 +2214,7 @@ func secretBearingControlKey(key string) bool {
 }
 
 func knownState(domain, state string) bool {
-	if domain == "action" && (state == "RECONCILING" || state == "CANCELLED_CONFIRMED" || verificationActionState(state)) {
+	if domain == "action" && (state == "RECONCILING" || state == "CANCELLED_CONFIRMED" || state == "FAILED" || verificationActionState(state)) {
 		return true
 	}
 	edges, ok := transitions[domain]
@@ -2223,6 +2396,16 @@ func (store *Control) Rollback(version int) error {
 	leaseUntil, err := store.assertWriterTx(tx, now)
 	if err != nil {
 		return err
+	}
+	if store.schema >= SchemaV19 {
+		if err := retireEmptyMediaPatchTx(tx); err != nil {
+			return err
+		}
+	}
+	if store.schema >= SchemaV18 {
+		if err := retireEmptyNativeOriginTx(tx); err != nil {
+			return err
+		}
 	}
 	if store.schema >= SchemaV5 {
 		if err := retireEmptyActionAdmissionTx(tx); err != nil {

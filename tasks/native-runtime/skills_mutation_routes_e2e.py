@@ -101,13 +101,15 @@ def bind_revisions(value: Any, replacements: dict[str, str]) -> Any:
 
 
 @contextmanager
-def native(gateway: Path, root: Path, mode: str) -> Iterator[int]:
+def native(gateway: Path, root: Path, mode: str, *, upstream_url: str | None = None) -> Iterator[int]:
     with socket.socket() as port_socket:
         port_socket.bind(("127.0.0.1", 0))
         port = port_socket.getsockname()[1]
     env = dict(os.environ, DEEPSEEK_INFRA_ROOT=root.as_posix(), DEEPSEEK_INFRA_STATIC_DIR=root.as_posix(),
                DEEPSEEK_RUNTIME_MODE=mode, GATEWAY_BIND_ADDR=f"127.0.0.1:{port}", AUTH_TOKEN=TOKEN, RUST_LOG="error")
     env.pop("AUTH_DISABLED", None)
+    if upstream_url is not None:
+        env["DEEPSEEK_API_URL"] = upstream_url
     with (root / "native.log").open("ab") as log:
         process = subprocess.Popen([str(gateway)], env=env, cwd=root, stdout=log, stderr=log)
         try:

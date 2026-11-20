@@ -313,14 +313,18 @@ func persistedProcessLease(t *testing.T, stateRoot string) (int64, int64) {
 	if runtime.GOOS == "windows" {
 		path = "/" + path
 	}
-	location := &url.URL{Scheme: "file", Path: path, RawQuery: "mode=ro"}
+	// BSD locking also excludes readers during a brief writer transaction.
+	// Observe the durable fence without changing it or racing a zero-timeout read.
+	location := &url.URL{Scheme: "file", Path: path, RawQuery: "mode=ro&_query_only=1&_busy_timeout=1000"}
 	database, err := sqlitedb.Open(location.String())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer database.Close()
 	var token, until int64
-	if err := database.QueryRow("SELECT fencing_token, lease_until FROM control_writer WHERE singleton=1").Scan(&token, &until); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	if err := database.QueryRowContext(ctx, "SELECT fencing_token, lease_until FROM control_writer WHERE singleton=1").Scan(&token, &until); err != nil {
 		t.Fatal(err)
 	}
 	return token, until

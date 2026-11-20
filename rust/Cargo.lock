@@ -681,6 +681,7 @@ version = "0.1.0"
 dependencies = [
  "async-stream",
  "axum",
+ "base64",
  "blake2",
  "bytes",
  "deepseek-browser",
@@ -689,10 +690,13 @@ dependencies = [
  "deepseek-policy",
  "deepseek-protocol",
  "deepseek-rag",
+ "deepseek-storage",
  "futures-core",
  "futures-util",
  "percent-encoding",
+ "prost",
  "rcgen",
+ "regex",
  "reqwest",
  "rusqlite",
  "serde",
@@ -737,6 +741,8 @@ dependencies = [
  "quick-xml 0.31.0",
  "regex",
  "rusqlite",
+ "ryu",
+ "sqlite-vec",
  "serde",
  "serde_json",
  "sha1 0.10.7",
@@ -786,11 +792,14 @@ name = "deepseek-stateless-mcp"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "getrandom 0.2.17",
+ "libc",
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "tokio",
  "tower 0.5.3",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -841,6 +850,7 @@ dependencies = [
  "deepseek-storage",
  "deepseek-transfer",
  "ed25519-dalek",
+ "futures-util",
  "prost",
  "rcgen",
  "rusqlite",
@@ -3371,6 +3381,15 @@ checksum = "d91ed6c858b01f942cd56b37a94b3e0a1798290327d1236e4d9cf4eaca44d29d"
 dependencies = [
  "base64ct",
  "der",
+]
+
+[[package]]
+name = "sqlite-vec"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d0ba424237a9a5db2f6071f193319e2b6a32f7f3961debb2fbbfe67067abce3f"
+dependencies = [
+ "cc",
 ]
 
 [[package]]

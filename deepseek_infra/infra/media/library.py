@@ -10,6 +10,7 @@ from typing import Any
 from deepseek_infra.core import config
 from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.infra.media import schema
+from deepseek_infra.infra.native_runtime.authority import assert_python_writer_allowed
 from deepseek_infra.infra.workspace.schema import redact_value, utc_now, validate_project_id, write_json_atomic
 
 MEDIA_DIR = config.MEDIA_DIR
@@ -273,4 +274,5 @@ def _load_store() -> list[dict[str, Any]]:
 
 
 def _write_store(items: list[dict[str, Any]]) -> None:
+    assert_python_writer_allowed("media_library_store")
     write_json_atomic(store_path(), {"schemaVersion": "media-library.v1", "media": items[-1000:]})

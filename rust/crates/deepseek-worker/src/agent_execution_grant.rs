@@ -15,6 +15,8 @@ use tonic::{Request, Status, metadata::MetadataValue, transport::Endpoint};
 
 pub const AGENT_EXECUTION_GRANT_SCHEMA: &str = "control-agent-execution-grant-v1";
 const SIGNATURE_DOMAIN: &[u8] = b"deepseek-infra:control-agent-execution-grant-v1\0";
+#[cfg(test)]
+mod recovery_tests;
 const FIELDS: &[&str] = &[
     "actionId",
     "digest",
@@ -70,8 +72,8 @@ fn typed_digest(value: &Value) -> Result<String, Status> {
 /// Deployment configuration, never selected by a signing RPC's caller.
 #[derive(Clone)]
 pub struct AgentExecutionControl {
-    endpoint: Endpoint,
-    authorization: MetadataValue<tonic::metadata::Ascii>,
+    pub(crate) endpoint: Endpoint,
+    pub(crate) authorization: MetadataValue<tonic::metadata::Ascii>,
 }
 impl std::fmt::Debug for AgentExecutionControl {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -80,6 +82,106 @@ impl std::fmt::Debug for AgentExecutionControl {
     }
 }
 impl AgentExecutionControl {
+    pub(crate) async fn validate_recovery_progress(
+        &self,
+        context: &deepseek_protocol::generated::deepseek::agent::v1::AgentRecoveryProgressContext,
+    ) -> Result<(), Status> {
+        use deepseek_protocol::generated::deepseek::{
+            agent::v1::{
+                PreviewAgentRecoveryProgressRequest,
+                agent_run_recovery_control_client::AgentRunRecoveryControlClient,
+            },
+            common::v1::ActionFence,
+        };
+        let channel = self.endpoint.connect().await.map_err(|_| unavailable())?;
+        let mut client =
+            AgentRunRecoveryControlClient::new(channel).max_decoding_message_size(2 * 1024 * 1024);
+        let mut request = Request::new(PreviewAgentRecoveryProgressRequest {
+            schema_version: 1,
+            run_id: context.run_id.clone(),
+            metadata_fence: Some(ActionFence {
+                action_id: context.run_id.clone(),
+                execution_epoch: context.metadata_epoch,
+            }),
+            expected_index: context.expected_index,
+            runtime_revision: context.runtime_revision,
+            request: context.request.clone(),
+        });
+        request
+            .metadata_mut()
+            .insert("authorization", self.authorization.clone());
+        let response = client
+            .preview_progress(request)
+            .await
+            .map_err(|status| {
+                if matches!(
+                    status.code(),
+                    tonic::Code::Unavailable | tonic::Code::DeadlineExceeded
+                ) {
+                    unavailable()
+                } else {
+                    crate::agent_recovery_context::denied()
+                }
+            })?
+            .into_inner();
+        if !response.authoritative || response.context.as_ref() != Some(context) {
+            return Err(crate::agent_recovery_context::denied());
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn validate_recovery_context(
+        &self,
+        context: &deepseek_protocol::generated::deepseek::agent::v1::AgentRunRecoveryContext,
+    ) -> Result<(), Status> {
+        use deepseek_protocol::generated::deepseek::{
+            agent::v1::{
+                PreviewAgentRunRecoveryRequest,
+                agent_run_recovery_control_client::AgentRunRecoveryControlClient,
+            },
+            common::v1::ActionFence,
+        };
+        let channel = self.endpoint.connect().await.map_err(|_| unavailable())?;
+        let mut client =
+            AgentRunRecoveryControlClient::new(channel).max_decoding_message_size(2 * 1024 * 1024);
+        let mut request = Request::new(PreviewAgentRunRecoveryRequest {
+            schema_version: 1,
+            run_id: context.run_id.clone(),
+            metadata_fence: Some(ActionFence {
+                action_id: context.run_id.clone(),
+                execution_epoch: context.metadata_epoch,
+            }),
+            expected_index: context.expected_index,
+            expected_runtime_revision: context.expected_runtime_revision,
+            expected_request: context.expected_request.clone(),
+            selection: context.selection.clone(),
+        });
+        request
+            .metadata_mut()
+            .insert("authorization", self.authorization.clone());
+        let response = client
+            .preview(request)
+            .await
+            .map_err(|status| {
+                if matches!(
+                    status.code(),
+                    tonic::Code::Unavailable | tonic::Code::DeadlineExceeded
+                ) {
+                    unavailable()
+                } else {
+                    crate::agent_recovery_context::denied()
+                }
+            })?
+            .into_inner();
+        if !response.authoritative
+            || response.context.as_ref() != Some(context)
+            || response.context_sha256 != crate::agent_recovery_context::digest(context)?
+        {
+            return Err(crate::agent_recovery_context::denied());
+        }
+        Ok(())
+    }
+
     pub(crate) async fn runtime_binding(
         &self,
         run_id: &str,
@@ -144,16 +246,21 @@ impl AgentExecutionControl {
             .strip_prefix("http://")
             .and_then(|value| value.parse::<SocketAddr>().ok())
             .ok_or_else(unavailable)?;
-        if !address.ip().is_loopback()
-            || address.port() == 0
-            || !(32..=4096).contains(&bearer.len())
-            || !bearer.bytes().all(|b| b.is_ascii_graphic())
-        {
+        if !address.ip().is_loopback() || address.port() == 0 {
+            return Err(unavailable());
+        }
+        Self::from_endpoint(
+            Endpoint::from_shared(origin.to_string()).map_err(|_| unavailable())?,
+            bearer,
+        )
+    }
+
+    fn from_endpoint(endpoint: Endpoint, bearer: &str) -> Result<Self, Status> {
+        if !(32..=4096).contains(&bearer.len()) || !bearer.bytes().all(|b| b.is_ascii_graphic()) {
             return Err(unavailable());
         }
         Ok(Self {
-            endpoint: Endpoint::from_shared(origin.to_string())
-                .map_err(|_| unavailable())?
+            endpoint: endpoint
                 .connect_timeout(Duration::from_secs(3))
                 .timeout(Duration::from_secs(5)),
             authorization: format!("Bearer {bearer}")
@@ -311,6 +418,12 @@ pub(crate) fn validate_node_dispatch(
 pub fn load_agent_execution_control_from_env(
     get: impl Fn(&str) -> Result<String, VarError>,
 ) -> Result<Option<AgentExecutionControl>, Status> {
+    if let Some(endpoint) = deepseek_gateway::control_rpc_client::private_endpoint_from_lookup(&get)
+        .map_err(|_| unavailable())?
+    {
+        let bearer = get("DEEPSEEK_INTERNAL_BEARER").map_err(|_| unavailable())?;
+        return AgentExecutionControl::from_endpoint(endpoint, &bearer).map(Some);
+    }
     let mut origins = Vec::new();
     for name in ["GO_CONTROL_ADDR", "DEEPSEEK_GO_CONTROL_URL"] {
         match get(name) {

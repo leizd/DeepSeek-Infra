@@ -69,13 +69,16 @@ func validateAgentRecoveryMetadataEdge(before, after Record) error {
 		return err
 	}
 	if before.ID == "" {
-		if next.Recovery != nil {
+		if next.Recovery != nil || next.RecoveryProgress != nil {
 			return ErrAgentRunRecoveryRequired
 		}
 		return nil
 	}
 	previous, err := decodeAgentMetadata(before)
 	if err != nil {
+		return err
+	}
+	if err := validateRecoveryProgressEdge(before, after, previous, next); err != nil {
 		return err
 	}
 	expectedCancelled, expectedGeneration := previous.Cancelled, previous.CancellationGeneration
@@ -103,6 +106,7 @@ func validateAgentRecoveryMetadataEdge(before, after Record) error {
 	}
 	expected := previous
 	expected.SchemaVersion, expected.RuntimeRevision, expected.Request, expected.Recovery = 3, previous.RuntimeVersion()+1, next.Request, next.Recovery
+	expected.RecoveryProgress = nil
 	expected.ApplyRunEvent(next.LastEvent)
 	first, err := json.Marshal(expected)
 	second, otherErr := json.Marshal(next)
@@ -230,6 +234,7 @@ func (store *Control) CommitAgentRunRecovery(input CommitAgentRunRecoveryRequest
 		return CommitAgentRunRecoveryResult{}, ErrAgentRunMetadataInvalid
 	}
 	run.SchemaVersion, run.RuntimeRevision, run.Request = 3, run.RuntimeVersion()+1, mutation.Request
+	run.RecoveryProgress = nil
 	run.Recovery = &agent.RunRecoveryScope{Generation: preview.Context.Generation, Context: mutation.Context,
 		ContextSHA256: preview.ContextSHA256, StartIndex: mutation.ExpectedIndex, Metadata: preview.Context}
 	for index := range events {

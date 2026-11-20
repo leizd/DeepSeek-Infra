@@ -1,0 +1,107 @@
+{
+  "schemaVersion": "rust-coverage.v1",
+  "version": "4.8.0",
+  "testedRevision": "9f18b7721c90bad52c746151d10923e1ffb428b9",
+  "sourceRevision": "9f18b7721c90bad52c746151d10923e1ffb428b9",
+  "sourceTreeDirty": false,
+  "releaseRevision": null,
+  "ciRevision": "9f18b7721c90bad52c746151d10923e1ffb428b9",
+  "sourceContext": {
+    "schemaVersion": 2,
+    "version": "4.8.0",
+    "testedRevision": "9f18b7721c90bad52c746151d10923e1ffb428b9",
+    "sourceTreeDirty": false,
+    "capturedAt": "2026-11-11T05:00:43Z",
+    "generator": "scripts/capture_evidence_context.py",
+    "repository": "leizd/DeepSeek-Infra",
+    "workflowRunId": "42962854437",
+    "workflowAttempt": 1,
+    "eventName": "workflow_dispatch",
+    "ref": "refs/heads/codex/native-s0-store-ownership-20261109"
+  },
+  "generatedAt": "2026-11-11T05:22:18Z",
+  "status": "PASS",
+  "threshold": {
+    "metric": "line",
+    "minimumPercent": 80.0
+  },
+  "workspaceCrates": [
+    "backup-crypto",
+    "deepseek-backup",
+    "deepseek-browser",
+    "deepseek-core",
+    "deepseek-federation",
+    "deepseek-gateway",
+    "deepseek-mcp",
+    "deepseek-policy",
+    "deepseek-proof",
+    "deepseek-protocol",
+    "deepseek-rag",
+    "deepseek-stateless-mcp",
+    "deepseek-storage",
+    "deepseek-transfer",
+    "deepseek-worker"
+  ],
+  "coverage": {
+    "lines": {
+      "count": 124848,
+      "covered": 103967,
+      "percent": 83.27486223247469
+    },
+    "functions": {
+      "count": 11659,
+      "covered": 8905,
+      "percent": 76.37876318723733
+    },
+    "regions": {
+      "count": 74811,
+      "covered": 55425,
+      "percent": 74.08669848017003
+    }
+  },
+  "rustTestCount": 1865,
+  "coreCrateExclusions": [],
+  "coverageOmit": [
+    "[/\\\\]target[/\\\\].*[/\\\\]build[/\\\\]deepseek-protocol-[^/\\\\]+[/\\\\]out[/\\\\]deepseek\\.[^/\\\\]+\\.v1\\.rs$"
+  ],
+  "tool": "cargo-llvm-cov 0.6.21",
+  "commands": {
+    "measure": [
+      "cargo",
+      "llvm-cov",
+      "--locked",
+      "--profile",
+      "coverage",
+      "--manifest-path",
+      "rust/Cargo.toml",
+      "--workspace",
+      "--all-features",
+      "--ignore-filename-regex",
+      "[/\\\\]target[/\\\\].*[/\\\\]build[/\\\\]deepseek-protocol-[^/\\\\]+[/\\\\]out[/\\\\]deepseek\\.[^/\\\\]+\\.v1\\.rs$",
+      "--json",
+      "--summary-only",
+      "--output-path",
+      "/home/runner/work/DeepSeek-Infra/DeepSeek-Infra/artifacts/rust-coverage-raw.json"
+    ],
+    "lcov": [
+      "cargo",
+      "llvm-cov",
+      "report",
+      "--locked",
+      "--profile",
+      "coverage",
+      "--manifest-path",
+      "rust/Cargo.toml",
+      "--ignore-filename-regex",
+      "[/\\\\]target[/\\\\].*[/\\\\]build[/\\\\]deepseek-protocol-[^/\\\\]+[/\\\\]out[/\\\\]deepseek\\.[^/\\\\]+\\.v1\\.rs$",
+      "--lcov",
+      "--output-path",
+      "/home/runner/work/DeepSeek-Infra/DeepSeek-Infra/artifacts/rust-coverage.lcov"
+    ],
+    "testInventory": "cargo llvm-cov --locked --profile coverage --manifest-path rust/Cargo.toml --workspace --all-features --no-report -- --list --format terse"
+  },
+  "artifacts": {
+    "summary": "artifacts/rust-coverage.json",
+    "lcov": "artifacts/rust-coverage.lcov"
+  }
+}

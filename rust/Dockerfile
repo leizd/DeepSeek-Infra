@@ -18,6 +18,10 @@ COPY proto ./proto
 # `VERSION` the single source of truth and keeps this build context as narrow as the two lines
 # above; without it the whole workspace compiles and then the last crate fails to read it.
 COPY VERSION ./VERSION
+# Compile-time inputs of the bundled-resource workspace regression.
+COPY skills/builtin/study_tutor.json ./skills/builtin/study_tutor.json
+COPY skills/packs/study.json ./skills/packs/study.json
+COPY evals/golden/skills/skill_eval_cases.jsonl ./evals/golden/skills/skill_eval_cases.jsonl
 
 RUN cargo build \
     --locked \
@@ -66,14 +70,22 @@ COPY --from=builder \
     /app/rust/target/release/deepseek-gateway \
     /usr/local/bin/deepseek-gateway
 COPY static ./static
+COPY skills /app/bundle/skills
+COPY evals/golden/skills/skill_eval_cases.jsonl /app/bundle/evals/golden/skills/skill_eval_cases.jsonl
 COPY --from=frontend-builder /build/static/ui ./static/ui
-RUN test -f /app/static/ui/index.html
+RUN test -f /app/static/ui/index.html \
+    && mkdir -p /data \
+    && chown deepseek:deepseek /data
 
 ENV GATEWAY_BIND_ADDR=0.0.0.0:8787 \
     DEEPSEEK_INFRA_STATIC_DIR=/app/static \
+    DEEPSEEK_INFRA_ROOT=/data \
+    DEEPSEEK_INFRA_BUNDLE_ROOT=/app/bundle \
     DEEPSEEK_RUNTIME_MODE=python_disabled
 
 USER deepseek
+
+VOLUME ["/data"]
 
 EXPOSE 8787
 

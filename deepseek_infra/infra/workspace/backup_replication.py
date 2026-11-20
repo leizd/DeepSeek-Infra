@@ -40,6 +40,7 @@ from deepseek_infra.infra.workspace import (
     backup_transfer_budget,
     backup_writer_lease,
 )
+from deepseek_infra.infra.native_runtime.authority import assert_python_writer_allowed
 
 REPLICATION_DIR = config.ROOT / ".backup-replication"
 HOLDS_DIR = REPLICATION_DIR / "holds"
@@ -162,6 +163,7 @@ def _hold_path(hold_id: str) -> Path:
 
 
 def _atomic_write(path: Path, payload: dict[str, Any]) -> None:
+    assert_python_writer_allowed("backup_replication_store")
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.{os.getpid()}.{time.time_ns()}.tmp")
     data = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
@@ -2263,6 +2265,7 @@ def _load_cursors() -> dict[str, Any]:
 
 
 def _save_cursors(cursors: dict[str, Any]) -> None:
+    assert_python_writer_allowed("backup_replication_store")
     _atomic_write(CURSORS_PATH, cursors)
 
 

@@ -27,7 +27,7 @@ def _write(tmp_path: Path, report: dict) -> Path:
 
 
 def _advisory_via(url: str, name: str = "react-router") -> dict:
-    return {"title": "advisory", "url": url, "name": name, "severity": "high", "range": ">=7.12.0 <8.3.0"}
+    return {"title": "advisory", "url": url, "name": name, "severity": "high", "range": ">=7.12.0 <7.18.2"}
 
 
 def test_empty_report_passes(tmp_path: Path) -> None:
@@ -36,7 +36,7 @@ def test_empty_report_passes(tmp_path: Path) -> None:
     assert "PASS" in result.stdout
 
 
-def test_documented_rsc_advisory_exception_passes(tmp_path: Path) -> None:
+def test_retired_rsc_exception_blocks_direct_and_transitive_advisories(tmp_path: Path) -> None:
     report = {
         "vulnerabilities": {
             "react-router": {
@@ -52,9 +52,10 @@ def test_documented_rsc_advisory_exception_passes(tmp_path: Path) -> None:
         }
     }
     result = _run(_write(tmp_path, report))
-    assert result.returncode == 0, result.stdout
+    assert result.returncode == 1, result.stdout
     assert "GHSA-qwww-vcr4-c8h2" in result.stdout
-    assert "documented exception" in result.stdout
+    assert "react-router-dom" in result.stdout
+    assert "documented exception" not in result.stdout
 
 
 def test_unknown_high_advisory_blocks(tmp_path: Path) -> None:

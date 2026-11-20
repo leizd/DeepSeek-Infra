@@ -966,6 +966,8 @@ def run_dr_drill(
 
     Emits dr-readiness-proof-v1 and supports exact resilienceActionId idempotency.
     """
+    from deepseek_infra.infra.native_runtime.authority import assert_python_writer_allowed
+
     if resilience_action_id:
         for rec in _drill_records():
             if rec.get("resilienceActionId") == resilience_action_id or (
@@ -983,6 +985,7 @@ def run_dr_drill(
                     "resilienceActionId": resilience_action_id,
                 }
 
+    assert_python_writer_allowed("restore_staging_store")
     if is_dr_drill_running():
         raise AppError("Disaster recovery rehearsal is already running", code=ErrorCode.INVALID_REQUEST, status=409)
 

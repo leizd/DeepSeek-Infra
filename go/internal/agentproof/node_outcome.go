@@ -67,13 +67,16 @@ func VerifyAgentNodeOutcome(receipt *agentv1.AgentNodeOutcomeReceipt, intent *ag
 		evidence.NodeId == "" || evidence.NodeId != intent.NodeId || evidence.Phase != intent.Phase ||
 		(evidence.Phase != agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_PLAN && evidence.Phase != agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_TASKS && evidence.Phase != agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_SYNTHESIS) ||
 		(evidence.Phase == agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_PLAN && evidence.NodeId != "leader") ||
-		(evidence.Phase == agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_SYNTHESIS && (evidence.NodeId != "synthesizer" || evidence.TaskOutput == nil || len(evidence.ProviderPlan) != 0)) ||
+		(evidence.Phase == agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_SYNTHESIS && (evidence.NodeId != "synthesizer" || (evidence.Failure == nil && evidence.TaskOutput == nil) || len(evidence.ProviderPlan) != 0)) ||
 		!ValidNodeOutcomeArtifact(evidence.Request) || !proto.Equal(evidence.Request, intent.Request) || !ValidNodeOutcomeArtifact(evidence.PublicEvent) ||
 		!ValidNodeOutcomeDigest(evidence.PlanDigest) || evidence.PlanDigest != intent.PlanDigest || evidence.MetadataIndex < 0 ||
 		evidence.MetadataIndex != intent.MetadataIndex || evidence.MetadataEpoch == 0 || evidence.MetadataEpoch != intent.MetadataEpoch ||
 		evidence.WriterFencingToken != writerFencingToken || !ValidNodeOutcomeDigest(evidence.OutcomeSha256) || evidence.OutcomeLength == 0 ||
 		evidence.OutcomeLength > 1024*1024 || evidence.FleetId != binding.FleetID || evidence.Environment != binding.Environment ||
 		evidence.Fence.ActionId == "" || evidence.Fence.ExecutionEpoch == 0 {
+		return invalid()
+	}
+	if evidence.Failure != nil && !ValidTerminalFailure(evidence) {
 		return invalid()
 	}
 	// Historical task receipts may predate typed counters. Settlement separately

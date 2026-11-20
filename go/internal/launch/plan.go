@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -27,7 +26,7 @@ const (
 type Process struct {
 	Name string
 	Path string
-	// Env, when non-nil, isolates platform UI glue from control/provider secrets.
+	// Env, when non-nil, isolates native child roles and platform UI glue.
 	Env []string
 }
 
@@ -62,6 +61,9 @@ func ProductionPlanWithAddress(binDir, dataRoot, staticDir, address string) (Pla
 	if err != nil {
 		return Plan{}, fmt.Errorf("resolve static dir: %w", err)
 	}
+	if err := validateBundledResourceRoot(os.Getenv("DEEPSEEK_INFRA_BUNDLE_ROOT")); err != nil {
+		return Plan{}, err
+	}
 	names := []string{"deepseekd", "deepseek-worker", "deepseek-gateway"}
 	processes := make([]Process, 0, len(names))
 	for _, name := range names {
@@ -77,6 +79,15 @@ func ProductionPlanWithAddress(binDir, dataRoot, staticDir, address string) (Pla
 		return Plan{}, err
 	}
 	env := productionEnv(dataRoot, staticDir, controlListen, gatewayBind)
+	if !managedOperatorConfiguration(env) {
+		env = append(env, managedRequired+"=1")
+	}
+	if err := validatePrivateControlDeployment(env); err != nil {
+		return Plan{}, err
+	}
+	for index := range processes {
+		processes[index].Env = productionChildEnvironment(processes[index].Name, env)
+	}
 	return Plan{
 		Processes:  processes,
 		Env:        env,
@@ -113,6 +124,7 @@ func productionEnv(dataRoot, staticDir, controlListen, gatewayBind string) []str
 	values := map[string]string{
 		"DEEPSEEK_INFRA_ROOT":        dataRoot,
 		"DEEPSEEK_INFRA_STATIC_DIR":  staticDir,
+		"DEEPSEEK_INFRA_BUNDLE_ROOT": os.Getenv("DEEPSEEK_INFRA_BUNDLE_ROOT"),
 		"DEEPSEEK_RUNTIME_MODE":      runtimeMode,
 		"DEEPSEEKD_MODE":             controlMode,
 		"DEEPSEEKD_LISTEN":           controlListen,
@@ -128,10 +140,12 @@ func productionEnv(dataRoot, staticDir, controlListen, gatewayBind string) []str
 		"PATHEXT":                    os.Getenv("PATHEXT"),
 		"TEMP":                       os.Getenv("TEMP"),
 		"TMP":                        os.Getenv("TMP"),
+		"TMPDIR":                     os.Getenv("TMPDIR"),
 	}
 	order := []string{
 		"DEEPSEEK_INFRA_ROOT",
 		"DEEPSEEK_INFRA_STATIC_DIR",
+		"DEEPSEEK_INFRA_BUNDLE_ROOT",
 		"DEEPSEEK_RUNTIME_MODE",
 		"DEEPSEEKD_MODE",
 		"DEEPSEEKD_LISTEN",
@@ -147,6 +161,7 @@ func productionEnv(dataRoot, staticDir, controlListen, gatewayBind string) []str
 		"PATHEXT",
 		"TEMP",
 		"TMP",
+		"TMPDIR",
 	}
 	env := make([]string, 0, len(order)+len(operatorConfigKeys))
 	for _, key := range order {
@@ -163,7 +178,8 @@ func productionEnv(dataRoot, staticDir, controlListen, gatewayBind string) []str
 	// public listener can authenticate and reach the model provider. Interpreter
 	// paths stay out: PATH was already filtered above.
 	for _, key := range operatorConfigKeys {
-		if strings.HasPrefix(key, "DEEPSEEK_WORKER_S3_") || strings.HasPrefix(key, "DEEPSEEK_WORKER_CONTROL_SIGNER_") {
+		if strings.HasPrefix(key, "DEEPSEEK_WORKER_S3_") || strings.HasPrefix(key, "DEEPSEEK_WORKER_CONTROL_SIGNER_") ||
+			strings.HasPrefix(key, "DEEPSEEKD_INTERNAL_RPC_") || strings.HasPrefix(key, "DEEPSEEK_GO_CONTROL_RPC_") {
 			// Preserve even blank or whitespace-containing values: the worker
 			// validates the complete configuration, and credentials are exact.
 			if value, exists := os.LookupEnv(key); exists {
@@ -181,12 +197,15 @@ func productionEnv(dataRoot, staticDir, controlListen, gatewayBind string) []str
 }
 
 var operatorConfigKeys = []string{
+	"DEEPSEEK_MEDIA_PHASE_TIMING",
 	"AUTH_TOKEN",
 	"AUTH_DISABLED",
 	"DEEPSEEK_API_KEY",
 	"DEEPSEEK_DEFAULT_MODEL",
 	"TAVILY_API_KEY",
 	"OCR_MODE",
+	"DEEPSEEK_ANDROID_PLATFORM_OCR_ADDR",
+	"DEEPSEEK_ANDROID_PLATFORM_OCR_TOKEN",
 	"DEEPSEEK_APP_VERSION",
 	"AUTH_ALLOWED_HOSTS",
 	"DEEPSEEK_API_URL",
@@ -216,6 +235,15 @@ var operatorConfigKeys = []string{
 	"RUST_LOG",
 	"DEEPSEEKD_INTERNAL_BEARER",
 	"DEEPSEEK_INTERNAL_BEARER",
+	"DEEPSEEKD_INTERNAL_RPC_LISTEN",
+	"DEEPSEEKD_INTERNAL_RPC_TLS_CA_FILE",
+	"DEEPSEEKD_INTERNAL_RPC_TLS_CERT_FILE",
+	"DEEPSEEKD_INTERNAL_RPC_TLS_KEY_FILE",
+	"DEEPSEEK_GO_CONTROL_RPC_URL",
+	"DEEPSEEK_GO_CONTROL_RPC_TLS_CA_FILE",
+	"DEEPSEEK_GO_CONTROL_RPC_TLS_CERT_FILE",
+	"DEEPSEEK_GO_CONTROL_RPC_TLS_KEY_FILE",
+	"DEEPSEEK_GO_CONTROL_RPC_TLS_SERVER_NAME",
 	"DEEPSEEKD_CONTROL_AUTHORITY",
 	"DEEPSEEKD_MUTATION_SIGNER_KEY",
 	"DEEPSEEKD_PROMOTION_SIGNER_KEY",
@@ -256,10 +284,7 @@ func filteredPath(raw string) string {
 }
 
 func resolveBinary(binDir, name string) (string, error) {
-	candidates := []string{name}
-	if runtime.GOOS == "windows" {
-		candidates = []string{name + ".exe", name}
-	}
+	candidates := platformBinaryCandidates(name)
 	if strings.TrimSpace(binDir) != "" {
 		for _, candidate := range candidates {
 			path := filepath.Join(binDir, candidate)
@@ -290,10 +315,17 @@ type supervisorFence interface {
 }
 
 func Run(ctx context.Context, processes []Process, env []string, output io.Writer) error {
+	if launchEnvironmentValue(env, managedRequired) == "1" {
+		return runManagedRuntime(ctx, processes, env, output)
+	}
 	return runWithFence(ctx, processes, env, output, func() (supervisorFence, error) { return newProcessFence() })
 }
 
 func runWithFence(ctx context.Context, processes []Process, env []string, output io.Writer, createFence func() (supervisorFence, error)) error {
+	return runWithFenceAfterStart(ctx, processes, env, output, createFence, nil)
+}
+
+func runWithFenceAfterStart(ctx context.Context, processes []Process, env []string, output io.Writer, createFence func() (supervisorFence, error), afterStart func(int) error) error {
 	if len(processes) == 0 {
 		return errors.New("no production processes")
 	}
@@ -343,6 +375,14 @@ func runWithFence(ctx context.Context, processes []Process, env []string, output
 			waitAll(commands)
 			return fmt.Errorf("fence %s: %w", process.Name, err)
 		}
+		if afterStart != nil {
+			if err := afterStart(len(commands) - 1); err != nil {
+				cancel()
+				waitAll(commands)
+				return err
+			}
+		}
+
 	}
 	errorsCh := make(chan processExit, len(commands))
 	for index, cmd := range commands {

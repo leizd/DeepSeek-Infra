@@ -11,6 +11,7 @@ import (
 	"github.com/leizd/DeepSeek-Infra/go/internal/config"
 	agentv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/agentv1"
 	controlv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/controlv1"
+	mediav1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/mediav1"
 	"github.com/leizd/DeepSeek-Infra/go/internal/shadow"
 	"github.com/leizd/DeepSeek-Infra/go/internal/store"
 	"github.com/leizd/DeepSeek-Infra/go/pkg/protocol"
@@ -19,6 +20,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 // ControlPlaneHealth is the process-wide authority reported by the control RPC.
@@ -54,8 +56,12 @@ func HealthFor(cfg config.Config) ControlPlaneHealth {
 // All RPCs require a loopback peer and the same configured internal bearer as
 // /internal/*. An absent bearer denies all.
 func NewControlRPC(control *store.Control, bearer string, health ControlPlaneHealth) *grpc.Server {
-	server := grpc.NewServer(grpc.MaxRecvMsgSize(1<<20), grpc.MaxSendMsgSize(1<<20),
-		grpc.UnaryInterceptor(func(ctx context.Context, request any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+	server := grpc.NewServer(grpc.MaxRecvMsgSize(4<<20), grpc.MaxSendMsgSize(4<<20),
+		grpc.UnaryInterceptor(func(ctx context.Context, request any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+			limit := controlRPCMessageLimit(info.FullMethod)
+			if message, ok := request.(proto.Message); !ok || proto.Size(message) > limit {
+				return nil, status.Error(codes.ResourceExhausted, "CONTROL_RPC_MESSAGE_TOO_LARGE")
+			}
 			remote, ok := peer.FromContext(ctx)
 			if !ok || remote.Addr == nil {
 				return nil, status.Error(codes.Unauthenticated, "INTERNAL_API_UNAUTHORIZED")
@@ -70,7 +76,13 @@ func NewControlRPC(control *store.Control, bearer string, health ControlPlaneHea
 				subtle.ConstantTimeCompare([]byte(authorization[0]), []byte("Bearer "+bearer)) != 1 {
 				return nil, status.Error(codes.Unauthenticated, "INTERNAL_API_UNAUTHORIZED")
 			}
-			return handler(ctx, request)
+			response, err := handler(ctx, request)
+			if err == nil {
+				if message, ok := response.(proto.Message); ok && proto.Size(message) > limit {
+					return nil, status.Error(codes.ResourceExhausted, "CONTROL_RPC_MESSAGE_TOO_LARGE")
+				}
+			}
+			return response, err
 		}))
 	if health.MutationAuthority == "" {
 		health = ShadowHealth()
@@ -79,7 +91,9 @@ func NewControlRPC(control *store.Control, bearer string, health ControlPlaneHea
 	agentv1.RegisterAgentChatSchedulerServer(server, &agentChatService{health: health, limits: agent.ChatLimitsFromEnv()})
 	agentRun := &agentRunService{control: control, health: health}
 	agentv1.RegisterAgentRunControlServer(server, agentRun)
+	agentv1.RegisterAgentRunRecoveryControlServer(server, &agentRunRecoveryService{run: agentRun})
 	agentv1.RegisterAgentNodeControlServer(server, &agentNodeService{run: agentRun})
+	mediav1.RegisterMediaMutationControlServer(server, &mediaMutationService{control: control, health: health})
 	return server
 }
 
@@ -131,4 +145,15 @@ func (service *controlReadService) GetBackupPolicyRecipients(context.Context, *c
 		return nil, status.Error(codes.DataLoss, "GO_CONTROL_READ_FAILED")
 	}
 	return result, nil
+}
+
+// The transport can carry typed media trees, but every previously registered
+// control method retains its original 1 MiB request AND response limit.
+func controlRPCMessageLimit(method string) int {
+	switch method {
+	case mediav1.MediaMutationControl_GetClaim_FullMethodName, mediav1.MediaMutationControl_BeginDispatch_FullMethodName, mediav1.MediaMutationControl_RecordOutcome_FullMethodName:
+		return 4 << 20
+	default:
+		return 1 << 20
+	}
 }

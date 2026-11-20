@@ -12,12 +12,19 @@
     "test": "npm run build && node --test dist/test/*.test.js",
     "check": "npm run typecheck && npm test",
     "smoke:failover": "npm run build && node dist/smoke/failover.js",
+    "smoke:restore-completion": "npm run build && node dist/smoke/restore-completion.js",
+    "smoke:default-durability": "npm run build && node dist/smoke/default-durability.js",
+    "smoke:workspace-boundary": "npm run build && node dist/smoke/workspace-boundary.js",
+    "smoke:process-lifecycle": "npm run build && node dist/smoke/process-lifecycle.js",
+    "smoke:default-test-engine": "npm run build && node dist/smoke/default-test-engine.js",
+    "smoke:search-liveness": "npm run build && node dist/smoke/search-liveness.js",
+    "smoke:unicode-input-parity": "npm run build && node dist/smoke/unicode-input-parity.js",
     "start": "node dist/src/server.js"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "2.3.1",
-    "@modelcontextprotocol/node": "2.0.0",
-    "@modelcontextprotocol/server": "2.0.0",
+    "@modelcontextprotocol/node": "2.1.0",
+    "@modelcontextprotocol/server": "2.3.1",
     "@opentelemetry/api": "1.9.0",
     "@opentelemetry/exporter-metrics-otlp-http": "0.221.0",
     "@opentelemetry/exporter-trace-otlp-http": "0.221.0",
@@ -27,7 +34,7 @@
     "@opentelemetry/sdk-trace-node": "2.10.0",
     "@opentelemetry/semantic-conventions": "1.43.0",
     "redis": "6.1.0",
-    "zod": "4.2.0"
+    "zod": "4.6.6"
   },
   "devDependencies": {
     "@types/node": "24.10.0",

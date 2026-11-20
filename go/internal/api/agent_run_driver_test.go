@@ -10,6 +10,7 @@ import (
 	"errors"
 	"log"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -25,18 +26,106 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+func TestAgentDriverSafeConfigurationFailuresRemainRedacted(t *testing.T) {
+	const secret = "private-provider-credential-fixture"
+	for _, entry := range []struct {
+		err  error
+		want string
+	}{
+		{worker.ErrControlSignerResponse, "AGENT_DRIVER_SIGNER_BINDING_INVALID"},
+		{worker.ErrWorkerTLSConfigInvalid, "AGENT_DRIVER_WORKER_TRANSPORT_INVALID"},
+		{errAgentDriverUnknown, "AGENT_DRIVER_EFFECT_UNCONFIRMED"},
+		{errors.Join(errAgentDriverUnknown, worker.ErrControlSignerResponse), "AGENT_DRIVER_EFFECT_UNCONFIRMED"},
+		{context.Canceled, "AGENT_DRIVER_CANCELLED"},
+		{errors.New("unclassified"), "AGENT_DRIVER_AUTHORITY_OR_TRANSPORT_UNAVAILABLE"},
+	} {
+		code := driverErrorCode(errors.Join(entry.err, errors.New(secret)))
+		if code != entry.want || strings.Contains(code, secret) {
+			t.Fatal("safe diagnostic changed effect semantics or exposed a credential")
+		}
+	}
+}
+
+func TestDriverRecoveryKeepsCancellationHistoryAndCompletesOnlySelectedTasks(t *testing.T) {
+	run := agent.RunMetadata{Status: "running", Cancelled: true, CancellationGeneration: 0,
+		Plan:      []agent.RunPlanNode{{ID: "coder", Task: "write"}, {ID: "critic", Task: "review"}},
+		BaseNodes: map[string]agent.RunNode{"coder": {ID: "coder", State: "succeeded"}, "critic": {ID: "critic", State: "failed", Failed: true}},
+		Recovery:  &agent.RunRecoveryScope{Generation: 1, Metadata: &agentv1.AgentRunRecoveryContext{Execute: []*agentv1.AgentRunPlanNode{{Id: "researcher", Task: "selected outside the public plan"}}}}}
+	if !driverRunnable(run) || driverTasksComplete(run) {
+		t.Fatal("old cancellation prevented the committed selection, or work was skipped")
+	}
+	run.BaseNodes["researcher"] = agent.RunNode{ID: "researcher", State: "succeeded"}
+	if !driverTasksComplete(run) || !run.Cancelled || len(run.Plan) != 2 {
+		t.Fatal("completion demanded unrelated tasks or erased history")
+	}
+	run.CancellationGeneration = 1
+	if driverRunnable(run) {
+		t.Fatal("new generation cancellation was ignored")
+	}
+}
+
 // Offline signed worker fixtures qualify Go orchestration and refusal behavior;
 // they never qualify Rust custody, a provider or the public native process path.
 type driverFixtureWorker struct {
-	t         *testing.T
-	nodes     *agentNodeService
-	private   ed25519.PrivateKey
-	binding   worker.ControlSignerBinding
-	effects   map[string]*agentv1.AgentNodeEffectMetadata
-	calls     []string
-	fail      string
-	failAfter string
-	closes    int
+	t     *testing.T
+	nodes *agentNodeService
+	// mu guards the fields the driver goroutine writes and the test reads. Without it
+	// the recorder is a plain unsynchronised slice shared across goroutines: safe only
+	// while the timing happens to work out, which is exactly the property that made
+	// these tests fail under load.
+	mu         sync.Mutex
+	effects    map[string]*agentv1.AgentNodeEffectMetadata
+	calls      []string
+	fail       string
+	failAfter  string
+	rejectNode string
+	closes     int
+	private    ed25519.PrivateKey
+	binding    worker.ControlSignerBinding
+}
+
+// recordCall appends a dispatched node and reports the resulting sequence, so the
+// caller can wait on it instead of sleeping.
+func (fixture *driverFixtureWorker) recordCall(id string) {
+	fixture.mu.Lock()
+	fixture.calls = append(fixture.calls, id)
+	fixture.mu.Unlock()
+}
+
+// callSequence returns a snapshot of the recorded nodes.
+func (fixture *driverFixtureWorker) callSequence() string {
+	fixture.mu.Lock()
+	defer fixture.mu.Unlock()
+	return strings.Join(fixture.calls, ",")
+}
+
+// putEffect records an effect under the same lock as the rest of the shared state.
+func (fixture *driverFixtureWorker) putEffect(operation string, effect *agentv1.AgentNodeEffectMetadata) {
+	fixture.mu.Lock()
+	fixture.effects[operation] = proto.Clone(effect).(*agentv1.AgentNodeEffectMetadata)
+	fixture.mu.Unlock()
+}
+
+// effect returns the recorded effect for an operation, or nil.
+func (fixture *driverFixtureWorker) effectFor(operation string) *agentv1.AgentNodeEffectMetadata {
+	fixture.mu.Lock()
+	defer fixture.mu.Unlock()
+	return fixture.effects[operation]
+}
+
+// waitForCalls blocks until the recorded sequence equals want, or the deadline
+// expires. It returns whether the sequence matched.
+func (fixture *driverFixtureWorker) waitForCalls(want string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		if fixture.callSequence() == want {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 func (fixture *driverFixtureWorker) AuthorizeAgentExecution(_ context.Context, claim *agentv1.AgentRunExecutionClaim, id, nonce string, binding worker.ControlSignerBinding) ([]byte, error) {
@@ -79,7 +168,7 @@ func (fixture *driverFixtureWorker) execute(ctx context.Context, claim *agentv1.
 	if !admitted.Fresh {
 		fixture.t.Fatal("fixture was asked to dispatch twice", id)
 	}
-	fixture.calls = append(fixture.calls, id)
+	fixture.recordCall(id)
 	effect := &agentv1.AgentNodeEffectMetadata{OperationId: intent.OperationId, Fence: intent.Fence, RunId: intent.RunId, NodeId: id, State: "CONFIRMED",
 		PublicEvent: driverFixtureReference("event:" + id), OutcomeSha256: strings.Repeat("a", 64), OutcomeLength: 50}
 	receipt := &agentv1.AgentNodeOutcomeReceipt{SchemaVersion: 1, SignerPublicKey: fixture.binding.PublicKey, Evidence: &agentv1.AgentNodeOutcomeEvidence{
@@ -93,9 +182,14 @@ func (fixture *driverFixtureWorker) execute(ctx context.Context, claim *agentv1.
 		receipt.Evidence.TaskOutput = &agentv1.AgentTaskOutputMetadata{SchemaVersion: 1, PromptTokens: 13, CompletionTokens: 21, LatencyMs: 120}
 		receipt.Evidence.TaskOutput.Failed = fixture.fail == "confirmed-failed-task" && id == "coder"
 	}
+	if id == fixture.rejectNode {
+		receipt.Evidence.ProviderPlan = nil
+		receipt.Evidence.TaskOutput = nil
+		receipt.Evidence.Failure = &agentv1.AgentProviderFailureMetadata{SchemaVersion: 1, HttpStatus: 401, ResponseSha256: strings.Repeat("f", 64)}
+	}
 	receipt.Signature = fixture.signed(receipt.Evidence, agentproof.NodeOutcomeDomain)
 	effect.OutcomeReceipt = receipt
-	fixture.effects[intent.OperationId] = proto.Clone(effect).(*agentv1.AgentNodeEffectMetadata)
+	fixture.putEffect(intent.OperationId, effect)
 	if fixture.fail == "tools" && id == "coder" {
 		effect.State = "AWAITING_TOOLS"
 		effect.OutcomeReceipt = nil
@@ -104,7 +198,7 @@ func (fixture *driverFixtureWorker) execute(ctx context.Context, claim *agentv1.
 		effect.State = "EFFECT_UNKNOWN"
 		effect.OutcomeReceipt = nil
 	}
-	fixture.effects[intent.OperationId] = proto.Clone(effect).(*agentv1.AgentNodeEffectMetadata)
+	fixture.putEffect(intent.OperationId, effect)
 	if fixture.fail == "nil" {
 		return nil, nil
 	}
@@ -130,7 +224,7 @@ func (fixture *driverFixtureWorker) QueryAgentNodeEffect(_ context.Context, inpu
 	if fixture.fail == "query" {
 		return nil, context.DeadlineExceeded
 	}
-	effect := fixture.effects[input.OperationId]
+	effect := fixture.effectFor(input.OperationId)
 	if effect == nil {
 		return nil, errAgentDriverUnknown
 	}
@@ -140,7 +234,7 @@ func (fixture *driverFixtureWorker) ProjectAgentPlan(_ context.Context, input *a
 	if fixture.fail == "plan-projection" {
 		return nil, context.DeadlineExceeded
 	}
-	raw, err := proto.MarshalOptions{Deterministic: true}.Marshal(fixture.effects[input.Source.OperationId].OutcomeReceipt)
+	raw, err := proto.MarshalOptions{Deterministic: true}.Marshal(fixture.effectFor(input.Source.OperationId).OutcomeReceipt)
 	if err != nil {
 		fixture.t.Fatal(err)
 	}
@@ -160,11 +254,36 @@ func (fixture *driverFixtureWorker) ProjectAgentPlan(_ context.Context, input *a
 	}
 	return receipt, nil
 }
+func (fixture *driverFixtureWorker) ProjectAgentFailure(_ context.Context, input *agentv1.ProjectAgentFailureRequest) (*agentv1.AgentFailureProjectionReceipt, error) {
+	if fixture.fail == "failure-projection" {
+		return nil, context.DeadlineExceeded
+	}
+	effect := fixture.effectFor(input.Source.OperationId)
+	raw, err := proto.MarshalOptions{Deterministic: true}.Marshal(effect.OutcomeReceipt)
+	if err != nil {
+		fixture.t.Fatal(err)
+	}
+	digest := sha256.Sum256(raw)
+	if input.Source.ExpectedReceiptSha256 != hex.EncodeToString(digest[:]) {
+		fixture.t.Fatal("failure projection did not pin the original signed receipt")
+	}
+	evidence := &agentv1.AgentFailureProjectionEvidence{SchemaVersion: 1, SourceReceiptSha256: hex.EncodeToString(digest[:]),
+		SettlementFence: input.SettlementFence, SettlementWriterToken: input.SettlementWriterToken, RunId: input.Source.RunId,
+		MetadataEpoch: input.MetadataEpoch, ExpectedIndex: input.ExpectedIndex, Phase: effect.OutcomeReceipt.Evidence.Phase, ErrorBody: effect.PublicEvent,
+		FleetId: mutationFleetID, Environment: mutationEnvironment}
+	receipt := &agentv1.AgentFailureProjectionReceipt{SchemaVersion: 1, SignerPublicKey: fixture.binding.PublicKey, Evidence: evidence,
+		Signature: fixture.signed(evidence, agentproof.FailureProjectionDomain)}
+	if fixture.fail == "failure-proof" {
+		receipt.Signature[0] ^= 1
+	}
+	return receipt, nil
+}
+
 func (fixture *driverFixtureWorker) ProjectAgentSynthesis(_ context.Context, input *agentv1.ProjectAgentSynthesisRequest) (*agentv1.AgentSynthesisProjectionReceipt, error) {
 	if fixture.fail == "synthesis-projection" {
 		return nil, context.DeadlineExceeded
 	}
-	effect := fixture.effects[input.Source.OperationId]
+	effect := fixture.effectFor(input.Source.OperationId)
 	raw, err := proto.MarshalOptions{Deterministic: true}.Marshal(effect.OutcomeReceipt)
 	if err != nil {
 		fixture.t.Fatal(err)
@@ -182,11 +301,15 @@ func (fixture *driverFixtureWorker) ProjectAgentSynthesis(_ context.Context, inp
 	return receipt, nil
 }
 
-func driverFixtureAuthority(t *testing.T, key string) *store.Control {
+func driverFixtureAuthority(t *testing.T, key string, clocks ...func() int64) *store.Control {
 	t.Helper()
-	control, err := store.OpenControl(store.OpenOptions{Path: t.TempDir(), Owner: "agent-driver-unit-test", LeaseSeconds: 600,
+	options := store.OpenOptions{Path: t.TempDir(), Owner: "agent-driver-unit-test", LeaseSeconds: 600,
 		AuthorizeCutover: true, PromotionSignerPublicKey: promotionRoutePublic, AgentOutcomeSignerPublicKey: key,
-		FleetID: mutationFleetID, Environment: mutationEnvironment})
+		FleetID: mutationFleetID, Environment: mutationEnvironment}
+	if len(clocks) != 0 {
+		options.Now = clocks[0]
+	}
+	control, err := store.OpenControl(options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,11 +335,11 @@ func driverFixtureAuthority(t *testing.T, key string) *store.Control {
 	return control
 }
 
-func newDriverFixture(t *testing.T, confirm bool) (*agentRunDriver, *driverFixtureWorker, agent.RunMetadata) {
+func newDriverFixture(t *testing.T, confirm bool, clocks ...func() int64) (*agentRunDriver, *driverFixtureWorker, agent.RunMetadata) {
 	t.Helper()
 	private := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{31}, ed25519.SeedSize)) // offline fixture only
 	key := base64.RawURLEncoding.EncodeToString(private.Public().(ed25519.PublicKey))
-	control := driverFixtureAuthority(t, key)
+	control := driverFixtureAuthority(t, key, clocks...)
 	service := &agentRunService{control: control, health: HealthFor(config.Config{Mode: config.ModeAuthoritative})}
 	authority, err := service.GetAuthority(context.Background(), &agentv1.AgentRunAuthorityInput{})
 	if err != nil {
@@ -616,7 +739,17 @@ func TestAgentDriverCannotTakeAStillLiveForeignClaim(t *testing.T) {
 }
 
 func TestAgentDriverExpiredClaimOnlyAdmitsReconciliationWithNoFreshEffect(t *testing.T) {
-	driver, fixture, run := newDriverFixture(t, false)
+	// A one-second wall-clock claim can expire inside the WASM SQLite commit.
+	// Freeze only after fixture initialization, then cross the actual returned
+	// lease boundary. Real UTC custody/takeover remains a separate process gate.
+	var frozen atomic.Int64
+	driver, fixture, run := newDriverFixture(t, false, func() int64 {
+		if now := frozen.Load(); now != 0 {
+			return now
+		}
+		return time.Now().UTC().Unix()
+	})
+	frozen.Store(time.Now().UTC().Unix())
 	authority, err := driver.service.GetAuthority(context.Background(), &agentv1.AgentRunAuthorityInput{})
 	if err != nil {
 		t.Fatal(err)
@@ -631,9 +764,10 @@ func TestAgentDriverExpiredClaimOnlyAdmitsReconciliationWithNoFreshEffect(t *tes
 		t.Fatal(err)
 	}
 	claim := admitted.Claim
-	for time.Now().Unix() <= claim.LeaseUntil {
-		time.Sleep(20 * time.Millisecond)
+	if claim.LeaseUntil != frozen.Load()+1 {
+		t.Fatal("claim did not retain the requested lease boundary")
 	}
+	frozen.Store(claim.LeaseUntil + 1)
 	record, found, err := driver.service.control.Get("action", claim.Fence.ActionId)
 	if err != nil || !found {
 		t.Fatal(err)
@@ -651,21 +785,37 @@ func TestAgentDriverExpiredClaimOnlyAdmitsReconciliationWithNoFreshEffect(t *tes
 	if !errors.Is(err, errAgentDriverUnknown) || len(fixture.calls) != 0 {
 		t.Fatal("missing original custody redispatched an effect", err)
 	}
+	actions, err := driver.service.control.ListAuthoritativeRecords("action")
+	if err != nil || len(actions) != 1 || actions[0].ID != claim.Fence.ActionId || actions[0].State != "RECONCILING" {
+		t.Fatal("takeover invented an action or completed an unknown effect", err)
+	}
+	resources, err := driver.service.control.GetResourceLeases(claim.Fence.ActionId)
+	if err != nil || len(resources) != 1 || driverFixtureRun(t, driver, run.RunID).NextIndex != run.NextIndex {
+		t.Fatal("reconciliation released custody or fabricated public progress", err)
+	}
 }
 
-func TestAgentDriverSignedFailedTaskBlocksItsDependentAndSynthesis(t *testing.T) {
+func TestAgentDriverSignedFailedTaskRetainsFailureThroughDependentAndSynthesis(t *testing.T) {
 	driver, fixture, run := newDriverFixture(t, false)
-	if err := driver.drive(context.Background(), run); err != nil {
+	fixture.fail = "confirmed-failed-task"
+	for phase := 0; phase < 3; phase++ {
+		if err := driver.drive(context.Background(), run); err != nil {
+			t.Fatal("phase", phase, err)
+		}
+		run = driverFixtureRun(t, driver, run.RunID)
+	}
+	if run.Status != "done" || !run.Nodes()["coder"].Failed || run.Nodes()["coder"].State != "failed" || run.Nodes()["critic"].State != "succeeded" || strings.Join(fixture.calls, ",") != "leader,coder,critic,synthesizer" {
+		t.Fatal("signed failure was lost or retried", run.Status, fixture.calls)
+	}
+	records, err := driver.service.control.ListAuthoritativeRecords("action")
+	if err != nil || len(records) != 3 {
 		t.Fatal(err)
 	}
-	run = driverFixtureRun(t, driver, run.RunID)
-	fixture.fail = "confirmed-failed-task"
-	if err := driver.drive(context.Background(), run); !errors.Is(err, errAgentDriverUnknown) {
-		t.Fatal("failed task admitted downstream effects", err)
-	}
-	run = driverFixtureRun(t, driver, run.RunID)
-	if !run.Nodes()["coder"].Failed || run.Nodes()["critic"].State == "succeeded" || run.Status == "done" || strings.Join(fixture.calls, ",") != "leader,coder" {
-		t.Fatal("failed task was replaced by fabricated completion", run.Status, fixture.calls)
+	for _, record := range records {
+		resources, err := driver.service.control.GetResourceLeases(record.ID)
+		if err != nil || len(resources) != 0 || record.State != "SUCCEEDED" {
+			t.Fatal("settled phase retained custody", err)
+		}
 	}
 }
 
@@ -675,12 +825,25 @@ func TestAgentDriverLoopKeepsUnknownAndToolsPendingCustodyWithoutRedispatch(t *t
 			driver, fixture, run := newDriverFixture(t, false)
 			fixture.fail = failure
 			cancel, done := driverFixtureLoop(t, driver)
-			time.Sleep(4300 * time.Millisecond)
+			// Wait for the state under test rather than for a duration. A fixed 4300ms
+			// was long enough only when this package ran alone: with the store race
+			// shards running beside it, the driver loop is slow enough that the sleep
+			// expires before `coder` has been dispatched, and the assertion then fails
+			// with "uncertain custody was redispatched" on a run that did nothing wrong.
+			if !fixture.waitForCalls("leader,coder", 60*time.Second) {
+				cancel()
+				<-done
+				t.Fatalf("driver never dispatched leader then coder; calls=%q", fixture.callSequence())
+			}
+			// Hold the state briefly so a redispatch attempt would have time to appear,
+			// then let the driver settle. This is a guard against a late second dispatch,
+			// not the trigger for the assertion.
+			time.Sleep(200 * time.Millisecond)
 			cancel()
 			<-done
 			run = driverFixtureRun(t, driver, run.RunID)
-			if run.Status == "done" || strings.Join(fixture.calls, ",") != "leader,coder" {
-				t.Fatal("uncertain custody was redispatched or fabricated completion", run.Status, fixture.calls)
+			if run.Status == "done" || fixture.callSequence() != "leader,coder" {
+				t.Fatal("uncertain custody was redispatched or fabricated completion", run.Status, fixture.callSequence())
 			}
 			records, err := driver.service.control.ListAuthoritativeRecords("action")
 			if err != nil || len(records) != 2 {

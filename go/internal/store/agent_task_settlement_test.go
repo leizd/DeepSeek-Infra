@@ -81,7 +81,7 @@ func TestTaskSettlementCommitsCompletionAndVerifiedDependencyWithoutReleasingPha
 	}
 }
 
-func TestFailedTaskAndHistoricalReceiptNeverAuthorizeDependentWork(t *testing.T) {
+func TestSignedFailedTaskCanInformDependentsButHistoricalReceiptCannot(t *testing.T) {
 	for _, name := range []string{"failed", "historical-without-counters"} {
 		t.Run(name, func(t *testing.T) {
 			var control *Control
@@ -100,8 +100,13 @@ func TestFailedTaskAndHistoricalReceiptNeverAuthorizeDependentWork(t *testing.T)
 			} else if !errors.Is(err, ErrAgentNodeOutcomeRequired) || countControlEvents(t, control) != before {
 				t.Fatalf("historical proof fabricated counters/completion: %v", err)
 			}
-			if _, err := control.BeginAgentNodeDispatch(taskDependentRequest(input)); !errors.Is(err, ErrAgentNodeDependencyUnverified) {
-				t.Fatalf("failed/incomplete predecessor was admitted: %v", err)
+			next, dispatchErr := control.BeginAgentNodeDispatch(taskDependentRequest(input))
+			if name == "failed" {
+				if dispatchErr != nil || !next.Fresh {
+					t.Fatalf("signed failure did not inform dependent work: %v", dispatchErr)
+				}
+			} else if !errors.Is(dispatchErr, ErrAgentNodeDependencyUnverified) {
+				t.Fatalf("historical incomplete predecessor was admitted: %v", dispatchErr)
 			}
 			resources, err := control.GetResourceLeases(input.ActionID)
 			if err != nil || len(resources) != 1 {

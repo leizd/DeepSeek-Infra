@@ -218,7 +218,7 @@ async fn federation_snapshot_matches_the_pure_builder_without_creating_a_store()
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(
         body,
-        json!({"error": {"code": "UNAUTHORIZED", "message": "Auth required"}})
+        json!({"error": "Auth required", "code": "unauthorized"})
     );
 
     let oracle_plan = json!({
@@ -300,11 +300,13 @@ async fn federation_snapshot_matches_the_pure_builder_without_creating_a_store()
     assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
     assert_eq!(body, json!({"detail": "Method Not Allowed"}));
 
+    // `journal` is served natively (it was Go-proxied before): an empty workspace
+    // answers the oracle's empty list and still creates no store.
     let (status, body, _) = fixture
         .request("GET", "/api/workspace/resilience/journal", true)
         .await;
-    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(body["error"]["code"], "GO_CONTROL_PROXY_NOT_READY");
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, json!([]));
     assert!(!root.join(".resilience-journal").exists());
     assert_eq!(std::fs::read_dir(root).unwrap().count(), 0);
 }

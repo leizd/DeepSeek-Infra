@@ -61,7 +61,11 @@ const (
 	SchemaV14      = 14
 	SchemaV15      = 15
 	SchemaV16      = 16
-	CurrentSchema  = SchemaV16
+	SchemaV17      = 17
+	SchemaV18      = 18
+	SchemaV19      = 19
+	SchemaV20      = 20
+	CurrentSchema  = SchemaV20
 )
 
 var controlTableNames = [...]string{
@@ -138,25 +142,57 @@ var fencedDomains = map[string]bool{
 }
 
 var pythonPathParts = map[string]bool{
-	".backup-control":       true,
-	".backup-scheduler":     true,
-	".backup-policies":      true,
-	".backup-targets":       true,
-	".resilience-journal":   true,
-	".resilience-risk":      true,
-	".resilience-waves":     true,
-	".resilience-scheduler": true,
-	".resilience-capacity":  true,
-	".resilience-slo":       true,
-	".resilience-cost":      true,
-	".resilience-optimizer": true,
-	".resilience-policy":    true,
-	".federation":           true,
-	".agent-runs":           true,
-	".a2a":                  true,
-	".backup-drains":        true,
-	".backup-retirements":   true,
-	".backup-dr":            true,
+	".memory":                     true,
+	".projects":                   true,
+	".local-rag":                  true,
+	".file-cache":                 true,
+	".skills":                     true,
+	".reminders":                  true,
+	".automation":                 true,
+	".scheduler":                  true,
+	".budget":                     true,
+	".traces":                     true,
+	".media":                      true,
+	".semantic-cache":             true,
+	".search-cache":               true,
+	".request-queue":              true,
+	".tools":                      true,
+	".tool-audit":                 true,
+	".generated":                  true,
+	".browser-audit":              true,
+	".browser-downloads":          true,
+	".browser-profiles":           true,
+	".backups":                    true,
+	".backup-mirror":              true,
+	".backup-catalog":             true,
+	".backup-retention":           true,
+	".backup-spool":               true,
+	".backup-run-plans":           true,
+	".backup-index":               true,
+	".backup-continuity":          true,
+	".backup-rebalance":           true,
+	".backup-component-cache":     true,
+	".backup-authority-retention": true,
+	".backup-replication":         true,
+	".backup-control":             true,
+	".backup-scheduler":           true,
+	".backup-policies":            true,
+	".backup-targets":             true,
+	".resilience-journal":         true,
+	".resilience-risk":            true,
+	".resilience-waves":           true,
+	".resilience-scheduler":       true,
+	".resilience-capacity":        true,
+	".resilience-slo":             true,
+	".resilience-cost":            true,
+	".resilience-optimizer":       true,
+	".resilience-policy":          true,
+	".federation":                 true,
+	".agent-runs":                 true,
+	".a2a":                        true,
+	".backup-drains":              true,
+	".backup-retirements":         true,
+	".backup-dr":                  true,
 }
 
 var pythonStoreFiles = map[string]bool{
@@ -192,8 +228,10 @@ var transitions = map[string]map[string][]string{
 	},
 	"target": {
 		"":         {"ACTIVE"},
-		"ACTIVE":   {"DRAINING", "DISABLED"},
-		"DRAINING": {"DRAINED"},
+		"ACTIVE":   {"ACTIVE", "DRAINING", "DISABLED", TombstoneState},
+		"DRAINING": {"DRAINING", "DRAINED", "ACTIVE", TombstoneState},
+		"DRAINED":  {"DRAINED", "ACTIVE", TombstoneState},
+		"DISABLED": {"DISABLED", "ACTIVE", TombstoneState},
 	},
 	"scheduler_run": {
 		"":       {"queued"},

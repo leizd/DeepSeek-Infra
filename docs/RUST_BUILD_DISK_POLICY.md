@@ -127,6 +127,8 @@ Rust 构建使用上述入口；直接 Cargo 不包含包装器的余量监测�
 
 ## 实测原因与处理
 
+本节容量为当时测量记录，不代表当前磁盘占用；本任务的原生构建和缓存现留在云端。
+
 Windows GNU 测试程序即使关闭 DWARF，仍可能携带很大的 COFF 符号表和
 字符串表。实测 `/api/chat` 测试程序原为 74,578,432 字节，其中约
 23.90 MB 是这类表。仅裁剪调试信息减少约 0.77 MB；裁剪普通符号后的
@@ -141,13 +143,32 @@ Windows GNU 测试程序即使关闭 DWARF，仍可能携带很大的 COFF 符�
 ## 默认配置
 
 - `dev` 与继承它的 `test`：关闭调试信息和增量编译，裁剪普通符号。
-  优化级别仍为 0，调试断言、整数溢出检查和栈展开保持 Cargo 默认值。
+  工作区默认优化级别仍为 0；实测热路径的例外是 `deepseek-worker` 的级别 3，
+  以及已锁定依赖 `sha2@0.10.9` 的级别 3。调试断言、整数溢出检查和栈展开保留，
+  两个开发优化覆盖项明确启用断言及溢出检查，其他工作区包的编译设置保持原样。
 - `release`：保留原有 LTO，裁剪符号。
 - `diagnostic`：完整调试信息，保留符号，供源码调试使用。
+  worker 与上述 SHA-256 依赖明确恢复到优化级别 0。
 - `coverage`：保留 LLVM 覆盖率映射和符号，关闭 DWARF 调试信息。
   覆盖率的源码位置来自独立嵌入的映射，避免每个测试程序重复携带 DWARF。
   覆盖率仍测完整工作区和全部特性，原始 80% 门槛和生成 Protobuf
-  排除规则保持不变。
+  排除规则保持不变。worker 在该配置中明确保持原来的优化级别 0，
+  不用开发构建的优化覆盖项改变工作区覆盖率测量方式。
+
+144,182,145 字节媒体库的同一云端 HTTP 工作负载中，`9d217aee` 的
+捕获/摘要耗时为 7.233857 秒，`6f3603c0` 为 0.194434 秒；后者仍在
+原始 10 秒请求期限内停留在完整文档验证及原始记录暂存阶段。
+`2dde10d7` 将 worker 开发优化设为 1 后，捕获为 0.187387 秒，完整文档
+验证及原始记录暂存仍耗时 9.093471 秒；实际请求在规范化阶段触及
+10.010559 秒超时，结果仍是 `EFFECT_UNKNOWN`，原请求未重试。
+本次只将 worker 开发优化从 1 提高到 3。依据
+[Cargo 对泛型优化覆盖的说明](https://doc.rust-lang.org/cargo/reference/profiles.html#overrides-and-generics)，
+级别 2 或 3 不导入其他 crate 已单态化的泛型实例；是否改善本项目的
+实际阶段耗时仍需测量。worker 的开发构建优化用于验证实例化的泛型代码，
+不替换摘要或 JSON 实现，不增加输入上限，也不放宽期限、测试清单或覆盖率门槛。
+这项新增覆盖仍待精确提交的实际云端请求复测；`release` 默认设置不变，
+上述测量不代表发行构建的性能改善或全产品验收通过。本机继续只做源码检查，
+原生编译、测试、容器、缓存和平台产物留在云端。
 
 Rust 的插桩覆盖率在二进制中独立嵌入源码区域映射，详情见
 [rustc 覆盖率文档](https://doc.rust-lang.org/rustc/instrument-coverage.html)。
@@ -347,3 +368,13 @@ was C: +1.7 GiB and D: +73.6 GiB. The exact remaining 34 Go archives and referen
 build records are recorded in `artifacts/native-20261011-go-docker-cloud/cleanup-summary.json`.
 See [cloud verification](NATIVE_CLOUD_VERIFICATION.md) for current execution and
 qualification status. Local native compilation remains disabled on this host.
+
+### 共享媒体读取代码的构建配置（2026-11-03）
+
+媒体记录的具体解码、校验、归一化和临时索引从 worker 共享到 policy，网关也使用该实现逐条读取。
+因此 policy 与 gateway 的日常 dev/test 配置设为 `opt-level = 3`，保持断言和整数溢出检查；
+它们的 coverage 与 diagnostic 配置明确保持 `opt-level = 0`，release 配置不变。
+此前实测的 144182145 字节是媒体库大小，HTTP PATCH 请求体为 76 字节，原 10 秒超时保持不变。
+父提交 `00a11f3d` 已在该受控案例中成功，新共享读取源码仍须独立云端验证。
+每条记录及响应仍完整保留；本改动不引入容量上限。单条记录宽度与整应用峰值内存仍需继续验收。
+所有 Rust/Go 编译、测试、容器与构建缓存继续留在云端，本机只做格式、源码检查和报告核验。

@@ -16,6 +16,8 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.InetAddress;
@@ -64,6 +66,16 @@ public class NativeRuntimeIntegrationTest {
         return new JSONObject(new String(request(method, path, body, expected), StandardCharsets.UTF_8));
     }
 
+    private byte[] readFile(File file) throws Exception {
+        try (InputStream input = new FileInputStream(file); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            byte[] buffer = new byte[8192];
+            for (int count; (count = input.read(buffer)) != -1;) {
+                output.write(buffer, 0, count);
+            }
+            return output.toByteArray();
+        }
+    }
+
     @Test
     public void packagedRuntimeCreatesRunsDownloadsAndRecoversPersistedState() throws Exception {
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
@@ -71,14 +83,27 @@ public class NativeRuntimeIntegrationTest {
         try {
             token = Uri.parse(runtime.start()).getQueryParameter("token");
             assertNotNull(token);
+            File data = context.getFilesDir().getCanonicalFile();
+            File resources = context.getDir("native-assets", Context.MODE_PRIVATE).getCanonicalFile();
+            File logs = context.getDir("native-logs", Context.MODE_PRIVATE).getCanonicalFile();
+            assertFalse(resources.getPath().startsWith(data.getPath() + File.separator));
+            assertFalse(logs.getPath().startsWith(data.getPath() + File.separator));
+            assertTrue(new File(resources, "static/ui/index.html").isFile());
+            File goldenFile = new File(resources, "evals/golden/skills/skill_eval_cases.jsonl");
+            byte[] goldenBefore = readFile(goldenFile);
+            assertTrue(goldenBefore.length > 0);
+            for (String directory : new String[]{"static", "skills", "evals", ".native-runtime-logs"}) {
+                assertFalse("bundled resources polluted authoritative data", new File(data, directory).exists());
+            }
             assertTrue(json("GET", "/healthz", null, 200).getBoolean("ok"));
             JSONObject config = json("GET", "/api/config", null, 200);
             assertTrue(config.getJSONArray("models").length() > 0);
             assertEquals(200_000_000, config.getJSONObject("uploadLimits").getInt("fileMaxBytes"));
             JSONObject authority = json("GET", "/api/control/status", null, 200);
-            assertEquals("shadow", authority.getString("mode"));
-            assertTrue(authority.getBoolean("shadowStore"));
-            assertFalse(authority.getBoolean("productionMutation"));
+            assertEquals("authoritative", authority.getString("mode"));
+            assertEquals("go", authority.getString("mutationAuthority"));
+            assertFalse(authority.getBoolean("shadowStore"));
+            assertTrue(authority.getBoolean("productionMutation"));
             String savedToken = token;
             token = null;
             request("POST", "/api/skills", new JSONObject("{\"action\":\"list\"}"), 401);
@@ -102,6 +127,9 @@ public class NativeRuntimeIntegrationTest {
             assertFalse(run.getJSONObject("analytics").getString("inputSummary").contains("fixture-secret"));
             String download = run.getJSONArray("artifacts").getJSONObject(0).getString("downloadUrl");
             assertTrue(new String(request("GET", download, null, 200), StandardCharsets.UTF_8).contains("App sandbox persistence"));
+            assertTrue(new File(data, ".skills/custom/apk-native-test.json").isFile());
+            assertFalse(new File(resources, ".skills").exists());
+            assertArrayEquals(goldenBefore, readFile(goldenFile));
             assertTrue(new String(request("GET", "/", null, 200), StandardCharsets.UTF_8).toLowerCase().contains("<!doctype html"));
             runtime.stop();
             Thread.sleep(1000);
@@ -111,6 +139,7 @@ public class NativeRuntimeIntegrationTest {
             JSONObject stored = json("POST", "/api/skills", new JSONObject().put("action", "get_run").put("runId", run.getString("skillRunId")), 200);
             assertEquals("completed", stored.getJSONObject("skillRun").getString("status"));
             assertTrue(new String(request("GET", download, null, 200), StandardCharsets.UTF_8).contains("App sandbox persistence"));
+            assertArrayEquals(goldenBefore, readFile(goldenFile));
         } finally {
             runtime.stop();
         }
@@ -140,7 +169,9 @@ public class NativeRuntimeIntegrationTest {
         });
         try (ServerSocket blockedGateway = new ServerSocket(8000, 1, InetAddress.getByName("127.0.0.1"))) {
             startup.start();
-            long deadline = System.nanoTime() + 10_000_000_000L;
+            // Keep the original Go 35-second writer acquisition window plus
+            // five seconds of health observation within the 45-second app start.
+            long deadline = System.nanoTime() + 40_000_000_000L;
             boolean controlReady = false;
             while (System.nanoTime() < deadline) {
                 controlReady = controlRunning();

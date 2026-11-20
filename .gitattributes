@@ -6,3 +6,9 @@ graphify-out/graph.json merge=graphify
 /go/**/testdata/**/*.json text eol=lf
 # Generated Java is checked byte for byte by native_android_codegen.
 /android/app/src/main/java/com/deepseek/mobile/platform/v1/*.java text eol=lf whitespace=-blank-at-eol
+
+# Files whose SHA-256 is recorded in release evidence and re-verified by CI.
+# They must be byte-identical on every platform, so the newline is pinned;
+# without this the Linux checkout hashes LF while a Windows worktree hashes CRLF
+# and the recorded digest only matches on one of them.
+/release/native-runtime-evidence-5.0/*.json text eol=lf

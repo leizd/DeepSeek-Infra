@@ -1,9 +1,13 @@
 use std::io;
 use std::net::SocketAddr;
 
+use deepseek_protocol::generated::deepseek::action::v1::control_signer_bootstrap_server::ControlSignerBootstrapServer;
 use deepseek_protocol::generated::deepseek::action::v1::control_signer_server::ControlSignerServer;
+use deepseek_protocol::generated::deepseek::action::v1::native_origin_custody_server::NativeOriginCustodyServer;
 use deepseek_protocol::generated::deepseek::action::v1::worker_server::WorkerServer;
 use deepseek_protocol::generated::deepseek::agent::v1::agent_node_worker_server::AgentNodeWorkerServer;
+use deepseek_protocol::generated::deepseek::media::v1::media_creation_payloads_server::MediaCreationPayloadsServer;
+use deepseek_protocol::generated::deepseek::media::v1::media_mutation_worker_server::MediaMutationWorkerServer;
 use deepseek_worker::{Worker, WorkerRpcService, authority_config_from_env, load_worker_transport};
 use tonic::transport::Server;
 
@@ -83,16 +87,28 @@ fn configured_worker(
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let address = configured_listen_addr(std::env::var("DEEPSEEK_WORKER_LISTEN"))?;
-    let transport = load_worker_transport(|name| std::env::var(name))?;
+    let managed = deepseek_worker::managed_profile::load(|name| std::env::var(name))?;
+    if managed.initialize_only {
+        return Ok(());
+    }
+    let environment = |name: &str| {
+        managed
+            .values
+            .get(name)
+            .cloned()
+            .map(Ok)
+            .unwrap_or_else(|| std::env::var(name))
+    };
+    let address = configured_listen_addr(environment("DEEPSEEK_WORKER_LISTEN"))?;
+    let transport = load_worker_transport(environment)?;
     let agent_plan = deepseek_worker::load_agent_plan_executor_from_env()?;
     // Validate provider configuration before opening the durable authority store.
     #[cfg(feature = "s3")]
-    let storage = deepseek_worker::load_worker_storage_transport(|name| std::env::var(name))?;
+    let storage = deepseek_worker::load_worker_storage_transport(environment)?;
     #[cfg(not(feature = "s3"))]
     if deepseek_worker::WORKER_S3_ENV_NAMES
         .iter()
-        .any(|name| !matches!(std::env::var(name), Err(std::env::VarError::NotPresent)))
+        .any(|name| !matches!(environment(name), Err(std::env::VarError::NotPresent)))
     {
         return Err(io::Error::new(
             io::ErrorKind::Unsupported,
@@ -100,16 +116,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .into());
     }
-    let worker = configured_worker(|name| std::env::var(name))?;
-    let signer_config = authority_config_from_env(|name| std::env::var(name)).map_err(|_| {
+    let worker = configured_worker(environment)?;
+    let signer_config = authority_config_from_env(environment).map_err(|_| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
             "worker control signer authority rejected",
         )
     })?;
-    let signer_root = std::env::var("DEEPSEEK_WORKER_STATE_ROOT").ok();
+    let signer_root = environment("DEEPSEEK_WORKER_STATE_ROOT").ok();
     let signer = deepseek_worker::load_control_signer_from_env(
-        |name| std::env::var(name),
+        environment,
         signer_config.as_ref(),
         signer_root.as_deref().map(std::path::Path::new),
         transport.tls_identity.is_some(),
@@ -125,11 +141,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "plaintext-loopback"
     };
     let agent_control = if signer.is_some() {
-        deepseek_worker::load_agent_execution_control_from_env(|name| std::env::var(name))?
+        deepseek_worker::load_agent_execution_control_from_env(environment)?
     } else {
         None
     };
     let service = WorkerRpcService::new_with_authenticator(worker, transport.authenticator);
+    let media_enabled = signer.is_some()
+        && environment("DEEPSEEK_RUNTIME_MODE").ok().as_deref() == Some("python_disabled");
     let service = match signer {
         Some(signer) => service.with_control_signer(signer),
         None => service,
@@ -137,6 +155,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let service = match agent_control {
         Some(control) => service.with_agent_execution_control(control),
         None => service,
+    };
+    let service = if media_enabled {
+        let root = environment("DEEPSEEK_INFRA_ROOT").unwrap_or_else(|_| ".".into());
+        service.with_media_journal(
+            std::path::Path::new(&root),
+            std::path::Path::new(signer_root.as_deref().ok_or("MEDIA_STATE_ROOT_REQUIRED")?),
+            signer_config.as_ref().ok_or("MEDIA_AUTHORITY_REQUIRED")?,
+        )?
+    } else {
+        service
     };
     let service = match agent_plan {
         Some(executor) => service.with_agent_plan_executor(executor),
@@ -154,14 +182,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(identity) = transport.tls_identity {
         builder = builder.tls_config(identity.server_tls_config())?;
     }
-    builder
+    let media_maintenance = service.start_media_image_maintenance().await;
+    let result = builder
+        .add_service(ControlSignerBootstrapServer::new(service.clone()))
+        .add_service(NativeOriginCustodyServer::new(service.clone()))
         .add_service(ControlSignerServer::new(service.clone()))
         .add_service(AgentNodeWorkerServer::new(service.clone()))
+        .add_service(
+            MediaMutationWorkerServer::new(service.clone())
+                .max_decoding_message_size(4 * 1024 * 1024)
+                .max_encoding_message_size(4 * 1024 * 1024),
+        )
+        .add_service(
+            MediaCreationPayloadsServer::new(service.clone())
+                .max_decoding_message_size(256 * 1024 + 1024)
+                .max_encoding_message_size(2 * 128 * 1024 * 1024 + 1024),
+        )
         .add_service(WorkerServer::new(service))
         .serve_with_shutdown(address, async {
             let _ = tokio::signal::ctrl_c().await;
         })
-        .await?;
+        .await;
+    if let Some(task) = media_maintenance {
+        task.abort();
+    }
+    result?;
     Ok(())
 }
 

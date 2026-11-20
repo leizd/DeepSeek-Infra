@@ -23,7 +23,7 @@ def test_react_frontend_is_an_isolated_versioned_build() -> None:
         "@tanstack/react-query": "5.101.2",
         "react": "19.2.7",
         "react-dom": "19.2.7",
-        "react-router-dom": "7.18.1",
+        "react-router-dom": "7.18.2",
     }
     assert package["devDependencies"]["@testing-library/react"] == "16.3.0"
     assert package["devDependencies"]["@testing-library/user-event"] == "14.6.1"

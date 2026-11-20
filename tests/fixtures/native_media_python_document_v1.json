@@ -1,0 +1,862 @@
+{
+  "schemaVersion": 1,
+  "sourceCommit": "f000759b44d5fb939c84e652866fca82cf47f517",
+  "sourceTree": "9b8cf2a11fbb787455e74747582ce723b1e2b110",
+  "originalReaderSha256": "1b1ae1f169609b0f83606c142726d2361902d4515845ed4465d9f93f69b2f7dd",
+  "originalAuditSha256": "0270e37c6b51e587df98e3fb08836516109df3792a8d602708c29051ffddbd91",
+  "originalReaderFunctions": [
+    "library._load_store",
+    "library.list_media"
+  ],
+  "caseCount": 23,
+  "acceptedOriginalCases": 22,
+  "originalEmptyCases": 1,
+  "cases": [
+    {
+      "name": "discarded_number_large_exponent",
+      "document": "{\"ignored\":1e400,\"media\":[{\"mediaId\":\"media_kept\",\"type\":\"image\",\"title\":\"original\",\"path\":\"image.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"fixed\"}]}",
+      "documentSha256": "ef88e231477a3bd00b7f80a5a410f1871291a8864394171ba23365f6bb3b30e9",
+      "storedRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "publicRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "readerError": null,
+      "publicUtf8Serializable": true,
+      "bodySha256": "174919a1dc75f9a245c5a3cc0bfe4bc74537f961996d4b331ea00b1b6b6d2938"
+    },
+    {
+      "name": "discarded_number_negative_large_exponent",
+      "document": "{\"ignored\":-1e400,\"media\":[{\"mediaId\":\"media_kept\",\"type\":\"image\",\"title\":\"original\",\"path\":\"image.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"fixed\"}]}",
+      "documentSha256": "3f64d6b93270af6a14121365c5199f89b4d0a86a47eb81376fc15ce1ba3c4c89",
+      "storedRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "publicRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "readerError": null,
+      "publicUtf8Serializable": true,
+      "bodySha256": "174919a1dc75f9a245c5a3cc0bfe4bc74537f961996d4b331ea00b1b6b6d2938"
+    },
+    {
+      "name": "discarded_number_tiny_exponent",
+      "document": "{\"ignored\":1e-4000,\"media\":[{\"mediaId\":\"media_kept\",\"type\":\"image\",\"title\":\"original\",\"path\":\"image.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"fixed\"}]}",
+      "documentSha256": "50833727c6b9f938b0ac14c7cd6dcd89525012daf14a00494ab7518fce0fd85a",
+      "storedRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "publicRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "readerError": null,
+      "publicUtf8Serializable": true,
+      "bodySha256": "174919a1dc75f9a245c5a3cc0bfe4bc74537f961996d4b331ea00b1b6b6d2938"
+    },
+    {
+      "name": "discarded_number_nan",
+      "document": "{\"ignored\":NaN,\"media\":[{\"mediaId\":\"media_kept\",\"type\":\"image\",\"title\":\"original\",\"path\":\"image.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"fixed\"}]}",
+      "documentSha256": "05f3ddfe7e817ae160bddce7cb77eac08b70b1d0f64dee1d98490c1ef6b60f4e",
+      "storedRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "publicRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "readerError": null,
+      "publicUtf8Serializable": true,
+      "bodySha256": "174919a1dc75f9a245c5a3cc0bfe4bc74537f961996d4b331ea00b1b6b6d2938"
+    },
+    {
+      "name": "discarded_number_infinity",
+      "document": "{\"ignored\":Infinity,\"media\":[{\"mediaId\":\"media_kept\",\"type\":\"image\",\"title\":\"original\",\"path\":\"image.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"fixed\"}]}",
+      "documentSha256": "378046dc01bf4e39224c988b6bd8f78dc3ef037cddf6191ec6cfe9a985688077",
+      "storedRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "publicRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "readerError": null,
+      "publicUtf8Serializable": true,
+      "bodySha256": "174919a1dc75f9a245c5a3cc0bfe4bc74537f961996d4b331ea00b1b6b6d2938"
+    },
+    {
+      "name": "discarded_number_negative_infinity",
+      "document": "{\"ignored\":-Infinity,\"media\":[{\"mediaId\":\"media_kept\",\"type\":\"image\",\"title\":\"original\",\"path\":\"image.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"fixed\"}]}",
+      "documentSha256": "b74ce6b80b7da63f47f2fe86b598e09ea9c4ca54126076cbf86140dec2584897",
+      "storedRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "publicRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "readerError": null,
+      "publicUtf8Serializable": true,
+      "bodySha256": "174919a1dc75f9a245c5a3cc0bfe4bc74537f961996d4b331ea00b1b6b6d2938"
+    },
+    {
+      "name": "discarded_array_nan",
+      "document": "{\"media\":[NaN,{\"mediaId\":\"media_kept\",\"type\":\"image\",\"title\":\"original\",\"path\":\"image.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"fixed\"}]}",
+      "documentSha256": "7b5d562093865d95598fba6b6997d165c743cf2b45aa2ab06ac9a8668ebe2452",
+      "storedRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "publicRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "readerError": null,
+      "publicUtf8Serializable": true,
+      "bodySha256": "174919a1dc75f9a245c5a3cc0bfe4bc74537f961996d4b331ea00b1b6b6d2938"
+    },
+    {
+      "name": "discarded_array_infinity",
+      "document": "{\"media\":[Infinity,{\"mediaId\":\"media_kept\",\"type\":\"image\",\"title\":\"original\",\"path\":\"image.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"fixed\"}]}",
+      "documentSha256": "2ab351018d33d6ef24235001c4be203c003ed4340c4f787cc400b1c7725c7684",
+      "storedRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "publicRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "readerError": null,
+      "publicUtf8Serializable": true,
+      "bodySha256": "174919a1dc75f9a245c5a3cc0bfe4bc74537f961996d4b331ea00b1b6b6d2938"
+    },
+    {
+      "name": "discarded_array_negative_infinity",
+      "document": "{\"media\":[-Infinity,{\"mediaId\":\"media_kept\",\"type\":\"image\",\"title\":\"original\",\"path\":\"image.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"fixed\"}]}",
+      "documentSha256": "f735bd33691f8bb8a2289162584364b5bacdc6198d91eea31c0a346a02c4194a",
+      "storedRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "publicRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "readerError": null,
+      "publicUtf8Serializable": true,
+      "bodySha256": "174919a1dc75f9a245c5a3cc0bfe4bc74537f961996d4b331ea00b1b6b6d2938"
+    },
+    {
+      "name": "ordinary_root_tag_9",
+      "document": "{\"$serde_json::private::Number\":\"0\",\"media\":[{\"mediaId\":\"media_kept\",\"type\":\"image\",\"title\":\"original\",\"path\":\"image.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"fixed\"}]}",
+      "documentSha256": "10de9f04f521900025e58704b7ea69c62683f7ff27d0315a7b73fa58eb9019e2",
+      "storedRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "publicRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "readerError": null,
+      "publicUtf8Serializable": true,
+      "bodySha256": "174919a1dc75f9a245c5a3cc0bfe4bc74537f961996d4b331ea00b1b6b6d2938"
+    },
+    {
+      "name": "ordinary_discarded_tag_10",
+      "document": "{\"ignored\":{\"$serde_json::private::Number\":\"0\"},\"media\":[{\"mediaId\":\"media_kept\",\"type\":\"image\",\"title\":\"original\",\"path\":\"image.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"fixed\"}]}",
+      "documentSha256": "9c5fa7886e2f6324aa8f1c77d255428806ed33982925d98cab685e606e370db0",
+      "storedRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "publicRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "readerError": null,
+      "publicUtf8Serializable": true,
+      "bodySha256": "174919a1dc75f9a245c5a3cc0bfe4bc74537f961996d4b331ea00b1b6b6d2938"
+    },
+    {
+      "name": "ordinary_root_tag_11",
+      "document": "{\"$serde_json::private::Number\":{},\"media\":[{\"mediaId\":\"media_kept\",\"type\":\"image\",\"title\":\"original\",\"path\":\"image.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"fixed\"}]}",
+      "documentSha256": "3bb8d46372b1fa84706bee1a079670df813e66fff6f0f665170208e024a42c01",
+      "storedRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "publicRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "readerError": null,
+      "publicUtf8Serializable": true,
+      "bodySha256": "174919a1dc75f9a245c5a3cc0bfe4bc74537f961996d4b331ea00b1b6b6d2938"
+    },
+    {
+      "name": "ordinary_discarded_tag_12",
+      "document": "{\"ignored\":{\"$serde_json::private::Number\":{}},\"media\":[{\"mediaId\":\"media_kept\",\"type\":\"image\",\"title\":\"original\",\"path\":\"image.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"fixed\"}]}",
+      "documentSha256": "57e0b1c3a284b09162911b4f4f7119e28f395acbc374a2f4d7fa88a0deea5cb6",
+      "storedRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "publicRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "readerError": null,
+      "publicUtf8Serializable": true,
+      "bodySha256": "174919a1dc75f9a245c5a3cc0bfe4bc74537f961996d4b331ea00b1b6b6d2938"
+    },
+    {
+      "name": "ordinary_root_tag_13",
+      "document": "{\"$serde_json::private::RawValue\":\"not-json\",\"media\":[{\"mediaId\":\"media_kept\",\"type\":\"image\",\"title\":\"original\",\"path\":\"image.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"fixed\"}]}",
+      "documentSha256": "acf8fbae2efa979b388690f5ff85490d926404fc1070a60c9fa315dbb1044e1e",
+      "storedRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "publicRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "readerError": null,
+      "publicUtf8Serializable": true,
+      "bodySha256": "174919a1dc75f9a245c5a3cc0bfe4bc74537f961996d4b331ea00b1b6b6d2938"
+    },
+    {
+      "name": "ordinary_discarded_tag_14",
+      "document": "{\"ignored\":{\"$serde_json::private::RawValue\":\"not-json\"},\"media\":[{\"mediaId\":\"media_kept\",\"type\":\"image\",\"title\":\"original\",\"path\":\"image.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"fixed\"}]}",
+      "documentSha256": "f64f7131ad0b9e48b6ba3e1a71cb745ea40cff162e270d2ae237c83719ebb5db",
+      "storedRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "publicRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "readerError": null,
+      "publicUtf8Serializable": true,
+      "bodySha256": "174919a1dc75f9a245c5a3cc0bfe4bc74537f961996d4b331ea00b1b6b6d2938"
+    },
+    {
+      "name": "ordinary_retained_record_tag_15",
+      "document": "{\"media\":[{\"$serde_json::private::Number\":\"not-json\",\"mediaId\":\"media_kept\",\"type\":\"image\",\"title\":\"original\",\"path\":\"image.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"fixed\"}]}",
+      "documentSha256": "88a86e70dc0e193b90a7e8536faf7ba58a64faaedeb17378540bda75aa5d7339",
+      "storedRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "publicRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "readerError": null,
+      "publicUtf8Serializable": true,
+      "bodySha256": "174919a1dc75f9a245c5a3cc0bfe4bc74537f961996d4b331ea00b1b6b6d2938"
+    },
+    {
+      "name": "ordinary_retained_record_tag_16",
+      "document": "{\"media\":[{\"$serde_json::private::RawValue\":\"not-json\",\"mediaId\":\"media_kept\",\"type\":\"image\",\"title\":\"original\",\"path\":\"image.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"fixed\"}]}",
+      "documentSha256": "fc1f02f721f04840e4278dbfe608d9fb4f1b467a9216f96d1a5d4a2e3a6a0c69",
+      "storedRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "publicRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "readerError": null,
+      "publicUtf8Serializable": true,
+      "bodySha256": "174919a1dc75f9a245c5a3cc0bfe4bc74537f961996d4b331ea00b1b6b6d2938"
+    },
+    {
+      "name": "ordinary_tag_media_object_is_not_an_array",
+      "document": "{\"media\": {\"$serde_json::private::RawValue\": \"[{\\\"mediaId\\\":\\\"media_kept\\\",\\\"type\\\":\\\"image\\\",\\\"title\\\":\\\"original\\\",\\\"path\\\":\\\"image.png\\\",\\\"createdAt\\\":\\\"fixed\\\",\\\"updatedAt\\\":\\\"fixed\\\"}]\"}}",
+      "documentSha256": "23a7057db4cf9defa2e73742f235886beace54772c9718c6b9c788dac3a6fb38",
+      "storedRows": [],
+      "publicRows": [],
+      "readerError": null,
+      "publicUtf8Serializable": true,
+      "bodySha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    {
+      "name": "discarded_depth_127",
+      "document": "{\"ignored\":[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[0]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]],\"media\":[{\"mediaId\":\"media_kept\",\"type\":\"image\",\"title\":\"original\",\"path\":\"image.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"fixed\"}]}",
+      "documentSha256": "6847e91e779da430ae3b7d763a40d3f13d9ad8e9ad28c4dfe72414e37cfe0e6d",
+      "storedRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "publicRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "readerError": null,
+      "publicUtf8Serializable": true,
+      "bodySha256": "174919a1dc75f9a245c5a3cc0bfe4bc74537f961996d4b331ea00b1b6b6d2938"
+    },
+    {
+      "name": "discarded_depth_128",
+      "document": "{\"ignored\":[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[0]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]],\"media\":[{\"mediaId\":\"media_kept\",\"type\":\"image\",\"title\":\"original\",\"path\":\"image.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"fixed\"}]}",
+      "documentSha256": "dea7dd42605ccc8222b41db732864a50528d79e6eb2999494a9656c6662d8332",
+      "storedRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "publicRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "readerError": null,
+      "publicUtf8Serializable": true,
+      "bodySha256": "174919a1dc75f9a245c5a3cc0bfe4bc74537f961996d4b331ea00b1b6b6d2938"
+    },
+    {
+      "name": "discarded_depth_200",
+      "document": "{\"ignored\":[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[0]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]],\"media\":[{\"mediaId\":\"media_kept\",\"type\":\"image\",\"title\":\"original\",\"path\":\"image.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"fixed\"}]}",
+      "documentSha256": "bab3d2f60bfd15528386fa7bd868c8dbed18128194e6a10223fef948237b32fc",
+      "storedRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "publicRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "readerError": null,
+      "publicUtf8Serializable": true,
+      "bodySha256": "174919a1dc75f9a245c5a3cc0bfe4bc74537f961996d4b331ea00b1b6b6d2938"
+    },
+    {
+      "name": "discarded_depth_500",
+      "document": "{\"ignored\":[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[0]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]],\"media\":[{\"mediaId\":\"media_kept\",\"type\":\"image\",\"title\":\"original\",\"path\":\"image.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"fixed\"}]}",
+      "documentSha256": "e59880cdc6d80b63409f8a63aed8d3c9a5d5d7ad172e66468d70c76503b65940",
+      "storedRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "publicRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "readerError": null,
+      "publicUtf8Serializable": true,
+      "bodySha256": "174919a1dc75f9a245c5a3cc0bfe4bc74537f961996d4b331ea00b1b6b6d2938"
+    },
+    {
+      "name": "retained_schema_ignored_surrogate",
+      "document": "{\"media\":[{\"unused\":\"\\uD800\",\"mediaId\":\"media_kept\",\"type\":\"image\",\"title\":\"original\",\"path\":\"image.png\",\"createdAt\":\"fixed\",\"updatedAt\":\"fixed\"}]}",
+      "documentSha256": "bcd8f57eaf98e9f64fb6fa9adde0d11d8e1629e88d1cd55d0dd78b7031618d4d",
+      "storedRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "publicRows": [
+        {
+          "mediaId": "media_kept",
+          "projectId": "",
+          "type": "image",
+          "title": "original",
+          "mimeType": "image/png",
+          "path": "image.png",
+          "source": {},
+          "status": "pending",
+          "createdAt": "fixed",
+          "updatedAt": "fixed",
+          "metadata": {}
+        }
+      ],
+      "readerError": null,
+      "publicUtf8Serializable": true,
+      "bodySha256": "174919a1dc75f9a245c5a3cc0bfe4bc74537f961996d4b331ea00b1b6b6d2938"
+    }
+  ]
+}

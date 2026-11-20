@@ -7,6 +7,69 @@ use deepseek_protocol::generated::deepseek::agent::v1::{
 use prost::Message as _;
 
 #[test]
+fn recovery_progress_signature_keeps_its_canonical_receipt_after_signer_restart() {
+    use deepseek_protocol::generated::deepseek::agent::v1::{
+        AgentRecoveryProgressContext, AgentRecoveryProgressEvidence, AgentRunRecoveryEffectSource,
+    };
+    let root = tempfile::tempdir().unwrap();
+    fs::create_dir(root.path().join("rust-worker")).unwrap();
+    let password = b"isolated-progress-custody-password-32-bytes";
+    let bundle = create_control_signer_bundle(password, "fleet-a", "test").unwrap();
+    let public = bundle["binding"]["signerPublicKey"].as_str().unwrap();
+    let bound = String::from_utf8(canonical_json_bytes(&bundle["binding"]).unwrap()).unwrap();
+    let reopen = || ControlSigner {
+        native_origin: None,
+        key: load_control_signer(&bundle, password, "fleet-a", "test", public).unwrap(),
+        journal: SignatureJournal::open(root.path(), &bound).unwrap(),
+    };
+    let reference = || {
+        Some(AgentArtifactReference {
+            sha256: "a".repeat(64),
+            length: 40,
+        })
+    };
+    let evidence = AgentRecoveryProgressEvidence {
+        schema_version: 1,
+        context: Some(AgentRecoveryProgressContext {
+            schema_version: 1,
+            run_id: "run".into(),
+            generation: 1,
+            metadata_epoch: 3,
+            expected_index: 12,
+            runtime_revision: 2,
+            request: reference(),
+            recovery_context_sha256: "b".repeat(64),
+            task_action_id: "original-task".into(),
+            task_action_revision: 7,
+            task_metadata_index: 12,
+            role: "critic".into(),
+            synthesize: true,
+            outputs: vec![AgentRunRecoveryEffectSource::default()],
+        }),
+        note_body: reference(),
+        next_body: reference(),
+        fleet_id: "fleet-a".into(),
+        environment: "test".into(),
+    };
+    let mut signer = reopen();
+    let first = signer.sign_recovery_progress(evidence.clone()).unwrap();
+    assert_eq!(first.signature.len(), 64);
+    assert_eq!(
+        first,
+        signer.sign_recovery_progress(evidence.clone()).unwrap()
+    );
+    drop(signer);
+    let mut signer = reopen();
+    assert_eq!(
+        first,
+        signer.sign_recovery_progress(evidence.clone()).unwrap()
+    );
+    let mut bad = evidence;
+    bad.environment = "foreign".into();
+    assert!(signer.sign_recovery_progress(bad).is_err());
+}
+
+#[test]
 fn plan_projection_journal_preserves_derived_signature_after_restart() {
     use deepseek_protocol::generated::deepseek::agent::v1::{
         AgentPlanProjectionEvidence, AgentRunPlanNode,
@@ -18,6 +81,7 @@ fn plan_projection_journal_preserves_derived_signature_after_restart() {
     let public = bundle["binding"]["signerPublicKey"].as_str().unwrap();
     let bound = String::from_utf8(canonical_json_bytes(&bundle["binding"]).unwrap()).unwrap();
     let reopen = || ControlSigner {
+        native_origin: None,
         key: load_control_signer(&bundle, password, "fleet-a", "test", public).unwrap(),
         journal: SignatureJournal::open(root.path(), &bound).unwrap(),
     };
@@ -87,6 +151,7 @@ fn outcome_signature_journal_is_idempotent_after_restart_and_refuses_corrupt_rec
     let public = bundle["binding"]["signerPublicKey"].as_str().unwrap();
     let bound = String::from_utf8(canonical_json_bytes(&bundle["binding"]).unwrap()).unwrap();
     let reopen = |directory: &Path| ControlSigner {
+        native_origin: None,
         key: load_control_signer(&bundle, password, "fleet-a", "test", public).unwrap(),
         journal: SignatureJournal::open(directory, &bound).unwrap(),
     };
@@ -117,15 +182,31 @@ fn outcome_signature_journal_is_idempotent_after_restart_and_refuses_corrupt_rec
             length: 1,
         }),
         provider_plan: vec![],
+        failure: None,
         task_output: None,
         fleet_id: "fleet-a".into(),
         environment: "test".into(),
     };
     let mut signer = reopen(root.path());
     let first = signer.sign_node_outcome(evidence.clone()).unwrap();
+    signer.verify_retained_node_outcome(&first).unwrap();
+    let mut changed = first.clone();
+    changed.signature[0] ^= 1;
+    assert!(signer.verify_retained_node_outcome(&changed).is_err());
+    changed = first.clone();
+    changed
+        .evidence
+        .as_mut()
+        .unwrap()
+        .request
+        .as_mut()
+        .unwrap()
+        .sha256 = "f".repeat(64);
+    assert!(signer.verify_retained_node_outcome(&changed).is_err());
     assert_eq!(first, signer.sign_node_outcome(evidence.clone()).unwrap());
     drop(signer);
     let mut signer = reopen(root.path());
+    signer.verify_retained_node_outcome(&first).unwrap();
     assert_eq!(first, signer.sign_node_outcome(evidence.clone()).unwrap());
     let mut wrong = evidence.clone();
     wrong.environment = "foreign".into();
@@ -136,6 +217,7 @@ fn outcome_signature_journal_is_idempotent_after_restart_and_refuses_corrupt_rec
     let corrupted = tempfile::tempdir().unwrap();
     fs::create_dir(corrupted.path().join("rust-worker")).unwrap();
     let mut signer = reopen(corrupted.path());
+    assert!(signer.verify_retained_node_outcome(&first).is_err());
     let payload = evidence.encode_to_vec();
     let mut identity = b"deepseek-infra:agent-node-outcome-receipt-v1:request\0".to_vec();
     identity.extend(&payload);
@@ -155,6 +237,7 @@ fn outcome_signature_journal_is_idempotent_after_restart_and_refuses_corrupt_rec
         signer.journal.existing(&request_id).unwrap().unwrap(),
         b"corrupted protobuf receipt"
     );
+    assert!(signer.verify_retained_node_outcome(&first).is_err());
 }
 
 fn synthesis_test_custody(root: &Path) -> ControlSigner {
@@ -171,8 +254,161 @@ fn synthesis_test_custody(root: &Path) -> ControlSigner {
     let public = bundle["binding"]["signerPublicKey"].as_str().unwrap();
     let binding = String::from_utf8(canonical_json_bytes(&bundle["binding"]).unwrap()).unwrap();
     ControlSigner {
+        native_origin: None,
         key: load_control_signer(&bundle, password, "fleet-a", "test", public).unwrap(),
         journal: SignatureJournal::open(root, &binding).unwrap(),
+    }
+}
+
+#[test]
+fn retained_node_outcome_read_never_creates_missing_original_custody() {
+    use prost::Message as _;
+    use sha2::{Digest, Sha256};
+    let root = tempfile::tempdir().unwrap();
+    let mut signer = synthesis_test_custody(root.path());
+    let evidence = AgentNodeOutcomeEvidence {
+        schema_version: 1,
+        fence: Some(ActionFence {
+            action_id: "original-plan".into(),
+            execution_epoch: 1,
+        }),
+        operation_id: format!("agent-node-{}", "a".repeat(64)),
+        run_id: "run".into(),
+        node_id: "leader".into(),
+        phase: 1,
+        request: Some(AgentArtifactReference {
+            sha256: "b".repeat(64),
+            length: 11,
+        }),
+        plan_digest: "c".repeat(64),
+        metadata_index: 0,
+        metadata_epoch: 1,
+        writer_fencing_token: 7,
+        created_at: "2026-10-18T00:00:00Z".into(),
+        confirmed_at: "2026-10-18T00:00:01Z".into(),
+        outcome_sha256: "d".repeat(64),
+        outcome_length: 112,
+        public_event: Some(AgentArtifactReference {
+            sha256: "e".repeat(64),
+            length: 92,
+        }),
+        fleet_id: "fleet-a".into(),
+        environment: "test".into(),
+        ..Default::default()
+    };
+    let receipt = signer.sign_node_outcome(evidence.clone()).unwrap();
+    let digest = format!("{:x}", Sha256::digest(receipt.encode_to_vec()));
+    assert_eq!(
+        signer
+            .retained_node_outcome(&evidence, &digest)
+            .unwrap()
+            .encode_to_vec(),
+        receipt.encode_to_vec()
+    );
+    assert!(
+        signer
+            .retained_node_outcome(&evidence, &"f".repeat(64))
+            .is_err()
+    );
+    // Restore the same encrypted key custody without the original signature DB.
+    // The pinned read must fail instead of manufacturing the missing audit row.
+    let empty = tempfile::tempdir().unwrap();
+    fs::copy(
+        root.path().join("fixture-custody.json"),
+        empty.path().join("fixture-custody.json"),
+    )
+    .unwrap();
+    let missing = synthesis_test_custody(empty.path());
+    assert!(missing.retained_node_outcome(&evidence, &digest).is_err());
+    let db = rusqlite::Connection::open_with_flags(
+        empty.path().join("rust-worker/control-signatures.sqlite3"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    assert_eq!(
+        db.query_row("SELECT count(*) FROM signatures", [], |row| row
+            .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    let mut rebound = evidence.clone();
+    rebound.fence.as_mut().unwrap().execution_epoch = 2;
+    assert!(signer.retained_node_outcome(&rebound, &digest).is_err());
+}
+
+#[test]
+fn failure_projection_keeps_its_own_signature_domain_and_journal_after_restart() {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    use deepseek_protocol::generated::deepseek::agent::v1::AgentFailureProjectionEvidence;
+    use ed25519_dalek::{Signature, VerifyingKey};
+    use prost::Message as _;
+    let root = tempfile::tempdir().unwrap();
+    let evidence = AgentFailureProjectionEvidence {
+        schema_version: 1,
+        source_receipt_sha256: "a".repeat(64),
+        settlement_fence: Some(ActionFence {
+            action_id: "failed-plan".into(),
+            execution_epoch: 2,
+        }),
+        settlement_writer_token: 3,
+        run_id: "run".into(),
+        phase: 1,
+        metadata_epoch: 1,
+        expected_index: 0,
+        error_body: Some(AgentArtifactReference {
+            sha256: "b".repeat(64),
+            length: 92,
+        }),
+        fleet_id: "fleet-a".into(),
+        environment: "test".into(),
+    };
+    let mut signer = synthesis_test_custody(root.path());
+    let receipt = signer.sign_failure_projection(evidence.clone()).unwrap();
+    let public: [u8; 32] = URL_SAFE_NO_PAD
+        .decode(&receipt.signer_public_key)
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let key = VerifyingKey::from_bytes(&public).unwrap();
+    let signature = Signature::from_slice(&receipt.signature).unwrap();
+    let mut message = b"deepseek-infra:agent-failure-projection-proof-v1\0".to_vec();
+    message.extend(evidence.encode_to_vec());
+    key.verify_strict(&message, &signature).unwrap();
+    for purpose in [
+        "deepseek-infra:agent-node-outcome-proof-v1\0",
+        "deepseek-infra:agent-plan-projection-proof-v1\0",
+        "deepseek-infra:agent-synthesis-projection-proof-v1\0",
+    ] {
+        let mut other = purpose.as_bytes().to_vec();
+        other.extend(evidence.encode_to_vec());
+        assert!(key.verify_strict(&other, &signature).is_err());
+    }
+    drop(signer);
+    let mut signer = synthesis_test_custody(root.path());
+    assert_eq!(
+        receipt.encode_to_vec(),
+        signer
+            .sign_failure_projection(evidence.clone())
+            .unwrap()
+            .encode_to_vec()
+    );
+    for change in 0..12 {
+        let mut bad = evidence.clone();
+        match change {
+            0 => bad.schema_version = 2,
+            1 => bad.source_receipt_sha256.clear(),
+            2 => bad.settlement_fence.as_mut().unwrap().execution_epoch = 0,
+            3 => bad.settlement_writer_token = 0,
+            4 => bad.run_id.clear(),
+            5 => bad.phase = 2,
+            6 => bad.metadata_epoch = 0,
+            7 => bad.expected_index = -1,
+            8 => bad.expected_index = i64::MAX,
+            9 => bad.error_body = None,
+            10 => bad.fleet_id = "other".into(),
+            _ => bad.environment = "other".into(),
+        }
+        assert!(signer.sign_failure_projection(bad).is_err());
     }
 }
 
@@ -207,6 +443,7 @@ fn synthesis_outcome_signing_requires_its_role_and_counters_and_recovers_after_r
             length: 30,
         }),
         provider_plan: vec![],
+        failure: None,
         task_output: Some(AgentTaskOutputMetadata {
             schema_version: 1,
             prompt_tokens: 3,

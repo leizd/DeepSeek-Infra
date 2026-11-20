@@ -69,7 +69,7 @@ fn read_secret(raw_handle: &str) -> io::Result<String> {
     Ok(value)
 }
 
-fn encrypt_passphrase<R: Read, W: Write>(
+pub fn encrypt_passphrase<R: Read, W: Write>(
     input: R,
     output: W,
     passphrase: String,
@@ -131,7 +131,7 @@ fn parse_identities(value: &str) -> io::Result<Vec<age::x25519::Identity>> {
     Ok(parsed)
 }
 
-fn decrypt_passphrase<R: Read, W: Write>(
+pub fn decrypt_passphrase<R: Read, W: Write>(
     input: R,
     mut output: W,
     passphrase: String,
@@ -186,11 +186,20 @@ pub fn generate_identity(mut output: impl Write) -> io::Result<()> {
     )
 }
 
+/// Derive X25519 recipient strings for every identity in `secret`.
+pub fn derive_recipients(secret: &str) -> io::Result<Vec<String>> {
+    let identities = parse_identities(secret)?;
+    Ok(identities
+        .into_iter()
+        .map(|identity| identity.to_public().to_string())
+        .collect())
+}
+
 fn derive_recipient(secret: String, mut output: impl Write) -> io::Result<()> {
-    let identities = parse_identities(&secret)?;
-    let values = identities
+    let recipients = derive_recipients(&secret)?;
+    let values = recipients
         .iter()
-        .map(|identity| format!("\"{}\"", identity.to_public()))
+        .map(|recipient| format!("\"{recipient}\""))
         .collect::<Vec<_>>()
         .join(",");
     writeln!(output, "{{\"recipients\":[{values}]}}")
@@ -243,15 +252,18 @@ fn read_age_header(input: impl Read) -> io::Result<Vec<u8>> {
     Ok(header)
 }
 
-fn inspect_header(input: impl Read, mut output: impl Write) -> io::Result<()> {
+/// Validate an age stream header within the bounded header budget and report
+/// whether it uses passphrase (`scrypt`) encryption.
+pub fn inspect_age_header<R: Read>(input: R) -> io::Result<bool> {
     let header = read_age_header(input)?;
     let decryptor =
         Decryptor::new(BufReader::new(&header[..])).map_err(|_| invalid("not an age file"))?;
-    writeln!(
-        output,
-        "{{\"age\":true,\"passphrase\":{}}}",
-        decryptor.is_scrypt()
-    )
+    Ok(decryptor.is_scrypt())
+}
+
+fn inspect_header(input: impl Read, mut output: impl Write) -> io::Result<()> {
+    let passphrase = inspect_age_header(input)?;
+    writeln!(output, "{{\"age\":true,\"passphrase\":{passphrase}}}")
 }
 
 fn required_flag_value<'a>(args: &'a [String], flag: &str) -> io::Result<&'a str> {

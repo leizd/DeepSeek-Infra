@@ -14,6 +14,8 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::any;
 use axum::{Json, Router};
 use deepseek_policy::app_error::{AppError, codes};
+use deepseek_policy::core_utils::python_truthy;
+use deepseek_policy::python_json::value_str;
 use serde_json::{Value, json};
 
 use crate::scheduler_routes::{
@@ -43,9 +45,36 @@ async fn status_response(method: Method) -> Response {
     }
 }
 
-fn build_body() -> Value {
-    let provider = configured_provider();
-    let model_path = configured_model_path(&provider);
+pub(crate) fn build_body() -> Value {
+    let (status, _) = status_for_payload(&json!({}));
+    json!({"ok": true, "edgeInference": status})
+}
+
+pub(crate) fn status_for_payload(payload: &Value) -> (Value, usize) {
+    let override_provider = payload_nonempty_str(payload.get("edgeProvider"));
+    let provider = if !override_provider.is_empty() {
+        normalize_provider(&override_provider)
+    } else {
+        configured_provider()
+    };
+    let allow_override = env_bool("EDGE_ALLOW_MODEL_PATH_OVERRIDE", false);
+    let mut model_path = std::env::var("EDGE_MODEL_PATH")
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let override_path = payload_trimmed_str(payload.get("edgeModelPath"));
+    if !override_path.is_empty() && allow_override {
+        model_path = override_path;
+    }
+    if provider == "llama_cpp" && !model_path.is_empty() {
+        model_path = python_path_str(&python_resolve(Path::new(&model_path)));
+    }
+    let override_model_name = payload_nonempty_str(payload.get("edgeModelName"));
+    let model_name = if !override_model_name.is_empty() {
+        override_model_name
+    } else {
+        configured_model_name()
+    };
     let enabled = env_bool("EDGE_INFERENCE_ENABLED", false);
     let provider_supported = PROVIDERS.contains(&provider.as_str());
     let dependency_available = dependency_available(&provider);
@@ -57,6 +86,15 @@ fn build_body() -> Value {
         && dependency_available
         && model_path_configured
         && model_path_exists;
+    let default_n_ctx = env_int_clamped("EDGE_N_CTX", 4096, 512, 262_144);
+    let default_n_threads = env_int_min("EDGE_N_THREADS", 0, 0);
+    let default_n_gpu_layers = env_int_min("EDGE_N_GPU_LAYERS", 0, 0);
+    let default_max_tokens = env_int_clamped("EDGE_MAX_TOKENS", 1024, 16, 16_384);
+    let default_temperature = env_float_clamped("EDGE_TEMPERATURE", 0.7, 0.0, 2.0);
+    let default_top_p = env_float_clamped("EDGE_TOP_P", 0.95, 0.05, 1.0);
+    let default_simple_max_chars = env_int_clamped("EDGE_SIMPLE_MAX_CHARS", 6000, 256, 120_000);
+    let simple_max_chars =
+        positive_int(payload.get("edgeSimpleMaxChars"), default_simple_max_chars) as usize;
     let edge = json!({
         "enabled": enabled,
         "provider": provider,
@@ -67,16 +105,16 @@ fn build_body() -> Value {
         "modelPathExists": model_path_exists,
         "modelPathSuffixSupported": model_path_suffix_supported,
         "modelPath": model_path,
-        "modelName": configured_model_name(),
+        "modelName": model_name,
         "loaded": false,
         "quantization": infer_quantization(&model_path),
-        "nCtx": env_int_clamped("EDGE_N_CTX", 4096, 512, 262_144),
-        "nThreads": env_int_min("EDGE_N_THREADS", 0, 0),
-        "nGpuLayers": env_int_min("EDGE_N_GPU_LAYERS", 0, 0),
-        "maxTokens": env_int_clamped("EDGE_MAX_TOKENS", 1024, 16, 16_384),
-        "temperature": env_float_clamped("EDGE_TEMPERATURE", 0.7, 0.0, 2.0),
-        "topP": env_float_clamped("EDGE_TOP_P", 0.95, 0.05, 1.0),
-        "allowModelPathOverride": env_bool("EDGE_ALLOW_MODEL_PATH_OVERRIDE", false),
+        "nCtx": positive_int(payload.get("edgeNCtx"), default_n_ctx),
+        "nThreads": non_negative_int(payload.get("edgeNThreads"), default_n_threads),
+        "nGpuLayers": non_negative_int(payload.get("edgeNGpuLayers"), default_n_gpu_layers),
+        "maxTokens": positive_int(payload.get("edgeMaxTokens"), default_max_tokens),
+        "temperature": float_value(payload.get("edgeTemperature"), default_temperature),
+        "topP": float_value(payload.get("edgeTopP"), default_top_p),
+        "allowModelPathOverride": allow_override,
     });
     let mut edge = edge;
     if let Value::Object(fields) = &mut edge {
@@ -85,7 +123,56 @@ fn build_body() -> Value {
             Value::Array(suggestions(fields).into_iter().map(Value::String).collect()),
         );
     }
-    json!({"ok": true, "edgeInference": edge})
+    (edge, simple_max_chars)
+}
+
+fn payload_nonempty_str(value: Option<&Value>) -> String {
+    match value {
+        Some(found) if python_truthy(found) => value_str(found),
+        _ => String::new(),
+    }
+}
+
+fn payload_trimmed_str(value: Option<&Value>) -> String {
+    payload_nonempty_str(value).trim().to_string()
+}
+
+fn parse_payload_i64(value: Option<&Value>) -> Option<i64> {
+    match value? {
+        Value::Number(num) => num
+            .as_i64()
+            .or_else(|| num.as_f64().map(|float| float as i64)),
+        Value::String(text) => text.trim().parse::<i64>().ok(),
+        Value::Bool(flag) => Some(i64::from(*flag)),
+        _ => None,
+    }
+}
+
+fn positive_int(value: Option<&Value>, default: i64) -> i64 {
+    parse_payload_i64(value)
+        .map(|parsed| parsed.max(1))
+        .unwrap_or_else(|| default.max(1))
+}
+
+fn non_negative_int(value: Option<&Value>, default: i64) -> i64 {
+    parse_payload_i64(value)
+        .map(|parsed| parsed.max(0))
+        .unwrap_or_else(|| default.max(0))
+}
+
+fn float_value(value: Option<&Value>, default: f64) -> f64 {
+    match value {
+        Some(Value::Number(num)) => num.as_f64().unwrap_or(default),
+        Some(Value::String(text)) => text.trim().parse::<f64>().unwrap_or(default),
+        Some(Value::Bool(flag)) => {
+            if *flag {
+                1.0
+            } else {
+                0.0
+            }
+        }
+        _ => default,
+    }
 }
 
 /// Settings coerce the provider before `normalize_provider`. `dry_run` is not
@@ -107,7 +194,7 @@ fn configured_provider() -> String {
     normalize_provider(&chosen)
 }
 
-fn normalize_provider(value: &str) -> String {
+pub(crate) fn normalize_provider(value: &str) -> String {
     let raw = value.trim().to_ascii_lowercase().replace('-', "_");
     if matches!(raw.as_str(), "llama" | "llamacpp" | "llama_cpp" | "gguf") {
         return "llama_cpp".to_string();
@@ -119,15 +206,6 @@ fn normalize_provider(value: &str) -> String {
         return "fake".to_string();
     }
     raw
-}
-
-fn configured_model_path(provider: &str) -> String {
-    let trimmed = std::env::var("EDGE_MODEL_PATH").unwrap_or_default();
-    let trimmed = trimmed.trim();
-    if provider == "llama_cpp" && !trimmed.is_empty() {
-        return python_path_str(&python_resolve(Path::new(trimmed)));
-    }
-    trimmed.to_string()
 }
 
 fn configured_model_name() -> String {
@@ -290,7 +368,7 @@ fn quant_token_end(bytes: &[u8]) -> Option<usize> {
 /// `importlib.util.find_spec(name) is not None` for a top-level module.
 /// Searches the working directory, `PYTHONPATH`, and `site-packages` next to
 /// `python` executables on `PATH`. It does not execute Python.
-fn python_module_available(name: &str) -> bool {
+pub(crate) fn python_module_available(name: &str) -> bool {
     module_search_dirs()
         .iter()
         .any(|dir| module_in_dir(dir, name))

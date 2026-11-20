@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
+import importlib
+import json
 import struct
+import zipfile
 import subprocess
 from pathlib import Path
 
@@ -12,6 +16,123 @@ from scripts.build_android_native import inspect_executable, source_identity, st
 
 
 VERSION = (Path(__file__).resolve().parents[1] / "VERSION").read_text(encoding="utf-8").strip()
+
+
+def fake_pidfd_sdk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, bytes]:
+    builder = importlib.import_module("scripts.build_android_native")
+    source = b"package os\nfunc pidfdWorks() bool {\n\treturn checkPidfdOnce() == nil\n}\n"
+    sdk = tmp_path / "go-sdk"
+    path = sdk / "src/os/pidfd_linux.go"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(source)
+    monkeypatch.setattr(builder, "ANDROID_AMD64_PIDFD_SOURCE_SHA256", hashlib.sha256(source).hexdigest())
+    return sdk, source
+
+
+def test_android_go_overlay_is_scoped_and_preserves_the_sdk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    builder = importlib.import_module("scripts.build_android_native")
+    sdk, before = fake_pidfd_sdk(tmp_path, monkeypatch)
+    overlay, metadata = builder.android_amd64_go_overlay(sdk, tmp_path / "private-build")
+    replacements = json.loads(overlay.read_text())["Replace"]
+    original = sdk / "src/os/pidfd_linux.go"
+    assert set(replacements) == {original.as_posix()}
+    patched = Path(replacements[original.as_posix()]).read_bytes()
+    assert b"return false" in patched and b"return checkPidfdOnce()" not in patched
+    assert original.read_bytes() == before
+    assert metadata["replacedFunctions"] == ["pidfdWorks"]
+    assert metadata["overlaySourceSha256"] == hashlib.sha256(patched).hexdigest()
+    assert metadata["sourceSDKModified"] is metadata["sandboxModified"] is metadata["pidfdProbeEnabled"] is False
+    assert builder.android_amd64_go_overlay(sdk, overlay.parent) == (overlay, metadata)
+
+
+def test_android_go_overlay_preserves_foreign_existing_outputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    builder = importlib.import_module("scripts.build_android_native")
+    sdk, original = fake_pidfd_sdk(tmp_path, monkeypatch)
+    output = tmp_path / "private-build"
+    output.mkdir()
+    retained = output / "pidfd_linux.go"
+    retained.write_bytes(b"foreign retained file")
+    with pytest.raises(ValueError, match="foreign Android Go compatibility output"):
+        builder.android_amd64_go_overlay(sdk, output)
+    assert retained.read_bytes() == b"foreign retained file"
+    assert (sdk / "src/os/pidfd_linux.go").read_bytes() == original
+
+
+def test_android_go_overlay_refuses_an_unknown_sdk_without_output(tmp_path: Path) -> None:
+    builder = importlib.import_module("scripts.build_android_native")
+    sdk = tmp_path / "unknown-sdk"
+    original = sdk / "src/os/pidfd_linux.go"
+    original.parent.mkdir(parents=True)
+    original.write_bytes(b"foreign SDK source")
+    output = tmp_path / "output"
+    with pytest.raises(ValueError, match="exact pinned SDK source"):
+        builder.android_amd64_go_overlay(sdk, output)
+    assert not output.exists() and original.read_bytes() == b"foreign SDK source"
+
+
+@pytest.mark.parametrize("copies", [0, 2])
+def test_android_go_overlay_refuses_a_changed_function_shape(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, copies: int) -> None:
+    builder = importlib.import_module("scripts.build_android_native")
+    sdk, original = fake_pidfd_sdk(tmp_path, monkeypatch)
+    changed = original * copies
+    (sdk / "src/os/pidfd_linux.go").write_bytes(changed)
+    monkeypatch.setattr(builder, "ANDROID_AMD64_PIDFD_SOURCE_SHA256", hashlib.sha256(changed).hexdigest())
+    with pytest.raises(ValueError, match="source shape changed"):
+        builder.android_amd64_go_overlay(sdk, tmp_path / "output")
+    assert not (tmp_path / "output").exists()
+
+
+def test_android_go_overlay_cannot_write_into_the_sdk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    builder = importlib.import_module("scripts.build_android_native")
+    sdk, original = fake_pidfd_sdk(tmp_path, monkeypatch)
+    with pytest.raises(ValueError, match="outside the SDK"):
+        builder.android_amd64_go_overlay(sdk, sdk / "compat")
+    assert (sdk / "src/os/pidfd_linux.go").read_bytes() == original
+    assert not (sdk / "compat").exists()
+
+
+def test_android_builder_applies_the_overlay_to_both_x86_roles_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    builder = importlib.import_module("scripts.build_android_native")
+    sdk, original = fake_pidfd_sdk(tmp_path, monkeypatch)
+    root, output = tmp_path / "repo", tmp_path / "output"
+    (root / "release").mkdir(parents=True)
+    (root / "release/native_runtime_toolchain_v1.json").write_text(json.dumps({"go": {"version": "1.27.1"}}))
+    android_sdk = tmp_path / "android-sdk"
+    ndk = android_sdk / "ndk" / builder.NDK_VERSION
+    host = "windows-x86_64" if builder.os.name == "nt" else "darwin-x86_64" if builder.platform.system() == "Darwin" else "linux-x86_64"
+    (ndk / "toolchains/llvm/prebuilt" / host / "bin").mkdir(parents=True)
+    (ndk / "source.properties").write_text("Pkg.Revision = " + builder.NDK_VERSION)
+    calls: list[tuple[list[str], dict[str, str]]] = []
+
+    def record(args: list[str], cwd: Path, env: dict[str, str]) -> str:
+        if "--version" in args:
+            return "rustc 1.85.0 fixture"
+        if args[1:] == ["version"]:
+            return "go version go1.27.1 fixture"
+        if args[1:] == ["env", "GOROOT"]:
+            return sdk.as_posix()
+        calls.append((args, env))
+        return ""
+
+    def stage(*args: object) -> dict[str, object]:
+        (output / "assets/native").mkdir(parents=True)
+        return {}
+
+    monkeypatch.setattr(builder, "check_existing", lambda root: None)
+    monkeypatch.setattr(builder, "source_identity", lambda root: {"commit": "fixture"})
+    monkeypatch.setattr(builder, "cache_environment", lambda *args, **kwargs: {})
+    monkeypatch.setattr(builder, "run", record)
+    monkeypatch.setattr(builder, "stage_bundle", stage)
+    result = builder.build(root, android_sdk, output, tmp_path / "cargo-output", "1.85.0")
+    go_calls = [(args, env) for args, env in calls if args[-1].startswith("./cmd/")]
+    assert len(go_calls) == 4
+    for args, env in go_calls:
+        assert env["CGO_ENABLED"] == "0"
+        assert ("-overlay" in args) is (env["GOARCH"] == "amd64")
+        assert env["GOOS"] == ("linux" if env["GOARCH"] == "amd64" else "android")
+    assert result["goCompatibility"]["x86_64"]["pidfdProbeEnabled"] is False
+    assert result["goCompatibility"]["arm64-v8a"]["mode"] == "official-android-arm64"
+    assert (sdk / "src/os/pidfd_linux.go").read_bytes() == original
 
 
 def elf(path: Path, *, machine: int = 183, interpreter: str = "/system/bin/linker64", alignment: int = 16384) -> Path:
@@ -53,7 +174,7 @@ def test_native_bundle_omits_python_and_preserves_input_files(tmp_path: Path) ->
     (root / "VERSION").write_text(f"{VERSION}\n", encoding="utf-8")
     rust = elf(tmp_path / "rust")
     go = elf(tmp_path / "go")
-    manifest = stage_bundle(root, output, {"arm64-v8a": {"rust": rust, "go": go}})
+    manifest = stage_bundle(root, output, {"arm64-v8a": {"rust": rust, "go": go, "worker": rust, "launcher": go}})
     assert manifest["version"] == VERSION
     assert {entry["path"] for entry in manifest["assets"]} == {
         "skills/builtin/example.json", "static/ui/index.html", "static/ui/.vite/manifest.json",
@@ -74,7 +195,7 @@ def test_native_bundle_requires_the_runtime_evaluation_corpus_before_staging(tmp
     (root / "VERSION").write_text(f"{VERSION}\n", encoding="utf-8")
     rust, go = elf(tmp_path / "rust"), elf(tmp_path / "go")
     with pytest.raises(ValueError, match="evaluation corpus"):
-        stage_bundle(root, output, {"arm64-v8a": {"rust": rust, "go": go}})
+        stage_bundle(root, output, {"arm64-v8a": {"rust": rust, "go": go, "worker": rust, "launcher": go}})
     assert not output.exists()
 
 
@@ -90,7 +211,7 @@ def test_native_bundle_rebuild_replaces_stale_assets_and_preserves_siblings(tmp_
     golden.write_text('{"caseId":"one"}\n', encoding="utf-8")
     (root / "VERSION").write_text(f"{VERSION}\n", encoding="utf-8")
     rust, go = elf(tmp_path / "rust"), elf(tmp_path / "go")
-    binaries = {"arm64-v8a": {"rust": rust, "go": go}}
+    binaries = {"arm64-v8a": {"rust": rust, "go": go, "worker": rust, "launcher": go}}
     stage_bundle(root, output, binaries)
     sibling = output / "assets/retained.txt"
     sibling.write_bytes(b"unrelated output")
@@ -159,7 +280,7 @@ def test_native_bundle_persistent_publication_refusal_restores_previous_assets(
     monkeypatch.setattr(Path, "rename", deny_publication)
     monkeypatch.setattr("scripts.build_android_native.time.sleep", waits.append)
     with pytest.raises(PermissionError):
-        stage_bundle(root, output, {"arm64-v8a": {"rust": tmp_path / "rust", "go": tmp_path / "go"}})
+        stage_bundle(root, output, {"arm64-v8a": {"rust": tmp_path / "rust", "go": tmp_path / "go", "worker": tmp_path / "rust", "launcher": tmp_path / "go"}})
     assert refused == (4 if winerror is not None else 1)
     assert len(waits) == (3 if winerror is not None else 0) and sum(waits) <= 0.301
     assert {path.relative_to(destination).as_posix(): path.read_bytes() for path in destination.rglob("*") if path.is_file()} == prior
@@ -186,7 +307,7 @@ def test_native_bundle_failed_restore_keeps_previous_assets_for_recovery(
     monkeypatch.setattr(Path, "rename", deny_publish_and_restore)
     monkeypatch.setattr("scripts.build_android_native.time.sleep", lambda _: None)
     with pytest.raises(RuntimeError, match="prior assets remain for recovery"):
-        stage_bundle(root, output, {"arm64-v8a": {"rust": tmp_path / "rust", "go": tmp_path / "go"}})
+        stage_bundle(root, output, {"arm64-v8a": {"rust": tmp_path / "rust", "go": tmp_path / "go", "worker": tmp_path / "rust", "launcher": tmp_path / "go"}})
     retired = list(output.glob(".native-stage-*/previous"))
     assert len(retired) == 1 and not destination.exists()
     assert {path.relative_to(retired[0]).as_posix(): path.read_bytes() for path in retired[0].rglob("*") if path.is_file()} == prior
@@ -218,7 +339,7 @@ def test_native_bundle_refused_retirement_does_not_leak_staged_resources(
     monkeypatch.setattr(Path, "rename", deny_retirement)
     monkeypatch.setattr("scripts.build_android_native.time.sleep", waits.append)
     with pytest.raises(PermissionError):
-        stage_bundle(root, output, {"arm64-v8a": {"rust": tmp_path / "rust", "go": tmp_path / "go"}})
+        stage_bundle(root, output, {"arm64-v8a": {"rust": tmp_path / "rust", "go": tmp_path / "go", "worker": tmp_path / "rust", "launcher": tmp_path / "go"}})
     assert refused == (4 if winerror is not None else 1)
     assert len(waits) == (3 if winerror is not None else 0) and sum(waits) <= 0.301
     assert {path.relative_to(destination).as_posix(): path.read_bytes() for path in destination.rglob("*") if path.is_file()} == prior
@@ -262,3 +383,118 @@ def test_native_source_identity_binds_runtime_contracts_and_evaluation_inputs(tm
         assert after["commit"] == before["commit"] and after["dirty"] is True
         assert after["sourceSha256"] != before["sourceSha256"]
         path.write_bytes(old)
+
+
+@pytest.mark.parametrize("missing", ["rust", "go", "worker", "launcher"])
+def test_native_bundle_refuses_an_incomplete_managed_process_tree(tmp_path: Path, missing: str) -> None:
+    root, output = managed_bundle_fixture(tmp_path)
+    binaries = {role: elf(tmp_path / role) for role in ("rust", "go", "worker", "launcher")}
+    del binaries[missing]
+    with pytest.raises(ValueError, match="complete native process tree"):
+        stage_bundle(root, output, {"arm64-v8a": binaries})
+    assert not output.exists(), "incomplete process tree published staged output"
+
+
+def managed_bundle_fixture(tmp_path: Path) -> tuple[Path, Path]:
+    root, output = tmp_path / "repo", tmp_path / "output"
+    (root / "static/ui").mkdir(parents=True)
+    (root / "static/ui/index.html").write_text("<html>native</html>", encoding="utf-8")
+    (root / "skills").mkdir()
+    golden = root / "evals/golden/skills/skill_eval_cases.jsonl"
+    golden.parent.mkdir(parents=True)
+    golden.write_text('{"caseId":"native-managed"}\n', encoding="utf-8")
+    (root / "VERSION").write_text(f"{VERSION}\n", encoding="utf-8")
+    return root, output
+
+
+def test_native_bundle_packages_every_managed_role_with_its_original_bytes(tmp_path: Path) -> None:
+    root, output = managed_bundle_fixture(tmp_path)
+    binaries = {role: elf(tmp_path / role) for role in ("rust", "go", "worker", "launcher")}
+    for role, path in binaries.items():
+        path.write_bytes(path.read_bytes() + role.encode())
+    manifest = stage_bundle(root, output, {"arm64-v8a": binaries})
+    assert set(manifest["binaries"]["arm64-v8a"]) == set(binaries)
+    filenames = {"rust": "gateway", "go": "control", "worker": "worker", "launcher": "launch"}
+    for role, label in filenames.items():
+        assert (output / f"jniLibs/arm64-v8a/libdeepseek_{label}.so").read_bytes() == binaries[role].read_bytes()
+
+
+def test_native_bundle_checks_worker_loader_before_publishing_any_role(tmp_path: Path) -> None:
+    root, output = managed_bundle_fixture(tmp_path)
+    binaries = {role: elf(tmp_path / role) for role in ("rust", "go", "worker", "launcher")}
+    elf(binaries["worker"], interpreter="/lib64/ld-linux-x86-64.so.2")
+    with pytest.raises(ValueError, match="Android PIE loader"):
+        stage_bundle(root, output, {"arm64-v8a": binaries})
+    assert not output.exists(), "unloadable worker partially published other roles"
+
+
+def managed_apk_entries(tmp_path: Path) -> dict[str, bytes]:
+    root, output = managed_bundle_fixture(tmp_path)
+    roles = ("rust", "go", "worker", "launcher")
+    binaries = {abi: {role: elf(tmp_path / f"{abi}-{role}", machine=machine) for role in roles}
+                for abi, machine in (("arm64-v8a", 183), ("x86_64", 62))}
+    manifest = stage_bundle(root, output, binaries)
+    manifest.update(toolchains={}, sourceIdentity={"commit": "a" * 40, "sourceSha256": "b" * 64})
+    entries = {}
+    for path in output.rglob("*"):
+        if path.is_file():
+            relative = path.relative_to(output).as_posix()
+            entries[relative.replace("jniLibs/", "lib/", 1)] = path.read_bytes()
+    entries["assets/native/bundle.json"] = json.dumps(manifest).encode()
+    return entries
+
+
+def write_apk_fixture(path: Path, entries: dict[str, bytes]) -> None:
+    with zipfile.ZipFile(path, "w") as archive:
+        for name, data in entries.items():
+            archive.writestr(name, data)
+
+
+def test_built_apk_inspection_requires_all_four_original_managed_images(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "scripts"))
+    inspector = importlib.import_module("check_native_android_package")
+    entries = managed_apk_entries(tmp_path)
+    apk = tmp_path / "managed.apk"
+    write_apk_fixture(apk, entries)
+    result = inspector.inspect_package(apk)
+    for abi in ("arm64-v8a", "x86_64"):
+        assert set(result["binaries"][abi]) == {"rust", "go", "worker", "launcher"}
+    assert not result["releaseQualified"] and not result["deviceExecutionVerified"]
+
+
+def test_built_apk_report_binds_the_effective_go_variant_to_original_manifest_bytes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "scripts"))
+    inspector = importlib.import_module("check_native_android_package")
+    builder = importlib.import_module("scripts.build_android_native")
+    entries = managed_apk_entries(tmp_path)
+    manifest = json.loads(entries["assets/native/bundle.json"])
+    manifest["goCompatibility"] = builder.expected_android_go_compatibility()
+    entries["assets/native/bundle.json"] = json.dumps(manifest).encode()
+    apk = tmp_path / "managed-variant.apk"
+    write_apk_fixture(apk, entries)
+    result = inspector.inspect_package(apk)
+    assert result["goCompatibility"] == manifest["goCompatibility"]
+    assert result["bundleManifestSha256"] == hashlib.sha256(entries["assets/native/bundle.json"]).hexdigest()
+    assert not result["releaseQualified"] and not result["productionAuthorityQualified"]
+
+
+@pytest.mark.parametrize("fault", ["missing-role", "changed-worker-bytes", "foreign-worker-loader"])
+def test_built_apk_inspection_refuses_a_missing_or_changed_worker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault: str) -> None:
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "scripts"))
+    inspector = importlib.import_module("check_native_android_package")
+    entries = managed_apk_entries(tmp_path)
+    manifest = json.loads(entries["assets/native/bundle.json"])
+    key = "lib/arm64-v8a/libdeepseek_worker.so"
+    if fault == "missing-role":
+        del manifest["binaries"]["arm64-v8a"]["worker"]
+    elif fault == "changed-worker-bytes":
+        entries[key] += b"changed after manifest signing"
+    else:
+        path = elf(tmp_path / "foreign-worker", interpreter="/lib64/ld-linux-x86-64.so.2")
+        entries[key] = path.read_bytes()
+        manifest["binaries"]["arm64-v8a"]["worker"]["sha256"] = hashlib.sha256(entries[key]).hexdigest()
+    entries["assets/native/bundle.json"] = json.dumps(manifest).encode()
+    apk = tmp_path / "refused.apk"
+    write_apk_fixture(apk, entries)
+    with pytest.raises(ValueError):
+        inspector.inspect_package(apk)

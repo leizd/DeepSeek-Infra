@@ -87,9 +87,15 @@ def generate(output_dir: Path, *, empty: bool = False, target_health: bool = Fal
             checkpoint = backup_control_authority.snapshot_authority_from_control_db()
             backup_control_authority.record_local_authority_head(checkpoint)
             checkpoint_path = output_dir / f"{prefix}inventory_checkpoint_v1.json"
+            # newline="\n" is required, not cosmetic: this file is an exact-merge
+            # fixture compared byte-for-byte with the checked-in copy, and the default
+            # newline translation writes CRLF on Windows. Without it the comparison
+            # fails on a clean checkout for reasons that have nothing to do with the
+            # content - which is how this was found.
             checkpoint_path.write_text(
                 json.dumps(checkpoint, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n",
                 encoding="utf-8",
+                newline="\n",
             )
             # The standard layout implies a sibling projection directory per
             # domain. Populate it from the authority rows, then export: the

@@ -322,3 +322,76 @@ pub(crate) fn casefold(value: &str) -> String {
     }
     folded
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{casefold, decimal_digit};
+
+    /// The multi-character expansions the table exists for, measured against
+    /// CPython 3.13 `str.casefold()`.
+    #[test]
+    fn the_documented_expansions_match_the_oracle() {
+        let cases: [(char, &[u32]); 6] = [
+            ('\u{b5}', &[0x3bc]),
+            ('\u{df}', &[0x73, 0x73]),
+            ('\u{149}', &[0x2bc, 0x6e]),
+            ('\u{390}', &[0x3b9, 0x308, 0x301]),
+            ('\u{3b0}', &[0x3c5, 0x308, 0x301]),
+            ('\u{587}', &[0x565, 0x582]),
+        ];
+        for (input, expected) in cases {
+            let folded = casefold(&input.to_string());
+            let actual: Vec<u32> = folded.chars().map(u32::from).collect();
+            assert_eq!(actual, expected, "casefold({input:?})");
+        }
+    }
+
+    /// Every scalar value must be accepted and fold stably. The table is one
+    /// `match` arm per character, so walking the whole range is what exercises
+    /// all of them. Stability, not the absence of uppercase, is the invariant:
+    /// CPython folds Cherokee U+13A0 to itself.
+    #[test]
+    fn every_scalar_value_folds_without_panicking() {
+        let mut changed = 0usize;
+        for code in 0u32..=0x10FFFF {
+            let Some(character) = char::from_u32(code) else {
+                continue;
+            };
+            let once = casefold(&character.to_string());
+            let twice = casefold(&once);
+            assert_eq!(once, twice, "casefold is not stable at U+{code:04X}");
+            if once != character.to_string() {
+                changed += 1;
+            }
+        }
+        assert!(
+            changed > 0,
+            "no scalar value folded, the table is not wired"
+        );
+    }
+
+    /// `decimal_digit` maps each zero point and its following nine values to
+    /// ASCII `0`..`9`, and refuses everything else.
+    #[test]
+    fn decimal_digits_cover_every_zero_point_and_reject_the_rest() {
+        // 0x1D7CE is deliberately absent: its run ends exactly at 0x1D7D8,
+        // which is the next zero point, so "the value after the run" is a digit
+        // there rather than a rejection.
+        for zero in [0x30u32, 0x660, 0x966, 0xff10, 0x104a0, 0x1fbf0] {
+            for offset in 0u32..10 {
+                let character = char::from_u32(zero + offset).expect("valid scalar");
+                let digit = decimal_digit(character).expect("digit");
+                assert_eq!(digit, char::from(b'0' + offset as u8));
+            }
+            let after = char::from_u32(zero + 10).expect("valid scalar");
+            assert!(
+                decimal_digit(after).is_none(),
+                "U+{:04X} was accepted as a digit",
+                zero + 10
+            );
+        }
+        assert!(decimal_digit('a').is_none());
+        assert!(decimal_digit(' ').is_none());
+        assert!(decimal_digit('\u{0}').is_none());
+    }
+}

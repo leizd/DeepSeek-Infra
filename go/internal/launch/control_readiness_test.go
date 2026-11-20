@@ -1,0 +1,193 @@
+package launch
+
+import (
+	"context"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/leizd/DeepSeek-Infra/go/internal/config"
+)
+
+func managedFixtureControlEnvironment(t *testing.T, environment []string) []string {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := listener.Addr().String()
+	_ = listener.Close()
+	return append(environment, "DEEPSEEKD_LISTEN="+address, "GO_CONTROL_ADDR=http://"+address)
+}
+
+func TestManagedControlReadinessRequiresTheExpectedLiveWriter(t *testing.T) {
+	var calls atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/healthz" || r.Header.Get("Authorization") != "" {
+			t.Error("readiness changed method, path or attached a credential")
+		}
+		n := calls.Add(1)
+		w.Header().Set(config.ControlWriterFenceHeader, "2")
+		w.Header().Set(config.ControlWriterOwnerHeader, "current-owner")
+		if n == 1 {
+			w.Header().Set(config.ControlWriterFenceHeader, "1")
+		}
+		if n == 2 {
+			w.Header().Set(config.ControlWriterOwnerHeader, "stale-owner")
+		}
+		if n == 3 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := waitManagedControl(ctx, server.URL, 2, "current-owner"); err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 4 {
+		t.Fatal("stale writer or unavailable control admitted")
+	}
+}
+func TestManagedControlReadinessRefusesForeignTargetsAndCancellation(t *testing.T) {
+	for _, target := range []string{"", "https://127.0.0.1:8090", "http://example.com:80", "http://0.0.0.0:8090", "http://user@127.0.0.1:8090", "http://127.0.0.1:8090/other", "http://127.0.0.1:8090/?q=1", "http://127.0.0.1:8090/#x", "http://127.0.0.1:0"} {
+		if err := waitManagedControl(context.Background(), target, 1, "owner"); err == nil {
+			t.Fatalf("foreign target admitted: %s", target)
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := waitManagedControl(ctx, "http://127.0.0.1:1", 1, "owner"); err == nil {
+		t.Fatal("cancelled control became ready")
+	}
+	if err := waitManagedControl(nil, "http://127.0.0.1:1", 1, "owner"); err == nil {
+		t.Fatal("missing context admitted")
+	}
+}
+
+func TestManagedControlReadinessWaitsForRetainedWriterLease(t *testing.T) {
+	// The retained default writer lease is thirty seconds. A hard-ended child
+	// must not be replaced early, nor killed by a shorter launcher deadline.
+	delay := config.ControlWriterStartupWait - 5*time.Second
+	started := time.Now()
+	readyAt := started.Add(delay)
+	var staleObservations atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/healthz" || r.Header.Get("Authorization") != "" {
+			t.Error("writer readiness changed its method, path or credential boundary")
+		}
+		if time.Now().Before(readyAt) {
+			staleObservations.Add(1)
+			w.Header().Set(config.ControlWriterFenceHeader, "1")
+			w.Header().Set(config.ControlWriterOwnerHeader, "previous-owner")
+			return
+		}
+		w.Header().Set(config.ControlWriterFenceHeader, "2")
+		w.Header().Set(config.ControlWriterOwnerHeader, "successor-owner")
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), config.ControlWriterStartupWait+5*time.Second)
+	defer cancel()
+	if err := waitManagedControl(ctx, server.URL, 2, "successor-owner"); err != nil {
+		t.Fatal("launcher refused the existing bounded writer-lease wait", err)
+	}
+	if time.Since(started) < delay || staleObservations.Load() == 0 {
+		t.Fatal("stale writer admitted before lease takeover")
+	}
+}
+func TestManagedGatewayWaitsForActualControlReadiness(t *testing.T) {
+	managedReadinessFixture(t, false)
+}
+
+func TestManagedDesktopAndEdgeWaitForActualControlReadiness(t *testing.T) {
+	managedReadinessFixture(t, true)
+}
+
+func managedReadinessFixture(t *testing.T, desktop bool) {
+	t.Helper()
+	root := t.TempDir()
+	processes, environment := managedFailurePlan(t, root)
+	environment = append(environment, "DEEPSEEK_MANAGED_FIXTURE_DELAY_CONTROL=1")
+	for i := range processes {
+		processes[i].Env = append(processes[i].Env, "DEEPSEEK_MANAGED_FIXTURE_DELAY_CONTROL=1")
+	}
+	if desktop {
+		// Deliberately supply the UI first. Managed launch must retain it after
+		// the native services without adding their private environment to it.
+		ui := Process{Name: "deepseek-desktop", Path: processes[0].Path, Env: []string{
+			"DEEPSEEK_INFRA_ROOT=" + root, "DEEPSEEK_LAUNCH_HELPER=1", "DEEPSEEK_MANAGED_FIXTURE_ROLE=deepseek-desktop",
+			"DEEPSEEK_DESKTOP_URL=http://127.0.0.1:8000/", "DEEPSEEK_DESKTOP_PROFILE=" + filepath.Join(root, ".desktop-webview"),
+		}}
+		processes = append([]Process{ui}, processes...)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	done := make(chan error, 1)
+	started := time.Now()
+	finished := false
+	go func() { done <- Run(ctx, processes, environment, io.Discard) }()
+	defer func() {
+		if t.Failed() {
+			t.Logf("fixture worker=%s control=%s", launchEnvironmentValue(environment, "DEEPSEEK_WORKER_LISTEN"), launchEnvironmentValue(environment, "DEEPSEEKD_LISTEN"))
+			if _, err := os.Stat(filepath.Join(root, "fixture-control-listen-failed")); err == nil {
+				t.Log("fixture control listener failed before serving health")
+			}
+		}
+		cancel()
+		if finished {
+			return
+		}
+		select {
+		case err := <-done:
+			if t.Failed() {
+				t.Logf("managed fixture cleanup result: %v", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Error("managed subprocess cleanup timed out")
+		}
+	}()
+	// Match the original managed-launch test's bounded startup window. The
+	// readiness observation follows custody initialization, TLS binding and
+	// the real Go database open; it has no independent five-second budget.
+	deadline := time.NewTimer(20 * time.Second)
+	defer deadline.Stop()
+	waitFile := func(name string) {
+		t.Helper()
+		ticker := time.NewTicker(20 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-deadline.C:
+				t.Fatalf("missing readiness observation %s after %s", name, time.Since(started))
+			case err := <-done:
+				finished = true
+				t.Fatalf("managed launch stopped before %s: %v", name, err)
+			case <-ticker.C:
+				if _, err := os.Stat(filepath.Join(root, name)); err == nil {
+					t.Logf("observed %s after %s", name, time.Since(started))
+					return
+				}
+			}
+		}
+	}
+	waitFile("fixture-control-ready")
+	waitFile("fixture-readiness-probed")
+	if _, err := os.Stat(filepath.Join(root, "fixture-gateway-ready")); !os.IsNotExist(err) {
+		t.Fatal("gateway started before the actual Go endpoint was ready")
+	}
+	if _, err := os.Stat(filepath.Join(root, "fixture-desktop-ready")); !os.IsNotExist(err) {
+		t.Fatal("desktop started before the actual Go endpoint was ready")
+	}
+	if err := os.WriteFile(filepath.Join(root, "fixture-release-control"), []byte("release"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	waitFile("fixture-gateway-ready")
+	if desktop {
+		waitFile("fixture-desktop-ready")
+	}
+}

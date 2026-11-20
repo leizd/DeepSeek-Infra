@@ -363,8 +363,9 @@ async fn replication_list_reads_job_files_without_creating_the_directory() {
 
     let (status, unauthenticated) = fixture.request("GET", LIST, false).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{unauthenticated}");
-    assert_eq!(unauthenticated["error"]["code"], "UNAUTHORIZED");
-    assert_eq!(unauthenticated["error"]["message"], "Auth required");
+    assert_eq!(unauthenticated["error"], "Auth required");
+    assert_eq!(unauthenticated["code"], "unauthorized");
+    assert_eq!(unauthenticated["code"], "unauthorized");
 
     std::fs::write(dir.join("zz-bad.json"), [0xFF, 0xFE]).unwrap();
     let (status, invalid) = fixture.request("GET", LIST, true).await;

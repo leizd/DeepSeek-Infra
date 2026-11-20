@@ -59,7 +59,7 @@ async fn dispatch(
 
 /// `registry.create_from_template`. `projectId` uses Python's `or ""`, then a
 /// dict `overrides` replaces keys. `overrides.projectId` wins.
-fn create_from_template(template_id: &str, payload: &Value) -> Result<Value, AppError> {
+pub(crate) fn create_from_template(template_id: &str, payload: &Value) -> Result<Value, AppError> {
     let template = builtin_template(template_id)
         .ok_or_else(|| AppError::not_found("Automation template not found"))?;
     let mut automation = template
@@ -82,7 +82,7 @@ fn create_from_template(template_id: &str, payload: &Value) -> Result<Value, App
     Ok(json!({"ok": true, "automation": created}))
 }
 
-fn builtin_template(template_id: &str) -> Option<Value> {
+pub(crate) fn builtin_template(template_id: &str) -> Option<Value> {
     builtin_templates()
         .get("templates")
         .and_then(Value::as_array)
@@ -106,7 +106,7 @@ fn method_not_allowed() -> Response {
     response
 }
 
-fn builtin_templates() -> Value {
+pub(crate) fn builtin_templates() -> Value {
     json!({
         "ok": true,
         "templates": [

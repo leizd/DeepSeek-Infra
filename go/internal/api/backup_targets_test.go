@@ -101,7 +101,7 @@ func TestBackupTargetsFailClosedAtThePublicReadBoundary(t *testing.T) {
 		{http.MethodGet, "127.0.0.1", "", http.StatusUnauthorized, "unauthorized"},
 		{http.MethodGet, "127.0.0.1", "wrong", http.StatusUnauthorized, "unauthorized"},
 		{http.MethodGet, "127.0.0.1", "target-public-secret", http.StatusServiceUnavailable, "CONTROL_UNAVAILABLE"},
-		{http.MethodPost, "127.0.0.1", "target-public-secret", http.StatusMethodNotAllowed, ""},
+		{http.MethodPut, "127.0.0.1", "target-public-secret", http.StatusMethodNotAllowed, ""},
 	} {
 		request := httptest.NewRequest(check.method, "/api/workspace/backup-targets", nil)
 		request.Host = check.host

@@ -6,7 +6,9 @@ use crate::{
 };
 use deepseek_federation::{ControlSigningKey, load_control_signer};
 use deepseek_protocol::generated::deepseek::action::v1::{
-    ControlSigningPurpose, SignControlRequest, SignControlResponse, StorageConditionType,
+    ControlSignerBindingRequest, ControlSignerBindingResponse, ControlSigningPurpose,
+    SignControlRequest, SignControlResponse, StorageConditionType,
+    control_signer_bootstrap_server::ControlSignerBootstrap as BootstrapRpc,
     control_signer_server::ControlSigner as SignerRpc,
 };
 use serde_json::{Value, json};
@@ -24,8 +26,9 @@ use zeroize::Zeroizing;
 pub const BUNDLE_FILE: &str = "DEEPSEEK_WORKER_CONTROL_SIGNER_BUNDLE_FILE";
 pub const PASSPHRASE_FILE: &str = "DEEPSEEK_WORKER_CONTROL_SIGNER_PASSPHRASE_FILE";
 pub struct ControlSigner {
-    key: ControlSigningKey,
+    pub(crate) key: ControlSigningKey,
     journal: SignatureJournal,
+    pub(crate) native_origin: Option<crate::native_origin::NativeOriginCustody>,
 }
 
 #[cfg(test)]
@@ -40,6 +43,123 @@ impl std::fmt::Debug for ControlSigner {
 }
 
 impl ControlSigner {
+    pub(crate) fn sign_recovery_progress(
+        &mut self,
+        evidence: deepseek_protocol::generated::deepseek::agent::v1::AgentRecoveryProgressEvidence,
+    ) -> Result<
+        deepseek_protocol::generated::deepseek::agent::v1::AgentRecoveryProgressReceipt,
+        Status,
+    > {
+        use deepseek_protocol::generated::deepseek::agent::v1::AgentRecoveryProgressReceipt;
+        use prost::Message as _;
+        let payload = evidence.encode_to_vec();
+        let signature = self
+            .key
+            .sign_agent_recovery_progress(&evidence)
+            .map_err(|_| Status::failed_precondition("AGENT_RECOVERY_PROGRESS_INVALID"))?;
+        let receipt = AgentRecoveryProgressReceipt {
+            schema_version: 1,
+            evidence: Some(evidence),
+            signature,
+            signer_public_key: self.key.public_key(),
+        };
+        let bytes = receipt.encode_to_vec();
+        let mut identity = b"deepseek-infra:agent-recovery-progress:request\0".to_vec();
+        identity.extend(&payload);
+        let request_id = format!("{:x}", Sha256::digest(identity));
+        let mut nonce = b"deepseek-infra:agent-recovery-progress:nonce\0".to_vec();
+        nonce.extend(&payload);
+        let nonce = format!("{:x}", Sha256::digest(nonce));
+        if let Some(prior) = self.journal.existing(&request_id)? {
+            if prior != bytes {
+                return Err(Status::data_loss("AGENT_RECOVERY_PROGRESS_CORRUPT"));
+            }
+        } else {
+            self.journal.record(&request_id, &nonce, &bytes)?;
+        }
+        Ok(receipt)
+    }
+
+    /// Only accept an existing original receipt. Recovery must not recreate a
+    /// missing signature journal entry by calling the signing path again.
+    pub(crate) fn verify_retained_node_outcome(
+        &self,
+        receipt: &deepseek_protocol::generated::deepseek::agent::v1::AgentNodeOutcomeReceipt,
+    ) -> Result<(), Status> {
+        use prost::Message as _;
+        let denied = || Status::failed_precondition("AGENT_RECOVERY_RECEIPT_NOT_RETAINED");
+        let evidence = receipt.evidence.as_ref().ok_or_else(denied)?;
+        if receipt.schema_version != 1
+            || receipt.signature.len() != 64
+            || receipt.signer_public_key != self.key.public_key()
+        {
+            return Err(denied());
+        }
+        let mut identity = b"deepseek-infra:agent-node-outcome-receipt-v1:request\0".to_vec();
+        identity.extend(evidence.encode_to_vec());
+        let request_id = format!("{:x}", Sha256::digest(&identity));
+        if self.journal.existing(&request_id)?.as_deref()
+            != Some(receipt.encode_to_vec().as_slice())
+        {
+            return Err(denied());
+        }
+        Ok(())
+    }
+
+    /// Read the already published proof without entering any signing/record path.
+    /// Go supplies the digest of its original retained document, not a new scope.
+    pub(crate) fn retained_node_outcome(
+        &self,
+        evidence: &deepseek_protocol::generated::deepseek::agent::v1::AgentNodeOutcomeEvidence,
+        expected_receipt_sha256: &str,
+    ) -> Result<deepseek_protocol::generated::deepseek::agent::v1::AgentNodeOutcomeReceipt, Status>
+    {
+        use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+        use deepseek_protocol::generated::deepseek::agent::v1::AgentNodeOutcomeReceipt;
+        use ed25519_dalek::{Signature, VerifyingKey};
+        use prost::Message as _;
+        let denied = || Status::failed_precondition("AGENT_RECOVERY_RECEIPT_NOT_RETAINED");
+        if expected_receipt_sha256.len() != 64
+            || !expected_receipt_sha256
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        {
+            return Err(denied());
+        }
+        let payload = evidence.encode_to_vec();
+        let mut identity = b"deepseek-infra:agent-node-outcome-receipt-v1:request\0".to_vec();
+        identity.extend(&payload);
+        let request_id = format!("{:x}", Sha256::digest(identity));
+        let document = self.journal.existing(&request_id)?.ok_or_else(denied)?;
+        if document.is_empty()
+            || document.len() > 1024 * 1024
+            || format!("{:x}", Sha256::digest(&document)) != expected_receipt_sha256
+        {
+            return Err(denied());
+        }
+        let receipt = AgentNodeOutcomeReceipt::decode(document.as_slice()).map_err(|_| denied())?;
+        if receipt.encode_to_vec() != document
+            || receipt.schema_version != 1
+            || receipt.evidence.as_ref() != Some(evidence)
+            || receipt.signer_public_key != self.key.public_key()
+        {
+            return Err(denied());
+        }
+        let public: [u8; 32] = URL_SAFE_NO_PAD
+            .decode(&receipt.signer_public_key)
+            .map_err(|_| denied())?
+            .try_into()
+            .map_err(|_| denied())?;
+        let key = VerifyingKey::from_bytes(&public).map_err(|_| denied())?;
+        let signature = Signature::from_slice(&receipt.signature).map_err(|_| denied())?;
+        let mut message = b"deepseek-infra:agent-node-outcome-proof-v1\0".to_vec();
+        message.extend(payload);
+        key.verify_strict(&message, &signature)
+            .map_err(|_| denied())?;
+        self.verify_retained_node_outcome(&receipt)?;
+        Ok(receipt)
+    }
+
     pub(crate) fn prepare_agent_credentials(
         &self,
         root: &Path,
@@ -74,6 +194,42 @@ impl ControlSigner {
         }
     }
 
+    pub(crate) fn sign_failure_projection(
+        &mut self,
+        evidence: deepseek_protocol::generated::deepseek::agent::v1::AgentFailureProjectionEvidence,
+    ) -> Result<
+        deepseek_protocol::generated::deepseek::agent::v1::AgentFailureProjectionReceipt,
+        Status,
+    > {
+        use deepseek_protocol::generated::deepseek::agent::v1::AgentFailureProjectionReceipt;
+        use prost::Message as _;
+        let payload = evidence.encode_to_vec();
+        let signature = self
+            .key
+            .sign_agent_failure_projection(&evidence)
+            .map_err(|_| Status::failed_precondition("AGENT_FAILURE_PROJECTION_INVALID"))?;
+        let receipt = AgentFailureProjectionReceipt {
+            schema_version: 1,
+            evidence: Some(evidence),
+            signature,
+            signer_public_key: self.key.public_key(),
+        };
+        let bytes = receipt.encode_to_vec();
+        let mut request = b"deepseek-infra:agent-failure-projection:request\0".to_vec();
+        request.extend(&payload);
+        let request_id = format!("{:x}", Sha256::digest(&request));
+        let mut nonce = b"deepseek-infra:agent-failure-projection:nonce\0".to_vec();
+        nonce.extend(&payload);
+        let nonce = format!("{:x}", Sha256::digest(&nonce));
+        if let Some(prior) = self.journal.existing(&request_id)? {
+            if prior != bytes {
+                return Err(Status::data_loss("AGENT_FAILURE_PROJECTION_CORRUPT"));
+            }
+        } else {
+            self.journal.record(&request_id, &nonce, &bytes)?;
+        }
+        Ok(receipt)
+    }
     pub(crate) fn sign_synthesis_projection(
         &mut self,
         evidence: deepseek_protocol::generated::deepseek::agent::v1::AgentSynthesisProjectionEvidence,
@@ -245,10 +401,76 @@ pub fn load_control_signer_from_env(
     let bound = canonical_json_bytes(key.binding()).map_err(|_| invalid())?;
     let journal_binding = String::from_utf8(bound).map_err(|_| invalid())?;
     let journal = SignatureJournal::open(root, &journal_binding).map_err(|_| invalid())?;
-    Ok(Some(ControlSigner { key, journal }))
+    let native_origin = match get("DEEPSEEK_WORKER_MANAGED_ROOT") {
+        Ok(path) => crate::native_origin::NativeOriginCustody::load(Path::new(&path), &key)?,
+        Err(VarError::NotPresent) => None,
+        Err(_) => return Err(invalid()),
+    };
+    Ok(Some(ControlSigner {
+        key,
+        journal,
+        native_origin,
+    }))
 }
 fn request_error() -> Status {
     Status::invalid_argument("CONTROL_SIGNER_REQUEST_INVALID")
+}
+
+#[tonic::async_trait]
+impl BootstrapRpc for WorkerRpcService {
+    async fn get_binding(
+        &self,
+        request: Request<ControlSignerBindingRequest>,
+    ) -> Result<Response<ControlSignerBindingResponse>, Status> {
+        let identity = self
+            .authenticator
+            .authenticate(request.metadata())
+            .map_err(|error| Status::unauthenticated(error.code()))?;
+        if identity.service_name != "go-control-plane" || identity.role != "controller" {
+            return Err(Status::permission_denied("CONTROL_SIGNER_CALLER_DENIED"));
+        }
+        let input = request.into_inner();
+        if input.schema_version != 1
+            || input.fleet_id.is_empty()
+            || input.environment.is_empty()
+            || input.fencing_token == 0
+            || input.fencing_token > i64::MAX as u64
+        {
+            return Err(Status::invalid_argument("CONTROL_SIGNER_BINDING_INVALID"));
+        }
+        let signer = self
+            .control_signer
+            .as_ref()
+            .ok_or_else(|| Status::unavailable("CONTROL_SIGNER_UNAVAILABLE"))?;
+        // Keep the existing worker -> signer lock order. This reads already
+        // loaded public metadata and never signs, admits, or writes a journal.
+        let worker = self.worker.lock().await;
+        let authority = worker
+            .authority
+            .as_ref()
+            .ok_or_else(|| Status::failed_precondition("CONTROL_SIGNER_BINDING_UNAVAILABLE"))?;
+        let signer = signer.lock().await;
+        let public = signer.key.public_key();
+        if input.fleet_id != authority.fleet_id
+            || input.environment != authority.environment
+            || input.fencing_token as i64 != authority.fencing_token
+            || public != authority.signer_public_key
+            || (!input.expected_signer_public_key.is_empty()
+                && input.expected_signer_public_key != public)
+        {
+            return Err(Status::failed_precondition(
+                "CONTROL_SIGNER_BINDING_MISMATCH",
+            ));
+        }
+        Ok(Response::new(ControlSignerBindingResponse {
+            schema_version: 1,
+            signer_public_key: public,
+            signer_key_id: authority.signer_key_id.clone(),
+            fleet_id: authority.fleet_id.clone(),
+            environment: authority.environment.clone(),
+            fencing_token: authority.fencing_token as u64,
+        }))
+    }
 }
 fn digest(value: &Value) -> Result<String, Status> {
     Ok(format!(

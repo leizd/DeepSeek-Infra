@@ -10,6 +10,7 @@ import (
 	internalprotocol "github.com/leizd/DeepSeek-Infra/go/internal/protocol"
 	actionv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/actionv1"
 	commonv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/commonv1"
+	mediav1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/mediav1"
 	"github.com/leizd/DeepSeek-Infra/go/internal/store"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -27,7 +28,11 @@ type Client struct {
 	tlsSecured     bool
 	bearerAttached bool
 	signer         actionv1.ControlSignerClient
+	bootstrap      actionv1.ControlSignerBootstrapClient
+	origin         actionv1.NativeOriginCustodyClient
 	nodes          agentNodeClient
+	media          mediav1.MediaMutationWorkerClient
+	mediaCreation  mediav1.MediaCreationPayloadsClient
 }
 
 func New(rpc actionv1.WorkerClient) *Client {

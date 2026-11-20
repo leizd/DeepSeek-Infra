@@ -13,6 +13,7 @@ from typing import Any
 
 from deepseek_infra.core import config
 from deepseek_infra.core.errors import AppError, ErrorCode
+from deepseek_infra.infra.native_runtime.authority import assert_python_writer_allowed
 
 CACHE_DIR = config.ROOT / ".backup-component-cache"
 READ_CHUNK_BYTES = 1024 * 1024
@@ -366,6 +367,7 @@ def get_default_cache() -> ComponentCache:
 
 
 def pin(digest_or_owner: str, digests: list[str] | None = None, *, owner_id: str | None = None) -> Path:
+    assert_python_writer_allowed("backup_component_cache_store")
     cache = get_default_cache()
     if digests is not None:
         return cache.pin(digest_or_owner, digests)
@@ -376,6 +378,7 @@ def pin(digest_or_owner: str, digests: list[str] | None = None, *, owner_id: str
 
 
 def unpin(owner_id: str) -> None:
+    assert_python_writer_allowed("backup_component_cache_store")
     get_default_cache().unpin(owner_id)
 
 
@@ -384,4 +387,5 @@ def is_pinned(digest: str) -> bool:
 
 
 def reconcile_pins() -> dict[str, Any]:
+    assert_python_writer_allowed("backup_component_cache_store")
     return get_default_cache().reconcile_pins()

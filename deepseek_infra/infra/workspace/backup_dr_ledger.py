@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from deepseek_infra.core import config
+from deepseek_infra.infra.native_runtime.authority import assert_python_writer_allowed
 
 BACKUP_DR_DIR = config.ROOT / ".backup-dr"
 EVIDENCE_DB = BACKUP_DR_DIR / "evidence.sqlite3"
@@ -237,6 +238,7 @@ def record_recovery_point(
     storage_protocol: str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> None:
+    assert_python_writer_allowed("backup_dr_ledger_store")
     with _DB_LOCK, _get_connection() as conn:
         conn.execute(
             """
@@ -292,6 +294,7 @@ def record_scrub_evidence(
     policy_id: str = "",
     details: dict[str, Any] | None = None,
 ) -> None:
+    assert_python_writer_allowed("backup_dr_ledger_store")
     with _DB_LOCK, _get_connection() as conn:
         _ensure_scrub_policy_column(conn)
         # Prefer new composite key; fall back for legacy DBs that still use (target, backup)
@@ -348,6 +351,7 @@ def record_drill_evidence(
     work_class: str | None = None,
     details: dict[str, Any] | None = None,
 ) -> None:
+    assert_python_writer_allowed("backup_dr_ledger_store")
     d_id = drill_id or f"drill_{uuid.uuid4().hex[:12]}"
     full_details = dict(details or {})
     if drill_kind:
@@ -396,6 +400,7 @@ def record_target_evidence(
     reason: str | None = None,
     details: dict[str, Any] | None = None,
 ) -> None:
+    assert_python_writer_allowed("backup_dr_ledger_store")
     with _DB_LOCK, _get_connection() as conn:
         conn.execute(
             """
@@ -433,6 +438,7 @@ def record_stage_sample(
     recovery_class: Any = None,
     target_id: str | None = None,
 ) -> None:
+    assert_python_writer_allowed("backup_dr_ledger_store")
     s_id = sample_id or f"sample_{uuid.uuid4().hex[:12]}"
     actual_bytes = bytes_transferred or bytes_count
     rc_data = recovery_class if isinstance(recovery_class, dict) else (recovery_class.to_dict() if hasattr(recovery_class, "to_dict") else {"tag": str(recovery_class or "default")})
@@ -478,6 +484,7 @@ def record_audit_evidence(
     error: str | None = None,
     details: dict[str, Any] | None = None,
 ) -> None:
+    assert_python_writer_allowed("backup_dr_ledger_store")
     a_id = audit_id or f"audit_{uuid.uuid4().hex[:12]}"
     t_start = started_at or observed_at or _utc_iso()
     t_status = status or result or "completed"
@@ -994,6 +1001,7 @@ def upsert_audit_job(
     completed_at: str | None = None,
     details: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    assert_python_writer_allowed("backup_dr_ledger_store")
     now = _utc_iso()
     started = started_at or now
     with _DB_LOCK, _get_connection() as conn:
@@ -1055,6 +1063,7 @@ def record_logical_recovery_copy(
     metadata: dict[str, Any] | None = None,
 ) -> str:
     """Record one target-local copy of a logical recovery point (same backupId + commitment)."""
+    assert_python_writer_allowed("backup_dr_ledger_store")
     digest = str(object_set_digest or "")
     logical_id = f"lrp_{policy_id}_{backup_id}_{digest[:16] if digest else 'na'}"
     with _DB_LOCK, _get_connection() as conn:
@@ -1220,6 +1229,7 @@ def update_recovery_copy_state(
     last_repair_at: str | None = None,
     last_failure: str | None = None,
 ) -> None:
+    assert_python_writer_allowed("backup_dr_ledger_store")
     with _DB_LOCK, _get_connection() as conn:
         updates: list[str] = ["state = ?"]
         params: list[Any] = [str(state)]
@@ -1255,6 +1265,7 @@ def mark_logical_recovery_point_retired(
     retired_at: str | None = None,
 ) -> None:
     """Mark a logical recovery point as retired, so it is never repaired or resurrected."""
+    assert_python_writer_allowed("backup_dr_ledger_store")
     at = retired_at or _utc_iso()
     with _DB_LOCK, _get_connection() as conn:
         conn.execute(

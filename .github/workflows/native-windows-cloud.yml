@@ -1,0 +1,688 @@
+name: Native Windows app platform verification
+
+on:
+  push:
+    branches: ["codex/rust-cloud/control-rpc-mtls-*"]
+    paths:
+      - ".github/workflows/native-windows-cloud.yml"
+      - "scripts/verify_native_windows_cloud.py"
+      - "go/internal/desktop/**"
+      - "tests/test_native_windows_cloud_gate.py"
+      - "docs/NATIVE_WINDOWS_CLOUD_VERIFICATION.md"
+  workflow_dispatch:
+    inputs:
+      verify_macos:
+        description: 'Also execute the native Go window on actual Intel and Apple silicon macOS runners'
+        type: boolean
+        required: false
+        default: false
+      verify_macos_product:
+        description: 'Build and run the actual Go/Rust Mac app, retained file workload and whole-app restart'
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-windows-cloud-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  windows-app:
+    runs-on: windows-2025
+    timeout-minutes: 60
+    env:
+      GIT_CONFIG_COUNT: "1"
+      GIT_CONFIG_KEY_0: core.autocrlf
+      GIT_CONFIG_VALUE_0: "false"
+      CGO_ENABLED: "0"
+      GOTOOLCHAIN: local
+      CARGO_BUILD_JOBS: "2"
+      CARGO_INCREMENTAL: "0"
+      CARGO_TARGET_DIR: ${{ github.workspace }}/artifacts/windows-native-rust-target
+      GOCACHE: ${{ github.workspace }}/artifacts/windows-native-go-cache
+      GOMODCACHE: ${{ github.workspace }}/artifacts/windows-native-go-modules
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - uses: dtolnay/rust-toolchain@1.85.0
+      - name: Install the repository checksum-pinned Windows Go toolchain
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $pin = (Get-Content -LiteralPath release/native_runtime_toolchain_v1.json -Raw | ConvertFrom-Json).go
+          $artifact = $pin.artifacts.windows_amd64
+          $archive = Join-Path $env:RUNNER_TEMP $artifact.filename
+          Invoke-WebRequest -Uri ('https://go.dev/dl/' + $artifact.filename) -OutFile $archive
+          if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $artifact.sha256) { throw 'Windows Go checksum mismatch' }
+          $installation = Join-Path $env:RUNNER_TEMP 'deepseek-windows-go'
+          Expand-Archive -LiteralPath $archive -DestinationPath $installation
+          $goBin = Join-Path $installation 'go/bin'
+          Add-Content -LiteralPath $env:GITHUB_PATH -Value $goBin
+          $version = & (Join-Path $goBin 'go.exe') version
+          if ($LASTEXITCODE -ne 0 -or $version -notmatch ('go' + [regex]::Escape($pin.version) + ' windows/amd64')) { throw 'Unexpected Windows Go toolchain' }
+      - name: Restore cloud-only Windows compilation caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.CARGO_TARGET_DIR }}
+            ${{ env.GOCACHE }}
+            ${{ env.GOMODCACHE }}
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: native-windows-v1-1.85.0-1.27.1-${{ hashFiles('rust/**/Cargo.toml', 'rust/Cargo.lock', 'go/go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            native-windows-v1-1.85.0-1.27.1-${{ hashFiles('rust/**/Cargo.toml', 'rust/Cargo.lock', 'go/go.sum') }}-
+      - name: Build the original React application
+        run: |
+          npm ci --prefix frontend
+          if ($LASTEXITCODE -ne 0) { throw 'Frontend dependency installation failed' }
+          npm run build --prefix frontend
+          if ($LASTEXITCODE -ne 0) { throw 'Frontend build failed' }
+      - name: Prepare exact-source platform evidence
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts/windows-native-cloud | Out-Null
+          python scripts/capture_evidence_context.py --out artifacts/windows-native-cloud/source-context.json
+          if ($LASTEXITCODE -ne 0) { throw 'Source context capture failed' }
+      - name: Build actual Windows Rust worker and public edge
+        run: |
+          python scripts/rust_build.py --toolchain 1.85.0 --target-dir $env:CARGO_TARGET_DIR -- build --locked -p deepseek-worker -p deepseek-gateway --bins 2>&1 | Tee-Object -FilePath artifacts/windows-native-cloud/rust-build.log
+          if ($LASTEXITCODE -ne 0) { throw 'Windows Rust build failed' }
+      - name: Verify retained media synchronization and recovery on Windows
+        run: |
+          python scripts/rust_build.py --toolchain 1.85.0 --target-dir $env:CARGO_TARGET_DIR -- test --locked -p deepseek-worker --lib media_journal::tests 2>&1 | Tee-Object -FilePath artifacts/windows-native-cloud/media-journal-tests.log
+          if ($LASTEXITCODE -ne 0) { throw 'Windows media journal recovery tests failed' }
+          $tests = Get-Content -LiteralPath artifacts/windows-native-cloud/media-journal-tests.log -Raw
+          foreach ($name in @('media_retained_publication_sync_never_creates_or_replaces_bytes', 'media_windows_readonly_recovery_keeps_original_unknown_until_sync_is_possible')) {
+            if ($tests -notmatch ('test .*' + $name + ' \.\.\. ok')) { throw ('Windows recovery case missing: ' + $name) }
+          }
+      - name: Build Windows media test binaries for all retained caller graphs
+        timeout-minutes: 20
+        run: |
+          foreach ($graph in @('worker', 'worker-policy', 'policy', 'gateway-policy', 'gateway')) {
+            $packages = switch ($graph) {
+              'worker' { @('-p', 'deepseek-worker') }
+              'worker-policy' { @('-p', 'deepseek-worker', '-p', 'deepseek-policy') }
+              'policy' { @('-p', 'deepseek-policy') }
+              'gateway-policy' { @('-p', 'deepseek-policy', '-p', 'deepseek-gateway') }
+              'gateway' { @('-p', 'deepseek-gateway') }
+            }
+            python scripts/rust_build.py --toolchain 1.85.0 --target-dir $env:CARGO_TARGET_DIR -- test --locked @packages --lib --no-run
+            if ($LASTEXITCODE -ne 0) { throw ('Windows media test prebuild failed: ' + $graph) }
+          }
+      - name: Verify streamed media images records compact results and digest corpus on Windows
+        timeout-minutes: 10
+        run: |
+          $log = 'artifacts/windows-native-cloud/media-image-and-record-tests.log'
+          if (Test-Path -LiteralPath $log) { throw 'Refuse an existing Windows media corpus log' }
+          foreach ($filter in @('media_journal::image_tests', 'media_journal::patch_result_tests', 'media_image::tests', 'media_records::tests', 'media_stream_io::tests')) {
+            $packages = @('-p', 'deepseek-worker')
+            if ($filter -eq 'media_records::tests') { $packages += @('-p', 'deepseek-policy') }
+            python scripts/rust_build.py --toolchain 1.85.0 --target-dir $env:CARGO_TARGET_DIR -- test --locked @packages --lib $filter 2>&1 | Tee-Object -FilePath $log -Append
+            if ($LASTEXITCODE -ne 0) { throw ('Windows media corpus failed: ' + $filter) }
+          }
+          $expected = @(
+            'media_image::tests::large_image_capture_does_not_use_the_old_library_byte_cutoff',
+            'media_image::tests::missing_empty_and_nonregular_source_images_preserve_the_original_semantics',
+            'media_image::tests::streamed_image_keeps_exact_bytes_and_rejects_changed_retained_content',
+            'media_journal::image_tests::bounded_preparation_sweep_keeps_fair_progress_across_repeated_restarts',
+            'media_journal::image_tests::compact_result_custody_is_verified_before_any_terminal_raw_image_is_collected',
+            'media_journal::image_tests::exact_legacy_schema_rows_migrate_without_rewriting_and_recover_each_durable_phase',
+            'media_journal::image_tests::failed_prepared_insert_retires_both_images_without_a_public_effect',
+            'media_journal::image_tests::missing_or_corrupt_active_images_never_settle_an_applying_effect',
+            'media_journal::image_tests::one_hundred_updates_keep_only_current_effect_images_and_small_historical_descriptors',
+            'media_journal::image_tests::positive_prepared_abort_and_terminal_replay_do_not_require_raw_images',
+            'media_journal::image_tests::restart_retires_a_durably_owned_partial_copy_and_sealed_images_are_untouched',
+            'media_journal::image_tests::schema1_identity_or_shape_rejection_does_not_partially_migrate_the_journal',
+            'media_journal::image_tests::sealed_image_identity_and_collection_receipts_are_mechanically_immutable',
+            'media_journal::image_tests::terminal_calls_return_while_private_maintenance_holds_the_workspace_gate',
+            'media_journal::image_tests::terminal_gc_failure_cannot_hide_the_receipt_and_is_retried_on_later_preparation',
+            'media_journal::patch_result_tests::compact_patch_keeps_original_record_outside_retention_and_after_restart',
+            'media_journal::patch_result_tests::compact_patch_missing_or_corrupt_preparation_never_publishes_or_reconstructs',
+            'media_journal::patch_result_tests::compact_patch_original_applied_recovery_does_not_require_a_live_lease',
+            'media_journal::patch_result_tests::compact_patch_refusals_and_unknown_keep_the_frozen_v1_shape',
+            'media_journal::patch_result_tests::flat_patch_preserves_the_deep_original_result_and_codec_binding_after_restart',
+            'media_records::tests::an_early_syntax_error_cannot_hide_a_later_source_io_failure',
+            'media_records::tests::changed_private_spool_bytes_are_detected_before_emission_or_lookup',
+            'media_records::tests::discarded_values_still_validate_numbers_utf8_and_original_json_depth',
+            'media_records::tests::durable_records_preserve_nonfinite_exact_numbers_and_deep_values_during_recovery',
+            'media_records::tests::first_match_delete_all_and_post_mutation_tail_match_the_original_order',
+            'media_records::tests::only_the_complete_winning_array_uses_normalization_clocks',
+            'media_records::tests::only_the_published_tail_requires_unicode_scalar_strings',
+            'media_records::tests::source_spool_and_index_failures_never_become_an_empty_store',
+            'media_records::tests::streaming_parser_matches_legacy_normalization_for_valid_and_malformed_documents',
+            'media_records::tests::shared_records_match_original_worker_normalizer',
+            'media_stream_io::tests::media_digest_reader_hashes_only_observed_bytes_and_preserves_source_failure',
+            'media_stream_io::tests::media_digest_streams_match_frozen_sha256_and_all_block_boundaries',
+            'media_stream_io::tests::media_digest_writer_hashes_only_accepted_short_writes_and_preserves_errors'
+          )
+          $tests = Get-Content -LiteralPath $log -Raw
+          $expectedNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+          foreach ($expectedName in $expected) {
+            if (-not $expectedNames.Add($expectedName)) { throw 'Windows media expected inventory contains duplicates' }
+          }
+          $caseLines = @([regex]::Matches($tests, '(?im)^test (?!result:)[^\n]*$'))
+          $results = @([regex]::Matches($tests, '(?m)^test ([^\r\n]+?) \.\.\. ([^\r\n]+?)\r?$'))
+          if ($caseLines.Count -ne $results.Count -or $results.Count -ne $expected.Count) { throw 'Windows media corpus has missing extra or malformed result lines' }
+          $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+          foreach ($result in $results) {
+            if (-not ([System.StringComparer]::Ordinal.Equals($result.Groups[2].Value, 'ok')) -or -not $expectedNames.Contains($result.Groups[1].Value) -or -not $seen.Add($result.Groups[1].Value)) { throw 'Windows media corpus failed ignored duplicated or misnamed a selected case' }
+          }
+          if ($seen.Count -ne $expectedNames.Count) { throw 'Windows media corpus names differ from the expected inventory' }
+          $summaries = @([regex]::Matches($tests, '(?m)^test result: ok\. ([0-9]+) passed; ([0-9]+) failed; ([0-9]+) ignored; ([0-9]+) measured; ([0-9]+) filtered out; finished in ([0-9]+(?:\.[0-9]+)?)s\r?$'))
+          $summaryLines = @([regex]::Matches($tests, '(?im)^test result:[^\n]*$'))
+          if ($summaryLines.Count -ne 6 -or $summaries.Count -ne 6) { throw 'Windows media corpus lacks one complete successful result summary per selected package/module' }
+          $totalPassed = 0
+          foreach ($summary in $summaries) {
+            if ($summary.Groups[2].Value -ne '0' -or $summary.Groups[3].Value -ne '0' -or $summary.Groups[4].Value -ne '0') { throw 'Windows media corpus summary includes failures or ignores' }
+            $totalPassed += [int]$summary.Groups[1].Value
+          }
+          $summaryPasses = @($summaries | ForEach-Object { [int]$_.Groups[1].Value } | Sort-Object)
+          $expectedPasses = @(1, 3, 3, 5, 9, 12)
+          for ($summaryIndex = 0; $summaryIndex -lt $expectedPasses.Count; $summaryIndex++) {
+            if ($summaryPasses[$summaryIndex] -ne $expectedPasses[$summaryIndex]) { throw 'Windows media corpus package summary distribution differs' }
+          }
+          if ($totalPassed -ne $expected.Count) { throw 'Windows media corpus result count does not match its complete inventory' }
+          # Both caller graphs run the same new parser corpus without enabling features.
+          $parserExpected = @(
+            'media_records::document::tests::escaped_names_and_complete_last_key_match_the_full_document',
+            'media_records::document::tests::discarded_string_escapes_are_fully_validated_without_becoming_values',
+            'media_records::document::tests::discarded_numeric_domain_uses_the_callers_existing_json_features',
+            'media_records::document::tests::full_document_depth_is_preserved_for_discarded_and_retained_values',
+            'media_records::document::tests::enormous_ignored_keys_and_values_are_consumed_from_a_generated_reader',
+            'media_records::document::tests::early_syntax_does_not_hide_utf8_or_a_later_original_source_failure',
+            'media_records::document::tests::raw_mode_preserves_per_row_skip_then_propagate_and_does_not_return_early',
+            'media_records::document::tests::valid_and_invalid_token_combinations_match_full_value_parsing',
+            'media_records::document::tests::interrupted_reads_before_and_inside_a_record_are_retried_without_poisoning',
+            'media_records::document::tests::first_key_number_and_raw_value_wrappers_match_the_existing_value_decoder',
+            'media_records::document::tests::wrapped_media_arrays_and_inner_depth_match_full_value_decoding',
+            'media_records::document::tests::discarded_surrogate_escapes_match_original_python_media_reader',
+            'media_records::document::tests::python_original_discarded_number_large_exponent',
+            'media_records::document::tests::python_original_discarded_number_negative_large_exponent',
+            'media_records::document::tests::python_original_discarded_number_tiny_exponent',
+            'media_records::document::tests::python_original_discarded_number_nan',
+            'media_records::document::tests::python_original_discarded_number_infinity',
+            'media_records::document::tests::python_original_discarded_number_negative_infinity',
+            'media_records::document::tests::python_original_discarded_array_nan',
+            'media_records::document::tests::python_original_discarded_array_infinity',
+            'media_records::document::tests::python_original_discarded_array_negative_infinity',
+            'media_records::document::tests::python_original_ordinary_root_tag_9',
+            'media_records::document::tests::python_original_ordinary_discarded_tag_10',
+            'media_records::document::tests::python_original_ordinary_root_tag_11',
+            'media_records::document::tests::python_original_ordinary_discarded_tag_12',
+            'media_records::document::tests::python_original_ordinary_root_tag_13',
+            'media_records::document::tests::python_original_ordinary_discarded_tag_14',
+            'media_records::document::tests::python_original_ordinary_retained_record_tag_15',
+            'media_records::document::tests::python_original_ordinary_retained_record_tag_16',
+            'media_records::document::tests::python_original_ordinary_tag_media_object_is_not_an_array',
+            'media_records::document::tests::python_original_discarded_depth_127',
+            'media_records::document::tests::python_original_discarded_depth_128',
+            'media_records::document::tests::python_original_discarded_depth_200',
+            'media_records::document::tests::python_original_discarded_depth_500',
+            'media_records::document::tests::python_original_retained_schema_ignored_surrogate',
+            'media_records::document::tests::original_winning_last_title_replaces_surrogate',
+            'media_records::document::tests::original_winning_last_metadata_replaces_nonfinite',
+            'media_records::document::tests::original_winning_last_metadata_key_replaces_surrogate',
+            'media_records::document::tests::original_winning_mime_raw_path_0',
+            'media_records::document::tests::original_winning_mime_raw_path_1',
+            'media_records::document::tests::original_winning_mime_raw_path_2',
+            'media_records::document::tests::original_winning_mime_raw_path_3',
+            'media_records::document::tests::original_winning_last_media_replaces_first_nan',
+            'media_records::document::tests::original_winning_last_media_replaces_first_surrogate',
+            'media_records::document::tests::original_winning_last_media_replaces_first_deep',
+            'media_records::document::tests::original_winning_clock_before_invalid_path',
+            'media_records::document::deferred::tests::dictionary_winners_precede_scalar_interpretation',
+            'media_records::document::deferred::tests::literal_and_surrogate_pair_keys_have_python_equality',
+            'media_records::document::deferred::tests::complete_syntax_and_utf8_are_still_required',
+            'media_records::document::retained_tests::retained_original_http_schema_and_strict_encoding_match_all_thirty_four_cases',
+            'media_records::document::retained_tests::retained_integer_tokens_survive_without_workspace_feature_unification',
+            'media_records::document::retained_tests::retained_floats_parse_before_stringification_and_preserve_negative_zero',
+            'media_records::document::retained_tests::retained_source_and_metadata_container_stringification_preserves_repr_order',
+            'media_records::document::retained_tests::retained_repr_uses_the_cloud_oracles_unicode_15_printability',
+            'media_records::document::retained_tests::retained_surrogates_only_fail_at_the_selected_strict_output_boundary',
+            'media_records::document::retained_tests::retained_sort_keys_follow_python_scalars_with_surrogate_pairs_and_stable_equals',
+            'media_records::document::retained_tests::retained_normalization_keeps_business_caps_without_cutting_a_surrogate_pair',
+            'media_records::document::retained_tests::retained_sanitized_keys_duplicates_and_empty_children_follow_original_order',
+            'media_records::document::retained_tests::retained_document_validates_tail_and_utf8_and_uses_dictionary_winners',
+            'media_records::document::retained_tests::retained_clock_and_second_path_validation_keep_original_phase_order',
+            'media_records::document::retained_tests::retained_deep_normalization_and_drop_use_heap_frames'
+          )
+          $spoolExpected = @(
+            'media_segment_routes::media_read_spool::tests::source_order_first_match_stable_sort_and_all_fields_match_original',
+            'media_segment_routes::media_read_spool::tests::second_normalization_follows_original_selection_and_complete_windows',
+            'media_segment_routes::media_read_spool::tests::complete_document_last_key_utf8_and_missing_sources_preserve_old_results',
+            'media_segment_routes::media_read_spool::tests::raw_membership_is_not_short_circuited_before_full_json_validation',
+            'media_segment_routes::media_read_spool::tests::streamed_collection_matches_original_bytes_filters_headers_and_head',
+            'media_segment_routes::media_read_spool::tests::dropping_a_stream_releases_its_private_file_without_modifying_the_library',
+            'media_segment_routes::media_read_spool::tests::changed_response_spool_fails_instead_of_claiming_a_complete_body',
+            'media_segment_routes::media_read_spool::tests::discarded_unicode_collection_detail_membership_and_window_match_python',
+            'media_segment_routes::media_read_spool::tests::retained_http_comparison_preserves_integers_and_scalar_types',
+            'media_segment_routes::media_read_spool::tests::retained_http_metadata_number_0',
+            'media_segment_routes::media_read_spool::tests::retained_http_metadata_number_1',
+            'media_segment_routes::media_read_spool::tests::retained_http_metadata_number_2',
+            'media_segment_routes::media_read_spool::tests::retained_http_metadata_number_3',
+            'media_segment_routes::media_read_spool::tests::retained_http_metadata_number_4',
+            'media_segment_routes::media_read_spool::tests::retained_http_metadata_number_5',
+            'media_segment_routes::media_read_spool::tests::retained_http_metadata_number_6',
+            'media_segment_routes::media_read_spool::tests::retained_http_metadata_surrogate_7',
+            'media_segment_routes::media_read_spool::tests::retained_http_metadata_surrogate_8',
+            'media_segment_routes::media_read_spool::tests::retained_http_metadata_surrogate_9',
+            'media_segment_routes::media_read_spool::tests::retained_http_metadata_surrogate_10',
+            'media_segment_routes::media_read_spool::tests::retained_http_metadata_surrogate_11',
+            'media_segment_routes::media_read_spool::tests::retained_http_metadata_sanitized_away_depth_500',
+            'media_segment_routes::media_read_spool::tests::retained_http_metadata_sanitized_away_depth_2048',
+            'media_segment_routes::media_read_spool::tests::retained_http_source_number_14',
+            'media_segment_routes::media_read_spool::tests::retained_http_source_number_15',
+            'media_segment_routes::media_read_spool::tests::retained_http_source_number_16',
+            'media_segment_routes::media_read_spool::tests::retained_http_source_number_17',
+            'media_segment_routes::media_read_spool::tests::retained_http_source_number_18',
+            'media_segment_routes::media_read_spool::tests::retained_http_source_number_19',
+            'media_segment_routes::media_read_spool::tests::retained_http_source_number_20',
+            'media_segment_routes::media_read_spool::tests::retained_http_source_surrogate_21',
+            'media_segment_routes::media_read_spool::tests::retained_http_source_surrogate_22',
+            'media_segment_routes::media_read_spool::tests::retained_http_source_surrogate_23',
+            'media_segment_routes::media_read_spool::tests::retained_http_source_surrogate_24',
+            'media_segment_routes::media_read_spool::tests::retained_http_source_surrogate_25',
+            'media_segment_routes::media_read_spool::tests::retained_http_source_sanitized_away_depth_500',
+            'media_segment_routes::media_read_spool::tests::retained_http_source_sanitized_away_depth_2048',
+            'media_segment_routes::media_read_spool::tests::retained_http_title_number_28',
+            'media_segment_routes::media_read_spool::tests::retained_http_title_number_29',
+            'media_segment_routes::media_read_spool::tests::retained_http_title_number_30',
+            'media_segment_routes::media_read_spool::tests::retained_http_title_number_31',
+            'media_segment_routes::media_read_spool::tests::retained_http_metadata_surrogate_after_original_business_cap',
+            'media_segment_routes::media_read_spool::tests::retained_http_source_surrogate_in_dropped_key'
+          )
+          foreach ($graph in @('policy', 'gateway-policy', 'gateway-spool')) {
+            $packages = @('-p', 'deepseek-policy')
+            $filter = 'media_records::document'
+            $graphExpected = $parserExpected
+            $expectedCount = $graphExpected.Count
+            $expectedSummaries = 1
+            if ($graph -eq 'gateway-policy') { $packages += @('-p', 'deepseek-gateway'); $expectedSummaries = 2 }
+            if ($graph -eq 'gateway-spool') { $packages = @('-p', 'deepseek-gateway'); $filter = 'media_segment_routes::media_read_spool::tests'; $graphExpected = $spoolExpected; $expectedCount = $graphExpected.Count }
+            $graphLog = 'artifacts/windows-native-cloud/media-read-' + $graph + '.log'
+            if (Test-Path -LiteralPath $graphLog) { throw 'Refuse an existing media read log' }
+            python scripts/rust_build.py --toolchain 1.85.0 --target-dir $env:CARGO_TARGET_DIR -- test --locked @packages --lib $filter 2>&1 | Tee-Object -FilePath $graphLog
+            if ($LASTEXITCODE -ne 0) { throw ('Windows shared media read graph failed: ' + $graph) }
+            $graphText = Get-Content -LiteralPath $graphLog -Raw
+            $graphCases = @([regex]::Matches($graphText, '(?m)^test (?!result:)([^\r\n]+?) \.\.\. ([^\r\n]+?)\r?$'))
+            $graphNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+            $graphCaseLines = @([regex]::Matches($graphText, '(?im)^test (?!result:)[^\n]*$'))
+            if ($graphCaseLines.Count -ne $graphCases.Count -or $graphCases.Count -ne $expectedCount) { throw 'Shared media read corpus has missing or extra cases' }
+            foreach ($case in $graphCases) {
+              if ($case.Groups[2].Value -cne 'ok' -or -not ($graphExpected -ccontains $case.Groups[1].Value) -or -not $graphNames.Add($case.Groups[1].Value)) { throw 'Shared media read corpus failed ignored duplicated or misnamed a case' }
+            }
+            $graphSummaries = @([regex]::Matches($graphText, '(?m)^test result: ok\. ([0-9]+) passed; ([0-9]+) failed; ([0-9]+) ignored; ([0-9]+) measured; ([0-9]+) filtered out; finished in ([0-9]+(?:\.[0-9]+)?)s\r?$'))
+            $graphSummaryLines = @([regex]::Matches($graphText, '(?im)^test result:[^\n]*$'))
+            if ($graphSummaryLines.Count -ne $graphSummaries.Count -or $graphSummaries.Count -ne $expectedSummaries) { throw 'Shared media read corpus lacks complete package summaries' }
+            $graphPassed = 0
+            foreach ($summary in $graphSummaries) {
+              if ($summary.Groups[2].Value -ne '0' -or $summary.Groups[3].Value -ne '0' -or $summary.Groups[4].Value -ne '0') { throw 'Shared media read summary includes a failure or ignore' }
+              $graphPassed += [int]$summary.Groups[1].Value
+            }
+            $graphSummaryPasses = @($graphSummaries | ForEach-Object { [int]$_.Groups[1].Value } | Sort-Object)
+            $graphExpectedPasses = @($expectedCount)
+            if ($expectedSummaries -eq 2) { $graphExpectedPasses = @(0, $expectedCount) }
+            for ($summaryIndex = 0; $summaryIndex -lt $graphExpectedPasses.Count; $summaryIndex++) {
+              if ($graphSummaryPasses[$summaryIndex] -ne $graphExpectedPasses[$summaryIndex]) { throw 'Shared media read package summary distribution differs' }
+            }
+            if ($graphPassed -ne $expectedCount) { throw 'Shared media read corpus totals differ' }
+          }
+      - name: Build actual Windows Go control, launcher and WebView2 host
+        run: |
+          $bin = Join-Path $env:RUNNER_TEMP 'deepseek-windows-bin'
+          New-Item -ItemType Directory -Force -Path $bin | Out-Null
+          Copy-Item -LiteralPath (Join-Path $env:CARGO_TARGET_DIR 'debug/deepseek-worker.exe') -Destination $bin
+          Copy-Item -LiteralPath (Join-Path $env:CARGO_TARGET_DIR 'debug/deepseek-gateway.exe') -Destination $bin
+          Push-Location go
+          try {
+            foreach ($name in @('deepseekd', 'deepseek-launch', 'deepseek-desktop')) {
+              go build -trimpath -o (Join-Path $bin ($name + '.exe')) ('./cmd/' + $name)
+              if ($LASTEXITCODE -ne 0) { throw ('Windows Go build failed: ' + $name) }
+            }
+          } finally { Pop-Location }
+      - name: Exercise actual app window, native provenance, file workload and close/restart
+        run: |
+          python scripts/verify_native_windows_cloud.py --bin (Join-Path $env:RUNNER_TEMP 'deepseek-windows-bin') --profile (Join-Path $env:RUNNER_TEMP 'deepseek-windows-disposable-profile') --out artifacts/windows-native-cloud
+          if ($LASTEXITCODE -ne 0) { throw 'Windows app platform gate failed' }
+      - name: Preserve bounded platform reports without binaries or caches
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-windows-platform-${{ github.sha }}
+          path: |
+            artifacts/windows-native-cloud/*.json
+            artifacts/windows-native-cloud/*.jsonl
+            artifacts/windows-native-cloud/*.log
+          if-no-files-found: warn
+          retention-days: 7
+
+  macos-build:
+    if: github.event_name == 'workflow_dispatch' && (inputs.verify_macos || inputs.verify_macos_product)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    env:
+      CGO_ENABLED: '0'
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Install the unchanged checksum-pinned Linux Go cross compiler
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib,json,os,shutil,tarfile,urllib.request
+          from pathlib import Path
+          pin=json.loads(Path('release/native_runtime_toolchain_v1.json').read_bytes())['go']
+          artifact=pin['artifacts']['linux_amd64']
+          archive=Path(os.environ['RUNNER_TEMP'])/artifact['filename']
+          with urllib.request.urlopen('https://go.dev/dl/'+artifact['filename'],timeout=60) as response,archive.open('wb') as target:
+              shutil.copyfileobj(response,target,1024**2)
+          assert hashlib.file_digest(archive.open('rb'),'sha256').hexdigest()==artifact['sha256']
+          destination=Path(os.environ['RUNNER_TEMP'])/'macos-window-go'
+          with tarfile.open(archive) as source:
+              source.extractall(destination,filter='data')
+          with open(os.environ['GITHUB_PATH'],'a') as path:
+              path.write(str(destination/'go/bin')+'\n')
+          PY
+      - name: Cross compile the real Go desktop program and native test host for both architectures
+        run: |
+          set -euo pipefail
+          export GOCACHE="$RUNNER_TEMP/macos-window-go-cache"
+          export GOMODCACHE="$RUNNER_TEMP/macos-window-go-modules"
+          out="$GITHUB_WORKSPACE/artifacts/macos-fixtures"
+          mkdir -p "$out"
+          go version | tee "$out/go-version.txt"
+          python scripts/capture_evidence_context.py --out "$out/source-context.json"
+          cd go
+          for arch in amd64 arm64; do
+            mkdir -p "$out/$arch"
+            GOOS=darwin GOARCH="$arch" go build -trimpath -o "$out/$arch/deepseek-desktop" ./cmd/deepseek-desktop
+            GOOS=darwin GOARCH="$arch" go test -c -trimpath -tags=native_desktop_integration -o "$out/$arch/desktop.test" ./internal/desktop
+          done
+          cd ..
+          python - <<'PY'
+          import hashlib,json,os,subprocess
+          from pathlib import Path
+          root=Path('artifacts/macos-fixtures')
+          pin=json.loads(Path('release/native_runtime_toolchain_v1.json').read_bytes())['go']
+          version=subprocess.check_output(['go','version'],text=True).strip()
+          assert version.startswith('go version go'+pin['version']+' linux/amd64')
+          rows=[]
+          for arch in ['amd64','arm64']:
+              for name in ['deepseek-desktop','desktop.test']:
+                  path=root/arch/name
+                  rows.append(dict(path=arch+'/'+name,architecture=arch,bytes=path.stat().st_size,sha256=hashlib.file_digest(path.open('rb'),'sha256').hexdigest()))
+          value=dict(sourceCommit=os.environ['GITHUB_SHA'],sourceTree=subprocess.check_output(['git','rev-parse','HEAD^{tree}'],text=True).strip(),runId=os.environ['GITHUB_RUN_ID'],attempt=os.environ['GITHUB_RUN_ATTEMPT'],goVersion=version,linuxGoArchiveSha256=pin['artifacts']['linux_amd64']['sha256'],cgoEnabled=False,binaries=rows,fullMigrationQualified=False)
+          (root/'build-receipt.json').write_text(json.dumps(value,indent=2)+'\n')
+          PY
+      - name: Keep executable fixtures inside the cloud
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: native-macos-fixtures-${{ github.sha }}
+          path: artifacts/macos-fixtures/
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Install the original Node major for the actual product frontend
+        if: inputs.verify_macos_product
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24'
+      - name: Build both actual Go product architectures and original React static tree
+        if: inputs.verify_macos_product
+        run: |
+          set -euo pipefail
+          export GOCACHE="$RUNNER_TEMP/macos-window-go-cache"
+          export GOMODCACHE="$RUNNER_TEMP/macos-window-go-modules"
+          npm ci --prefix frontend
+          npm run build --prefix frontend
+          out="$GITHUB_WORKSPACE/artifacts/macos-product-fixtures"
+          mkdir -p "$out"
+          cd go
+          for arch in amd64 arm64; do
+            mkdir -p "$out/$arch"
+            cp "$GITHUB_WORKSPACE/artifacts/macos-fixtures/$arch/deepseek-desktop" "$out/$arch/deepseek-desktop"
+            for name in deepseekd deepseek-launch; do
+              GOOS=darwin GOARCH="$arch" go build -trimpath -o "$out/$arch/$name" "./cmd/$name"
+            done
+          done
+          cd ..
+          cp -R static "$out/static"
+          python scripts/prepare_native_macos_product.py --seal --fixture "$out"
+      - name: Keep the complete native Go and static product fixture inside the cloud
+        if: inputs.verify_macos_product
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: native-macos-product-fixtures-${{ github.sha }}
+          path: artifacts/macos-product-fixtures
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 2
+
+  macos-window:
+    if: github.event_name == 'workflow_dispatch' && inputs.verify_macos
+    needs: macos-build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: amd64
+            runner: macos-15-intel
+          - architecture: arm64
+            runner: macos-15
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    env:
+      CGO_ENABLED: '0'
+      GOTOOLCHAIN: local
+      DEEPSEEK_MACOS_ARCH: ${{ matrix.architecture }}
+      DEEPSEEK_MACOS_PROFILE: ${{ github.workspace }}/artifacts/native-macos-disposable-profile
+      DEEPSEEK_MACOS_REPORT: ${{ github.workspace }}/artifacts/macos-window/result.json
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: native-macos-fixtures-${{ github.sha }}
+          path: artifacts/macos-fixtures
+      - name: Verify exact source, runtime architecture and every executable before running it
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/macos-window
+          python scripts/capture_evidence_context.py --out artifacts/macos-window/source-context.json
+          python - <<'PY'
+          import hashlib,json,os,platform,struct,subprocess
+          from pathlib import Path
+          assert os.environ['GITHUB_ACTIONS']=='true' and os.environ['RUNNER_ENVIRONMENT']=='github-hosted'
+          assert platform.system()=='Darwin' and os.environ['RUNNER_OS']=='macOS'
+          arch=os.environ['DEEPSEEK_MACOS_ARCH']
+          assert platform.machine()=={'amd64':'x86_64','arm64':'arm64'}[arch]
+          root=Path('artifacts/macos-fixtures').resolve()
+          receipt=json.loads((root/'build-receipt.json').read_bytes())
+          tree=subprocess.check_output(['git','rev-parse','HEAD^{tree}'],text=True).strip()
+          assert (receipt['sourceCommit'],receipt['sourceTree'],receipt['runId'],receipt['attempt'])==(os.environ['GITHUB_SHA'],tree,os.environ['GITHUB_RUN_ID'],os.environ['GITHUB_RUN_ATTEMPT'])
+          pin=json.loads(Path('release/native_runtime_toolchain_v1.json').read_bytes())['go']
+          assert receipt['linuxGoArchiveSha256']==pin['artifacts']['linux_amd64']['sha256'] and receipt['cgoEnabled'] is False
+          assert receipt['goVersion'].startswith('go version go'+pin['version']+' linux/amd64')
+          assert {(r['architecture'],r['path']) for r in receipt['binaries']}=={(a,a+'/'+n) for a in ['amd64','arm64'] for n in ['deepseek-desktop','desktop.test']}
+          for row in receipt['binaries']:
+              path=root/row['path'];assert path.is_file() and not path.is_symlink() and path.resolve().is_relative_to(root)
+              assert path.stat().st_size==row['bytes'] and hashlib.file_digest(path.open('rb'),'sha256').hexdigest()==row['sha256']
+              magic,cpu=struct.unpack('<II',path.open('rb').read(8))
+              assert (magic,cpu)==(0xfeedfacf,{'amd64':0x1000007,'arm64':0x100000c}[row['architecture']])
+          for name in ['deepseek-desktop','desktop.test']:(root/arch/name).chmod(0o700)
+          Path('artifacts/macos-window/build-receipt.json').write_bytes((root/'build-receipt.json').read_bytes())
+          PY
+      - name: Verify native bundle identity, update isolation, link denial and browser credential boundaries
+        run: |
+          set -euo pipefail
+          set -o pipefail
+          "artifacts/macos-fixtures/$DEEPSEEK_MACOS_ARCH/desktop.test" -test.v -test.count=1 -test.timeout=60s -test.run='^TestNativeMac(Bundle|Browser|ActivationPolicy)' 2>&1 | tee artifacts/macos-window/profile-browser-test.log
+      - name: Exercise a real visible window, authenticated WebKit DOM and cancellation
+        run: |
+          set -euo pipefail
+          set -o pipefail
+          "artifacts/macos-fixtures/$DEEPSEEK_MACOS_ARCH/desktop.test" -test.v -test.count=1 -test.timeout=60s -test.run='^TestNativeMacWindowBootAndCancel$' 2>&1 | tee artifacts/macos-window/window-test.log
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          report=json.loads(Path(os.environ['DEEPSEEK_MACOS_REPORT']).read_bytes())
+          assert report['sourceCommit']==os.environ['GITHUB_SHA'] and report['runId']==os.environ['GITHUB_RUN_ID']
+          assert report['architecture']==os.environ['DEEPSEEK_MACOS_ARCH']
+          assert all(report[k] is True for k in ['visible','titleMatched','authenticatedDOMObserved','contextCancellationSettled','nativeMainThreadObserved','persistentDataStoreObserved','regularActivationPolicyObserved'])
+          receipt=json.loads(Path('artifacts/macos-window/build-receipt.json').read_bytes())
+          binary=next(row for row in receipt['binaries'] if row['path']==os.environ['DEEPSEEK_MACOS_ARCH']+'/desktop.test')
+          assert report['actualExecutableSha256']==binary['sha256']
+          assert report['bundleIdentifier'].startswith('com.deepseekinfra.profile.p')
+          assert set(report['protocolMetadataAvailability'])=={'NSWindowDelegate','NSApplicationDelegate','WKUIDelegate','WKNavigationDelegate','WKDownloadDelegate'}
+          assert all(type(report[k]) is int and report[k]>0 for k in ['nativeNavigationActionCallbacks','nativeNavigationResponseCallbacks','nativeDispatchCallbacks'])
+          assert report['windowId']>0 and report['contentWidth']>=760 and report['contentHeight']>=520
+          assert report['productionApplicationWorkloadQualified'] is False and report['fullMigrationQualified'] is False and report['readiness']=='NOT_READY'
+          PY
+      - name: Verify real WebKit storage across native UI restarts and isolated profiles
+        run: |
+          set -euo pipefail
+          set -o pipefail
+          "artifacts/macos-fixtures/$DEEPSEEK_MACOS_ARCH/desktop.test" -test.v -test.count=1 -test.timeout=120s -test.run='^TestNativeMacPersistentProfilesAcrossActualUIRestarts$' 2>&1 | tee artifacts/macos-window/profile-persistence-test.log
+      - name: Verify a real JavaScript modal cannot strand original context cancellation
+        env:
+          DEEPSEEK_MACOS_MODAL_REPORT: ${{ github.workspace }}/artifacts/macos-window/modal-cancellation.json
+        run: |
+          set -euo pipefail
+          for kind in alert confirm prompt nested; do
+            DEEPSEEK_MACOS_MODAL_KIND="$kind" DEEPSEEK_MACOS_PROFILE="$DEEPSEEK_MACOS_PROFILE-$kind" DEEPSEEK_MACOS_MODAL_REPORT="${DEEPSEEK_MACOS_MODAL_REPORT%.json}-$kind.json" \
+              "artifacts/macos-fixtures/$DEEPSEEK_MACOS_ARCH/desktop.test" -test.v -test.count=1 -test.timeout=45s -test.run='^TestNativeMacJavaScriptModalCancellationSettlesApplication$' 2>&1 | tee "artifacts/macos-window/$kind-modal-cancel-test.log"
+          done
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          receipt=json.loads(Path('artifacts/macos-window/build-receipt.json').read_bytes())
+          binary=next(row for row in receipt['binaries'] if row['path']==os.environ['DEEPSEEK_MACOS_ARCH']+'/desktop.test')
+          for kind in ['alert','confirm','prompt','nested']:
+              path=Path(os.environ['DEEPSEEK_MACOS_MODAL_REPORT'])
+              report=json.loads(path.with_name(path.stem+'-'+kind+path.suffix).read_bytes())
+              assert report['sourceCommit']==os.environ['GITHUB_SHA'] and report['runId']==os.environ['GITHUB_RUN_ID']
+              assert report['architecture']==os.environ['DEEPSEEK_MACOS_ARCH'] and report['status']=='PASS' and report['modalKind']==kind
+              assert all(report[k] is True for k in ['actualJavaScriptModalObserved','nativeMainThreadObserved','contextCancellationSettled'])
+              assert report['testAbortUsed'] is False and report['actualModalWindowId']>0 and report['remainingOwnedModalDepth']==0
+              assert report['observedOwnedModalDepth']==(2 if kind=='nested' else 1)
+              if kind=='nested':
+                  assert report['nestedStopConfirmationDeclined'] is True
+                  assert report['outerJavaScriptModalWindowId']>0 and report['outerJavaScriptModalWindowId']!=report['actualModalWindowId']
+              assert all(report[k]>0 for k in ['nativeNavigationActionCallbacks','nativeNavigationResponseCallbacks','nativeDispatchCallbacks'])
+              assert report['actualExecutableSha256']==binary['sha256']
+              assert report['fullMigrationQualified'] is False and report['readiness']=='NOT_READY'
+          PY
+      - name: Retain reports only for local collection
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: native-macos-window-${{ matrix.architecture }}-${{ github.sha }}
+          path: |
+            artifacts/macos-window/*.json
+            artifacts/macos-window/*.log
+          if-no-files-found: error
+          retention-days: 7
+
+
+  macos-product:
+    if: github.event_name == 'workflow_dispatch' && inputs.verify_macos_product
+    needs: macos-build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: amd64
+            runner: macos-15-intel
+          - architecture: arm64
+            runner: macos-15
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    env:
+      CGO_ENABLED: '0'
+      GOTOOLCHAIN: local
+      DEEPSEEK_MACOS_ARCH: ${{ matrix.architecture }}
+      CARGO_BUILD_JOBS: '2'
+      CARGO_INCREMENTAL: '0'
+      CARGO_TARGET_DIR: ${{ github.workspace }}/artifacts/macos-product-cargo-target
+      CARGO_HOME: ${{ github.workspace }}/artifacts/macos-product-cargo-home
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: native-macos-product-fixtures-${{ github.sha }}
+          path: artifacts/macos-product-fixtures
+      - name: Verify exact source, all native fixture hashes and the hidden Vite manifest
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/macos-product
+          python scripts/prepare_native_macos_product.py --verify --fixture artifacts/macos-product-fixtures
+          test "$(uname -m)" = "${{ matrix.architecture == 'arm64' && 'arm64' || 'x86_64' }}"
+          xcodebuild -version | tee artifacts/macos-product/apple-sdk.log
+      - name: Install the unchanged Rust compiler and record the actual native host
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.85.0 --profile minimal
+          rustc +1.85.0 -vV | tee artifacts/macos-product/rust-toolchain.log
+          rustc +1.85.0 -vV | grep -Fx "host: ${{ matrix.architecture == 'arm64' && 'aarch64' || 'x86_64' }}-apple-darwin"
+      - name: Build the actual native Rust worker and public gateway on this Mac
+        run: |
+          set -euo pipefail
+          python scripts/rust_build.py --toolchain 1.85.0 --target-dir "$CARGO_TARGET_DIR" -- build --locked -p deepseek-worker -p deepseek-gateway --bins 2>&1 | tee artifacts/macos-product/rust-build.log
+      - name: Run the actual five-binary app, file workload and graceful complete restart
+        run: |
+          set -euo pipefail
+          bin="$RUNNER_TEMP/macos-product-bin"
+          mkdir -p "$bin"
+          for name in deepseekd deepseek-launch deepseek-desktop; do
+            cp "artifacts/macos-product-fixtures/$DEEPSEEK_MACOS_ARCH/$name" "$bin/$name"
+          done
+          for name in deepseek-worker deepseek-gateway; do
+            cp "$CARGO_TARGET_DIR/debug/$name" "$bin/$name"
+          done
+          chmod 700 "$bin/"*
+          for name in deepseekd deepseek-launch deepseek-desktop deepseek-worker deepseek-gateway; do
+            otool -L "$bin/$name"
+          done | tee artifacts/macos-product/direct-dynamic-dependencies.log
+          python scripts/verify_native_macos_product.py --bin "$bin" --fixture artifacts/macos-product-fixtures --profile "$RUNNER_TEMP/disposable-native-macos-product-profile" --out artifacts/macos-product
+      - name: Return only native product reports; leave binaries, profile and compiler output in cloud
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: native-macos-product-${{ matrix.architecture }}-${{ github.sha }}
+          path: artifacts/macos-product
+          if-no-files-found: error
+          retention-days: 7

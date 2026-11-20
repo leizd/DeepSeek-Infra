@@ -11,6 +11,7 @@ import (
 // history, and the legacy CHECK constraint still rejects the new terminal state.
 func materializeLegacyActionLeasesFixture(t *testing.T, tx *sql.Tx) {
 	t.Helper()
+	dropEmptyNativeOriginFixture(t, tx)
 	for _, statement := range []string{
 		`CREATE TEMP TABLE legacy_action_leases_fixture AS SELECT * FROM action_leases`,
 		`DROP TABLE action_leases`, actionAdmissionSchemaObjects["action_leases"],
@@ -34,7 +35,7 @@ func materializeCancellationV15Fixture(t *testing.T, control *Control) {
 		`CREATE TABLE control_meta_v15_fixture(singleton INTEGER PRIMARY KEY CHECK(singleton=1),runtime TEXT NOT NULL,mode TEXT NOT NULL,schema_version INTEGER NOT NULL CHECK(schema_version BETWEEN 0 AND 15),unique_writer TEXT NOT NULL) STRICT`,
 		`INSERT INTO control_meta_v15_fixture SELECT singleton,runtime,mode,15,unique_writer FROM control_store_meta`,
 		`DROP TABLE control_store_meta`, `ALTER TABLE control_meta_v15_fixture RENAME TO control_store_meta`,
-		`DELETE FROM schema_migrations WHERE version=16`, `PRAGMA user_version=15`,
+		`DELETE FROM schema_migrations WHERE version>=16`, `PRAGMA user_version=15`,
 	} {
 		if _, err := tx.Exec(statement); err != nil {
 			t.Fatal(err)
@@ -108,6 +109,19 @@ func TestV16CancellationMigrationPreservesActiveLeaseAndImmutableHistory(t *test
 	}
 	if control.SchemaVersion() != SchemaV16 {
 		t.Fatal("wrong migrated schema")
+	}
+	// The historical v16 assertion stays above. Public mutations require the
+	// current schema, so advance the fixture through the independent v17 gate.
+	tx, err = control.db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := control.migrateTx(tx); err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
 	}
 	if _, err := control.SettleAgentCancellation(input); err != nil {
 		t.Fatal("migrated lease could not settle original confirmed custody", err)

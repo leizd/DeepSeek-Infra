@@ -20,13 +20,16 @@ def test_native_contract_check_passes() -> None:
     report = check_all()
     assert report["ok"] is True
     assert report["go"] == "1.27.1"
-    # Include browser, platform OCR and typed Agent node dispatch contracts.
-    assert report["proto_files"] == 11
+    # Include browser, platform OCR, typed Agent nodes and media mutation contracts.
+    assert report["proto_files"] == 12
     assert (ROOT / "proto/browser/v1/browser.proto").is_file()
     assert (ROOT / "proto/platform/v1/ocr.proto").is_file()
     assert (ROOT / "proto/agent/v1/agent_node.proto").is_file()
+    assert (ROOT / "proto/media/v1/media.proto").is_file()
+    assert (ROOT / "go/internal/protocol/mediav1/media.pb.go").is_file()
+    assert (ROOT / "go/internal/protocol/mediav1/media_grpc.pb.go").is_file()
     # Agent run and node services each retain their generated gRPC binding.
-    assert report["generated_outputs"] == 19
+    assert report["generated_outputs"] == 21
     assert (ROOT / "go/internal/protocol/agentv1/agent_grpc.pb.go").is_file()
     assert (ROOT / "go/internal/protocol/agentv1/agent_node_grpc.pb.go").is_file()
 
@@ -57,9 +60,16 @@ def test_ci_has_native_go_and_protocol_gates() -> None:
     workflow = _read(".github/workflows/ci.yml")
     assert "native-go:" in workflow
     assert "native-protocol:" in workflow
-    assert workflow.count("https://go.dev/dl/go1.27.1.linux-amd64.tar.gz") == 3
-    assert workflow.count("63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445") == 3
-    assert workflow.count("GOTOOLCHAIN: local") >= 2
+    # Five jobs install the pinned toolchain: the fast Go gate, the two race suites
+    # that now run concurrently, and the two protocol/S3 jobs. Each copy must be
+    # accompanied by the checksum - a job that installs without verifying would be
+    # worse than one that does not install at all - so the two counts must agree.
+    go_jobs = ("native-go", "native-go-race", "native-go-android")
+    installs = workflow.count("https://go.dev/dl/go1.27.1.linux-amd64.tar.gz")
+    checksums = workflow.count("63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445")
+    assert installs == checksums == 5
+    # And every Go job carries the no-implicit-upgrade setting.
+    assert workflow.count("GOTOOLCHAIN: local") >= len(go_jobs)
     assert "python scripts/native_codegen.py --check" in workflow
     assert "--require-hashes" in workflow
     assert "-r requirements-native-protocol.txt" in workflow
@@ -77,18 +87,38 @@ def test_ci_has_native_go_and_protocol_gates() -> None:
     assert (ROOT / "go/pkg/protocol/canonical.go").is_file()
     assert (ROOT / "scripts/native_codegen.py").is_file()
     assert (ROOT / "scripts/check_native_contract_parity.py").is_file()
-    native_go = yaml.safe_load(workflow)["jobs"]["native-go"]
+    jobs = yaml.safe_load(workflow)["jobs"]
+    # The two race suites live in their own jobs so they run in parallel; each job
+    # carries exactly one variant, and together they still cover both.
     race_commands = [
         line.strip()
-        for step in native_go["steps"]
+        for name in go_jobs
+        for step in jobs[name]["steps"]
         for line in step.get("run", "").splitlines()
-        if line.strip().startswith("go test -race ")
+        if line.strip().startswith("python ../scripts/run_native_go_race.py ")
     ]
     assert len(race_commands) == 2
-    for command in race_commands:
-        assert re.fullmatch(r"go test -race(?: -json)? -timeout=(?:30|60|90)m \./\.\.\.(?: > \S+ 2> \S+)?", command)
-    android = next(step for step in native_go["steps"] if step.get("name") == "Android Go SQLite compatibility checks")
-    assert android["env"]["GOFLAGS"] == "-tags=deepseek_android"
+    # --max-parallel 4 because the standard runner has 4 vCPU: four race processes is
+    # one per core, not oversubscription. It was 2 with no stated reason, which left
+    # half the runner idle for the whole suite.
+    assert set(race_commands) == {
+        f"python ../scripts/run_native_go_race.py --variant {variant} --out ../artifacts/go-race/{variant} --store-shards 4 --max-parallel 4"
+        for variant in ("default", "android")
+    }
+    race_runner = _read("scripts/run_native_go_race.py")
+    assert 'GO_TIMEOUT = "90m"' in race_runner
+    assert '"-test.count=1"' in race_runner
+    assert '"-test.paniconexit0"' in race_runner
+    assert '"go", "test", "-race", "-json", "-count=1"' in race_runner
+    assert "TEST_CORPUS_INCOMPLETE_OR_FILTER_LEAK" in race_runner
+    assert "SUBTEST_TERMINAL_MISSING_OR_DUPLICATED" in race_runner
+    assert "UNREVIEWED_TEST_SKIP" in race_runner
+    android_job = jobs["native-go-android"]
+    assert android_job["env"]["GOFLAGS"] == "-tags=deepseek_android,sqlite3_flock"
+    android = next(
+        step for step in android_job["steps"] if step.get("name") == "Android Go SQLite compatibility checks"
+    )
+    assert "check_go_coverage.py --dir . --min 95.0 --profile android-coverage.out" in android["run"]
     assert "scripts/check_go_coverage.py" in workflow
 
 

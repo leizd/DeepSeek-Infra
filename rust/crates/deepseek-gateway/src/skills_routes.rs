@@ -3,7 +3,7 @@ use axum::{
     Json, Router,
     body::Bytes,
     extract::{Path, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::post,
 };
@@ -97,9 +97,9 @@ pub fn config(payload: &Value, key: &str) -> skills::Result<Value> {
         Ok(value)
     }
 }
-async fn api_skills(State(registry): State<Registry>, body: Bytes) -> Response {
+async fn api_skills(State(registry): State<Registry>, headers: HeaderMap, body: Bytes) -> Response {
     match parse_payload(&body) {
-        Ok(payload) => dispatch(registry, payload),
+        Ok(payload) => dispatch(registry, payload, headers).await,
         Err(error) => app_error(error),
     }
 }
@@ -116,9 +116,9 @@ pub const ACTION_NOT_READY: &str = "NATIVE_SKILLS_ACTION_NOT_READY";
 /// `run`, `dry_run` and the run/catalog/versioning blocks are phases 3-5, and phase 6 registers
 /// every action. An action that is neither here nor implemented still gets the oracle's 400, so
 /// unknown input keeps parity with Python.
-/// Offline runs and evaluation are implemented. The online branch of `run` still needs the
-/// native provider exchange; registering its action or passing offline tests does not complete it.
-pub const ACTION_NOT_MIGRATED: [&str; 1] = ["run"];
+/// Every action is registered. Complete behavior and platform qualification are
+/// separate from registration; online runs reuse the native chat composition.
+pub const ACTION_NOT_MIGRATED: [&str; 0] = [];
 
 /// The refusal both the action dispatch and `/api/skills/{skill_id}/run` answer with.
 pub fn not_ready_error(action: &str) -> deepseek_policy::app_error::AppError {
@@ -135,6 +135,7 @@ pub fn not_ready_error(action: &str) -> deepseek_policy::app_error::AppError {
 async fn api_skill_run(
     State(registry): State<Registry>,
     Path(skill_id): Path<String>,
+    headers: HeaderMap,
     body: Bytes,
 ) -> Response {
     let mut payload = match parse_payload(&body) {
@@ -143,7 +144,7 @@ async fn api_skill_run(
     };
     payload["skillId"] = json!(skill_id);
     payload["action"] = json!("run");
-    dispatch(registry, payload)
+    dispatch(registry, payload, headers).await
 }
 
 fn parse_payload(body: &Bytes) -> skills::Result<Value> {
@@ -165,8 +166,8 @@ fn parse_payload(body: &Bytes) -> skills::Result<Value> {
     Ok(payload)
 }
 
-fn dispatch(registry: Registry, payload: Value) -> Response {
-    let result = (|| {
+async fn dispatch(registry: Registry, payload: Value, headers: HeaderMap) -> Response {
+    let result = async {
         let action = skills::text(&payload, "action");
         let action = if action.is_empty() { "list" } else { &action }
             .trim()
@@ -250,15 +251,20 @@ fn dispatch(registry: Registry, payload: Value) -> Response {
                 status: 409,
             });
         }
-        execute(&registry, &payload, &action)
-    })();
+        execute(&registry, &payload, &action, &headers).await
+    }.await;
     match result {
         Ok(value) => Json(value).into_response(),
         Err(error) => app_error(error),
     }
 }
 
-fn execute(registry: &Registry, payload: &Value, action: &str) -> skills::Result<Value> {
+async fn execute(
+    registry: &Registry,
+    payload: &Value,
+    action: &str,
+    headers: &HeaderMap,
+) -> skills::Result<Value> {
     match action {
         "list" => Ok(json!({
             "ok": true,
@@ -295,7 +301,7 @@ fn execute(registry: &Registry, payload: &Value, action: &str) -> skills::Result
             "skill": registry.set_disabled(&id(payload, "skillId")?, action == "disable")?,
         })),
         "delete" => registry.delete(&id(payload, "skillId")?),
-        "run" => run_skill(registry, payload, &id(payload, "skillId")?),
+        "run" => run_skill(registry, payload, &id(payload, "skillId")?, headers).await,
         // The oracle's `dry_run` takes the Skill **configuration** from the request and never looks
         // an id up, so a `{"skillId": …}`-only payload is the oracle's own
         // `400 "Skill config missing required fields: …"` here too.
@@ -554,7 +560,12 @@ fn execute(registry: &Registry, payload: &Value, action: &str) -> skills::Result
     }
 }
 
-fn run_skill(registry: &Registry, payload: &Value, skill_id: &str) -> skills::Result<Value> {
+async fn run_skill(
+    registry: &Registry,
+    payload: &Value,
+    skill_id: &str,
+    headers: &HeaderMap,
+) -> skills::Result<Value> {
     let input = run_input(payload);
     if boolean(payload, "offline", false) {
         let mut options = payload.clone();
@@ -582,7 +593,28 @@ fn run_skill(registry: &Registry, payload: &Value, skill_id: &str) -> skills::Re
             }),
         );
     }
-    Err(not_ready_error("run"))
+    let prepared = runner::prepare(registry, skill_id, &input, payload)?;
+    let result = match prepared.request() {
+        Ok(request) => {
+            crate::chat_ndjson::complete_payload(
+                crate::chat_ndjson::ChatNdjsonState {
+                    root: registry.root.clone(),
+                    api_key_fallback: key,
+                },
+                headers.clone(),
+                request,
+            )
+            .await
+        }
+        Err(error) => Err(error),
+    };
+    let output = result.map(|response| json!({
+        "content": skills::text(&response, "content"),
+        "model": response.get("model").cloned().unwrap_or(Value::Null),
+        "usage": response.get("usage").filter(|v| v.is_object()).cloned().unwrap_or_else(|| json!({})),
+        "diagnostics": response.get("diagnostics").filter(|v| v.is_object()).cloned().unwrap_or_else(|| json!({})),
+    }));
+    prepared.finish(registry, output)
 }
 
 fn run_input(payload: &Value) -> Value {

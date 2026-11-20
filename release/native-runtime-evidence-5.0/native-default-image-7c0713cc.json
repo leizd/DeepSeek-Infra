@@ -1,0 +1,53 @@
+{
+  "sourceCommit": "7c0713ccb09484587ca0a3c15dde3847a2af5186",
+  "sourceTree": "abb4739a752c65f8fec0c6b242bc4cc0dd4d7c1e",
+  "runId": "42786170148",
+  "event": "workflow_dispatch",
+  "imageId": "sha256:5aa0c6e36362ccbee20687df6c494fcf5a7b0d7e50a0da7d081f9343b20acb63",
+  "sourceTreeDirty": false,
+  "checkedAt": "2026-11-10T09:00:41.073722+00:00",
+  "cases": {
+    "positive": {
+      "status": "PASS",
+      "freshVolume": true,
+      "bundledSkills": 18,
+      "bundledPacks": 4,
+      "goldenCases": 4,
+      "customSkillRetained": true,
+      "customCaseRetained": true,
+      "packagedInputsUnchanged": true,
+      "originalSignedOriginRetained": true,
+      "writerFences": [
+        1,
+        2
+      ],
+      "originSha256": "5ba507188fec62b28da140d7c54211edbf0496fecbe97770b47bddff78a6c42c",
+      "retainedCustomSha256": "247a0293bc47e5eee6704700b9c2a1b5f912143c69c9c79fbe1e1a80f6ca8a9a",
+      "requiredNativeRoles": [
+        "deepseek-gateway",
+        "deepseek-launch",
+        "deepseek-worker",
+        "deepseekd"
+      ],
+      "PythonAndNodeRuntimeExecutablesAbsent": true,
+      "reactEntryAndScriptsServed": true,
+      "firstPublishedOrigin": "http://127.0.0.1:32768",
+      "restartPublishedOrigin": "http://127.0.0.1:32769"
+    },
+    "legacy-seed": {
+      "status": "PASS",
+      "expectedFailureDetected": true,
+      "kind": "legacy-worker-directory"
+    },
+    "missing-bundle": {
+      "status": "PASS",
+      "expectedFailureDetected": true,
+      "kind": "missing-bundle"
+    }
+  },
+  "fullMigrationQualified": false,
+  "allProductFeaturesQualified": false,
+  "productionProviderQualified": false,
+  "readiness": "NOT_READY",
+  "status": "PASS"
+}

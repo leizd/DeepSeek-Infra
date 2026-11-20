@@ -78,6 +78,7 @@ tonic = "=0.12.3"
 protox = "=0.8.0"
 tonic-build = "=0.12.3"
 rusqlite = { version = "=0.37.0", features = ["bundled"] }
+sqlite-vec = "=0.1.9"
 
 [profile.release]
 lto = true
@@ -85,7 +86,8 @@ strip = "symbols"
 
 # Independently linked test binaries repeat very large COFF/ELF symbol tables.
 # Keep normal dev/test builds small. Assertions, overflow checks, optimization,
-# and unwinding retain Cargo's dev defaults; test inherits this profile.
+# and unwinding retain Cargo's dev defaults. Measured worker/SHA-256
+# optimization overrides are explicit below; test inherits this profile.
 [profile.dev]
 debug = false
 strip = "symbols"
@@ -94,6 +96,38 @@ incremental = false
 [profile.dev.package."*"]
 debug = false
 
+# A 76-byte PATCH against the actual 144 MB media library spent 7.23 s capturing/hashing its before
+# image in the unoptimized dev build. Optimize only the exact
+# existing dependency, retaining its algorithm, length semantics, assertions,
+# overflow checks and Rust source. Test/coverage inherit dev settings.
+[profile.dev.package."sha2@0.10.9"]
+opt-level = 3
+debug-assertions = true
+overflow-checks = true
+
+# At worker opt-level 1, the unchanged PATCH against that library still timed out: raw
+# validation/spooling alone took 9.09 s after capture completed in 0.187 s.
+# Level 3 also prevents importing unoptimized shared monomorphized generics.
+# Measure the original HTTP gate again; source, limits and checks are unchanged.
+# Coverage and source debugging stay unoptimized.
+[profile.dev.package.deepseek-worker]
+opt-level = 3
+debug-assertions = true
+overflow-checks = true
+
+# Shared record decoding/normalization now lives in policy, and gateway owns
+# bounded read snapshots. Avoid reintroducing the measured unoptimized parsing
+# cost when moving the same work out of worker. Coverage/debugging stay at 0.
+[profile.dev.package.deepseek-policy]
+opt-level = 3
+debug-assertions = true
+overflow-checks = true
+
+[profile.dev.package.deepseek-gateway]
+opt-level = 3
+debug-assertions = true
+overflow-checks = true
+
 # Deliberate source-level debugging is separate from routine verification.
 [profile.diagnostic]
 inherits = "dev"
@@ -101,6 +135,23 @@ debug = true
 strip = "none"
 
 [profile.diagnostic.package."*"]
+debug = true
+
+# Keep source-level debugging of this dependency deliberately unoptimized.
+[profile.diagnostic.package."sha2@0.10.9"]
+opt-level = 0
+debug = true
+
+[profile.diagnostic.package.deepseek-worker]
+opt-level = 0
+debug = true
+
+[profile.diagnostic.package.deepseek-policy]
+opt-level = 0
+debug = true
+
+[profile.diagnostic.package.deepseek-gateway]
+opt-level = 0
 debug = true
 
 # LLVM embeds coverage mappings independently of debugger DWARF information.
@@ -112,4 +163,17 @@ debug = false
 strip = "none"
 
 [profile.coverage.package."*"]
+debug = false
+
+# Keep workspace coverage measurement at its original optimization level.
+[profile.coverage.package.deepseek-worker]
+opt-level = 0
+debug = false
+
+[profile.coverage.package.deepseek-policy]
+opt-level = 0
+debug = false
+
+[profile.coverage.package.deepseek-gateway]
+opt-level = 0
 debug = false

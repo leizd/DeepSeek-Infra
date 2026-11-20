@@ -1,0 +1,128 @@
+// HTTP admission is exercised against the production Rust gateway. Go observes
+// only its own metadata and opaque Rust body references.
+package api
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"reflect"
+	"testing"
+
+	"github.com/leizd/DeepSeek-Infra/go/internal/agent"
+	agentv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/agentv1"
+	"github.com/leizd/DeepSeek-Infra/go/internal/store"
+	"google.golang.org/protobuf/proto"
+)
+
+func nativePublicRecoveryPost(t *testing.T, client *http.Client, origin, run, path string, input []byte) (int, map[string]any) {
+	t.Helper()
+	request, err := http.NewRequest(http.MethodPost, origin+"/api/agent-runs/"+run+"/"+path, bytes.NewReader(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(response.Body, 2<<20))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, private := range []string{"request-only-credential", "_nativeProviderCredentials", "_nativeRecoveryContext", "private-task-reasoning"} {
+		if bytes.Contains(raw, []byte(private)) {
+			t.Fatal("public recovery response leaked private custody")
+		}
+	}
+	var payload map[string]any
+	if json.Unmarshal(raw, &payload) != nil || payload == nil {
+		t.Fatal("public recovery returned a non-object body")
+	}
+	return response.StatusCode, payload
+}
+
+func nativePublicTaskRecoveryAdmission(t *testing.T, control *store.Control, client *http.Client, origin string,
+	before agent.RunMetadata, input *agentv1.PreviewAgentRunRecoveryRequest, preview *agentv1.PreviewAgentRunRecoveryResponse,
+	ctx context.Context, recovery agentv1.AgentRunRecoveryControlClient) (*agentv1.PrepareAgentCredentialsResponse, *agentv1.CommitAgentRunRecoveryRequest, *agentv1.CommitAgentRunRecoveryResponse) {
+	t.Helper()
+	body, err := json.Marshal(map[string]any{"agentId": input.Selection.AgentId, "resynthesize": input.Selection.GetResynthesize(),
+		"payload": map[string]any{"temperature": 1.0}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, public := nativePublicRecoveryPost(t, client, origin, before.RunID, "rerun", body)
+	if status != http.StatusOK || public["ok"] != true || public["started"] != true || public["run"] == nil {
+		t.Fatal("actual Rust HTTP rerun admission failed", status)
+	}
+	after, found, err := control.AgentRunMetadata(before.RunID)
+	if err != nil || !found || after.Recovery == nil || after.Recovery.ContextSHA256 != preview.ContextSha256 ||
+		after.NextIndex != before.NextIndex+2 || after.Status != "running" || after.RuntimeVersion() != before.RuntimeVersion()+1 {
+		t.Fatal("public admission did not bind the fresh Go context and runtime", err)
+	}
+	headers, err := control.AgentRunEventsAfter(before.RunID, before.NextIndex-1, 3)
+	if err != nil || len(headers) != 2 {
+		t.Fatal("public admission did not persist exactly its original ordered event pair", err)
+	}
+	prepared := &agentv1.PrepareAgentCredentialsResponse{PreparedRequest: artifactProtocol(after.Request),
+		RecoveryContext: artifactProtocol(after.Recovery.Context), RecoveryContextSha256: after.Recovery.ContextSHA256,
+		RecoveryEventBodies: []*agentv1.AgentArtifactReference{artifactProtocol(headers[0].Body), artifactProtocol(headers[1].Body)}}
+	digest := sha256.Sum256([]byte(fmt.Sprintf("%s:%d:%d:%s:%s", before.RunID, input.MetadataFence.ExecutionEpoch,
+		before.NextIndex, preview.ContextSha256, after.Request.SHA256)))
+	commit := &agentv1.CommitAgentRunRecoveryRequest{SchemaVersion: 1, OperationId: fmt.Sprintf("agent-web-recovery-%x", digest),
+		Actor: "operator:agent-web", RunId: before.RunID, Fence: input.MetadataFence, ExpectedIndex: before.NextIndex,
+		ExpectedRuntimeRevision: before.RuntimeVersion(), ExpectedRequest: input.ExpectedRequest, Selection: input.Selection,
+		ContextSha256: preview.ContextSha256, Context: prepared.RecoveryContext, Request: prepared.PreparedRequest, EventBodies: prepared.RecoveryEventBodies}
+	// This is explicitly a replay of the operation admitted by HTTP. It cannot
+	// substitute a private RPC admission for the public request above.
+	replay, err := recovery.Commit(ctx, commit)
+	if err != nil || !replay.GetAlreadyApplied() || replay.Run == nil || len(replay.Events) != 2 {
+		t.Fatal("HTTP did not retain the exact operation receipt used by the replay", err)
+	}
+	for i, event := range replay.Events {
+		if !proto.Equal(event.Body, prepared.RecoveryEventBodies[i]) {
+			t.Fatal("public operation receipt rebound the initial event body")
+		}
+	}
+	return prepared, commit, replay
+}
+
+func nativePublicRecoveryRefusals(t *testing.T, control *store.Control, client *http.Client, origin, runID string, role string) []map[string]any {
+	t.Helper()
+	before, found, err := control.AgentRunMetadata(runID)
+	if err != nil || !found || before.Status != "running" {
+		t.Fatal("refusal probe requires the actual paused running task", err)
+	}
+	valid, _ := json.Marshal(map[string]any{"agentId": role, "payload": map[string]any{}})
+	cases := []struct {
+		name, path, run string
+		body            []byte
+		status          int
+	}{
+		{"invalid-json", "rerun", runID, []byte("{"), http.StatusBadRequest},
+		{"missing-role", "rerun", runID, []byte(`{"payload":{}}`), http.StatusBadRequest},
+		{"unknown-role", "rerun", runID, []byte(`{"agentId":"unknown","payload":{}}`), http.StatusBadRequest},
+		{"private-input", "rerun", runID, []byte(`{"agentId":"critic","payload":{"_nativeProviderCredentials":{}}}`), http.StatusBadRequest},
+		{"duplicate-rerun-while-active", "rerun", runID, valid, http.StatusConflict},
+		{"resume-while-active", "resume", runID, []byte(`{"payload":{}}`), http.StatusConflict},
+		{"missing-run", "rerun", "run_missing_public_recovery_fixture", valid, http.StatusNotFound},
+	}
+	results := make([]map[string]any, 0, len(cases))
+	for _, probe := range cases {
+		status, _ := nativePublicRecoveryPost(t, client, origin, probe.run, probe.path, probe.body)
+		if status != probe.status {
+			t.Fatal("public recovery refusal differs", probe.name, status)
+		}
+		after, found, err := control.AgentRunMetadata(runID)
+		if err != nil || !found || !reflect.DeepEqual(before, after) {
+			t.Fatal("public refusal changed the original run while its provider task was paused", probe.name, err)
+		}
+		results = append(results, map[string]any{"case": probe.name, "path": probe.path, "status": status, "runUnchanged": true})
+	}
+	return results
+}

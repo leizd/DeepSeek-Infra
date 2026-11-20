@@ -1,18 +1,20 @@
-//! `GET /api/workspace/artifacts/{artifact_id}/preview`.
+//! `GET /api/workspace/artifacts/{artifact_id}/preview` and
+//! `GET /api/workspace/artifacts/{artifact_id}/download`.
 //!
-//! `artifacts.preview_artifact`. A missing `artifacts.json` is an empty list, so a
-//! well-formed id is `404 Artifact not found`. The read does not create
-//! `.projects`. An explicit `projectId` searches only that project, even when
-//! `project.json` is absent. An empty `projectId` scans `list_projects` (newest
-//! `updatedAt` first) and therefore only projects that already have `project.json`.
+//! `artifacts.preview_artifact` / `api_workspace_artifact_download`. A missing
+//! `artifacts.json` is an empty list, so a well-formed id is `404 Artifact not
+//! found`. The read does not create `.projects`. An explicit `projectId`
+//! searches only that project, even when `project.json` is absent. An empty
+//! `projectId` scans `list_projects` (newest `updatedAt` first) and therefore
+//! only projects that already have `project.json`.
 //!
-//! This path has no other Python method. `HEAD` follows Starlette and returns
-//! the GET status with an empty body. Any other method is `405` with FastAPI's
-//! `{"detail": "Method Not Allowed"}`. `GET .../download` stays on the Go proxy.
+//! Neither path has any other Python method. `HEAD` follows Starlette and
+//! returns the GET status/headers with an empty body. Any other method is `405`
+//! with FastAPI's `{"detail": "Method Not Allowed"}`.
 
 use std::path::{Path, PathBuf};
 
-use axum::body::Bytes;
+use axum::body::{Body, Bytes};
 use axum::extract::{OriginalUri, Path as AxumPath};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
@@ -21,12 +23,13 @@ use axum::{Json, Router};
 use deepseek_policy::app_error::{AppError, codes};
 use deepseek_policy::core_utils::{python_int_opt, python_truthy};
 use deepseek_policy::entropy::SystemEntropy;
+use deepseek_policy::file_routes::content_disposition_header;
 use deepseek_policy::generated_files::generated_dir;
 use deepseek_policy::projects::{self, read_project};
 use deepseek_policy::workspace_schema::{
     normalize_artifact_type, normalize_source_ref, normalize_title, python_str,
-    redact_sensitive_text, resolve_runtime_path, runtime_relative_path, timestamp_ms_to_iso,
-    validate_project_id, validate_workspace_id,
+    redact_sensitive_text, resolve_runtime_path, runtime_relative_path, safe_filename,
+    timestamp_ms_to_iso, validate_project_id, validate_workspace_id,
 };
 use serde_json::{Map, Number, Value, json};
 
@@ -35,10 +38,15 @@ const MAX_ARTIFACT_PREVIEW_CHARS: usize = 100_000;
 const TEXT_PREVIEW_TYPES: [&str; 7] = ["svg", "markdown", "md", "csv", "json", "html", "txt"];
 
 pub fn router() -> Router {
-    Router::new().route(
-        "/api/workspace/artifacts/:artifact_id/preview",
-        any(dispatch),
-    )
+    Router::new()
+        .route(
+            "/api/workspace/artifacts/:artifact_id/preview",
+            any(dispatch),
+        )
+        .route(
+            "/api/workspace/artifacts/:artifact_id/download",
+            any(dispatch_download),
+        )
 }
 
 async fn dispatch(
@@ -52,6 +60,61 @@ async fn dispatch(
         return preview_response(method, artifact_id, project_query(&uri)).await;
     }
     method_not_allowed()
+}
+
+async fn dispatch_download(
+    method: Method,
+    AxumPath(artifact_id): AxumPath<String>,
+    OriginalUri(uri): OriginalUri,
+    _headers: HeaderMap,
+    _body: Bytes,
+) -> Response {
+    if method == Method::GET || method == Method::HEAD {
+        return download_response(method, artifact_id, project_query(&uri)).await;
+    }
+    method_not_allowed()
+}
+
+async fn download_response(method: Method, artifact_id: String, project_id: String) -> Response {
+    let result = match tokio::task::spawn_blocking(move || {
+        download_payload(&artifact_id, &project_id)
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => Err(server_error()),
+    };
+    match result {
+        Ok((media_type, disposition, bytes)) => {
+            build_download_response(method, &media_type, &disposition, bytes)
+        }
+        Err(error) if method == Method::HEAD => StatusCode::from_u16(error.status)
+            .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
+            .into_response(),
+        Err(error) => error_response(error),
+    }
+}
+
+pub(crate) fn build_download_response(
+    method: Method,
+    media_type: &str,
+    disposition: &str,
+    bytes: Vec<u8>,
+) -> Response {
+    let mut headers = HeaderMap::new();
+    if let Ok(value) = HeaderValue::from_str(disposition) {
+        headers.insert(header::CONTENT_DISPOSITION, value);
+    }
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    if let Ok(value) = HeaderValue::from_str(media_type) {
+        headers.insert(header::CONTENT_TYPE, value);
+    }
+    let body = if method == Method::HEAD {
+        Body::empty()
+    } else {
+        Body::from(bytes)
+    };
+    (StatusCode::OK, headers, body).into_response()
 }
 
 async fn preview_response(method: Method, artifact_id: String, project_id: String) -> Response {
@@ -71,7 +134,7 @@ async fn preview_response(method: Method, artifact_id: String, project_id: Strin
 }
 
 /// `str(query.get("projectId") or "")`. An empty value scans every project.
-fn project_query(uri: &Uri) -> String {
+pub(crate) fn project_query(uri: &Uri) -> String {
     first_query(uri.query().unwrap_or(""), "projectId").unwrap_or_default()
 }
 
@@ -98,19 +161,98 @@ fn percent_decode_query(raw: &str) -> String {
         .into_owned()
 }
 
-fn preview(artifact_id: &str, project_id: &str) -> Result<Value, AppError> {
+fn require_artifact_in(
+    root: &Path,
+    artifact_id: &str,
+    project_id: &str,
+) -> Result<Value, AppError> {
     let safe_artifact_id = validate_workspace_id(artifact_id, "artifact id")?;
-    let root = crate::data_routes::workspace_root();
-    let projects = project_ids(&root, project_id)?;
+    let projects = project_ids(root, project_id)?;
     for project_id in projects {
-        for artifact in load_artifacts(&root, &project_id)? {
+        for artifact in load_artifacts(root, &project_id)? {
             if artifact.get("artifactId").and_then(Value::as_str) == Some(safe_artifact_id.as_str())
             {
-                return preview_body(&root, &artifact);
+                return Ok(artifact);
             }
         }
     }
     Err(AppError::not_found("Artifact not found"))
+}
+
+fn preview(artifact_id: &str, project_id: &str) -> Result<Value, AppError> {
+    let root = crate::data_routes::workspace_root();
+    let artifact = require_artifact_in(&root, artifact_id, project_id)?;
+    preview_body(&root, &artifact)
+}
+
+fn download_payload(
+    artifact_id: &str,
+    project_id: &str,
+) -> Result<(String, String, Vec<u8>), AppError> {
+    let root = crate::data_routes::workspace_root();
+    let artifact = require_artifact_in(&root, artifact_id, project_id)?;
+    let (generated, projects, workspace) = roots(&root);
+    let path = resolve_runtime_path(
+        artifact.get("path").and_then(Value::as_str).unwrap_or(""),
+        &generated,
+        &projects,
+        &workspace,
+    )?;
+    if !path.is_file() {
+        return Err(AppError::not_found("Artifact file not found"));
+    }
+    let bytes = std::fs::read(&path).map_err(|_| server_error())?;
+    let media_type = guess_download_media_type(&path).to_string();
+    let ext_lower = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| format!(".{}", ext.to_ascii_lowercase()))
+        .unwrap_or_else(|| {
+            let ty = artifact
+                .get("type")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("artifact");
+            format!(".{ty}")
+        });
+    let stem = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("artifact");
+    let raw_name = artifact
+        .get("title")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(stem);
+    let filename = format!("{}{}", safe_filename(raw_name, "artifact"), ext_lower);
+    let disposition = content_disposition_header("attachment", &filename);
+    Ok((media_type, disposition, bytes))
+}
+
+pub(crate) fn guess_download_media_type(path: &Path) -> &'static str {
+    let ext = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    match ext.as_str() {
+        "json" => "application/json",
+        "html" | "htm" => "text/html",
+        "csv" => "text/csv",
+        "md" | "markdown" => "text/markdown",
+        "txt" | "log" => "text/plain",
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        "gif" => "image/gif",
+        "pdf" => "application/pdf",
+        "zip" => "application/zip",
+        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        _ => "application/octet-stream",
+    }
 }
 
 /// Explicit `projectId` is that one id. An empty value is `list_projects`.
@@ -124,7 +266,7 @@ fn project_ids(root: &Path, project_id: &str) -> Result<Vec<String>, AppError> {
 /// `data.projects.list_projects`: invalid directory names raise, a missing
 /// `project.json` is skipped, and `public_project`'s `int(updatedAt)` is the
 /// sort key. Newest first. Equal timestamps keep directory order.
-fn scan_projects(root: &Path) -> Result<Vec<String>, AppError> {
+pub(crate) fn scan_projects(root: &Path) -> Result<Vec<String>, AppError> {
     let directory = projects::projects_dir(root);
     if !directory.exists() {
         return Ok(Vec::new());
@@ -170,7 +312,7 @@ fn public_clock(value: Option<&Value>) -> Result<i64, AppError> {
     coerced_int(value, 0).map_err(|_| server_error())
 }
 
-fn load_artifacts(root: &Path, project_id: &str) -> Result<Vec<Value>, AppError> {
+pub(crate) fn load_artifacts(root: &Path, project_id: &str) -> Result<Vec<Value>, AppError> {
     let path = projects::projects_dir(root)
         .join(project_id)
         .join("artifacts.json");
@@ -388,7 +530,7 @@ fn roots(root: &Path) -> (PathBuf, PathBuf, PathBuf) {
 
 /// Missing path, `OSError` (including a directory), invalid JSON, and a non-object
 /// are the empty default. Invalid UTF-8 is not caught.
-fn read_store_json(path: &Path) -> Result<Option<Value>, AppError> {
+pub(crate) fn read_store_json(path: &Path) -> Result<Option<Value>, AppError> {
     if !path.exists() {
         return Ok(None);
     }
@@ -411,7 +553,7 @@ fn coerced_int(value: Option<&Value>, fallback: i64) -> Result<i64, ()> {
     python_int_opt(Some(&chosen)).ok_or(())
 }
 
-fn method_not_allowed() -> Response {
+pub(crate) fn method_not_allowed() -> Response {
     let mut response = (
         StatusCode::METHOD_NOT_ALLOWED,
         Json(json!({"detail": "Method Not Allowed"})),
@@ -423,7 +565,7 @@ fn method_not_allowed() -> Response {
     response
 }
 
-fn server_error() -> AppError {
+pub(crate) fn server_error() -> AppError {
     AppError {
         status: 500,
         code: codes::INTERNAL,
@@ -431,7 +573,7 @@ fn server_error() -> AppError {
     }
 }
 
-fn error_response(error: AppError) -> Response {
+pub(crate) fn error_response(error: AppError) -> Response {
     (
         StatusCode::from_u16(error.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
         Json(json!({"error": error.message, "code": error.code})),

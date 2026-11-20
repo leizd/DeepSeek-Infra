@@ -373,3 +373,246 @@ var ControlSigner_ServiceDesc = grpc.ServiceDesc{
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "action/v1/action.proto",
 }
+
+const (
+	ControlSignerBootstrap_GetBinding_FullMethodName = "/deepseek.action.v1.ControlSignerBootstrap/GetBinding"
+)
+
+// ControlSignerBootstrapClient is the client API for ControlSignerBootstrap service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+type ControlSignerBootstrapClient interface {
+	GetBinding(ctx context.Context, in *ControlSignerBindingRequest, opts ...grpc.CallOption) (*ControlSignerBindingResponse, error)
+}
+
+type controlSignerBootstrapClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewControlSignerBootstrapClient(cc grpc.ClientConnInterface) ControlSignerBootstrapClient {
+	return &controlSignerBootstrapClient{cc}
+}
+
+func (c *controlSignerBootstrapClient) GetBinding(ctx context.Context, in *ControlSignerBindingRequest, opts ...grpc.CallOption) (*ControlSignerBindingResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ControlSignerBindingResponse)
+	err := c.cc.Invoke(ctx, ControlSignerBootstrap_GetBinding_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ControlSignerBootstrapServer is the server API for ControlSignerBootstrap service.
+// All implementations must embed UnimplementedControlSignerBootstrapServer
+// for forward compatibility.
+type ControlSignerBootstrapServer interface {
+	GetBinding(context.Context, *ControlSignerBindingRequest) (*ControlSignerBindingResponse, error)
+	mustEmbedUnimplementedControlSignerBootstrapServer()
+}
+
+// UnimplementedControlSignerBootstrapServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedControlSignerBootstrapServer struct{}
+
+func (UnimplementedControlSignerBootstrapServer) GetBinding(context.Context, *ControlSignerBindingRequest) (*ControlSignerBindingResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetBinding not implemented")
+}
+func (UnimplementedControlSignerBootstrapServer) mustEmbedUnimplementedControlSignerBootstrapServer() {
+}
+func (UnimplementedControlSignerBootstrapServer) testEmbeddedByValue() {}
+
+// UnsafeControlSignerBootstrapServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to ControlSignerBootstrapServer will
+// result in compilation errors.
+type UnsafeControlSignerBootstrapServer interface {
+	mustEmbedUnimplementedControlSignerBootstrapServer()
+}
+
+func RegisterControlSignerBootstrapServer(s grpc.ServiceRegistrar, srv ControlSignerBootstrapServer) {
+	// If the following call panics, it indicates UnimplementedControlSignerBootstrapServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&ControlSignerBootstrap_ServiceDesc, srv)
+}
+
+func _ControlSignerBootstrap_GetBinding_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ControlSignerBindingRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlSignerBootstrapServer).GetBinding(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ControlSignerBootstrap_GetBinding_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlSignerBootstrapServer).GetBinding(ctx, req.(*ControlSignerBindingRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// ControlSignerBootstrap_ServiceDesc is the grpc.ServiceDesc for ControlSignerBootstrap service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var ControlSignerBootstrap_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "deepseek.action.v1.ControlSignerBootstrap",
+	HandlerType: (*ControlSignerBootstrapServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "GetBinding",
+			Handler:    _ControlSignerBootstrap_GetBinding_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "action/v1/action.proto",
+}
+
+const (
+	NativeOriginCustody_Read_FullMethodName    = "/deepseek.action.v1.NativeOriginCustody/Read"
+	NativeOriginCustody_Publish_FullMethodName = "/deepseek.action.v1.NativeOriginCustody/Publish"
+)
+
+// NativeOriginCustodyClient is the client API for NativeOriginCustody service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+type NativeOriginCustodyClient interface {
+	Read(ctx context.Context, in *ReadNativeOriginRequest, opts ...grpc.CallOption) (*NativeOriginState, error)
+	Publish(ctx context.Context, in *PublishNativeOriginRequest, opts ...grpc.CallOption) (*NativeOriginState, error)
+}
+
+type nativeOriginCustodyClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewNativeOriginCustodyClient(cc grpc.ClientConnInterface) NativeOriginCustodyClient {
+	return &nativeOriginCustodyClient{cc}
+}
+
+func (c *nativeOriginCustodyClient) Read(ctx context.Context, in *ReadNativeOriginRequest, opts ...grpc.CallOption) (*NativeOriginState, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(NativeOriginState)
+	err := c.cc.Invoke(ctx, NativeOriginCustody_Read_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *nativeOriginCustodyClient) Publish(ctx context.Context, in *PublishNativeOriginRequest, opts ...grpc.CallOption) (*NativeOriginState, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(NativeOriginState)
+	err := c.cc.Invoke(ctx, NativeOriginCustody_Publish_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// NativeOriginCustodyServer is the server API for NativeOriginCustody service.
+// All implementations must embed UnimplementedNativeOriginCustodyServer
+// for forward compatibility.
+type NativeOriginCustodyServer interface {
+	Read(context.Context, *ReadNativeOriginRequest) (*NativeOriginState, error)
+	Publish(context.Context, *PublishNativeOriginRequest) (*NativeOriginState, error)
+	mustEmbedUnimplementedNativeOriginCustodyServer()
+}
+
+// UnimplementedNativeOriginCustodyServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedNativeOriginCustodyServer struct{}
+
+func (UnimplementedNativeOriginCustodyServer) Read(context.Context, *ReadNativeOriginRequest) (*NativeOriginState, error) {
+	return nil, status.Error(codes.Unimplemented, "method Read not implemented")
+}
+func (UnimplementedNativeOriginCustodyServer) Publish(context.Context, *PublishNativeOriginRequest) (*NativeOriginState, error) {
+	return nil, status.Error(codes.Unimplemented, "method Publish not implemented")
+}
+func (UnimplementedNativeOriginCustodyServer) mustEmbedUnimplementedNativeOriginCustodyServer() {}
+func (UnimplementedNativeOriginCustodyServer) testEmbeddedByValue()                             {}
+
+// UnsafeNativeOriginCustodyServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to NativeOriginCustodyServer will
+// result in compilation errors.
+type UnsafeNativeOriginCustodyServer interface {
+	mustEmbedUnimplementedNativeOriginCustodyServer()
+}
+
+func RegisterNativeOriginCustodyServer(s grpc.ServiceRegistrar, srv NativeOriginCustodyServer) {
+	// If the following call panics, it indicates UnimplementedNativeOriginCustodyServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&NativeOriginCustody_ServiceDesc, srv)
+}
+
+func _NativeOriginCustody_Read_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReadNativeOriginRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NativeOriginCustodyServer).Read(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NativeOriginCustody_Read_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NativeOriginCustodyServer).Read(ctx, req.(*ReadNativeOriginRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _NativeOriginCustody_Publish_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PublishNativeOriginRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NativeOriginCustodyServer).Publish(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NativeOriginCustody_Publish_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NativeOriginCustodyServer).Publish(ctx, req.(*PublishNativeOriginRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// NativeOriginCustody_ServiceDesc is the grpc.ServiceDesc for NativeOriginCustody service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var NativeOriginCustody_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "deepseek.action.v1.NativeOriginCustody",
+	HandlerType: (*NativeOriginCustodyServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "Read",
+			Handler:    _NativeOriginCustody_Read_Handler,
+		},
+		{
+			MethodName: "Publish",
+			Handler:    _NativeOriginCustody_Publish_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "action/v1/action.proto",
+}

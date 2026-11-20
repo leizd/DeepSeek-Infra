@@ -105,7 +105,13 @@ func PlanRunRecovery(input RunRecoveryRequest, checkpoint RunRecoveryCheckpoint)
 	if input.Mode != "resume" && input.Mode != "rerun" || len(checkpoint.Plan) > 64 || len(checkpoint.Outputs) > 4 {
 		return RunRecoveryDecision{}, ErrInvalidRunRecovery
 	}
-	decision := RunRecoveryDecision{Plan: NormalizeRunPlan(checkpoint.Plan), Execute: []RunPlanNode{},
+	// The retained controller uses its default DAG when planning produced no
+	// output. Keep this effective plan separate from the public empty snapshot.
+	effectivePlan := checkpoint.Plan
+	if len(effectivePlan) == 0 {
+		effectivePlan = []RunPlanNode{}
+	}
+	decision := RunRecoveryDecision{Plan: NormalizeRunPlan(effectivePlan), Execute: []RunPlanNode{},
 		CompletedIDs: []string{}, RetainedIDs: []string{}, PriorIDs: []string{}, ResetIDs: []string{}, SynthesisOutputIDs: []string{}}
 	outputs := map[string]RunRecoveryOutput{}
 	ordered := []string{}

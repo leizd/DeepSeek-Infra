@@ -24,6 +24,7 @@ from typing import Any, BinaryIO
 from deepseek_infra.core import config
 from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.infra.workspace import backup_object_set
+from deepseek_infra.infra.native_runtime.authority import assert_python_writer_allowed
 
 INDEX_DIR = config.ROOT / ".backup-index"
 INDEX_DB = INDEX_DIR / "index.db"
@@ -1116,6 +1117,7 @@ def record_committed_snapshot(
     Older tests and integrations call this lineage helper before attaching
     chunk maps. It must not revive the legacy per-snapshot materialized tables.
     """
+    assert_python_writer_allowed("backup_index_store")
     commit_snapshot_index(
         target_id=target_id,
         policy_id=policy_id,
@@ -1347,6 +1349,7 @@ def commit_snapshot_index(
     storage_protocol: str = backup_object_set.CURRENT_STORAGE_PROTOCOL,
 ) -> None:
     """Atomically commit lineage, delta ops, immutable versions and one effective view."""
+    assert_python_writer_allowed("backup_index_store")
     grouped: dict[tuple[str, str], list[ChunkRecord]] = {}
     for item in chunks:
         grouped.setdefault((item.contributor_id, item.logical_path), []).append(item)
@@ -1568,6 +1571,7 @@ def record_snapshot_chunks(
     backup_id: str,
     chunks: list[ChunkRecord],
 ) -> None:
+    assert_python_writer_allowed("backup_index_store")
     grouped: dict[tuple[str, str], list[ChunkRecord]] = {}
     for item in chunks:
         grouped.setdefault((item.contributor_id, item.logical_path), []).append(item)
@@ -2039,6 +2043,7 @@ def lookup_parent_chunks_accelerated(
 
 def garbage_collect_chunk_maps(deleted_snapshots: list[tuple[str, str, str]]) -> dict[str, int]:
     """Drop physically deleted snapshot state and unreferenced accelerators."""
+    assert_python_writer_allowed("backup_index_store")
     bloom_paths = [_bloom_path(target_id, policy_id, backup_id) for target_id, policy_id, backup_id in deleted_snapshots]
     with _connect() as connection:
         connection.execute("BEGIN IMMEDIATE")
@@ -2294,6 +2299,7 @@ def maintain_snapshot_index(
     migrate: bool = False,
 ) -> dict[str, Any]:
     """Run bounded incremental compaction outside the backup commit path."""
+    assert_python_writer_allowed("backup_index_store")
     before = index_metrics(target_id, policy_id)
     if int(before["dbBytes"]) <= int(minimum_db_bytes) or float(before["freePageRatio"]) <= float(minimum_free_page_ratio):
         return {"status": "not-needed", "before": before, "after": before}

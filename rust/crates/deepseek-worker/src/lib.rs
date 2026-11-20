@@ -1,3 +1,4 @@
+pub mod managed_profile;
 use std::collections::{HashMap, HashSet};
 use std::env::VarError;
 
@@ -14,16 +15,37 @@ use deepseek_transfer::{TransferRequest, plan as plan_transfer};
 use sha2::Digest;
 
 mod agent_execution_grant;
+mod agent_failure_projection;
 mod agent_node_effect;
 mod agent_plan_executor;
 mod agent_plan_projection;
 mod agent_provider_credentials;
+mod agent_recovery_context;
+mod agent_recovery_progress;
 mod agent_synthesis_projection;
 mod agent_task_executor;
+mod agent_terminal_failure;
 mod authority_request;
 mod authority_store;
 mod control_signer;
+mod media_control;
+mod media_create;
+mod media_delete;
+mod media_image;
+mod media_image_custody;
+mod media_journal;
+mod media_library;
+mod media_patch;
+mod media_patch_result;
+mod media_phase_timing;
+mod media_process;
+mod media_process_index;
+mod media_processing;
+mod media_records;
+mod media_stream_io;
+mod media_values;
 mod mutation_request;
+mod native_origin;
 mod operation_grant;
 #[cfg(test)]
 mod operation_grant_replay_tests;

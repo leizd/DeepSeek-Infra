@@ -1,3 +1,5 @@
+mod instance_identity;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -5,16 +7,28 @@ use std::time::Duration;
 
 use deepseek_stateless_mcp::http::{AppState, ServiceConfig, router};
 use deepseek_stateless_mcp::model::TaskOutcome;
-use deepseek_stateless_mcp::runner::execute_configured_task;
+use deepseek_stateless_mcp::runner::{complete_when_unfenced, execute_configured_task};
 use deepseek_stateless_mcp::store::TaskBackend;
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let redis_url = nonempty("REDIS_URL");
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    if let Some(code) = deepseek_stateless_mcp::task_process::maybe_run_supervisor() {
+        std::process::exit(code);
+    }
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(serve())
+}
+
+async fn serve() -> Result<(), Box<dyn std::error::Error>> {
+    let redis_url = env_string("REDIS_URL", "redis://127.0.0.1:6379");
     let host = env_string("MCP_HOST", "0.0.0.0");
     let port: u16 = env_string("MCP_PORT", "8010").parse()?;
-    let instance_id =
-        std::env::var("MCP_INSTANCE_ID").unwrap_or_else(|_| format!("mcp-{}", std::process::id()));
+    let instance_id = match nonempty("MCP_INSTANCE_ID") {
+        Some(value) => value,
+        None => instance_identity::new_instance_id()?,
+    };
     let workspace_root = PathBuf::from(env_string("MCP_WORKSPACE_ROOT", "."));
     let allowed_hosts = env_string("MCP_ALLOWED_HOSTS", "localhost,127.0.0.1,[::1],mcp-lb")
         .split(',')
@@ -27,8 +41,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         allowed_hosts,
         auth_token: nonempty("MCP_AUTH_TOKEN"),
         internal_backup_token: nonempty("MCP_INTERNAL_BACKUP_TOKEN"),
-        durable_task_state: TaskBackend::advertised_durable_task_state(redis_url.is_some())
-            .to_string(),
+        durable_task_state: TaskBackend::advertised_durable_task_state(true).to_string(),
         max_output_bytes: env_string("MCP_MAX_OUTPUT_BYTES", "262144")
             .parse()
             .unwrap_or(262_144),
@@ -45,12 +58,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or(250);
     let timeout_seconds = config.task_timeout_seconds;
     let max_output_bytes = config.max_output_bytes;
-    let store = Arc::new(match redis_url {
-        Some(url) => {
-            TaskBackend::connect_redis(&url, &env_string("REDIS_PREFIX", "deepseek-infra:mcp:v1"))?
-        }
-        None => TaskBackend::memory(),
-    });
+    let store = Arc::new(TaskBackend::connect_redis(
+        &redis_url,
+        &env_string("REDIS_PREFIX", "deepseek-infra:mcp:v1"),
+    )?);
     let worker_store = Arc::clone(&store);
     let worker_root = workspace_root.clone();
     tokio::spawn(async move {
@@ -109,12 +120,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     exit_code: None,
                     error: Some(error.to_string()),
                 });
-                heartbeat.abort();
                 if !cancel.load(Ordering::Relaxed) {
-                    let _ = tokio::task::block_in_place(|| {
-                        worker_store.complete(&task_id, &instance_id, outcome, now_millis())
-                    });
+                    let result = complete_when_unfenced(
+                        || {
+                            tokio::task::block_in_place(|| {
+                                worker_store.complete(
+                                    &task_id,
+                                    &instance_id,
+                                    outcome.clone(),
+                                    now_millis(),
+                                )
+                            })
+                        },
+                        &cancel,
+                        Duration::from_millis(poll_ms.max(1)),
+                        Duration::from_secs(5 * 60),
+                    )
+                    .await;
+                    if let Err(error) = result {
+                        eprintln!("task_completion_failed task_id={task_id}: {error}");
+                    }
                 }
+                heartbeat.abort();
                 continue;
             }
             tokio::time::sleep(Duration::from_millis(poll_ms)).await;

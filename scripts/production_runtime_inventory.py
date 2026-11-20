@@ -24,6 +24,13 @@ RUST_ROUTE_RE = re.compile(r'\.route\(\s*"([^"]+)"')
 GO_ROUTE_RE = re.compile(r'HandleFunc\("([^"]+)"')
 PARAM_RE = re.compile(r"\{([A-Za-z0-9_]+)\}")
 
+# Method limits for dispatchers that register `any(...)` while leaving a subset
+# of HTTP verbs unported. Media write verbs (`POST /api/media`,
+# `PATCH/DELETE /api/media/:media_id`, `POST /api/media/:media_id/process`) are
+# now explicitly routed via `control_proxy::proxy_api_to_go` to Go (`mediaCreate`,
+# `mediaUpload`, `mediaPatch`, `mediaProcess`) + `deepseek-worker`.
+NATIVE_METHOD_LIMITS: dict[str, frozenset[str]] = {}
+
 # Live production entry points. ``marker`` is a source string that proves the
 # entry still executes Python or server-side TypeScript. Native packaging
 # inputs are listed separately and must not carry these markers.
@@ -272,7 +279,9 @@ def _native_route_paths() -> set[str]:
 def _routes_only_on_python(native_paths: set[str]) -> list[dict[str, str]]:
     missing: list[dict[str, str]] = []
     for route in _python_routes():
-        if _normalize(route["path"]) not in native_paths:
+        path = _normalize(route["path"])
+        methods = NATIVE_METHOD_LIMITS.get(path)
+        if path not in native_paths or (methods is not None and route["method"] not in methods):
             missing.append(route)
     return missing
 

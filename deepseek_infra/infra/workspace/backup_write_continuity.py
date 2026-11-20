@@ -26,6 +26,7 @@ from typing import Any
 from deepseek_infra.core import config
 from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.infra.workspace import backup_dr_ledger, backup_publish
+from deepseek_infra.infra.native_runtime.authority import assert_python_writer_allowed
 
 CONTINUITY_DIR = config.ROOT / ".backup-continuity"
 DEFAULT_FAILBACK_STABILITY_SECONDS = 1800  # 30 minutes continuous primary health
@@ -110,6 +111,7 @@ def get_write_continuity_state(policy_id: str) -> dict[str, Any]:
 
 
 def save_write_continuity_state(policy_id: str, state: dict[str, Any]) -> None:
+    assert_python_writer_allowed("backup_write_continuity_store")
     with _LOCK:
         CONTINUITY_DIR.mkdir(parents=True, exist_ok=True)
         state["updatedAt"] = _utc_iso()
@@ -179,6 +181,7 @@ def record_target_liveness(
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """Update durable liveness tracking for a target under policy."""
+    assert_python_writer_allowed("backup_write_continuity_store")
     with _LOCK:
         state = get_write_continuity_state(policy_id)
         now_dt = now or datetime.now(tz=timezone.utc)
@@ -318,6 +321,7 @@ def execute_failover_transition(
     reason: str = "primary-unavailable",
 ) -> dict[str, Any]:
     """Execute dynamic write target failover under governed write placement."""
+    assert_python_writer_allowed("backup_write_continuity_store")
     with _LOCK:
         state = get_write_continuity_state(policy_id)
         now_str = _utc_iso()
@@ -346,6 +350,7 @@ def execute_failback_transition(
     reason: str = "governed-stability-window-and-point-convergence",
 ) -> dict[str, Any]:
     """Revert active write target to configured primary upon meeting stability and convergence."""
+    assert_python_writer_allowed("backup_write_continuity_store")
     with _LOCK:
         state = get_write_continuity_state(policy_id)
         primary_id = str(state.get("configuredPrimaryTargetId") or "managed-local")
@@ -373,6 +378,7 @@ def promote_primary_target(
     expected_latest_object_set_digest: str | None = None,
 ) -> dict[str, Any]:
     """Explicit administrative primary promotion with CAS validation and strict safety preconditions."""
+    assert_python_writer_allowed("backup_write_continuity_store")
     from deepseek_infra.infra.workspace import backup_policies, backup_publish, backup_replication, backup_targets
 
     with _LOCK:

@@ -1,3 +1,6 @@
+pub mod media_patch_result;
+pub mod media_server_error;
+
 pub mod generated {
     pub mod deepseek {
         pub mod common {
@@ -61,6 +64,11 @@ pub mod generated {
         pub mod storage {
             pub mod v1 {
                 tonic::include_proto!("deepseek.storage.v1");
+            }
+        }
+        pub mod media {
+            pub mod v1 {
+                tonic::include_proto!("deepseek.media.v1");
             }
         }
         pub mod platform {

@@ -23,6 +23,7 @@ from deepseek_infra.core import config
 from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.infra.workspace import backup_catalog, backup_crypto, backup_object_set, backup_publish, backup_reconcile, backup_scheduler, backup_unattended, backups, backup_writer_lease
 from deepseek_infra.infra.workspace.backup_cron import load_timezone
+from deepseek_infra.infra.native_runtime.authority import assert_python_writer_allowed
 
 RETENTION_SCHEMA_VERSION = 1
 BACKUP_RETENTION_DIR = config.ROOT / ".backup-retention"
@@ -112,6 +113,7 @@ def get_retention_policy(retention_policy_id: str) -> dict[str, Any]:
 
 
 def put_retention_policy(retention_policy_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    assert_python_writer_allowed("backup_retention_store")
     safe = str(retention_policy_id or "").strip()
     if not safe or len(safe) > 64 or not all(char.isalnum() or char in "._-" for char in safe):
         raise AppError("Invalid retention policy id", code=ErrorCode.INVALID_PAYLOAD)
@@ -414,6 +416,7 @@ TRASH_JOURNAL_NAME = "trash.journal.json"
 
 
 def _trash_journal_write(destination: Path, journal: dict[str, Any]) -> None:
+    assert_python_writer_allowed("backup_retention_store")
     destination.mkdir(parents=True, exist_ok=True)
     path = destination / TRASH_JOURNAL_NAME
     tmp = destination / f".{TRASH_JOURNAL_NAME}.{os.getpid()}.tmp"
@@ -495,6 +498,7 @@ def _execute_trash_move(
 
 def _recover_trash_journals(target_root: Path, *, at: str, writer: backup_writer_lease.TargetWriterLease | None) -> list[str]:
     """Roll interrupted trash transactions forward to their committed event."""
+    assert_python_writer_allowed("backup_retention_store")
     trash_dir = target_root / ".trash"
     if not trash_dir.is_dir():
         return []
@@ -543,6 +547,7 @@ def apply_retention(
     writer: backup_writer_lease.TargetWriterLease | None = None,
 ) -> dict[str, Any]:
     """Phase one: move prune candidates into ``.trash`` and record intent."""
+    assert_python_writer_allowed("backup_retention_store")
     backup_reconcile.assert_catalog_committed(target_root)
     if writer is not None:
         writer.assert_owned()
@@ -606,6 +611,7 @@ def finalize_retention(
     writer: backup_writer_lease.TargetWriterLease | None = None,
 ) -> dict[str, Any]:
     """Phase two: permanently delete grace-expired trash after re-checking protections."""
+    assert_python_writer_allowed("backup_retention_store")
     backup_reconcile.assert_catalog_committed(target_root)
     if writer is not None:
         writer.assert_owned()
@@ -710,6 +716,7 @@ def _restore_trash_entry(target_root: Path, backup_id: str) -> None:
 
 def restore_from_trash(target_root: Path, backup_id: str, *, now: datetime | None = None) -> dict[str, Any]:
     """Undo a grace-period trash move."""
+    assert_python_writer_allowed("backup_retention_store")
     state = backup_catalog.catalog_state(target_root)
     record = state.get(backup_id)
     if record is None or not record.get("trashed"):

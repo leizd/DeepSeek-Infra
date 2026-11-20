@@ -21,6 +21,7 @@ from typing import Any
 
 from skills_mutation_routes_e2e import bind_revisions, native, normalize, revision_bindings
 from skills_read_routes_e2e import CLOCK_FIELDS, REPO, TOKEN, differences, digest, source_context, source_digest
+from skills_online_rejection_probe import verify_rejection
 
 
 def post(port: int, path: str, payload: dict[str, Any]) -> tuple[int, Any]:
@@ -237,9 +238,6 @@ def main() -> int:
                 for root in [oracle_root, native_root]:
                     (root / ".workspace-restore-fence.json").unlink()
                 compare(port, {"action": "run", "skillId": "bound", "input": {"topic": "恢复后"}, "projectId": project_id, "offline": True})
-                online_before = digest(snapshot(native_root)[0])
-                online_status, online = post(port, "/api/skills/plain/run", {"input": {"topic": "online"}, "apiKey": "offline-only-provider-fixture"})
-                online_fail_closed = online_status == 501 and online.get("code") == "NATIVE_SKILLS_ACTION_NOT_READY" and digest(snapshot(native_root)[0]) == online_before
             restart_before = digest(snapshot(native_root)[0])
             with native(gateway, native_root, "python_disabled") as port:
                 compare(port, {"action": "list_runs"}, restarted=True)
@@ -255,6 +253,8 @@ def main() -> int:
                 results.append({"payload": {"action": "get_run"}, "restarted": True, "nativeStatus": actual_status,
                                 "ok": expected.status_code == actual_status and not diff, "responseDifferences": diff})
             restart_preserves_state = digest(snapshot(native_root)[0]) == restart_before
+        online_rejection = verify_rejection(gateway, native_root)
+        online_fail_closed = online_rejection["qualified"]
         after, _ = snapshot(native_root)
         trace_state = stored(native_root)[".traces/logical"]
         generated_count = len(list((native_root / ".generated").glob("*.md")))
@@ -268,10 +268,11 @@ def main() -> int:
               **source_context(),
               "sourceSha256": source_digest(), "probeSha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
               "gatewaySha256": hashlib.sha256(gateway.read_bytes()).hexdigest(), "platform": platform.platform(), "command": sys.argv,
-              "topology": "independent native Rust process and Python offline oracle; no provider credentials",
+              "topology": "independent native Rust process and Python offline oracle; isolated HTTP rejection fixture; no real provider credentials",
               "caseCount": len(results), "differences": failures, "denialPreservesState": denial_preserves_state,
               "recoveryRefusalPreservesState": recovery_refusal, "restartPreservesState": restart_preserves_state,
-              "onlineFailsClosedWithoutWrites": online_fail_closed, "generatedMarkdownCount": generated_count,
+              "onlineFailsClosedWithoutWrites": False, "onlineProviderRejectionQualified": online_fail_closed,
+              "onlineProviderRejection": online_rejection, "generatedMarkdownCount": generated_count,
               "completedPersistentRunCount": completed_count, "traceRunCount": len(trace_state["trace_runs"]),
               "idsAndRevisionHashesVerified": True, "storeBeforeSha256": digest(before), "storeAfterSha256": digest(after), "cases": results}
     args.output.parent.mkdir(parents=True, exist_ok=True)

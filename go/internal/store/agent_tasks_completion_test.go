@@ -188,8 +188,8 @@ func TestTasksCompletionRestartRevalidatesOriginalWriterAndTermination(t *testin
 	}
 }
 
-func TestTasksCompletionRefusesIncompleteFailedAndReboundAuthority(t *testing.T) {
-	for _, name := range []string{"incomplete", "failed", "wrong-cursor", "wrong-owner", "wrong-claim", "wrong-epoch", "wrong-run"} {
+func TestTasksCompletionRefusesIncompleteAndReboundAuthority(t *testing.T) {
+	for _, name := range []string{"incomplete", "wrong-cursor", "wrong-owner", "wrong-claim", "wrong-epoch", "wrong-run"} {
 		t.Run(name, func(t *testing.T) {
 			var control *Control
 			var input CompleteAgentTasksRequest
@@ -198,7 +198,7 @@ func TestTasksCompletionRefusesIncompleteFailedAndReboundAuthority(t *testing.T)
 				control, task, _ = taskSettlementFixture(t, false)
 				input = CompleteAgentTasksRequest{OperationID: "complete-incomplete", Actor: task.Actor, ActionID: task.ActionID, Epoch: task.Epoch, RunID: task.RunID, Owner: task.Owner, ClaimToken: task.ClaimToken, ExpectedIndex: 4}
 			} else {
-				control, input = tasksCompletionFixture(t, name == "failed")
+				control, input = tasksCompletionFixture(t, false)
 			}
 			switch name {
 			case "wrong-cursor":
@@ -308,5 +308,26 @@ func TestTasksCompletionCommitDeadlineCannotReleaseResources(t *testing.T) {
 				t.Fatalf("expired commit poisoned retry: %v", err)
 			}
 		})
+	}
+}
+
+func TestTasksCompletionSignedFailureClosesPhaseWithoutErasingFailedOutput(t *testing.T) {
+	control, input := tasksCompletionFixture(t, true)
+	before := countControlEvents(t, control)
+	result, err := control.CompleteAgentTasks(input)
+	if err != nil || result.AlreadyApplied || result.Action.State != "SUCCEEDED" || result.Run.Status != "running" || result.Run.NextIndex != 6 || !result.Run.Nodes()["critic"].Failed || result.Run.Nodes()["critic"].State != "failed" || countControlEvents(t, control) != before+1 {
+		t.Fatalf("failed task was not durably retained: %+v %v", result, err)
+	}
+	resources, err := control.GetResourceLeases(input.ActionID)
+	if err != nil || len(resources) != 0 {
+		t.Fatal("settled failure retained phase reservation", err)
+	}
+	_, _, receipt, found, err := control.AgentNodeOutcomeSnapshot(input.ActionID, "critic")
+	if err != nil || !found || receipt == nil || !receipt.Evidence.TaskOutput.Failed {
+		t.Fatal("phase completion changed original signed failure", err)
+	}
+	replay, err := control.CompleteAgentTasks(input)
+	if err != nil || !replay.AlreadyApplied || countControlEvents(t, control) != before+1 || !replay.Run.Nodes()["critic"].Failed {
+		t.Fatal("signed failure replay duplicated or erased projection", err)
 	}
 }

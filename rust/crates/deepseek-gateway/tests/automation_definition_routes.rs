@@ -384,8 +384,9 @@ async fn automation_get_reads_the_registry_without_creating_it_or_blocking_write
 
     let (status, unauthenticated) = fixture.request("GET", &item, false).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{unauthenticated}");
-    assert_eq!(unauthenticated["error"]["code"], "UNAUTHORIZED");
-    assert_eq!(unauthenticated["error"]["message"], "Auth required");
+    assert_eq!(unauthenticated["error"], "Auth required");
+    assert_eq!(unauthenticated["code"], "unauthorized");
+    assert_eq!(unauthenticated["code"], "unauthorized");
     assert!(!fixture.automation_dir().exists());
 
     let missing = oracle(
@@ -701,7 +702,8 @@ async fn automation_patch_and_delete_match_the_oracle_only_after_python_is_disab
 
     let (status, unauthenticated) = fixture.request("PATCH", &item, false).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{unauthenticated}");
-    assert_eq!(unauthenticated["error"]["code"], "UNAUTHORIZED");
+    assert_eq!(unauthenticated["error"], "Auth required");
+    assert_eq!(unauthenticated["code"], "unauthorized");
     let (status, unauthenticated_delete) = fixture.request("DELETE", &item, false).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{unauthenticated_delete}");
     assert!(!fixture.automation_dir().exists());

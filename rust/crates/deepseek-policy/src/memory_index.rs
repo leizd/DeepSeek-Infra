@@ -15,18 +15,12 @@
 //! - **sqlite-vec** (`rag_vec` `MATCH`) when the extension loaded;
 //! - **cosine fallback** over the `rag_items.embedding` JSON column otherwise.
 //!
-//! `sqlite_vec` is not a dependency of this repository (not in `requirements*.txt`,
-//! `pyproject.toml` or any Compose file; `find_spec` is `None`), so the fallback is
-//! the branch every shipped deployment takes, and it is the one implemented here in
-//! full.
-//!
-//! The vec branch is **not** reimplemented, because it cannot be: `vec0` is an
-//! extension loaded into the Python connection and `rusqlite`'s bundled SQLite has
-//! no such module. [`MemoryIndex::vector_table_ready`] is read from the schema
-//! exactly as the oracle decides it, and when it is set the read returns
-//! [`MemoryIndexError::VectorTableNotReadable`] rather than quietly computing the
-//! fallback — the oracle would have blended `1/(1+distance)` into every score, so
-//! the two answers differ in membership, not just in order.
+//! Native sqlite-vec is statically linked for stores that already contain a real
+//! `vec0` table. Opening an ordinary store does not create one or change its
+//! scoring branch. [`MemoryIndex::vector_table_ready`] is still read from the
+//! existing schema; an unreadable vector table returns
+//! [`MemoryIndexError::VectorTableNotReadable`] instead of serving different
+//! cosine results.
 //!
 //! # Ownership
 //!
@@ -234,6 +228,10 @@ impl MemoryIndex {
         if !path.exists() {
             return None;
         }
+        // A failed module registration must not select the cosine branch for an
+        // existing vector table: vector_match will return the original explicit
+        // unreadable-table error in that case.
+        let _ = crate::sqlite_vec_runtime::register();
         let connection =
             Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
         let vector_table_ready = table_exists(&connection, VECTOR_TABLE);
@@ -252,9 +250,9 @@ impl MemoryIndex {
     /// `try/except Exception` around `_search_db`.
     ///
     /// The **one** case that is not a degrade is the vec branch: when `rag_vec`
-    /// exists the oracle blends `1/(1+distance)` into every score, and this process
-    /// cannot evaluate a `vec0` `MATCH`, so serving the cosine fallback would
-    /// silently change which memories reach the prompt. That is
+    /// exists the oracle blends `1/(1+distance)` into every score, so serving the
+    /// cosine fallback after an unreadable `vec0` MATCH would silently change
+    /// which memories reach the prompt. That is
     /// [`MemoryIndexError::VectorTableNotReadable`], and it is narrow — it fires
     /// only in a deployment that installed `sqlite-vec`.
     pub fn search_memories(

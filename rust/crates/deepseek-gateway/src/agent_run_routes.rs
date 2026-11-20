@@ -27,12 +27,14 @@ use tonic::{
     transport::Channel,
 };
 
+mod recovery;
 mod runtime;
 use runtime::{operator_event_with_runtime, prepare_runtime_update, request_credential};
 
 #[derive(Clone)]
 struct ReadConfig {
     origin: String,
+    endpoint: Option<tonic::transport::Endpoint>,
     bearer: String,
     artifacts: PathBuf,
     credentials: Option<crate::agent_credential_client::WorkerConfig>,
@@ -206,6 +208,7 @@ fn hydrate(store: &ArtifactStore, metadata: &AgentRunEventMetadata) -> Result<Va
 
 struct ReadSession {
     config: ReadConfig,
+    channel: Channel,
     client: AgentRunControlClient<Channel>,
     authorization: MetadataValue<Ascii>,
     epoch: u64,
@@ -236,8 +239,12 @@ impl ReadSession {
         let authorization = format!("Bearer {}", config.bearer.trim())
             .parse()
             .map_err(|_| control_unavailable())?;
-        let channel = tonic::transport::Endpoint::from_shared(config.origin.trim().to_string())
-            .map_err(|_| control_unavailable())?
+        let endpoint = match config.endpoint.clone() {
+            Some(endpoint) => endpoint,
+            None => tonic::transport::Endpoint::from_shared(config.origin.trim().to_string())
+                .map_err(|_| control_unavailable())?,
+        };
+        let channel = endpoint
             .connect_timeout(Duration::from_secs(3))
             .timeout(Duration::from_secs(10))
             .connect()
@@ -245,7 +252,8 @@ impl ReadSession {
             .map_err(|_| control_unavailable())?;
         let mut session = Self {
             config,
-            client: AgentRunControlClient::new(channel).max_decoding_message_size(1 << 20),
+            client: AgentRunControlClient::new(channel.clone()).max_decoding_message_size(1 << 20),
+            channel,
             authorization,
             epoch: 0,
             snapshot: AgentRunSnapshot {
@@ -440,17 +448,28 @@ fn read_router(enabled: bool, config: Option<ReadConfig>) -> Router {
         .route("/api/agent-runs/:run_id", get(detail))
         .route("/api/agent-runs/:run_id/plan", post(confirm_plan))
         .route("/api/agent-runs/:run_id/cancel", post(cancel_run))
+        .route("/api/agent-runs/:run_id/resume", post(recovery::resume_run))
+        .route("/api/agent-runs/:run_id/rerun", post(recovery::rerun_run))
         .route("/api/agent-runs/:run_id/events", get(events))
         .route("/api/agent-runs/:run_id/stream", get(stream))
         .with_state(config)
 }
 
 pub fn router() -> Router {
-    let origin = crate::backup_mirror_routes::GO_CONTROL_ADDR_ENV
-        .iter()
-        .find_map(|key| std::env::var(key).ok());
+    let (origin, endpoint) =
+        match crate::control_rpc_client::private_endpoint_from_lookup(|key| std::env::var(key)) {
+            Ok(Some(endpoint)) => (Some(endpoint.uri().to_string()), Some(endpoint)),
+            Ok(None) => (
+                crate::backup_mirror_routes::GO_CONTROL_ADDR_ENV
+                    .iter()
+                    .find_map(|key| std::env::var(key).ok()),
+                None,
+            ),
+            Err(_) => (None, None),
+        };
     let config = origin.map(|origin| ReadConfig {
         origin,
+        endpoint,
         bearer: std::env::var(crate::backup_mirror_routes::INTERNAL_BEARER_ENV).unwrap_or_default(),
         credentials: crate::agent_credential_client::WorkerConfig::from_env(),
         artifacts: std::env::var_os("DEEPSEEK_AGENT_ARTIFACT_DIR")

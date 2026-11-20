@@ -44,6 +44,18 @@ func StartConfigured(ctx context.Context) (*RPCServer, error) {
 	return StartRPC(ctx, cfg)
 }
 
+// mapServeError treats a server we stopped ourselves as a clean shutdown.
+//
+// grpc.Server.Serve reports ErrServerStopped when it is entered after Stop, and a nil
+// error when Stop arrives while it is already serving. Both are requested shutdowns,
+// so both must settle without an error - the caller asked for this.
+func mapServeError(err error) error {
+	if errors.Is(err, grpc.ErrServerStopped) {
+		return nil
+	}
+	return err
+}
+
 func StartRPC(ctx context.Context, cfg RPCConfig) (*RPCServer, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -79,11 +91,7 @@ func StartRPC(ctx context.Context, cfg RPCConfig) (*RPCServer, error) {
 	run := &RPCServer{server: server, address: listener.Addr().String(), done: make(chan error, 1)}
 	finished := make(chan struct{})
 	go func() {
-		err := server.Serve(listener)
-		if errors.Is(err, grpc.ErrServerStopped) {
-			err = nil
-		}
-		err = errors.Join(err, tasks.Close())
+		err := errors.Join(mapServeError(server.Serve(listener)), tasks.Close())
 		run.done <- err
 		close(run.done)
 		close(finished)

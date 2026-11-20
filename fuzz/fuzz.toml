@@ -1,0 +1,15 @@
+# Bounded fuzzing for the native Rust runtime.
+#
+# These are release gates, not exploratory fuzzing, so the budget is deliberately
+# short: a few minutes per target on every merge, enough to catch a regression in a
+# parser that changed, without turning a PR into an hour-long wait. Longer runs are a
+# separate scheduled job.
+#
+# `max_total_time` is per target. `rss_limit_mb` keeps a runaway allocation from
+# taking the runner down before libFuzzer can report it, which is itself a finding.
+[fuzz]
+max_total_time = 180
+rss_limit_mb = 2048
+# Any crash is a failure. libFuzzer exits non-zero on a finding, and the CI step must
+# not paper over that with a retry.
+timeout = 25

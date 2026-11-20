@@ -280,3 +280,11 @@ func TestAgentNodeClientRequiresTLSAndPreservesUnknown(t *testing.T) {
 		t.Fatal("lost transport inferred absence")
 	}
 }
+
+func (rpc fixtureNodeWorker) ProjectFailure(_ context.Context, _ *agentv1.ProjectAgentFailureRequest, _ ...grpc.CallOption) (*agentv1.AgentFailureProjectionReceipt, error) {
+	return nil, ErrInvalidWorkerResponse
+}
+
+func (rpc fixtureNodeWorker) ReadRetainedEffect(_ context.Context, input *agentv1.QueryAgentNodeEffectRequest, _ ...grpc.CallOption) (*agentv1.QueryAgentNodeEffectResponse, error) {
+	return rpc.query(input)
+}

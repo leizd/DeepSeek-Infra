@@ -64,6 +64,164 @@ def final_mirror_payload() -> dict[str, Any]:
             "schemaVersion": 3, "conversationId": "conversation-1", "revision": "revision-1", "conversation": conversation}}]}}
 
 
+def browser_recovery_fixture() -> tuple[dict[str,Any],list[dict[str,Any]]]:
+    result,exchanges=browser_fixture()
+    result.update(nextIndex=17,runtimeRevision=3,metadataSchemaVersion=4,durablePhases=5,recoveryGeneration=1,
+        independentBrowserRecoveryProgressVerified=True,originalBrowserActionsAndEffectsUnchanged=True,
+        originalBrowserHistoryUnchanged=True,browserRetainedCoderAndLatestCriticVerified=True,browserProgressRustJournalVerified=True,
+        browserRecoveryTaskActionId="rerun-task",browserRecoverySynthesisActionId="rerun-synthesis")
+    result["browser"].update(rerunByBrowser=True,oldFinalVisibleDuringRerun=True,recoveredFinalVisible=True,
+        generatedTitleRetainedDuringRecovery=True,
+        rerunSelectionAndPayloadVerified=True,screenshot="browser-recovery.png")
+    result["browser"]["requests"].append({"method":"POST","path":"/api/agent-runs/browser-run/rerun","status":200})
+    exchanges[2]["actionId"]=exchanges[1]["actionId"]
+    for name in ["task","synthesis"]:
+        exchanges.append(dict(kind="agent",requestCredentialUsed=True,credentialInProviderBody=False,
+            actionId="rerun-"+name,operationId="node-rerun-"+name,executionEpoch="1",stream=False,
+            browserEditedTaskInPrompt=name=="synthesis",predecessorSummaryInPrompt=True,
+            recoveredCriticSummaryInPrompt=name=="synthesis",privateReasoningInPrompt=False))
+    for row in exchanges:
+        if row.get("kind")=="agent":
+            row["stream"]=False
+    return result,exchanges
+
+
+def test_actual_browser_recovery_retains_exact_ui_and_native_proof_boundaries() -> None:
+    from scripts.verify_native_agent_browser_recovery import validate_browser_recovery_result
+
+    validate_browser_recovery_result(*browser_recovery_fixture())
+
+
+@pytest.mark.parametrize("title_proof", [False, None])
+def test_actual_browser_recovery_requires_generated_title_survival(title_proof: bool | None) -> None:
+    from scripts.verify_native_agent_browser_recovery import validate_browser_recovery_result
+
+    result, exchanges = browser_recovery_fixture()
+    if title_proof is None:
+        result["browser"].pop("generatedTitleRetainedDuringRecovery")
+    else:
+        result["browser"]["generatedTitleRetainedDuringRecovery"] = title_proof
+    with pytest.raises(ValueError):
+        validate_browser_recovery_result(result, exchanges)
+
+
+@pytest.mark.parametrize("change",["source","cursor","runtime","schema","phases","generation","signature","old-actions",
+    "old-history","latest-critic","journal","rerun-ui","old-final","reload","selection","page-error","console-error",
+    "interception","outside-ui","duplicate-rerun","missing-rerun","wrong-rerun-status","extra-provider","credential",
+    "old-action","old-operation","new-summary","private-reasoning","overclaim"])
+def test_actual_browser_recovery_rejects_unproven_ui_or_repeated_provider_effects(change: str) -> None:
+    from scripts.verify_native_agent_browser_recovery import validate_browser_recovery_result
+
+    result,exchanges=browser_recovery_fixture()
+    observed=result["browser"]
+    if change=="source":
+        result["sourceCommit"]="bad"
+    elif change in {"cursor","runtime","schema","phases","generation"}:
+        key={"cursor":"nextIndex","runtime":"runtimeRevision","schema":"metadataSchemaVersion",
+             "phases":"durablePhases","generation":"recoveryGeneration"}[change]
+        result[key]+=1
+    elif change in {"signature","old-actions","old-history","latest-critic","journal"}:
+        key={"signature":"independentBrowserRecoveryProgressVerified","old-actions":"originalBrowserActionsAndEffectsUnchanged",
+            "old-history":"originalBrowserHistoryUnchanged","latest-critic":"browserRetainedCoderAndLatestCriticVerified",
+            "journal":"browserProgressRustJournalVerified"}[change]
+        result[key]=False
+    elif change in {"rerun-ui","old-final","reload","selection","interception","outside-ui"}:
+        key={"rerun-ui":"rerunByBrowser","old-final":"oldFinalVisibleDuringRerun","reload":"reloadRetainedFinalAnswer",
+            "selection":"rerunSelectionAndPayloadVerified","interception":"requestInterceptionUsed","outside-ui":"apiInvokedOutsideUI"}[change]
+        observed[key]=change in {"interception","outside-ui"}
+    elif change in {"page-error","console-error"}:
+        observed["pageErrors" if change=="page-error" else "consoleErrors"].append("unexpected error")
+    elif change=="duplicate-rerun":
+        observed["requests"].append(deepcopy(observed["requests"][-1]))
+    elif change=="missing-rerun":
+        observed["requests"].pop()
+    elif change=="wrong-rerun-status":
+        observed["requests"][-1]["status"]=409
+    elif change=="extra-provider":
+        exchanges.append(deepcopy(exchanges[-1]))
+    elif change=="credential":
+        exchanges[-1]["requestCredentialUsed"]=False
+    elif change=="old-action":
+        exchanges[-1]["actionId"]=exchanges[0]["actionId"]
+    elif change=="old-operation":
+        exchanges[-1]["operationId"]=exchanges[0]["operationId"]
+    elif change=="new-summary":
+        exchanges[-1]["recoveredCriticSummaryInPrompt"]=False
+    elif change=="private-reasoning":
+        exchanges[-1]["privateReasoningInPrompt"]=True
+    else:
+        result["fullMigrationQualified"]=True
+    with pytest.raises(ValueError):
+        validate_browser_recovery_result(result,exchanges)
+
+
+def test_final_mirror_keeps_the_same_conversation_and_new_recovery_answer() -> None:
+    from scripts.verify_native_agent_browser_recovery import RECOVERED_FINAL
+
+    payload=final_mirror_payload()
+    message=payload["envelope"]["conversations"][0]["checkpoint"]["conversation"]["messages"][1]
+    message["content"]=RECOVERED_FINAL
+    assert not browser.is_final_browser_mirror(payload,"browser-run","conversation-1")
+    assert browser.is_final_browser_mirror(payload,"browser-run","conversation-1",RECOVERED_FINAL)
+
+
+@pytest.mark.parametrize("fault",[None,"old-action","old-effect","history","coder","critic","missing-journal","duplicate-journal","receipt-hash"])
+def test_browser_recovery_inspection_reads_immutable_rows_and_actual_receipt_journal(tmp_path: Path, fault: str | None) -> None:
+    import base64
+    from scripts import verify_native_agent_browser_recovery as recovery
+
+    control,state=tmp_path/"control",tmp_path/"state"
+    control.mkdir()
+    (state/"rust-worker").mkdir(parents=True)
+    with sqlite3.connect(control/"control.sqlite3") as database:
+        database.execute("CREATE TABLE action_journal(id TEXT PRIMARY KEY,state TEXT,payload_json TEXT)")
+        for i in range(3):
+            database.execute("INSERT INTO action_journal VALUES(?,?,?)",(f"old-{i}","SUCCEEDED",'{}'))
+    with sqlite3.connect(state/"rust-worker/authority.sqlite3") as database:
+        database.execute("CREATE TABLE agent_node_effects(operation_id TEXT PRIMARY KEY,state TEXT,output BLOB,output_sha256 TEXT)")
+        for i in range(4):
+            body=f'{{"public":{i}}}'.encode()
+            database.execute("INSERT INTO agent_node_effects VALUES(?,?,?,?)",(f"old-{i}","CONFIRMED",body,hashlib.sha256(body).hexdigest()))
+    public: dict[str,Any]={"status":"done","nextIndex":10,"finalAnswer":"Controlled final answer","events":[{"index":i} for i in range(10)],
+            "agentOutputs":{"coder":"retained coder","critic":"original critic"}}
+    before=recovery.capture_before_recovery(control,state,public)
+    with sqlite3.connect(control/"control.sqlite3") as database:
+        for key in ["new-task","new-synthesis"]:
+            database.execute("INSERT INTO action_journal VALUES(?,?,?)",(key,"SUCCEEDED",'{}'))
+        if fault=="old-action":
+            database.execute("UPDATE action_journal SET payload_json='{} changed' WHERE id='old-0'")
+    with sqlite3.connect(state/"rust-worker/authority.sqlite3") as database:
+        for key in ["new-task","new-synthesis"]:
+            body=b'{"public":"fresh"}'
+            database.execute("INSERT INTO agent_node_effects VALUES(?,?,?,?)",(key,"CONFIRMED",body,hashlib.sha256(body).hexdigest()))
+        if fault=="old-effect":
+            body=b'{"public":"changed"}'
+            database.execute("UPDATE agent_node_effects SET output=?,output_sha256=? WHERE operation_id='old-0'",(body,hashlib.sha256(body).hexdigest()))
+    document=b"offline-shape-only; actual signature is independently required from Go"
+    with sqlite3.connect(state/"rust-worker/control-signatures.sqlite3") as database:
+        database.execute("CREATE TABLE signatures(document BLOB)")
+        if fault!="missing-journal":
+            database.execute("INSERT INTO signatures VALUES(?)",(document,))
+        if fault=="duplicate-journal":
+            database.execute("INSERT INTO signatures VALUES(?)",(document,))
+    final=deepcopy(public)
+    final.update(nextIndex=17,finalAnswer=recovery.RECOVERED_FINAL,events=public["events"]+[{"index":i} for i in range(10,17)])
+    final["agentOutputs"]["critic"]=recovery.RERUN_SUMMARY
+    if fault=="history":
+        final["events"][0]["index"]=-1
+    elif fault=="coder":
+        final["agentOutputs"]["coder"]="changed"
+    elif fault=="critic":
+        final["agentOutputs"]["critic"]="original critic"
+    inspected={"browserRecoveryReceiptBase64":base64.urlsafe_b64encode(document).decode().rstrip("="),
+               "browserRecoveryReceiptSha256":hashlib.sha256(document).hexdigest() if fault!="receipt-hash" else "e"*64}
+    if fault is None:
+        assert all(recovery.inspect_after_recovery(control,state,final,before,inspected).values())
+    else:
+        with pytest.raises(ValueError):
+            recovery.inspect_after_recovery(control,state,final,before,inspected)
+
+
 def test_native_browser_title_matches_the_existing_title_normalization_contract() -> None:
     from deepseek_infra.infra.gateway.title_generator import _sanitize_title
 
@@ -370,3 +528,52 @@ def test_browser_provider_context_requires_settled_public_predecessor_summaries(
         exchanges[2]["privateReasoningInPrompt"] = True
     with pytest.raises(ValueError, match="public predecessor"):
         browser.validate_browser_result(result, exchanges)
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_browser_recovery_baseline_uses_actual_native_public_view(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, legacy: bool) -> None:
+    import json
+    from scripts import verify_native_agent_browser_recovery as recovery
+
+    public=json.loads((Path(__file__).parent/"native/agent_public_browser_v1.json").read_text(encoding="utf-8"))
+    monkeypatch.setattr(recovery,"_actions",lambda _: {str(i):"original-action" for i in range(3)})
+    monkeypatch.setattr(recovery,"_effects",lambda _: {str(i):"original-effect" for i in range(4)})
+    if legacy:
+        public["outputs"]=public.pop("agentOutputs")
+        with pytest.raises(ValueError):
+            recovery.capture_before_recovery(tmp_path,tmp_path,public)
+    else:
+        before=recovery.capture_before_recovery(tmp_path,tmp_path,public)
+        assert before["agentOutputs"]==public["agentOutputs"]
+        assert before["events"]==public["events"]
+
+
+@pytest.mark.parametrize("fault",[None,"legacy-field","wrong-final","wrong-coder","missing-coder","wrong-status","wrong-index","missing-baseline"])
+def test_browser_inflight_guard_uses_the_actual_native_output_contract(fault: str | None) -> None:
+    import json
+    from scripts import verify_native_agent_browser_recovery as recovery
+
+    initial = json.loads((Path(__file__).parent / "native/agent_public_browser_v1.json").read_text(encoding="utf-8"))
+    before = {"agentOutputs": deepcopy(initial["agentOutputs"])}
+    during = deepcopy(initial)
+    during.update(status="running", nextIndex=12)
+    during["agentOutputs"].pop("critic")
+    if fault == "legacy-field":
+        during["outputs"] = during.pop("agentOutputs")
+    elif fault == "wrong-final":
+        during["finalAnswer"] = "erased"
+    elif fault == "wrong-coder":
+        during["agentOutputs"]["coder"] = {"content": "changed"}
+    elif fault == "missing-coder":
+        during["agentOutputs"].pop("coder")
+    elif fault == "wrong-status":
+        during["status"] = "done"
+    elif fault == "wrong-index":
+        during["nextIndex"] = 13
+    elif fault == "missing-baseline":
+        before = {}
+    if fault is None:
+        assert recovery.inspect_inflight_public(during, before) == {"oldFinalRetained": True, "coderRetained": True}
+    else:
+        with pytest.raises(ValueError):
+            recovery.inspect_inflight_public(during, before)

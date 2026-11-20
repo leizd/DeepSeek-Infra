@@ -163,7 +163,8 @@ async fn recovery_drill_get_reads_an_existing_session_without_creating_one() {
         .request("GET", &format!("{DRILL}/restore_abc"), false)
         .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{unauthenticated}");
-    assert_eq!(unauthenticated["error"]["code"], "UNAUTHORIZED");
+    assert_eq!(unauthenticated["error"], "Auth required");
+    assert_eq!(unauthenticated["code"], "unauthorized");
     assert!(!staging.exists());
 
     for id in ["nope", "restore_", "restore_ab-c", "restore_ab_c"] {
@@ -279,8 +280,74 @@ async fn recovery_drill_get_reads_an_existing_session_without_creating_one() {
     assert_eq!(accented["restoreId"], "restore_é");
     assert_eq!(accented["result"], "success");
 
-    let (status, forwarded) = fixture.request("POST", &format!("{DRILL}/run"), true).await;
-    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{forwarded}");
-    assert_eq!(forwarded["error"]["code"], "GO_CONTROL_PROXY_NOT_READY");
+    let (status, denied) = fixture.request("POST", &format!("{DRILL}/run"), true).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{denied}");
+    assert_eq!(
+        denied["code"],
+        "NATIVE_RESTORE_STAGING_STORE_WRITE_NOT_OWNED"
+    );
     assert!(session.join("drill-running.json").is_file());
+}
+
+#[tokio::test]
+async fn recovery_drill_run_executes_isolated_rehearsal_under_python_disabled() {
+    let _lock = EnvLock::acquire();
+    let root = tempfile::tempdir().expect("workspace");
+    let proj_dir = root.path().join(".projects").join("proj_1");
+    std::fs::create_dir_all(&proj_dir).unwrap();
+    std::fs::write(proj_dir.join("note.txt"), b"hello drill").unwrap();
+
+    let static_root = tempfile::tempdir().expect("static");
+    std::fs::create_dir_all(static_root.path().join("ui")).unwrap();
+    std::fs::write(static_root.path().join("ui/index.html"), "<main>ui</main>").unwrap();
+    let _env = EnvGuard::set(&[
+        (
+            "DEEPSEEK_INFRA_ROOT",
+            root.path().to_str().expect("utf-8").to_string(),
+        ),
+        ("AUTH_TOKEN", TEST_TOKEN.to_string()),
+        ("DEEPSEEK_RUNTIME_MODE", "python_disabled".to_string()),
+        ("GO_CONTROL_ADDR", String::new()),
+        ("DEEPSEEK_GO_CONTROL_URL", String::new()),
+    ]);
+    let app = create_production_app(static_root.path()).expect("app");
+    let body_bytes = serde_json::to_vec(&json!({
+        "backupId": "bk_drill_1",
+        "targetId": "managed-local"
+    }))
+    .unwrap();
+    let req = Request::builder()
+        .method("POST")
+        .uri(format!("{DRILL}/run"))
+        .header(header::HOST, "127.0.0.1")
+        .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::CONTENT_LENGTH, body_bytes.len().to_string())
+        .body(Body::from(body_bytes))
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    let status = resp.status();
+    let raw = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let parsed: Value = serde_json::from_slice(&raw).unwrap();
+    assert_eq!(status, StatusCode::OK, "body={parsed}");
+    assert_eq!(parsed["status"], "success");
+    assert_eq!(parsed["backupId"], "bk_drill_1");
+    assert_eq!(parsed["testedBackupId"], "bk_drill_1");
+    assert_eq!(parsed["targetId"], "managed-local");
+    assert_eq!(parsed["bytesRestored"], 11);
+    assert_eq!(parsed["proof"]["schema"], "dr-readiness-proof-v1");
+    assert_eq!(
+        parsed["proof"]["workspaceDigestBefore"],
+        parsed["proof"]["workspaceDigestAfter"]
+    );
+    let drill_id = parsed["drillId"].as_str().unwrap();
+    assert!(
+        root.path()
+            .join(".restore-staging")
+            .join(drill_id)
+            .join("drill-result.json")
+            .is_file()
+    );
 }

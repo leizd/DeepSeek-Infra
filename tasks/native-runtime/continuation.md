@@ -1,36 +1,3439 @@
+## 2026-11-20 whole-branch green on 1e90e9e3
+
+Whole product Rust/Go migration remains ACTIVE / **NOT_READY**. This entry records
+a verification milestone, not completion.
+
+`ci.yml` run [44687684156](https://github.com/leizd/DeepSeek-Infra/actions/runs/44687684156)
+and `Native Android cloud verification` run
+[44687684163](https://github.com/leizd/DeepSeek-Infra/actions/runs/44687684163)
+both passed on exact commit `1e90e9e3b596529a1fe4e52955758dfde6366798`
+(40/40 and 6/6, zero failures, zero skips; `sourceTreeDirty: false`). Rust line
+coverage `80.27%` (`137932/171837`) against the unchanged `80.0` floor, `1992`
+tests.
+
+This is the first green run for the S5-S8 route slices. They had never executed
+before, because `rust` failed to compile: `backup_policy_run_routes.rs` passed an
+owned `ContributorSpec` where `collect_contributor_files` takes a reference
+(`E0308`). A crate that does not compile yields no test results, so every S5-S8
+test below that error had been invisible.
+
+Removing it exposed, one layer at a time, six real implementation defects and a
+set of fixture/assertion errors. The defects, in the order they surfaced:
+
+1. `hex_digest` (hex-encodes only) used as a digest in five places, so
+   `commitHash`, `receiptDigest`, `slotDigest`, `runPlanDigest` and the control
+   `checksums.sha256` were hex dumps and no commit marker could validate.
+2. A projected restore plan hashed `extracted/manifest.json` from disk, but the
+   projection branch never writes it (the oracle passes the manifest in memory).
+3. A repeated risk snapshot incremented `observationCount`; the oracle returns
+   the stored row when `last_snapshot_observation_key` matches.
+4. `value_str(Null)` produced the literal `"None"`, adding a phantom target id
+   that emptied the capacity snapshot and failed the wave admit closed.
+5. The persisted capacity observation was only read inside the
+   `quotaBytes`/`kind == "s3"` branch, while the oracle reads it first.
+6. `TestSettlementEntryPointsRefuseAMismatchedPhase` skipped instead of asserting
+   when its fixture lacked a plan action; the race gate correctly reported
+   `UNREVIEWED_TEST_SKIP`. All three assertions now execute.
+
+Coverage was raised from `79.91%` to `80.27%` by covering the two untested
+Unicode tables, with no floor change and no `#[ignore]`.
+
+Two workflow-level transients, unrelated to source: Gradle failed to resolve its
+plugin classpath from `repo.maven.apache.org` twice (`44672165712` and
+`44687684163`), and apt/`playwright install` failed at `native-protocol`,
+`stateless-mcp`, `release-readiness` and `native-browser-engine` in earlier runs.
+Every one of them passed on re-dispatch of the same commit.
+
+`release/native_runtime_5_0_evidence_v1.json` still reports `NOT_READY` with all
+six blockers open and `exact_head: null`; this run changes no readiness string.
+The 5.0 objective remains blocked on production edge authority, control-domain
+promotion against a stopped-and-fenced Python source, provider/fault evidence,
+and zero-Python workload measurement.
+
+
+<!-- native checkpoint 2026-11-11 eleven of fifteen gates have evidence -->
+
+Whole product Rust/Go migration remains ACTIVE / **NOT_READY**.
+
+**I was wrong last turn about the provider and fault gates, and this corrects it.**
+I reported `native_two_fleet_four_minio` and the three SIGKILL gates as unproduced.
+They were already in the green run — a five-MinIO harness with 240 passing checks and
+the three parity reports — I simply had not looked at the artifacts. Looking changed
+the count from 3 of 15 gates to **11 of 15**.
+
+| gate | evidence now recorded |
+| --- | --- |
+| `native_two_fleet_four_minio` | 240 checks all PASS across endpoints A–E; signed federation trust/replica/DR proofs uploaded |
+| `go_controller_sigkill` | control-DB crash recovery + wave SIGKILL takeover at a strictly higher epoch, no duplicated effect, settles exactly once |
+| `rust_worker_sigkill` | fresh worker took over the expired action, entered reconciling before mutating, found the existing effect, no second repair job |
+| `rust_receiver_sigkill` | receiver killed mid-transfer, transfer resumed without duplicating the commit |
+| `public_http_sse_mcp_a2a_parity` | gateway-request and MCP-protocol parity both PASS |
+| `frozen_wire_parity` | objectSetV1, receiptV4, commitV4, fastCdcV3, controlAuthorityV1, authorityCheckpointV1, drReadinessProofV1, evidenceProofV2, randomizedAge all unchanged |
+| `coverage` | Rust 83.2749% (floor 80), Go 95.010592% (floor 95), Python 95.59% (floor 95) |
+| `security` | real scanners: npm audit, pip-audit, bandit, detect-secrets |
+| `exact_head_ci`, `evidence_assembly`, `production_artifact_zero_python` | as previously recorded |
+
+**The four that remain, each with its concrete gap** — a test now enforces that this
+detail exists, so "not done" cannot decay into a vague claim:
+
+- `performance`: the report says PASS but declares `informationalOnly: true` and
+  `absoluteLatencyMergeGate: false`. It does **not** qualify; a measured
+  absolute-latency merge gate is still needed. Its artifact is kept so the claim is
+  checkable rather than asserted.
+- `fuzz`: no fuzz target or harness exists anywhere in the tree.
+- `go_control_authority` / `rust_data_authority`: the cutover state machine,
+  promotion signing, mechanical writer gates and isolated transfer/rollback proofs
+  all exist and are tested, but no domain has been promoted against a genuinely
+  stopped-and-fenced Python source.
+
+The seven workload-measured zero invariants remain at zero of seven, and the
+assessment stays `NOT_READY` with empty `measurements` and `gates`.
+
+Provenance moved to run 42962854437 at `9f18b772` (tree `f2ef2311`), 37/37; all
+eleven artifacts are copied into `release/native-runtime-evidence-5.0/` and their
+digests re-derive from the committed blobs.
+
+<!-- native checkpoint 2026-11-11 green reproduced at the evidence commit -->
+
+Whole product Rust/Go migration remains ACTIVE / **NOT_READY**.
+
+The fully green state reproduces: `ci.yml` run
+[42962854437](https://github.com/leizd/DeepSeek-Infra/actions/runs/42962854437) at
+`9f18b772` — the commit that carries the gate evidence — is **37/37 success, zero
+failures, zero skips**. So 37/37 is not a one-off on an earlier revision; it holds
+at the revision where the evidence lives.
+
+**Where the four requested items actually stand.** Reported item by item rather than
+as one verdict, because two of them are done and two are not:
+
+| item | state |
+| --- | --- |
+| `production_artifact_zero_python` | **PASS** — the default native image, started from a fresh volume, where a container-side check proved no `python`/`python3`/`node`/`nodejs` on `PATH`; 18 skills, 4 packs, 4 golden cases, signed origin retained across restart with the fencing token advancing 1 -> 2, both negative cases detected |
+| workload-measured zero invariants | **0 of 7** — each needs positive `samples` and `workload_operations`; a CI pass cannot produce them and the validator refuses a vacuous zero |
+| provider and fault evidence | **not produced** — `native_two_fleet_four_minio`, `go_controller_sigkill`, `rust_worker_sigkill`, `rust_receiver_sigkill` all outstanding |
+| control-domain promotion | **not done** — `current_production_authority` is still `python` |
+
+The last three are not unfinished code. They need a live Python service that can be
+genuinely stopped and fenced, real S3/MinIO providers, and process-kill injection
+against running processes. None of that can be manufactured on this host, and this
+workstream will not mark them complete by writing a file that asserts them.
+
+What *is* real now, and did not exist before this workstream: the default native
+image is a packaged artifact with no Python on `PATH`, verified from inside the
+running container rather than inferred; three release gates carry exact-head,
+hash-verified evidence with the artifacts copied into `release/native-runtime-evidence-5.0/`
+so any reviewer can re-derive the digests; and the transition tooling
+(`control-domain-promotion`, `control-transfer-verify`) has already driven a full
+promotion and rollback on isolated copies with the real Python-sourced fixtures.
+
+<!-- native checkpoint 2026-11-11 three release gates now have hash-verified evidence -->
+
+Whole product Rust/Go migration remains ACTIVE / **NOT_READY**, but three of the
+fifteen 5.0 release gates now rest on real, exact-head, hash-verified evidence
+rather than on a claim. They are recorded in
+`release/native_runtime_gate_evidence_v1.json`, with the artifacts copied into
+`release/native-runtime-evidence-5.0/` so any reviewer can re-derive their digests.
+
+| gate | evidence |
+| --- | --- |
+| `exact_head_ci` | run 42786170148, 37/37 jobs, zero failures, zero skips |
+| `evidence_assembly` | the 50-artifact bundle whose manifest records that revision with `sourceTreeDirty: false` |
+| `production_artifact_zero_python` | the default native image, started from a fresh volume, where a container-side check proved no `python`/`python3`/`node`/`nodejs` exists on `PATH` |
+
+**The distinction this evidence exists to keep straight.** The zero-Python gate is
+satisfied by the **image**, not by the release zip. The zip built in the same run is
+a 4294-entry source tree containing **1029 Python files**; it is a source
+distribution and does not satisfy the gate. The evidence file states this in a named
+field (`whyThisIsTheRealClaim`) rather than only in prose, and a test asserts the
+gate points at the image report.
+
+What the image run actually proved, beyond the absence check: the same container
+served the React entry and its scripts, retained a signed origin across a restart
+with the writer fence advancing 1 -> 2, kept 18 bundled skills / 4 packs / 4 golden
+cases, had all four required native roles present (`deepseek-gateway`,
+`deepseek-launch`, `deepseek-worker`, `deepseekd`), and both negative cases (legacy
+worker directory, missing bundle) detected their expected failure.
+
+**Why the assessment still says NOT_READY.** `DELIVERED` requires all fifteen gates
+*and* seven workload-measured zero invariants, and the validator refuses a vacuous
+zero — every invariant needs a positive `samples` and `workload_operations` count. A
+CI pass cannot produce those, so `measurements` and `gates` in
+`release/native_runtime_5_0_evidence_v1.json` stay empty on purpose.
+`tests/test_native_runtime_gate_evidence.py` (6 tests) re-derives every artifact
+digest and asserts both files keep those statuses, so a later change cannot quietly
+promote three green gates into a release claim.
+
+**Still outstanding, in dependency order:**
+
+1. Six workload-measured zero invariants (the seventh, `crossLanguageCgoAllocations`,
+   is structural and already enforced by the zero-Python source gate).
+2. Twelve gates: the parity set, control/data authority, the three-MinIO and
+   two-Fleet/four-MinIO topologies, the three SIGKILL matrices, security, coverage,
+   fuzz and performance.
+3. Domain promotion against a genuinely stopped-and-fenced Python source, after
+   which `current_production_authority` can leave `python`.
+
+Items 1 and 2 need live workloads and real providers; none of them can be closed by
+another CI pass.
+
+<!-- native checkpoint 2026-11-11 ci.yml 37/37 green, artifacts hash-verified -->
+
+Whole product Rust/Go migration remains ACTIVE / **NOT_READY**.
+
+`ci.yml` run
+[42786170148](https://github.com/leizd/DeepSeek-Infra/actions/runs/42786170148) at
+`7c0713cc` is **37 of 37 jobs successful, zero failures, zero skips** — verified
+from the job API rather than from a partial reading. The local tree hashes to the
+same value the run tested.
+
+Two artifacts from that run were downloaded and **hash-verified**, which is what
+turns "the gate passed" into evidence:
+
+- `release-evidence-v4.8.0`: a 50-artifact bundle whose manifest records
+  `testedRevision 7c0713cc`, `sourceTreeDirty false`, SHA-256
+  `b3350096...49409` — matched.
+- `deepseek-infra-release-v4.8.0`: a 28 MB zip, SHA-256 `6f4bb036...a46af` —
+  matched.
+
+**A finding that had to be recorded rather than glossed.** That release zip is a
+package of the **full source tree** built by `scripts/release.py`: 4294 entries
+including **1029 Python files**. It is not a standalone native runtime. So
+`production_artifact_zero_python` is **not** satisfied by it, and this workstream
+does not claim otherwise. What does pass is the zero-Python *source* contract
+(`scripts/check_zero_python_runtime.py --strict`, 8/8) covering the native
+services' sources. The distinction matters: a source-distribution zip and a
+production artifact with no Python chain are different claims, and only the first
+one is true here.
+
+`release/native_runtime_5_0_evidence_v1.json` was updated so its
+`EXACT_HEAD_CI_MISSING` blocker states the CI half *is* satisfied, with the run,
+revision and verified hashes, while the blocker stays open for the two reasons that
+survive: the release artifact is a source zip, and `measurements`/`gates` stay empty
+until workload-measured zero invariants exist (the validator requires positive
+`samples` and `workload_operations` for every zero, so a CI run cannot populate
+them).
+
+**What is genuinely left**, in dependency order:
+
+1. `production_artifact_zero_python` — a packaged artifact whose production chain
+   contains no Python. Today's release zip is a source distribution, so this needs
+   packaging work, not a test.
+2. Workload-measured zero invariants — real operations with zero Python production
+   HTTP requests, mutations, scheduler runs, storage writes and federation signs,
+   plus zero shared-database writes and zero cgo allocations.
+3. Provider and fault evidence — three-MinIO, two-Fleet/four-MinIO, and the
+   SIGKILL/takeover matrices.
+4. Domain promotion — one real control domain moved end to end against a genuinely
+   stopped-and-fenced Python source, then the ownership contract's
+   `current_production_authority` can leave `python`.
+
+<!-- native checkpoint 2026-11-11 full ci.yml green: 37/37, Go coverage 95.01% -->
+
+Whole product Rust/Go migration remains ACTIVE / **NOT_READY**, but the complete
+verification gate now passes for the first time in this workstream.
+
+`ci.yml` run
+[42786170148](https://github.com/leizd/DeepSeek-Infra/actions/runs/42786170148) at
+`7c0713cc` (tree `abb4739a`, branch
+`codex/native-s0-store-ownership-20261109`) completed **success: 37 jobs, 0
+failures, 0 skipped**. The local tree hashes to the same value, so the green run
+tested exactly this content.
+
+Go statement coverage is **95.010592% (17043/17938)** against the 95.0% floor.
+
+**How the last 21 statements were closed: a fault-injection harness, not more
+shaped-input tests.** The classification recorded earlier said the remainder was the
+`return err` arms of the migration ladder rather than untested features, and that
+turned out to be exactly right. Each rung begins by verifying the schema it migrates
+*from*, so setting the store's `schema` field to a version the database is not
+actually at makes that verification fail and runs the rung's error arm. That field
+is the ladder's own dispatch key and the migration suites already write it directly,
+so the harness needed no new seam.
+
+Two facts made it work, and both cost a wrong first attempt:
+
+1. **A sample of start versions is not enough.** Four starts covered only 3 of the
+10 arms, because each run failed on the *first* mismatched precondition and never
+reached the later rungs. Every version from 1 to `CurrentSchema-1` has to be
+exercised separately.
+2. **`CurrentSchema` has no rung.** A rung named after a version carries a store
+*from* that version to the next, so `migrateToV20Tx` moves SchemaV19 to
+CurrentSchema (20). Including version 20 in the sweep fails the "must be reached"
+assertion for the right reason.
+
+Also worth keeping: a migrated store **cannot** be replayed from zero. The first
+attempt at these tests tried to rewind and re-run the whole ladder, which fails on
+`table policies already exists` because every rung runs DDL against its predecessor's
+objects. The tests now cover the ladder's own responsibilities — refusal boundaries,
+per-version dispatch, and the closing schema verification — instead of pretending it
+can be replayed.
+
+**Coverage ledger for this workstream:** 16974 -> 17043 statements (+69), through
+five shaped-input suites and finally the fault harness. The four defects found by the
+first full `ci.yml` run (missing `httpx2` in two Rust jobs, two stale pinned hashes,
+a `read_text`/`read_bytes` mismatch in the procfs readers, and static platform
+imports that broke `mypy`) remain fixed.
+
+<!-- native checkpoint 2026-11-10 Go coverage narrowed, floor not yet reached -->
+
+Whole product Rust/Go migration remains ACTIVE / **NOT_READY**.
+
+**State: 33 of 37 `ci.yml` jobs pass, 3 fail, 1 skipped** (run `42771997916` at
+`d226539b`). Two earlier notes in this file were written from a run that had not
+settled: the first said 33 when several jobs were still in progress, the second
+said 32 after a transient 404. The settled, reproduced figure is 33. `rust`, `rust-coverage`,
+`docs` and all three `test (3.10/3.11/3.12)` jobs — the six this workstream fixed
+— are green. The four failures are Go coverage, a transient 404, and the two gates
+that inherit Go coverage.
+
+`native-protocol` failed once fetching the checksum-pinned
+`protoc-gen-grpc-java` 1.84.0 artifact from `repo.maven.apache.org` with a 404, and
+**passed on the re-dispatch**, which confirms that was a transient upstream failure
+rather than a defect. Three remaining failures are one cause and two consequences:
+`native-go` measures Go statement coverage at 94.893522% (17022/17938) against the
+95.0% floor, and `evidence-assembly` plus `rc-readiness` require every upstream
+evidence gate so they inherit it.
+
+**Go coverage was 94.625934% (16974/17938) at the start of this work and is
+94.893522% (17022/17938) now. The floor is 95.0%, which needs 17042, so 20
+statements remain.** That is reported plainly rather than as progress: the floor
+is still missed.
+
+What was added (24 tests) and why each target was chosen from the profile rather
+than guessed:
+
+- `internal/media/server_error.go` had **no tests at all** at 3.70%. It is the one
+  signed result whose entire payload is a fixed 500 refusal, so a mistake there
+  either hides a real refusal or forges a success. Now 88.9%.
+- `internal/worker/media_patch_result.go` 82.76% -> 98.3%: `ReadFlatMediaPatchResult`
+  was entirely uncovered; its wrong-version, non-applied, unsecured-client and
+  interrupted-stream refusals are now pinned.
+- `internal/media/flat_patch_input.go` 90.16% -> 94.8%: the JSON escape decoder that
+  reproduces the original Python key ordering.
+- `internal/api/media_patch.go`: the public patch input gate and the outcome writer,
+  including the rule that a UTF-8 violation is a 500 with a generic message while a
+  JSON syntax error is a 400 carrying the parser diagnostic.
+
+**Five attempts at the floor, and an honest stop.** Each was chosen from the
+coverage profile rather than guessed, and each moved the count:
+
+| commit | suite added | covered |
+| --- | --- | --- |
+| `b6312156` | server-error outcomes, flat patch results | 16974 -> 17006 |
+| `cf728984` | flat patch escape decoder | 17006 -> 17015 |
+| `360f1323` | public patch input gate | 17015 -> 17017 |
+| `5bb55242` | media outcome response writer | 17017 -> 17022 |
+| `b68bcd1c` | managed-profile custody validators | 17022 -> 17022 |
+
+The last one is worth recording as a negative result: it raises
+`internal/launch/managed_profile.go` from 89.7% to 93.2% and moves the aggregate by
+**zero**, because the Linux-only tests already cover those branches in CI. The suite
+is still kept — the coverage is now honest on any platform instead of only on Linux
+— but it demonstrates that a plausible-looking target can be worth nothing against
+this number.
+
+**The remainder is fault-injection coverage, and that is now measured rather
+than asserted.** Every remaining uncovered block was classified by its source
+shape: 262 statements are literal `return err` / `_ = db.Close()` lines, which only
+execute when an I/O or sqlite call fails. The other 654 look input-reachable, but
+the largest clusters sit inside refusal paths that already have subtests —
+`control_sqlite_fault_test.go` alone covers parent-is-a-file,
+database-path-is-a-directory, empty-file resume, incomplete marker set, closed
+connection, inactive schema, missing domain table, unexpected migration, invalid
+writer metadata, metadata row missing, foreign metadata, multiple metadata rows,
+malformed metadata schema, `user_version` mismatch and migration-count mismatch.
+
+So the floor is **not** blocked by untested features. It is blocked by the absence
+of a fault harness. The honest options are to build one (an injectable sqlite
+driver or a filesystem that fails on demand) and cover the 262 branch statements it
+exposes, or to record a justified floor decision with this classification as the
+evidence. Silently lowering the floor, or counting unrelated statements, is not one
+of them.
+
+**Why the remaining 20 are a different kind of work.** They are single error
+returns scattered across `internal/store/control.go` (93 missing at 92.60%):
+corrupt-record guards, `db.Close()` error branches and snapshot failure paths. Each
+needs a deliberately tampered store or an injected failure rather than a shaped
+input, which is a larger piece than the response-shaping tests above — and it is
+where the next slice should start.
+
+**Four fixture facts that cost real iterations and should not be re-learned:**
+
+1. A `MediaPatchIntent` of the patch kind is rejected by `RequestDigest` unless it
+   carries a `Patch` body, and the server-error schema version is legal only for the
+   delete kind.
+2. A flat record is a node table whose last node is the root object and whose
+   members reference earlier nodes, so a scalar must precede the object pointing at
+   it.
+3. `patchWireText(raw, decoded)` returns `(decoded, nil, nil)` when the units are
+   well formed and `("", units, nil)` for an unpaired surrogate — it never rebuilds
+   the string from the raw bytes.
+4. The outcome schema versions are not consecutive (`Compact` 2, `ServerError` 3,
+   `Flat` 4), so tests must use the named constants; a guessed version silently
+   takes the wrong branch and still answers 200.
+
+**Also worth recording:** `internal/protocol`'s job failed fetching an external
+pinned artifact with a 404 — infrastructure, not code — and the local
+`check_go_coverage.py` gate cannot run to completion on this host because a
+`managed_profile` test needs symlink privileges Windows withholds, so CI remains the
+only authority for the number.
+
+<!-- native checkpoint 2026-11-10 ci.yml remediated: 34/37 jobs green -->
+
+Whole product Rust/Go migration remains ACTIVE / **NOT_READY**.
+
+Branch `codex/native-s0-store-ownership-20261109`, head `b05f2ad7`, run
+[42756315885](https://github.com/leizd/DeepSeek-Infra/actions/runs/42756315885):
+**34 of 37 `ci.yml` jobs succeed**, including `rust`, `rust-coverage`, `docs` and
+all three `test (3.10/3.11/3.12)` jobs.
+
+Running the full gate for the first time in this workstream was worth more than
+the S0 slice itself, because it found a defect that made the gate unpassable for
+*any* change: `ci.yml`'s `rust` and `rust-coverage` jobs installed
+`requirements.txt` + `requirements-ocr.txt` but not `requirements-dev.txt`, while
+`httpx2` (needed by starlette's `TestClient`, which every Python-oracle-backed
+Rust test uses) lives only in `requirements-dev.txt`. `rust-cloud.yml` did install
+the dev requirements, so the bounded workflow was green and the full one could not
+be. Both job definitions now agree.
+
+Four defects were fixed in total: that missing oracle dependency in two jobs; two
+macOS tests whose pinned SHA-256 for a `native-windows-cloud.yml` step was never
+updated after commit `0965937fb` legitimately changed the step; `proc_state`
+reading `/proc/<pid>/stat` with `read_text` while `process_identity` uses
+`read_bytes` (so six `identity` cases tested a nonexistent pid instead of their
+stub); and the S0 cutover tool's static `fcntl`/`msvcrt` imports that `mypy`
+rejects on the branch it is not running.
+
+**The three remaining failures are one cause and two consequences.**
+`native-go` measures Go statement coverage at **94.625934%** (16974/17938) against
+the 95.0% floor — the identical number measured before this slice. The coverage
+script lists only `./internal/...` and `./pkg/...`, so new `cmd/` packages cannot
+move it. Diffing the profile against the last fully green run (`41826868421`,
+95.030198%) attributes the drop to the six earlier media commits:
+`media_patch_result.go` 100% -> 82.76%, `values.go` 98.67% -> 96.38% (+50
+statements), `media_upload.go` 92.68% -> 91.67% (+45) — 453 statements newly
+covered but 553 added. `evidence-assembly` and `rc-readiness` require every
+upstream evidence gate and inherit that failure.
+
+**Next executable task.** Close the Go coverage gap honestly: add tests for the
+uncovered media branches (`media_patch_result.go`'s error paths are the largest
+single drop and the cheapest to cover), re-measure with the same script and floor,
+and keep the before/after profile diff as the evidence. Do not lower the floor and
+do not attribute the gap to this slice — the number predates it and the diff shows
+exactly where it went.
+
+**Still not done.** The ownership contract still records
+`current_production_authority: python`. Promoting a real control domain still
+requires a genuinely stopped-and-fenced Python source, and the tooling built here
+runs on copies with a generated signer. Platform packages, zero-Python workloads
+and Evidence Assembly remain outstanding.
+
+<!-- native checkpoint 2026-11-10 executable ownership-transfer tooling -->
+
+Whole product Rust/Go migration remains ACTIVE / **NOT_READY**.
+
+The S0 Go authority item moved from "documented but unreachable" to "executable
+and reversible". The runbook itself said "an isolated export/import and
+ownership-transfer recovery procedure still needs evidence"; that sentence now
+describes history rather than the plan.
+
+**What was missing.** The Go cutover state machine, the promotion verifier
+(`verifyPromotionArtifact`), the attested Python inventory import and the handback
+all existed and all were tested in isolation. But `SignPromotionArtifact` and
+`PromotionArtifactForTransition` were referenced only from `_test.go` files, so no
+operator could ever mint the artifact a promotion requires. The gate was real and
+unreachable at the same time.
+
+**What was added.**
+
+- `go/cmd/control-domain-promotion` — signs the canonical
+  `control-domain-promotion-v1` artifact. Inputs are an explicit transition
+  request, the live cutover record and the installed authority checkpoint. It
+  refuses a request that disagrees with the record on revision/epoch/fencing
+  token/domain, any target other than `go_authoritative`, an internally
+  inconsistent checkpoint, unknown fields, trailing content, and a relative or
+  unusable key path. The key comes only from
+  `DEEPSEEK_PROMOTION_PRIVATE_KEY_FILE` as an absolute path to a base64url seed or
+  private key — never a flag value. It never opens the store and never claims
+  authority.
+- `go/cmd/control-transfer-verify` — runs the whole handover on isolated copies and
+  reports ten steps: open a fresh Go store, attest the copied Python source, claim
+  the checkpoint, read the head, enter `dual_evaluate`, import the attested
+  inventory, observe the dual state, sign the promotion, verify
+  `IsGoAuthoritative`, then roll back to `shadow` with **no promotion artifact** and
+  verify Go is no longer authoritative. Guards: absolute empty scratch outside the
+  repository, a changed source refused by the store's own attestation, and a
+  per-run generated signer.
+
+**Three contract facts found the hard way** (each is now encoded, not just noted):
+
+1. The frozen lifecycle reverses `go_authoritative -> shadow`, not back to
+   `dual_evaluate`. That reversal is deliberately unauthenticated — it is what
+   makes ownership always recoverable — so a rollback probe must target `shadow`.
+2. The authoritative hop must carry the *import's* transfer ID. The store binds a
+   promotion to the attested import that produced the records; any other ID is
+   refused as `INVENTORY_PROMOTION_UNPROVEN`.
+3. The claimed checkpoint must be the one the export was taken under (same
+   generation, same digest, same source schema version). A synthesised checkpoint
+   fails inside `installedInventoryCheckpointTx`, so the verifier requires the real
+   document instead of inventing one.
+
+**Evidence.** Both `policy` and `target` complete the full sequence, run with the
+built binaries against the Python-sourced fixtures under
+`go/internal/store/testdata`; the per-step JSON reports and both binaries are in
+`D:/deepseek-worktree-evidence/native-20261110-promotion-signer/`. Local gates:
+`go vet ./...` PASS, both new command directories gofmt-clean, `./cmd/...` and
+`./internal/api/` PASS, `./internal/store/` PASS except one pre-existing
+Windows-only temp-dir cleanup race that reproduces with every change stashed.
+`ruff check .` and `scripts/check_release_version.py` still PASS.
+
+**Not proven.** Production. The verifier runs on copies with a generated signer,
+against no live Python service, no real provider and no public listener. The
+ownership contract still records `current_production_authority: python`, and the
+exact-commit cloud qualification for this slice is dispatched but not yet green at
+the time of writing. The full 37-job `ci.yml`, Evidence Assembly, platform
+packages and zero-Python workloads remain outstanding.
+
+**Next executable task.** Turn the tooling into an ownership-contract revision:
+promote one real control domain (policy first) through the same sequence against a
+genuine stopped-and-fenced Python source, capture the export/import/promotion
+evidence bundle, and only then flip that domain's `current_owner` to `go` in
+`release/native_runtime_ownership_v1.json`. Until that bundle exists the contract
+must not move.
+
+<!-- native checkpoint 2026-11-09 S0 store ownership declared and gated -->
+
+Whole product Rust/Go migration remains ACTIVE / **NOT_READY**.
+
+The S0 prerequisite is now mostly real rather than a plan. Two of its four parts
+are complete and proven; the Go control authority part is not.
+
+**1. Declared.** Fifteen workspace backup/restore/DR/resilience stores are
+`python -> rust` at 4.9.4 with `durable_store: rust_data` in
+`release/native_runtime_ownership_v1.json`. Every field a cutover needs was
+measured from the module itself, not assumed: `storePath` (the actual
+dot-directory, plus a second directory for the two stores that own two),
+`writerEntryPoints` and `cutoverGate`. `RUST_DATA_DOMAINS` lists the same fifteen,
+so a drift between the contract and the mechanical gate is now a test failure
+rather than a latent bug. The contract went from 52 to 67 domains and from 16 to 31
+`rust_data` stores.
+
+**2. Gated.** `scripts/native_store_writer_gate.py` installed
+`assert_python_writer_allowed("<store>")` at 81 declared write entry points. Two
+properties make that gate trustworthy rather than decorative: it is inert in the
+default runtime mode and raises `PythonWriterMechanicallyDeniedError` under
+`python_disabled` (both measured), and it is idempotent, so `--check` in CI fails
+the moment a declared writer loses its guard.
+
+The gate tool refuses to touch a function named in any frozen-AST compatibility
+test. Those tests (`tests/test_native_runtime_*.py`) compare whole `ast.dump`
+bodies against the frozen 4.8.0 commit, so inserting a statement breaks a
+legitimate frozen-contract check — nine `backup_replication` job/phase functions
+were in that set. `backup_replication_store` is therefore gated at `_atomic_write`,
+the single choke point every job, hold and cursor file passes through, and the
+constraint is encoded in the tool so a future declaration cannot silently pick a
+frozen name.
+
+**3. Movable and reversible.** `scripts/native_workspace_store_cutover.py`
+implements `export`/`verify`/`snapshot`/`import`/`rollback` on explicit paths: a
+content-addressed per-entry inventory, a store-level `entryDigest`, an
+`exportDigest` covering the manifest itself, a named lock file fencing the whole
+operation, an import that refuses a non-empty destination (a transfer of authority,
+never a merge) and a rollback that restores a verified snapshot.
+`tests/test_native_workspace_store_cutover.py` drives real stores through it — the
+catalog JSONL via `backup_catalog.append_receipt`, retention policies via
+`backup_retention.put_retention_policy`, and a WAL-mode SQLite database built from
+`resilience_capacity_history._SCHEMA` and queried again after import — and covers
+the tamper, changed-source, non-empty-destination and rollback refusals.
+
+**4. Not done.** The Go control authority path: policies and targets still need a
+`control-authority-v1` checkpoint with `DEEPSEEKD_CONTROL_AUTHORITY` promoted per
+domain, takeover/lease rules and export/import evidence. That is the next
+executable S0 item and it is what still blocks porting the writer-shaped routes
+(`backup-capacity/summary`, `authority/history-snapshot`, retention apply,
+pin/unpin, restores).
+
+Two test facts worth carrying forward. `tests/test_backup_456_coverage_booster.py`
+::`test_rebalance_policy_replicas_with_draining_and_diversity` fails on a clean
+tree at this commit — it is a pre-existing failure, verified by stashing all S0
+work and reproducing it. And `tests/test_backup_480_real_two_fleet_four_minio_e2e.py`
+errors locally only because it tries to build the native backup helper and this
+host has no linker; Rust builds belong to the cloud gate.
+
+<!-- native checkpoint 2026-11-08 S2a backup catalog local read -->
+
+Whole product Rust/Go migration remains ACTIVE / **NOT_READY**.
+
+Active worktree: `D:\deepseek-worktrees\tip20261106`, branch to be
+`codex/native-backup-catalog-20261108`, HEAD `aed5d99f24800e7963038362cb7ea84dca5254d5`
+(tree `1e41f724c82a962f0b714aeb5ca3a57f66d2ee4e`). That HEAD is the exact source
+of the qualified trace slice: `rust-cloud.yml` run
+[42459534356](https://github.com/leizd/DeepSeek-Infra/actions/runs/42459534356)
+succeeded for both `Rust checks` and `Rust coverage` (102647/123408 = 83.1769%
+lines, 80% floor, 1844 tests, `sourceTreeDirty: false`, no failed step); evidence
+is sealed under `artifacts/native-20261107-trace-routes/` including the downloaded
+`rust-cloud-checks-*` and `rust-cloud-coverage-*` report directories.
+
+Completed this round: `GET /api/workspace/backup-catalog` for the local
+`managed-local` catalog, implemented in
+`rust/crates/deepseek-gateway/src/backup_catalog_routes.rs` and mounted after the
+backup-run router. The port covers the governance fold, the chain recomputation
+(`deepseek_policy::python_json::dumps_compact` reproduces Python's
+`sort_keys=True` compact JSON), the stable `state_sorted` order, the
+orphan/missing scan (including the frozen `object-set-v1` commitment through
+`deepseek_storage::object_inventory_digest`) and `backup_health` with the 30-day
+unlock window. Unhandled Python failure modes are preserved as unhandled 500s: a
+truthy non-mapping payload (`AttributeError`), a timezone-naive unlock timestamp
+(`TypeError`) and a receipt without `backupId` (`KeyError`).
+
+Verification this round: `tests/backup_catalog_routes.rs` seeds the real catalog
+through the Python writers and compares 12 measured cases byte-for-byte
+(normalising only `health.evaluatedAt`) against the same workspace root, plus two
+further tests that prove the read-only contract (an unused workspace keeps no
+`.backups` while the oracle root gets one and returns the same body) and that a
+registered target is refused by name without writing the control store. Local
+`rustfmt --check`, `cargo metadata --locked --offline`, `tests/test_backup_catalog.py`
+(10 tests) and `scripts/production_runtime_inventory.py --check` pass; `--write`
+removed exactly this one route from `http_routes_only_on_python`.
+
+Remaining capability: registered-target catalogs (filesystem marker targets and
+the S3 catalog store) answer `503 NATIVE_BACKUP_CATALOG_TARGET_STORE_UNMIGRATED`
+until their stores are declared Rust data domains with cutover evidence. Pin /
+unpin, retention preview/apply, capacity/QoS, authority retention, DR,
+resilience, policies/targets, restores, exports and the full platform/CI/Evidence
+Assembly matrix remain open. Local pass is not release evidence: S2a still needs
+its own exact-source cloud run.
+
+Next executable task: push `codex/native-backup-catalog-20261108` and dispatch
+`rust-cloud.yml` at the resulting commit, download only the report artifacts, and
+seal them into `artifacts/native-20261107-backup-catalog/`.
+<!-- native checkpoint 2026-11-06 media PATCH response order and JSON errors -->
+
+Whole product migration remains ACTIVE / NOT_READY. Exact source d7d342395
+passed the Rust workspace tests, Rust 83.02788779 percent line coverage and
+Windows verification. Its real launcher media PATCH probe failed on the
+normalized duplicate's response order. The Rust encoder sorted response keys
+and wrote zero source ordinals. Flat-input claims now retain signed source
+ordinals on inline and compact results. Legacy claims and previously prepared
+or settled journal bytes keep their established handling.
+
+An original authenticated TCP run issued 73 requests for 36 malformed JSON
+cases on a synthetic profile, with byte-identical library and reads. The
+project's Python 3.12 oracle replays the exact original source helper. Its two
+trailing-comma messages differ from Python 3.13. The native rejection includes
+the 3.12 diagnostic and Unicode character position. The exact-source cloud
+probe checks original and native TCP, both effect journals, workspace
+generation and retained reads. The focused Go race inventory includes all
+115 selected tests and the original full coverage gates remain required.
+
+<!-- native checkpoint 2026-11-06 lossless media PATCH input -->
+
+Whole product migration remains ACTIVE / NOT_READY. The parent a0552e0186
+failed both Rust jobs and Windows verification in generated Protobuf code.
+The new flat value oneof now derives Eq alongside the existing media value
+oneof. This correction still requires compilation of this exact source.
+
+The original authenticated HTTP server verified ten input cases against two
+isolated fixture runs. The Go ingress sends selected values as ordered,
+child-first Protobuf nodes and keeps the original 1,000,000-byte body limit.
+The retained Rust writer restores exact numbers and lone UTF-16 units and
+keeps the existing authority, preparation and recovery contracts. Legacy
+nested claims still decode and keep their original signing digests. The Go
+PATCH response restores the field positions on legacy and compact results.
+
+The cloud probe replays the exact request bytes and checks PATCH and GET,
+published bytes, workspace generation, and signed receipts across restart.
+An invalid UTF-8 body fails before admission. A surviving unpaired string
+refuses publication, while selected nonfinite numbers persist before the
+response fails. Malformed JSON retains status 400 and invalid_payload.
+The original line-and-column diagnostic wording remains a compatibility gap.
+
+<!-- native checkpoint 2026-11-06 flat media PATCH response -->
+
+Whole product migration remains ACTIVE / NOT_READY. The original authenticated
+HTTP server returned the selected 160-layer mapping after PATCH. A combined
+11-request oracle now covers that response and the two earlier HTTP 500
+effects using the same synthetic library seed as the native probe.
+
+The controller advertises media outcome capability 4. Rust plans a flat
+typed record when the legacy public conversion or inline journal decoder
+cannot represent the retained depth. The v4 receipt uses its own signature
+domain and preparation schema 2. The original dispatch, before and after
+images, typed bytes, length and digest remain bound to the original fence.
+
+Go verifies the compact receipt, consumes the same authenticated chunk RPC,
+validates the ordered tree and encodes the HTTP object iteratively. The new
+regressions cover exact decimals, ordered members, invalid references,
+wrong signing and preparation domains, and retained restart. Cloud validation
+still needs to demonstrate the actual PATCH response and preserved receipt.
+
+<!-- native checkpoint 2026-11-06 signed media response errors -->
+
+Whole product migration remains ACTIVE / NOT_READY. The original authenticated
+TCP oracle observed identical HTTP 500 responses for two different effects.
+A retained unpaired unit blocked the write. A selected NaN allowed the library
+publication and failed strict public response encoding afterwards.
+
+Both Rust jobs on parent 0965937 failed the same two fixture assertions.
+The original deep success fixture retained nested mappings. The unpaired
+string was under a surviving metadata key. The corrected tests use those
+inputs and check that the invalid key discarded by normalization stays absent.
+
+The Rust PATCH planner updates the selected retained record directly. Exact
+decimal integers reach the existing typed public record without a float
+conversion. The version 3 terminal error uses the existing protobuf envelope
+and a separate signing domain. Its refused form binds the before image. Its
+applied PATCH form binds both images and the Go dispatch preparation.
+The controller can continue verifying stored v1 and compact v2 receipts.
+
+New regressions exercise recovery after a committed image and interrupted
+receipt, no-effect refusal, exact selected integers, and Go settlement over
+TLS. The cloud launcher probe checks five native mutations, the actual file
+digests and the two durable receipts across restart. The selected deep success
+case still needs a response representation beyond the legacy nesting limit.
+
+<!-- native checkpoint 2026-11-06 retained media publication -->
+
+Whole product migration remains ACTIVE / NOT_READY. The retained library writer
+now normalizes source rows through the lossless value model. Publication admits
+nonfinite values and validates Unicode scalars in the final retained tail.
+Recovery copies the value bytes of each generated image record, retaining the
+numeric spelling and field order needed for intermediate-image replay.
+
+The original authenticated TCP oracle observed 19 requests. An unrelated NaN
+survived a successful PATCH. Retained unpaired text caused a 500 with the original
+store bytes intact. Deleting the offending record succeeded. A selected NaN
+produced a 500 after commit. A selected 40-digit integer and depth-160 value
+survived a successful PATCH. The original report has SHA-256
+792e84e834886db4bd09babba350e66ca192f47c49bd4fb71966716689386f21.
+
+Rust regressions cover retention and recovery bytes, patching around an unrelated
+NaN, and deleting an unencodable row after a rejected publication. The signed
+selected-record result and original post-commit response error still require
+compatibility work. Native compilation, coverage, capacity and platform
+qualification are evaluated on their exact cloud revisions.
+
+<!-- native checkpoint 2026-11-05 retained media values -->
+
+Whole product migration remains ACTIVE / NOT_READY. All original server,
+desktop, Android, background, retained functions, unique writer, recovery,
+production runtime and original MCP acceptance requirements remain in scope.
+
+The original selected-public-normalization commit f842fce5 passed that case in
+both Rust modes of run 41961153815. Each mode still observed 26 retained-value
+failures among 35 cases. The exact logs and named results are preserved.
+
+Gateway reads now use an iterative lossless arena before selecting or encoding
+media. Decimal integers remain exact, floats undergo IEEE parsing, and UTF-16
+units survive until business normalization and strict response construction.
+Private stored/public spools retain source ordinals and digest-checked bytes.
+Collections complete selected public normalization in source order then sort by
+Python scalar order. Home normalizes the whole collection, loads its remaining
+sections, and encodes the selected window. Segments require the public lookup. Media and home read denials preserve the
+original 401 response, and the stream verifies its final chunk before delivery.
+
+A separate original TCP proof adds 16 authenticated requests and two auth denials for output boundaries, including
+unencodable off-window records, a legal segments read for the same record,
+stable scalar sorting, and normalization errors preceding response encoding.
+The cloud process probe retains the prior 26 generations and adds 37 cases,
+152 authenticated GETs, 152 HEADs and 304 auth denials. Home success compares
+its media window/count and ok flag; other results compare complete bodies.
+Windows includes 61 parser and 43 spool cases across the existing graphs.
+
+Repr printability and lowercase mappings use the cloud Python 3.12 oracle's
+Unicode 15.0.0. Float parsing handles balanced long exponents and uses the
+already locked Ryu formatter for ties to even. The wire probe rejects redirects,
+checks HEAD bytes directly, and compares exact numeric response tokens. The
+existing process corpus retains its 15 minute limit and the extended corpus
+has its own time allowance for the real writer lease waits. Per-interpreter and host MIME database variation remains open.
+Worker mutations, durable images/recovery and wider native protocol support for
+retained values require separate qualification. Current-source standalone Rust,
+coverage, actual sockets, source CI, controlled platforms, Rust/browser push,
+PR candidate, and the full release remain pending until observed on this source.
+
+<!-- native checkpoint 2026-11-05 original selected public normalization -->
+
+Whole product migration remains ACTIVE / NOT_READY. All original server, desktop,
+Android, background, retained features, unique-writer/recovery, zero-production-
+Python/server-TypeScript and original MCP requirements remain required.
+
+A real isolated original TCP replay of13 requests proves that later stored path
+./C:/x.png is accepted by first normalization, but fails public normalization as
+C:/x.png. Full list and that item's detail/segments fail400; selecting an earlier
+legal item or filtering the later row out succeeds200. The earlier native-only
+helper incorrectly made find(first) fail. This correction retains that regression
+with the original selected outcomes and complete-list/window errors, including
+limit0; no test is removed. Windows spool43/parser49, prebuild and original
+10minute validation remain required with only the renamed case/step hash rebound.
+
+The gateway now completes first normalization for all raw rows, then public
+normalization for the selected detail/filter results. Home windows still validate
+the entire public collection before selecting their limit. Collection public
+normalization completes before response construction. Segment reads require the
+same public get_media lookup as the original route. Source bytes remain read-only.
+The real default-launcher process probe also replays both original variants,
+checking11 authenticated GETs+11 HEADs+22 auth refusals and unchanged media/auth
+bytes with two additional writer generations. These actual native probes are
+unqualified until this exact source really executes them; all previous probes stay.
+
+Parent6278f3a0 has34 original-value regressions plus a lossless numeric-comparison
+control in the existing full Rust run41952489148. Retained numeric/UTF-16 handling,
+all-width memory, actual media processing/GUI, authority/recovery and physical/end-
+user platform acceptance remain incomplete. Parent c56bb3ca's full Rust, CI37+
+Evidence50 and controlled Windows/Mac/Android reports apply only to that parent.
+No original coverage floor or effect-recovery invariant is relaxed. Original dirty
+source/data remain preserved, native builds/caches stay in cloud, and only reports
+return. This is not a release, production switch or full migration completion.
+
+The read probe also compares401 GET bodies and JSON boolean/number types,
+retains arbitrary integers in offline comparisons, and waits for identity-fenced
+children plus native guardian completion even after a launcher timeout or failed
+process discovery. Native guardians keep their own pidfd/subreaper custody;
+process-group checks use signal0 only. These verifier changes remain cloud-only.
+
+<!-- native checkpoint 2026-11-04 complete retained HTTP oracle regressions -->
+
+Whole product Rust/Go migration remains ACTIVE / NOT_READY. Every original
+server, desktop, Android, background, retained feature, unique writer, recovery,
+zero-production-Python/server-TypeScript and original MCP requirement stays open
+until its own exact-source evidence proves completion.
+
+Parent c56bb3ca now has a complete standalone Rust workflow:1763 passes, sole
+original Redis ignore,82.803445% lines,49 checks and11 coverage gates. Its actual
+144182145-byte library PATCH completed in8.142351seconds under the unchanged
+10second deadline and retained610 records after restart. Windows/Mac controlled
+smoke6/6 and Android controlled emulator6/6 (70 instrumentation+25 AppUID custody)
+are verified for that parent only. Older f264e381 full CI passed37/37 and Evidence50
+with original Go/Python95 and Rust80 floors; current parent CI has its own run.
+These proofs do not qualify this changed source or a PR merge candidate.
+
+This source adds34 distinct native GET-renderer regressions from170 real isolated
+original TCP HTTP observations, with full expected bodies and source/digest binding.
+All34 cases check four native roles:full collection, selected detail, an independent
+legal detail and a filtered legal collection. Original401 auth refusals remain in
+the frozen fixture and original socket replay; these private renderer unit tests
+are not a full authenticated native socket or browser qualification. Existing
+Windows spool inventory extends8 to43 (34 original cases plus a lossless-number
+comparison control) with every original test retained; parser49,
+all five prebuild graphs, original10minute validation and all other gates stay.
+The two separately pinned Windows additions remain excluded from the unchanged
+original job hash8108d2be...ac537. Production Rust/Go and Proto are unchanged.
+
+Fixtures include the local original2048-depth observations; this does not prove
+all supported original interpreter boundaries. No blanket new depth/number/Unicode
+admission cap, fixture reduction or production Python fallback is authorized.
+New native regressions are not yet qualified and may expose real retained-value
+failures. Full winning numeric/UTF-16 normalization and actual process parity,
+all-width memory, media processing/GUI, authority/recovery and physical/end-user
+platform acceptance remain required. The original dirty checkout/data stay intact.
+Native builds/caches stay in cloud and only reports return. No release or cutover.
+
+<!-- native checkpoint 2026-11-04 raw capture result type -->
+
+Full product migration remains ACTIVE / NOT_READY. Source35680c0c run41822512132
+checks job126548906137 reached the unchanged pinned Clippy gate and failed only
+on the private Capture::finish complex tuple type. This source names the same
+writer/offset/length/hash result CapturedRecord. Buffer/sink flushes, digest
+finalization, writer restoration and SQLite index ordering stay identical.
+All production/test/gate bytes except that type spelling and this checkpoint
+remain unchanged. The source uses no lint suppression or skipped case. Parent
+coverage keeps its original run handle and is not borrowed for current-source
+qualification. Current cloud native compilation/runtime is still required.
+All earlier raw/lossless normalization, product/platform/recovery/authority,
+zero-production-Python and original MCP obligations remain required. Original
+dirty checkout/data stay intact; all native builds/caches remain cloud-only.
+
+<!-- native checkpoint 2026-11-04 raw media read-spool separation -->
+
+Whole server/desktop/Android/background Rust+Go production migration remains
+ACTIVE / NOT_READY; every original capability, gate, floor and recovery obligation
+stays required. Source904bfadc actual cloud run41798478357 fixed the original
+clock/MIME assertions in both test modes (six new passes, five remaining duplicate
+failures), with no ignored or removed tests. This source targets those remaining
+original duplicate-media/record/nested-key semantics.
+
+Initial media validation now writes only raw known-field spans to a temporary
+opaque read-only RawRecords facade. It validates full syntax/UTF-8/I/O and resolves
+the final media array before decoding any winning record. Capture occurs only on
+logical byte consumption with a fallible sink, preserves raw escape/number spelling,
+avoids read-ahead and negative replay, and flushes buffer/sink before indexing or
+truncation. Only normalized Records expose mutation/emission. Raw and normalized
+record reads keep length/digest verification. Deferred iterative dictionary
+selection uses Python UTF-16 key equality and first-insertion/last-value order,
+including literal non-BMP versus escaped surrogate-pair names. Three explicit
+node-selection cases extend the retained Windows parser inventory in both graphs.
+Existing source/normalized failures, flush-only failures before index publication,
+and changed raw bytes remain hard failures.
+
+A separately replayed original boundary also proves read_text UTF-8 decode errors
+propagate rather than produce an empty store. Worker invalid UTF-8 is now an error;
+malformed JSON keeps its original empty result, gateway typed behavior is retained.
+The original native empty assertion was contradicted by real original-reader
+outputs and corrected, not preserved as a legacy-native oracle.
+
+Parent f264 standalone Rust workflow is qualified at1749 passes, sole original
+Redis ignore,82.777530% lines,49 checks and11 coverage gates. Its144MB controlled
+PATCH completed in7.097155seconds under the original deadline. Full CI was still
+running Go race; Android passed6/6; Windows timed out while compiling a caller-graph
+test binary. A new bounded20minute no-run prebuild covers all five exact feature
+graphs before the unchanged10minute real validation. The original Windows job hash
+stays8108d2be...ac537 after removing only the two separately pinned additions.
+No runtime case, deadline, dependency, profile, Proto or original floor is relaxed.
+Those parent reports never qualify this changed source.
+
+Fresh scoped read-only code/CI reviews found no concrete issues; cross-model CLI
+was skipped in autonomous continuation. Native compilation/runtime and current
+platform acceptance still require this exact snapshot. Winning nonfinite/surrogate
+normalization beyond the explicit fixtures, all-width memory, full media processing,
+authority/recovery, physical/end-user platform acceptance, zero production Python/
+server TypeScript and the original MCP test engine remain required and incomplete.
+Original dirty checkout/data are preserved. Native builds/caches stay in cloud;
+only reports are retrieved. This checkpoint is not a release or production switch.
+
+<!-- native checkpoint 2026-11-04 original MIME and clock correction -->
+
+Full product migration remains ACTIVE / NOT_READY. Source4e29505c cloud run
+41794728527 compiled and passed Clippy, then its coverage-mode policy tests
+exposed10 failures among11 new original-Python regressions. The checks-mode
+handle is preserved and observed separately; no uncertain run is restarted.
+
+This source corrects two normalizer expressions: original timestamps are
+calculated before invalid-path rejection, and MIME fallback reads the original
+raw path before normalization. No other production expression, test, fixture,
+workflow, profile, dependency, Proto, timeout or coverage floor changes. The
+clock and four raw-path MIME assertions stay mandatory. Five other duplicate-
+selection inputs still require raw/lossless record spooling; this source does
+not claim those solved and does not suppress or ignore their regressions.
+
+Fresh scoped adversarial review found no issue in the two-line unit. External
+model review was skipped for autonomous continuation. Native qualification must
+be re-established at this exact source; inherited offline393/mypy1020 evidence
+is limited to byte-identical Python/test/fixture sources. Parent f264 coverage
+and controlled media HTTP reports are not child qualification. All original
+server/desktop/Android/background, authority/recovery, zero-production-Python
+and MCP test-engine obligations stay open. Original dirty checkout and real
+data stay intact; all native compilation and caches remain cloud-only.
+
+<!-- native checkpoint 2026-11-04 original winning-field and clock diagnostics -->
+
+Full server/desktop/Android/background Rust+Go production migration remains
+ACTIVE / NOT_READY, with every retained function and original gate still required.
+This source adds 11 independent native regressions against actual unchanged
+original Python behavior: four raw-path MIME cases, three final media-array cases,
+three duplicate-field cases and one fake-clock ordering case. The original reader
+accepts all ten documents; after skipping an invalid-path row, the next valid row
+uses the second clock value. The deep losing-array fixture uses500 levels already
+covered in the original supported Python CI range, without imposing a native cap.
+
+Only a clock dependency was extracted from the existing Rust normalizer for this
+diagnostic snapshot. Its production clock, expression order and body tokens are
+unchanged; the source does not yet fix the exposed behavior. Both worker and
+gateway results are evaluated before assertions. Every existing native test stays
+in the inventory. The added Windows parser group includes the new11 names in
+both caller graphs; the original Windows job bytes, CI, profiles, dependencies,
+coverage floors, deadlines, Proto and authoritative writer boundaries stay intact.
+
+Parent f264e381b5c7980281d013f95d94e1fc10eed4a8 has a separately verified
+coverage job:1749 passed, sole original Redis ignore,15 crates and82.777530%
+lines at the unchanged80% floor. Parent full Rust HTTP gates were still pending
+when this diagnostic checkpoint was prepared. Ancestor f000759b fullCI37/37 and
+Evidence50 are not current-source qualification. The new regressions need actual
+cloud execution, then repair and exact-source original verification. Raw/lossless
+spooling must preserve escapes, separate raw from emission-capable normalized
+records, resolve duplicate keys and preserve actual clock ordering; the reviewed
+four design findings remain actionable. Full media processing/recovery/authority,
+remaining JSON domains, platforms, zero production Python/server TypeScript and
+original MCP test-engine requirements remain open. All native builds/caches stay
+cloud-only; original dirty checkout and real data are preserved.
+
+<!-- native checkpoint 2026-11-04 pinned Clippy correction -->
+
+Whole product migration remains ACTIVE / NOT_READY. At source
+`8aa6721d7610cf31599f9f450b1383cb4633c317`, Rust cloud run 41788650911
+checks job 126436577030 failed its unchanged pinned Clippy gate on
+`nonminimal_bool` and `explicit_auto_deref` in document-key recognition.
+This source changes only those two equivalent expressions and this checkpoint.
+Original tests (including the 23 individual regressions and 328-case actual
+Python matrix), production behavior, dependencies, profiles, workflows, deadlines
+and floors remain unchanged. The previous coverage job retains its original
+handle; it is not restarted or borrowed to qualify this source. Current native
+compilation/runtime verification is required at this exact new commit.
+
+The original dirty checkout and real data remain intact. All native builds and
+caches stay cloud-side; only reports are retrieved. All earlier unfinished full
+product, retained JSON domain, authority/recovery, platform, zero-production-
+Python and MCP test-engine obligations remain required.
+
+<!-- native checkpoint 2026-11-04 ordinary Python media JSON -->
+
+The full server/desktop/Android/background Rust+Go production migration remains
+**ACTIVE / NOT_READY**. This checkpoint does not waive any retained function,
+original gate, original coverage floor, authority/recovery obligation, or platform
+acceptance. Original MCP `start_test_run` compatibility is still incomplete under
+the unchanged zero-production-Python requirement.
+
+This source replaces serde-private dictionary interpretation with ordinary JSON
+object semantics in the temporary media reader, digest-checked record spool and
+native after-image reader. Only the original schema's 11 record fields are
+materialized; all other values are fully validated with iterative heap frames.
+Ignored NaN/Infinity/-Infinity, valid large exponent spellings, escaped surrogate
+code units and deep ignored containers do not acquire serde-specific rejections.
+Complete document/EOF, last duplicate media key, deferred normalization, source
+I/O/UTF-8 precedence and private-spool failure/digest checks remain mandatory.
+
+The diagnostic parent `2eebc140c77b9ddeeb3aa5e053da0d76ecea13c8`
+freezes 23 actual-original-Python regressions. Cloud run 41786250876
+confirmed 19/23 failures in both checks and coverage, after successful compilation
+and Clippy. A further 328-case original-reader
+matrix replaces the old serde oracle in four existing named tests. It includes
+every original depth 0..133 and added 140/200/500 cases, ordinary private-tag keys
+inside retained source/metadata, and duplicate projected fields. Local Python
+oracle/flow checks passed (381). Fresh read-only parser/value/test reviews found
+no remaining actionable issues; cross-model CLI was skipped in this autonomous
+continuation. Native compilation/runtime acceptance is still required on cloud.
+
+Ancestor `f000759b44d5fb939c84e652866fca82cf47f517` independently passed
+37/37 full CI jobs and 50 Evidence artifacts: default Go 95.030198%, Android Go
+95.017774%, Python branch 95.580477%, Rust lines 82.718282%. Those reports do not
+qualify this changed source, Rust/browser push or a PR merge candidate. Retained
+non-finite numbers, unpaired surrogates and other original JSON-domain gaps,
+all-width memory, full media processing/authority/recovery and complete product
+acceptance remain open. All Rust/Go/container/platform builds stay in cloud;
+only reports are retrieved. The dirty original checkout and real data stay intact.
+
+## 2026-11-04: original-reader JSON regressions before native repair
+
+This diagnostic source snapshot adds23 independent Rust cases backed by actual
+original Python `_load_store` / `list_media` observations:22 retain a media row,
+and one ordinary private-tag object used as `media` remains a non-array and
+returns empty. Both worker and gateway observations run before each assertion.
+The fixtures cover discarded numeric domains, ordinary private dictionary
+keys, original admitted nesting and schema-ignored surrogate fields. The old
+native Value decoder is not the acceptance oracle. None of these tests is
+ignored or marked as an expected failure. Existing assertions remain intact.
+
+Production Rust/Go/Python, Proto, Cargo profiles/dependencies/lock, original
+coverage floors and Rust cloud commands remain byte-identical to parentf000759b.
+Only the additional Windows parser corpus grows by23 names; all original
+Windows steps remain frozen. Local offline/source checks do not establish
+native compatibility. Execute the reviewed exact snapshot in GitHub Actions,
+preserve actual regression evidence, and then repair the reader in a later
+source snapshot. Do not relabel compiler errors or older-source passes as
+these required original-function cases passing.
+
+Parentf000759b has completed standalone Rust and controlled Windows/macOS /
+Android qualification; its original complete CI41766346063 remains separate.
+No parent result qualifies this new diagnostic source. The original workspace
+HEAD/index and163 guarded entries remain preserved. Native compilation/tests,
+Docker and platform builds stay in the cloud; only reports return locally.
+No main merge, product release, PR operation or production-data change is
+included. Full migration stays ACTIVE/NOT_READY. All original retained JSON
+and domain behavior, MCP test-engine, unique signed writers/cutover/Fleet/proof,
+unknown effects, complete recovery/rollback/width/power-loss and actual full
+product/provider/model/physical-platform/zero-Python acceptance remain required.
+
+---
+
+## 2026-11-04: discarded Unicode escapes use the original Python oracle
+
+The latest exact-source Rust cloud run for `c2b00a2a` failed a newly added
+test that incorrectly treated the previous native reader as the compatibility
+oracle. Actual original Python `_load_store` and `list_media` retain a legal
+record when unused document keys, values or non-object media items contain
+escaped lone UTF-16 surrogates. The new fixed fixture executes those original
+functions on 21 isolated documents: 17 retained results and four malformed
+escape/control inputs with empty results. No production data is used.
+
+The bounded shared reader now accepts these code-unit escapes only in strings
+that it discards. Captured/retained strings still use strict UTF-8 decoding;
+hex-digit validation, JSON grammar, raw UTF-8 and complete-source/error checks
+remain. Regression coverage compares gateway raw rows, worker normalized rows,
+normalized-image re-read, sorted windows, detail, raw membership and complete
+streamed responses with the actual Python fixture. The cloud process probe
+keeps every original case and adds actual authenticated list/detail/filter GET
+and HEAD requests for all 21 inputs, with stopped-process seeding, writer-fence
+advance and unchanged source/auth across restarts. The additional Windows case
+inventory grows by one; every original Windows step and original coverage
+floor remains. Native execution is PENDING for this new source, not implied
+by the offline oracle, Rust formatting or historical cloud passes.
+
+The original workspace HEAD and all 163 guarded entries remain unchanged.
+Rust/Go compilation, tests and Docker verification stay in GitHub Actions;
+only reports return locally. No main merge, release, production-data operation
+or PR action is included. The full product migration remains ACTIVE/NOT_READY.
+Full original-Python JSON parity is still required for retained/schema-ignored
+surrogates, private JSON tag objects, non-finite numeric domains and nesting;
+this slice does not close those gaps. All retained functionality, the original
+MCP test engine, unique writers, signed custody/cutover/Fleet/proofs, unknown
+remote effects, full recovery/rollback/power-loss/width/cancellation, all actual
+server/desktop/Android/browser/provider/model paths and exact-source original
+CI/Evidence/platform/coverage/performance/release gates remain mandatory.
+
+---
+
+<!-- native-20261104-media-valid-fixtures:start -->
+## Current checkpoint: make new positive media fixtures valid, 2026-11-04
+
+Working branch: `codex/native-media-valid-fixtures-20261104`, based on exact source
+`cf315d10c5b68d910b010a402227949e6861a69f`.
+Historical source d3b06946 run 41744758477 coverage job 126294859284 reached actual
+gateway tests: 250 passed, one new streamed-collection test failed because fixture
+IDs a/b were rejected by the existing 4-character minimum. The base source retains
+that identical fixture file. Original Python normalization independently rejects
+a/b/one/two and accepts media_alpha/media_beta/media_one/media_two. This is invalid
+positive test data; production admission rules remain unchanged.
+
+Use legal IDs in streaming, cancellation and corruption fixtures, require the
+positive row factory to normalize successfully, and require the original collection
+oracle to retain both rows. Correct the worker comparison's one/two IDs and require
+its independent original normalizer to retain all three rows; these were likewise
+short invalid fixtures. Preserve every existing case name and behavioral assertion,
+including filtering, exact bytes/headers, status-only HEAD, cancellation cleanup,
+corrupt-spool failure and duplicate-first semantics. No production Rust changes.
+
+Only two Rust test files and three append-preserving task checkpoints change.
+All production code, three digest tests, dependencies/lock, profiles, workflows,
+thresholds, features, admitted inputs, deadlines and protocols are unchanged.
+Native results on this exact source are still pending; historical or base results
+do not qualify it. Keep observing the original base run 41746583402 without restart
+until each job is terminal. Whole-product readiness remains **NOT_READY**, and all
+preceding retained-function/ownership/recovery/platform/browser/provider/release
+gates remain required. Preserve original HEAD and163 guarded entries; no local
+native build, cache/image/volume download, main merge/release/production-data or
+out-of-schedule PR action is included.
+<!-- native-20261104-media-valid-fixtures:end -->
+
+<!-- native-20261104-media-worker-imports:start -->
+## Current checkpoint: worker imports after shared record relocation, 2026-11-04
+
+Working branch: `codex/native-media-worker-imports-20261104`, based on exact source
+`d3b06946cdd5cfe29916b82578063b0af7c20cde`.
+Checks job 126294859469 in run 41744758477 reached the worker and failed the
+unchanged `-D warnings` gate on unused imports left by record relocation. Its
+terminal raw log and source/run/job/hash receipt are retained. Coverage job
+126294859284 was independently verified live at the recorded observation; keep
+that exact handle and collect its eventual result, without restart or treating
+an observation timeout as termination. No parent result qualifies this source.
+
+Retain the production DigestWriter re-export, import DigestReader only for the
+existing tests, remove the unused WriteSeek re-export and redundant parent SHA2
+import (the test module already imports SHA2). The common streaming digest code,
+worker image identities, all three original digest tests and every other test,
+profile, dependency/lock, feature, workflow, threshold and deadline are unchanged.
+An exact inverse rewrite restores the parent worker file. Only this import file
+and three append-preserving task checkpoints change; no lint suppression is added.
+
+Native compilation/tests/coverage and controlled HTTP capacity/memory are pending
+for this source. Full product readiness remains **NOT_READY** and all earlier
+retained functionality, ownership, recovery, platform/browser/provider and release
+gates remain required. Preserve original HEAD and163 guarded entries; no local
+native build, compiler cache/image/volume download, main merge/release/production
+data or out-of-schedule PR action is included.
+<!-- native-20261104-media-worker-imports:end -->
+
+<!-- native-20261104-media-parser-build-fixes:start -->
+## Current checkpoint: combine three observed cloud compilation corrections, 2026-11-04
+
+Working branch: `codex/native-media-parser-build-fixes-20261103`, based on exact
+source `7c97e6dd76c279a70a79f4ebe1b4352ea28ce739`.
+Parent run 41642403830 is terminal: checks job 125938966298 failed on two Clippy
+lints, and coverage job 125938966754 failed compiling one new fixture format
+string (two placeholders, one argument). The prior byte-reader signature errors
+were absent. Both terminal raw logs and source/run/job/hash receipts are retained;
+no native tests, coverage score, capacity or memory were qualified or restarted.
+
+This direct child combines the two prepared production lint cleanups with the
+fixture escaping correction. Elide the Numeric visitor lifetime and retain the
+early Storage failure return with an explicit if-let before source/UTF8 fallback.
+Escape the literal empty object in the existing mixed media-array fixture;
+retain its real row placeholder, all assertions and every case name. The already
+frozen lint-only prototype dbc652d71b73e8576d51e95b323dc39b82bdd90f remains in
+artifacts but was never uploaded or dispatched. No native tests are removed.
+
+Only those two Rust files and three append-preserving task checkpoints change.
+Profiles, dependencies/lock, workflows, features, thresholds, input domains,
+protocols, deadlines and runtime data remain unchanged. Source scope, formatting
+and doc links precede a new exact-source cloud run. All new native results are
+pending; full product readiness remains **NOT_READY** with every earlier retained
+functionality/ownership/recovery/platform/browser/provider gate still required.
+Original HEAD and163 guarded entries are retained; no local native compilation,
+compiler cache/image/volume download, main merge/release/production-data or
+out-of-schedule PR action is included.
+<!-- native-20261104-media-parser-build-fixes:end -->
+
+<!-- native-20261103-media-byte-reader-fix:start -->
+## Current checkpoint: cloud compilation correction, 2026-11-03
+
+Working branch: `codex/native-media-byte-reader-fix-20261103`, based on exact
+source `996115f40276e5e317f4aab84228d19f3dfeaac0`.
+The parent Rust source-dispatch run 41640268529 failed compilation in both checks
+and coverage: the owned `Input` field selected `std::io::Read::take(self, u64)`
+instead of its identically named byte-consumption helper. The raw logs and
+source/job/run/hash receipts are preserved; no tests, capacity or memory results
+were qualified, and the failed run was not restarted.
+
+This correction renames only that helper and its 25 call sites to `next_byte`;
+all Option::take calls, parsing branches, features, limits, deadlines, profiles,
+interfaces and tests remain unchanged. An exact inverse rewrite reconstructs
+the parent Rust file. The existing twelve parser and seven gateway cases plus
+all original tests still require exact-source cloud execution. Native compilation
+is pending; no parent result qualifies this new source. Full readiness remains
+**NOT_READY**, with the entire preceding checkpoint and all whole-product gates
+retained below. Original HEAD/163 guarded entries and runtime data are preserved;
+no local native build, cache/image/volume download, main merge/release/production
+data or out-of-schedule PR action is included.
+<!-- native-20261103-media-byte-reader-fix:end -->
+
+<!-- native-20261103-media-gateway-streaming:start -->
+## Current checkpoint: bounded gateway media reads, 2026-11-03
+
+Working branch: `codex/native-media-gateway-streaming-20261103`, based on exact
+source `00a11f3d1c387c49709ce4554eb2cec5496c3ac8`.
+This checkpoint is source-reviewed and awaiting compilation and cloud results.
+No parent result qualifies this changed source. Full readiness remains **NOT_READY**.
+Earlier dated checkpoints below are historical and retained byte for byte.
+
+The parent independently passed all 37 original CI jobs and 50 Evidence Assembly
+artifacts. Go default coverage was 16521/17385 (95.030198%), Go Android
+16840/17723 (95.017774%), Python branch 83524/87385 (95.581622%), and CI Rust
+96964/117325 (82.645642%); original 95%/80% floors were retained. Its unchanged
+10-second controlled PATCH succeeded in 8.587913 seconds against a 144182145-byte
+library with all 600 large metadata rows retained after a full restart. The HTTP
+request itself was 76 bytes. These are parent source-dispatch results, neither
+push/browser validation nor a PR merge-candidate qualification. The measured
+parent gateway high-water memory was 458576 KiB; whole-library gateway decoding
+and collection allocation therefore remained open despite the successful PATCH.
+
+This increment replaces gateway library aggregation for collection, detail,
+segment membership, and workspace-home media with private bounded snapshots.
+Full source/UTF8/JSON validation precedes normalization. Raw membership keeps
+its original acceptance rules; public rows retain first-normalization skip and
+second-normalization propagation before filtering, first-match selection, or
+home windowing. A separate SQLite order index preserves descending sort keys
+and source-order ties. Collection JSON is completed in a private temporary file
+and then streamed through one bounded channel; cancellation closes its owner.
+One individual media/segment width, other domains, and all-product peak memory
+remain unqualified. No new library/record limits, HTTP deadlines, truncation,
+shared authoritative writer, or protocol change is introduced.
+
+The existing record-spool implementation and original seven tests move from
+worker into policy, preserving worker digest and journal tests. The worker gains
+one integration comparison against its old normalizer. Twelve parser tests cover
+complete documents, IO/UTF8/Interrupted precedence, ignored token widths, depth,
+last keys, caller numeric features, and Value's existing private Number/RawValue
+wrappers; seven gateway tests cover ordering, errors, headers, filtering,
+window/counts, cancellation and changed private response bytes. Native execution
+is pending. Caller feature graphs are not changed. Dev/test policy and gateway
+code use opt-level 3 for the moved concrete work, retaining assertions and
+overflow checks; coverage and diagnostic overrides remain explicitly 0.
+The original Windows job remains frozen; its separately bound additional gate
+retains all original 29 cases and adds the worker comparison and both new parser
+feature graphs plus gateway tests. Full original CI and coverage gates remain.
+
+No local native compilation, cache/image/volume download, main merge, release,
+production-data operation or out-of-schedule PR action is included. The original
+163 guarded dirty-root entries and HEAD are retained. Whole-product ownership,
+all retained MCP test-engine functions, Fleet/proofs/risk/cutover, arbitrary-width
+memory, historical unsignable APPLYING recovery, full processing/crash/power-loss,
+export/import/downgrade/rollback and all affected product/platform/provider/browser
+qualification remain required; this is not release readiness.
+<!-- native-20261103-media-gateway-streaming:end -->
+
+<!-- native-20261103-media-worker-optimized:start -->
+## Current checkpoint: measured worker optimization and CI contract repair, 2026-11-03
+
+Working branch: `codex/native-media-worker-optimized-20261103`, based on exact source
+`2dde10d72e7bd87b0a1103bc5602f406892633be` (tree
+`c2bdd2963d5718a41085a8d30f24c0cf5f7d7407`). This new batch is pending its own
+cloud qualification. Preserve the original dirty worktree, index, source and data.
+Earlier dated checkpoints below are historical; full readiness remains NOT_READY.
+
+Parent [Rust run 41592910898](https://github.com/leizd/DeepSeek-Infra/actions/runs/41592910898)
+passed 1705 Rust tests with the original one Redis ignore; raw LCOV is
+96968/117325 = 82.649052% against the unchanged 80% floor. The whole workflow
+failed the unchanged 144182145-byte actual HTTP workload. Capture completed in
+0.187387 s and raw validation/spooling in 9.093471 s; normalization remained open
+at the 10.010559 s timeout. The original effect stays EFFECT_UNKNOWN and the
+original request was not repeated. This batch changes only worker dev/test
+optimization from 1 to 3 to measure that same workload again. Assertions and
+integer overflow checks stay enabled; coverage/diagnostic worker optimization
+stays 0. Release defaults, algorithms, Rust/Go source, dependencies, deadlines,
+input domains and the complete test inventory/floors are unchanged.
+
+Parent [platform run 41593327223](https://github.com/leizd/DeepSeek-Infra/actions/runs/41593327223)
+passed all six controlled Windows/Mac jobs. Independently parsed Windows results
+bind all 35 original journal cases and all 29 added media cases to that source.
+Parent [Android run 41593336359](https://github.com/leizd/DeepSeek-Infra/actions/runs/41593336359)
+independently binds 70 instrumentation and 25 app-UID custody observations across
+API 24/26/28/30/34 x86_64 emulators. These remain controlled subsets; full desktop,
+arm64 device, all product workflows and production zero-Python proof stay open.
+
+Parent [CI run 41593318029](https://github.com/leizd/DeepSeek-Infra/actions/runs/41593318029)
+has failed two frozen Windows-job structural hash assertions in Python 3.12;
+3.10/3.11 also report pytest failures. Its native Go job was still live when this
+checkpoint was written; do not redispatch it. The new Windows media step is the
+only change to the canonical original Windows job. This batch binds that exact
+additional step to its own SHA-256 and still requires the original complete job's
+unchanged SHA-256 after removing only that bound step. No workflow is changed by
+this contract repair, and no original command, timeout or assertion is removed.
+
+Next: measure the original legal 144 MB request, preserve all existing negative
+and recovery cases, qualify exact-source Rust/Go and original coverage floors,
+CI/Evidence, platform and browser gates. Retain export/downgrade/cross-version
+rollback, historical unsignable APPLYING recovery, arbitrary-width memory and
+power-loss durability, all domains/providers/Fleet/authority/cutover and the
+original MCP test engine as unfinished full-product requirements. Source-dispatch
+results do not qualify push/browser runs or a PR merge candidate.
+<!-- native-20261103-media-worker-optimized:end -->
+
+<!-- native-20261103-media-worker-profile:start -->
+## Current checkpoint: measured media phases and Windows corpus, 2026-11-03
+
+Working branch: `codex/native-media-worker-profile-windows-20261103`, based on
+measured parent `6f3603c01a6367f746b85a4b53ac4985f88de779` (tree
+`8c224c76d205f5fde872e88518cf6d9fbc7e1823`). This batch is pending its own
+cloud qualification; preserve the original dirty worktree, source, index and data.
+Earlier dated checkpoints below retain their historical status.
+
+Parent [Rust run41583322898](https://github.com/leizd/DeepSeek-Infra/actions/runs/41583322898)
+passed1705 Rust tests, the original one Redis ignore, the three new digest/IO
+tests and raw LCOV96968/117325=82.649052% against the original80%floor.
+The whole Rust workflow failed the unchanged144182145-byte HTTP workload at
+10.010306s. Verified worker timings reduced capture/hash from7.233857s on9d217aee
+to0.194434s on6f3603c0; full-document validation/raw-record spooling remained open
+at timeout. The original request remains EFFECT_UNKNOWN and was never retried.
+
+This batch gives only the worker dev/test code basic optimization, preserving
+assertions, overflow checks, algorithms and source. Coverage explicitly keeps
+the worker at its original optimization level0; diagnostic also remains0 with
+full debug information. Release defaults, protocols, source tests, input limits,
+the10-second HTTP deadline and original coverage floors remain unchanged.
+
+Parent [platform run41583562808](https://github.com/leizd/DeepSeek-Infra/actions/runs/41583562808)
+passed six controlled Windows/Mac jobs; independent reports bind actual windows,
+file requests and retained restart state to this source. The existing Windows
+journal filter actually ran35 tests:25 top-level and10 nested. It did not select
+29 image/record/compact-result/digest cases. A new mandatory Windows step runs
+those five modules and requires the exact29 passing names, retaining the old35.
+Parent [Android run41583571182](https://github.com/leizd/DeepSeek-Infra/actions/runs/41583571182)
+independently binds70 instrumentation and25 app-UID custody observations across
+API24/26/28/30/34 x86_64 emulators. These are controlled subsets, not full product
+platform, arm64 device, production authority or zero-Python workload qualification.
+
+Parent [CI run41583554362](https://github.com/leizd/DeepSeek-Infra/actions/runs/41583554362)
+was still in full Go race verification when this checkpoint was written. Do not
+redispatch a live run. Historical71661484 has37/37 original CI jobs and50 bound
+Evidence reports; it does not qualify later source or a PR merge candidate.
+
+Next: qualify this batch's unchanged actual144MB request, complete Rust/Go original
+corpora and floors, all exact-source CI/Evidence/platform/browser gates and the
+additional Windows corpus. Keep export/downgrade/cross-version rollback,
+historical unsignable APPLYING recovery, arbitrary-width memory/durability,
+all retained domains/providers/Fleet/authority/cutover and original MCP test
+engine functionality open. Full product readiness remains NOT_READY.
+<!-- native-20261103-media-worker-profile:end -->
+
+<!-- native-20261102-compact-patch-result:start -->
+## 2026-11-02 media record parent proof and bulk-streaming candidate
+
+Parent `52da66155658891ea2c4355de7f4bc05a46b609e`/run41434727285 actually passed
+original/native/retained HTTP200 for a4321460-byte typed record with a447-byte
+v2 signed envelope, full metadata, original claim and complete launcher restart.
+Clippy,1679Rust tests (one original Redis ignore),15crates, independent raw LCOV
+95108/115208=82.55329491007569% (original80%floor) and8targeted Go tests passed.
+Its mandatory144MB library case still returned503/EFFECT_UNKNOWN; the workflow
+failed. This is not fullGo95%/race/Android, current-source CI or promotion proof.
+
+The unqualified candidate streams raw images/publication and uses a disk offset/
+digest record spool, preserving full EOF/last-key parsing, first match/delete-all,
+clock ordering and post-mutation1000 retention. Private schema2 validates old
+schema1+identity before additive migration; old rows/receipts remain byte-identical.
+RETAINING ownership precedes copies, PREPARED/SEALED commit atomically, and bounded
+fair retries persist progress across restarts and retire failed private preparations.
+Separate-connection startup/periodic maintenance retires idle images; terminal
+RPCs perform no cleanup or maintenance-gate wait. Signed terminal loading has no
+image filesystem dependency; raw-image retirement requires the original signed
+receipt and retained result custody, and GC errors never hide terminal outcomes.
+New tests cover these boundaries and100updates, but execution is pending. All
+original PROCESS/index crash and signability tests and actual capacity gate remain.
+
+Explicit export/downgrade/cross-version rollback, arbitrary record-width memory,
+Windows directory/power-loss behavior, old unsignable APPLYING recovery, current
+actual144MB success and full exact-source originalCI/coverage/platform/Evidence
+remain required. [Detailed boundaries](../../docs/NATIVE_MEDIA_CAPACITY_COMPATIBILITY.md).
+Original MCP pytest behavior remains unfinished under the unchanged no-production-
+Python requirement. All product/server/desktop/Android/background, authority,
+provider/Fleet/proof, zeroPython/serverTypeScript, security/performance/upgrade
+and complete cutover requirements remain ACTIVE/**NOT_READY**. No local native
+build, main merge, PR update, release or production-data operation is performed.
+
+<!-- native-20261102-compact-patch-result:end -->
+
+# Current checkpoint: validate the final receipt before media publication, 2026-11-02
+
+Parent70df's actual legal large-library HTTP200-versus-native503/EFFECT_UNKNOWN
+RED is preserved. A fresh-context review identified a second boundary: plans
+permit4MiB but the original signer permits2MiB and was called after publication.
+Parente6a76058/run41402282756/job125136509045 actually reaches the real-journal
+regression: the original signer rejects the plan and publication returns error,
+but library SHA changes16be32c0to72a46e69. The original raw log and exact
+source are preserved; this is physical-write runtimeRED, not a compile failure.
+
+This child extracts the exact existing signer validation/message builder and
+uses it before APPLYING, workspace generation or library publication. The
+original validation block,2MiB bound, signing domain, signed bytes, protobuf,
+identity/fence checks and final post-effect signing remain. Validation returns
+no signature. The regression is byte-unchanged; all old tests/corpora and the
+mandatory large-library process case remain. Native proof is still pending.
+
+This is a required safety prerequisite, not large-record or whole-library
+capacity completion. Strict compact-result custody/typed reads must restore
+legal large-record success; bounded images, explicit reversible legacy-journal
+migration, sealed chunks, deterministic PROCESSING recovery, parser/retention
+parity and measured storage/memory/disk-full/lease-expiry behavior remain open.
+All original full server/desktop/Android/background features, authority/recovery/
+cutover/provider/Fleet, originalMCP, zeroPython/serverTypeScript, platform/
+upgrade/backup/security/performance and exactCI/Evidence remain ACTIVE/NOT_READY.
+No native build runs locally; original163dirtyentries/HEAD/index/data are
+preserved. NoPR/mainmerge/release or realproduction operation is performed.
+
+# Current checkpoint: reproduce unsignable media publication before repair, 2026-11-02
+
+The actual large-library process RED70df4d57/run41390652958 preserves original
+HTTP200/610normalized records but native503/EFFECT_UNKNOWN for144182145bytes;
+native read/auth/control prerequisites pass. This failure stays recorded.
+
+Independent source review also finds planning permits4MiBoutcomes while the
+unchanged original signer accepts2MiB; publication currently precedes signing.
+This test-only child constructs18legal120000character metadata fields, calls
+the actual journal/unchanged signer and requires that an unsignable result
+cannot change library bytes or generation, stays PREPARED and can be closed by
+the original signed query. Until an actual run fails this guard, this new
+publication counterexample is UNPROVEN. Production code and every existing
+case/timeout/coverage floor stay unchanged. No local native build runs.
+
+Required follow-up: prevent publish-before-signability using the same original
+validator without signing early or weakening it; implement large-record legal
+success via strict compact-result custody/typed reads, bounded full-library
+images, explicit reversible journal migration, sealed chunk integrity and the
+PROCESSING recovery image, preserving complete parser/retention semantics.
+Neither refusal nor600record bulk success completes these requirements.
+All full server/desktop/Android/background features, authority/recovery/cutover,
+provider/Fleet, originalMCP, zeroPython/serverTypeScript, platform/upgrade/backup,
+security/performance and exactCI/Evidence remain ACTIVE/NOT_READY. Original
+worktree/index/data remain preserved; noPR/mainmerge/release/production action.
+
+# Current checkpoint: prove retained media capacity through real native HTTP, 2026-11-02
+
+Parent a28f238e has independently qualified full Rust1674 tests/82.53991798272402%
+against the original80% floor, online Skill/oracle cases, and six controlled
+Windows/IntelMac/ARMMac app/profile/modal/lifecycle jobs. Complete37jobCI
+41387158014 remains separately observed. Those results do not qualify a child.
+
+The original media normalizer permits multiple120000character metadata fields
+and its writer retains1000records. Native worker reads/publications are bounded
+at128MiB. This test-only child keeps the original18record fixture and every
+existing case, appends600legal records only in a new cloud-only case, and
+requires original authenticatedHTTP success plus real retained metadata before
+actual authenticated Go/Rust PATCH, generation/effect checks and full restart.
+Small source tests never serialize/write its144MB data locally. Actual HTTP,
+request duration, process-bound RSS/high-water and raw replies are saved. The
+original timeouts, ownership/proof/fence/recovery checks and coverage floors
+remain; no production Rust/Go/Proto implementation changes.
+
+This counterexample remains UNPROVEN until its exact cloud run reaches the
+actual native request. All original34checks/7coverage remain plus the mandatory
+capacity process step; no existing case is removed. Full retained server,
+desktop, Android and background features, original MCP engine, capacity,
+authority/recovery/cutover/provider/Fleet, zeroPython/serverTypeScript, installer,
+upgrade/backup/security/performance and exactCI/Evidence remain ACTIVE/NOT_READY.
+Original163dirtyentries/HEAD/index/data are preserved. NoPR/mainmerge/release
+or realproduction operation is performed.
+
+# Current checkpoint: retain original Skill failure trace status, 2026-11-02
+
+Sourcec178badb passed strict Clippy and all-feature tests, but its new Skill
+process probe failed: it expected trace status failed. The original Python
+runner and unchanged Rust trace writer both specify error; the separate Skill
+run status remains failed. The actual report contains HTTP502, exactly one
+real provider request, one failed run, traceerror, no persisted key, no seeded
+SQL, and all20offline comparisons plus owner/recovery/restart guards passing.
+This child changes only that single probe expectation to the original contract.
+No production code, accepted state set, workflow, case or threshold changes.
+
+The complete34check/7coverage Rust workflow must pass on this frozen source,
+then complete37job CI and actual Windows/both-Mac product gates must qualify
+the same source. Parent tests or coverage never qualify this child. All original
+full-product, authority/recovery/cutover, zero-Python/server-TypeScript, original
+MCP, platform/upgrade/backup/capacity/security/performance and exact CI/Evidence
+requirements remain ACTIVE/NOT_READY. Build caches stay in Actions; original
+worktree/index/data stay preserved. No PR, main merge or release is performed.
+
+# Current checkpoint: retain strict Rust lint for online Skill execution, 2026-11-02
+
+Parente59b7143's complete CI and full Rust checks both stop at the original
+Clippy-Dwarnings gate. Exact logs identify only two question_mark suggestions
+in the extracted native chat preparation. This child replaces those two
+identity error matches with? propagation; validation order, error values and
+all shared Skill/chat behavior remain. No lint allowance or gate is removed.
+
+The actual c45a9c9d online HTTP501 functional RED remains the baseline. The
+original33Rust checks plus the new mandatory Skill/oracle step, all-feature
+tests,15crate80floor,20offline HTTP cases, original-callable fixtures and real
+provider success/rejection cases all remain required. First qualify the full
+bounded Rust workflow; then run complete CI and both-Mac/Windows product gates
+on this same immutable source. These later gates are staged, never waived.
+
+No native compilation runs locally. Python executable inputs match the parent
+whose original Linux/Win32 mypy each passed1014files; formatting, source inventory
+and docs are checked on this child. Parent source results do not qualify this
+Rust edit. Every original retained server/desktop/Android/background feature,
+ownership/recovery/cutover, zero-Python/server-TypeScript, original MCP engine,
+platform/upgrade/backup/capacity/security/performance and exact CI/Evidence
+requirement stays ACTIVE/NOT_READY. Original worktree/index/data are preserved.
+
+# Current checkpoint: implement retained online Skill execution, 2026-11-02
+
+Baselinec45a9c9d actually compiles and fails the new legal online request:
+run41370273799/job125039048704 reaches the expected HTTP501 instead of200,
+after authentication/owner checks. The original raw log and exact source are
+retained. This is functional RED, not a compile or fixture failure.
+
+The candidate reuses one native chat preparation and non-streaming cascade/tool
+execution path, makes Skill dispatch asynchronous, and retains every existing
+pre-execution owner check and terminal artifact/project/run/trace path. It keeps
+the original four output fields and fixes compare_search_results search policy.
+Six offline original-callable fixtures protect tool/memory/model/request shape.
+All20offline HTTP oracle cases and restart/owner/restore checks remain. The old
+extra501gap check becomes a separate real provider401/failed-journal/no-retry
+case on an empty fixture. Original33Rust checks remain plus one mandatory Skill
+step; no original80/95floor, test timeout or coverage omission is weakened.
+
+This changed Rust source is not qualified by parent6ff's actual platform proof
+or its independently verified1672tests/82.41997percent Rust result. Actual new
+native compilation/tests and complete CI/Evidence/platform acceptance stay in
+Actions. The original worktree/index/data remain preserved. Full retained
+server/desktop/Android/background ownership/recovery, original MCP test engine,
+zero-Python/server-TypeScript, provider/Fleet/capacity/security/performance and
+all remaining platform/upgrade/backup requirements stay ACTIVE/NOT_READY.
+See [the online Skill contract](../../docs/NATIVE_SKILLS_ONLINE_EXECUTION.md).
+
+# Current checkpoint: actual retained online Skill request baseline, 2026-11-02
+
+Parent6ff4b8ab independently passes both actual Mac CPUs and Windows lifecycle
+regressions, including8real modal-cancellation cases. Its complete CI and full
+Rust gates are still separate pending exact-source qualifications.
+
+The current production Skill run accepts offline requests but refuses every
+valid-key online request with501. A new test-only real provider-socket case
+requires legal online success through the production authenticated router,
+original content/model/usage/diagnostics and actual artifact/project/trace/run
+records. It also checks owner denial before effects, restart, environment key,
+path-ID precedence, persist=false, restore fence and conclusive upstream denial.
+Production implementation is unchanged; actual runtime RED is not assumed from
+the source assertions. All native compilation stays in Actions.
+
+The repair must reuse the native chat composition and existing Skill owner and
+terminal-record paths. No Python fallback, simplified parallel executor, hidden
+scope reduction or whole-product readiness is allowed. Full migration remains
+ACTIVE/NOT_READY with all original capability, ownership/recovery, platform,
+MCP, zero-Python/server-TypeScript, security/performance and CI/Evidence gates.
+See [the online Skill contract](../../docs/NATIVE_SKILLS_ONLINE_EXECUTION.md).
+
+# Current checkpoint: repair verified native Mac modal cancellation, 2026-11-02
+
+Baseline3303e0b4 actually failed on both Intel and Apple silicon in
+[run41312771718](https://github.com/leizd/DeepSeek-Infra/actions/runs/41312771718):
+real visible modal/main thread observed, Destroy reached, original context
+cancellation did not settle within5seconds. Production window bytes were
+unchanged in that baseline. Both original raw failure reports are retained.
+
+This repair tracks all owned AppKit modal stack levels, aborts each current
+modal during cancellation, then stops and wakes the outer application loop
+after the final level returns. Accepted results cannot escape a cancelled host.
+Actual cloud cases cover alert/confirm/prompt plus an original stop-confirmation
+nested inside a real JavaScript alert. TestMain preserves a failing test's
+nonzero exit even when the native initial thread is stuck. Original5second,
+45second and15minute bounds and all prior window/profile/Windows gates remain.
+This source is not runtime-qualified until its own cloud reports pass.
+
+Parent597f9f9a complete CI41309085900 now reports37successful jobs; raw complete
+gate qualification remains separate, and parent results do not qualify this
+changed native source. Full migration remains NOT_READY: complete source CI,
+retained capabilities/ownership/recovery/zero-Python/server-TypeScript,
+Mac UI/install/upgrade/backup/supported OS, Android ARM64 execution and original
+MCP test-engine parity all remain required. Native builds stay in Actions and
+the original local worktree/index/runtime data remain unchanged.
+See [modal evidence and scope](../../docs/NATIVE_MACOS_MODAL_CANCELLATION.md).
+
+# Current checkpoint: reproduce cancellation inside a real Mac modal loop, 2026-11-01
+
+Source597f9f9a independently qualifies both actual Mac application/file/restart
+workloads:28report members,14original HTTP responses,20native process snapshots
+and4owned app frames. Original bytes, upload ID, static React hash and public
+writer fencing1to2 are checked. Actual DOM interaction and native modal behavior
+remain separate. Complete CI41309085900 is still observed, not assumed green.
+
+Apple distinguishes stopping a modal loop from stopping the outer application
+loop. Native Destroy currently has no explicit modal exit. The new actual
+WebKit JavaScript-alert probe observes a real visible modal on the initial
+thread, then cancels only the original application context and requires the
+original callbacks and app loop to settle within5seconds. It never substitutes
+a test abort. Production Go/Rust/Proto remain byte-identical for this baseline;
+no runtime failure or fix is claimed until actual Intel/ARM execution. Existing
+window/profile/Windows gates and15minute/45second bounds are preserved.
+See [the actual modal cancellation case](../../docs/NATIVE_MACOS_MODAL_CANCELLATION.md).
+
+All retained product/ownership/cutover/recovery, real DOM/chooser/dialog/download/
+user-close, platform/package/upgrade/legacy/backup/supported-OS, zero production
+Python/server TypeScript, security/performance and exact CI/Evidence obligations
+remain ACTIVE/NOT_READY; the retained MCP pytest engine remains unfinished.
+No local native build, out-of-schedule PR, main merge, release, production data
+operation or original-workspace source application is included.
+
+# Current checkpoint: retain the actual Mac workload responses, 2026-11-01
+
+Source6fd0a5de has all6 platform jobs successful, including both actual Mac
+five-binary app workloads and complete restarts. Each seven-member report has real
+process/window/build/provenance observations but omits the original HTTP
+response bodies; it is not sufficient for an independent file-byte recheck.
+The stronger child records seven exact response bodies and actual status/method/
+URI/length/SHA256, binds the upload ID to both reads, compares retained bytes
+across restart, and binds served React HTML to the original static fixture.
+Missing/altered/misbound responses and success flags alone are refused; bearer
+content is refused before writing and evidence is never overwritten.
+
+No production Go/Rust/Proto, API behavior, timeout, original platform job, test
+corpus or coverage floor changes. The same actual two-architecture app gate
+will be rerun for this child before raw business qualification. Current parent
+019c847c retains independent original9+all24PROCESS recovery and window/profile
+evidence; no parent result transfers to the child. Full feature/ownership/
+cutover/recovery, zero production Python/server TypeScript, platform/package/
+upgrade/legacy/backup/supported-OS, security/performance and exact CI/Evidence
+remain ACTIVE/NOT_READY, including the retained MCP pytest engine.
+
+See [the actual Mac product gate](../../docs/NATIVE_MACOS_PRODUCT_CLOUD_VERIFICATION.md).
+No out-of-schedule PR, original-root source application or local native build.
+
+# Current checkpoint: run the complete Mac native application, 2026-11-01
+
+Exact source019c847c independently passes the original9 and all24 PROCESS
+recovery cases, with568 raw report members and all12 final inode-alias cases
+verified. Its Windows/Mac workflow41300405420 has all4 jobs successful; the
+exact-source Intel/Apple-silicon window and three-process persistent-profile
+probes are independently qualified. Rust and Android jobs are successful;
+complete CI and each exact-source raw qualification remain separate.
+
+The next gate builds actual Go control/launcher/desktop binaries with the
+original checksum-pinned Linux compiler, then builds real Rust worker/gateway
+on both actual Mac architectures. It starts the original whole app, binds
+real process ancestry/start identity/UID/binary hashes and WindowServer frame,
+performs one authenticated public file workload, gracefully stops all observed
+processes, and requires original file/provenance continuity with advanced writer
+fencing after a complete restart. Stores are never seeded and signing keys are
+not inspected. The original Windows job and existing window limits remain
+unchanged. This new product gate is unexecuted until its exact cloud run passes.
+See [the concrete Mac product gate](../../docs/NATIVE_MACOS_PRODUCT_CLOUD_VERIFICATION.md).
+
+Retained React DOM/native UI/default-browser/upgrade/legacy-profile/backup/all-OS
+behavior, whole-product ownership/recovery/features, zero production Python and
+server TypeScript, security/performance, exact-source CI/Evidence and the retained
+MCP pytest engine still require completion. No scope or coverage floor is
+reduced. Full migration stays ACTIVE/NOT_READY; no out-of-schedule PR is changed.
+
+# Current checkpoint: observe procfs exit races without weakening crash evidence, 2026-11-01
+
+Exact source df16f983 recovery run41288289654 passes eight original cases
+but fails vector DELETE after all seven SIGKILL sends succeed. Its24 PROCESS
+cases are not qualified. Both procfs stat readers now accept ESRCH as a task
+that exited during read, alongside ENOENT; permission/I/O errors propagate,
+pidfd/start-time refusal and mandatory actual worker/launcher termination stay
+unchanged. Five functional RED cases reproduce the gap;15 new cases pass.
+See [the bounded failure and regression review](../../docs/NATIVE_MEDIA_PROC_EXIT_REVIEW.md).
+
+The df16f983 controlled Intel/Apple-silicon visible window and three-process
+profile continuity/isolation probes pass independently; full macOS product
+behavior is not qualified. Parent082e4d57 has separate9+24 recovery evidence;
+no parent result qualifies this cumulative child. New exact-source cloud
+CI/Rust/recovery/Windows/Android qualification and all retained product, unique
+writer, recovery, zero-Python/server-TypeScript, platform/package, security and
+performance requirements remain ACTIVE/NOT_READY. No PR is updated outside
+the daily09:00 scheduled run. Original local checkout remains preserved.
+
+# Current checkpoint: audit the bounded native Mac process entries, 2026-11-01
+
+Source475124e native Mac/Windows workflow41284368750 passes all four jobs,
+including the independently qualified two-architecture visible WebKit window.
+Its complete CI41284373617 fails all three Python-version jobs on the same
+zero-Python source-contract error: the new bounded native Mac browser helper's
+os/exec import was not recognized. Coverage still reports95.58%; the original
+95% gate is not lowered. Parent082e recovery41282782837 has all14 jobs green
+(original9 and12 PROCESS cells), and its original reports are being separately
+verified. None of these results qualify this cumulative child source.
+
+The source admission fix permits exactly the known native desktop browser
+helper with its fixed sibling program, validated local/IP HTTP URL, no URL argv,
+exact session-only environment,8s deadline,1s WaitDelay and checked exit. The
+initial-thread browser entry must select NSWorkspace only. It also audits the
+new same-PID bundle self-exec separately: only current native executable bytes,
+private owned/non-linked profile, bounded atomic copy and unchanged argv/env are
+admitted. Generic direct/aliased/dot-import syscall/unix Exec, arbitrary paths,
+interpreters, extra arguments, inherited provider credentials, omitted waits or
+guards remain refused. The original eight source checks remain eight, and
+runtime/deployment/provider verification remains explicitly false/UNVERIFIED.
+26 focused cases plus the nine original gate tests pass;24 negative boundaries
+remain refused. Functional RED evidence excludes the metadata-only missing
+counter and preliminary fixtures. Production runtime code is unchanged.
+
+This cumulative child retains the frozen3dd2b28 actual profile restart probe:
+three independent native UI processes per architecture, original browser-state
+hashes, namespace absence, supervised PID and source/binary/callback/shutdown
+bindings. That new probe is still unexecuted and grants no persistence result.
+Full exact-source CI/Evidence/recovery/platform and all retained feature/
+ownership/package/zero-Python/server-TypeScript/security/performance obligations
+remain ACTIVE/NOT_READY. No PR is changed outside the daily scheduled run.
+
+# Current checkpoint: qualify native Mac profile continuity, 2026-11-01
+
+Source475124e run41284368750 now passes both actual Intel/Apple-silicon native
+window jobs. Ten top-level native tests across both architectures, including
+12 activation-state subcases, are independently bound to the exact source,
+SDK/build receipt, actual copied binary SHA and ten report members. Each actual
+window is visible on the main thread in Regular activation state; authenticated
+WebKit DOM, original native action/response completions and dispatched context
+shutdown pass. Profile restart/persistence, complete desktop and product flags
+remain false. Complete CI41284373617 and Rust41284378865 remain independent
+current-source jobs; parent082e recovery41282782837 is a different source.
+
+The follow-up adds only test/verification code. On each actual architecture it
+starts three separate native UI processes at the same HTTP origin: profileA
+writes controlled localStorage/IndexedDB and a persistent HttpOnly cookie; a new
+profileA process must read all original values; a distinct profileB must expose
+none. Only the writer's page receives the expected value, and all reads use the
+actual WebKit storage APIs. Cookie presence and raw value hashes are independently
+recorded, including complete absence for B. Each child must retain its supervised
+PID through bundle exec, show a real native window, complete original callbacks,
+settle SIGTERM and exit cleanly. Every child binary/source/run/phase and report
+is rebound by the parent. No direct SQL seed, storage fallback, retry or sleep
+substitutes for actual state retention. Executables/profiles stay in the cloud;
+only bounded reports and logs return. Original Windows/window jobs, 60s window
+bound, pins, coverage floors and all existing tests remain required.
+
+This new probe has not executed yet and grants no persistence qualification.
+Cold/physical power loss, legacy profile migration, real binary upgrades, full
+Rust/Go product/UI/backend/platform/package and the complete ownership/recovery/
+feature/zero-Python/server-TypeScript/security/performance migration remain open.
+ACTIVE/NOT_READY.
+
+# Current checkpoint: verify native Mac activation state, 2026-11-01
+
+Actual2410572 run41283592581 verifies all required classes and registered
+callbacks on Intel/Apple silicon. The system publishes NSWindow/WKUI/navigation
+protocols but omits formal NSApplication/WKDownload delegate metadata; both
+platforms get beyond that corrected check, then fail the activation setter
+return check. The actual visible-window workload still has not passed.
+
+The follow-up requires the public activationPolicy getter to report Regular.
+An already-Regular app needs no policy switch. A setter's true return without
+Regular state is rejected, and a false return is accepted only when the actual
+required state is observed. A missing app or non-main-thread creation fails.
+Six native logic cases cover these outcomes. The actual native window gate also
+requires Regular state together with all existing visible/DOM/cookie/real native
+callback/exact executable/cancellation checks. No supported UI state is inferred
+from a setter return, and no window or capability failure is ignored.
+
+Parent082e4d5 recovery run41282782837 remains independently live. Exact-source
+native Mac/recovery/full CI/Evidence, retained profile/UI/product/backend/platform/
+package/ownership/recovery/zero-Python/server-TypeScript/security/performance work
+remains required. Full migration remains ACTIVE/NOT_READY.
+
+# Current checkpoint: bind native Mac callback capability, 2026-11-01
+
+The082e4d5 source cross-builds the real desktop program/test host for Intel and
+Apple silicon. All three native profile/update/link-denial/browser-environment
+tests pass on both architectures. Both actual window tests then fail at the
+blanket Objective-C protocol-metadata requirement before a visible window.
+Their original logs remain retained. This is not native-window qualification.
+
+Apple permits Objective-C conformance by implementing the declared methods;
+WebKit selects its public delegate callbacks with respondsToSelector. The
+follow-up records optional formal metadata, still adopts it when published,
+and always registers every required callback. Every required platform class
+and every registered selector must actually exist or startup fails. The actual
+window gate now also requires positive Cocoa navigation-action, navigation-
+response and main-thread dispatch callback counts, so neither an absent handler
+nor a default WebKit navigation can substitute for the implemented round trip.
+Unknown/retired delegates cancel navigation. No test, deadline, pin or original
+Windows job is removed. Native blocks are still completed through their original
+Apple ABI and must succeed on both architectures.
+
+The082e4d5 media recovery matrix remains live; its hidden-Vite transfer fix is
+retained byte-for-byte. This new source still requires exact-source native Mac,
+recovery and complete CI/Evidence/platform verification. Profile restart/legacy
+migration, real retained UI/product/backend lifecycle, all supported OS releases,
+packaging/signing and the entire ownership/recovery/feature/zero-Python/server-
+TypeScript/security/performance matrix remain mandatory. ACTIVE/NOT_READY.
+
+# Current checkpoint: preserve the cloud fixture file set, 2026-11-01
+
+Source9ace5f9 recovery run41280484842 completes all nine original cases, but
+all12 new matrix cells fail before PROCESS execution because their downloaded
+file set lacks the source-built ui/.vite/manifest.json. Its hash/size/path are
+present in the retained producer receipt. The pinned artifact uploader excludes
+hidden files by default. This is a fixture-transfer failure, not24 qualified
+crash cases; the exact file-set check correctly refuses incomplete input.
+
+The follow-up enables hidden-file inclusion only for the existing dedicated
+cloud binary/UI fixture path. The producer includes exactly the two built native
+programs and the built UI; no runtime profile, private signing state or cache is
+copied. Exact source/tree/run/attempt, all members, hashes, ELF headers, linkage,
+timeouts, original9, all24 PROCESS cases and original coverage floors remain
+required. An offline regression executes the actual consumer with inert files:
+the original transfer fails at the same file-set assertion; corrected transfer
+succeeds, and five missing/extra/modified/mixed/duplicate inputs remain refused.
+These are Python verifier tests, never locally built/executed native programs.
+
+The cumulative source also contains thea8c0241 AppKit/WebKit implementation.
+Both real Mac architecture tests, persistent/retained UI functionality, complete
+exact-source CI/Evidence and the full product ownership/recovery/feature/package/
+zero-Python/server-TypeScript/security/performance matrix remain open. All broad
+readiness flags stay false and the migration remains ACTIVE/NOT_READY.
+
+Artifact semantics: [pinned upload-artifact documentation](https://github.com/actions/upload-artifact/blob/ea165f8d65b6e75b540449e92b4886f43607fa02/README.md).
+
+# Current checkpoint: implement the retained native macOS window, 2026-11-01
+
+Actual9ace5f9 run41280489970 executes Intel and Apple silicon and fails at the
+same unavailable production window entry; the Linux cross-build and original
+Windows job pass. The source follow-up adds AppKit/WKWebView, a private stable
+profile bundle and main-thread browser mode using the existing purego pin and
+no cgo/Python/business bridge. Native chooser/download/dialog/edit/close hooks
+are implemented but unqualified until actual runtime evidence is collected.
+The original Windows job, toolchain pins and coverage floors are unchanged.
+
+Parentb98c81b full CI41255611520 is now independently qualified: all37 jobs,
+Go16433/17293, AndroidGo16753/17631, Rust94391/114522,
+Python83525/87385, complete race corpora and50 Evidence hashes. Those passes
+belong only to that source. The9ace5f9 recovery matrix is still live and cannot
+qualify this new source. The complete retained media/MCP/ownership/recovery/
+platform/package/zero-Python/server-TypeScript/security/performance obligations
+remain ACTIVE/NOT_READY. No main merge, PR change, release or real data operation.
+
+# Current checkpoint: isolate the complete PROCESS corpus, 2026-11-01
+
+The7478c31 source run41264942053 is terminal FAIL: original9 PASS and11
+SQLite PROCESS PASS. All five completed final cases actually reuse the initial
+inode, retain a different live processing predecessor, and preserve the final
+publication across recovery. SQLite reaches the unchanged20-minute serial step
+limit during video-final; its residual listener prevents SQLiteVec preflight.
+There are13 unqualified cases. The286 reports and raw timeout remain retained.
+
+The source follow-up keeps all29 other original steps and the60-minute job
+limit, and moves PROCESS to12 required backend/kind cells on independent
+runners, max four at once, each with the original20-minute cap and both phases.
+The default verifier still selects all six kinds. An explicitly selected cell
+cannot claim a complete backend qualification. The final required aggregator
+checks original9 plus all24 unique same-source/tree/run/attempt cases, their
+original Go/Rust fences, private plan binding, signed outcome, native process
+identities, actual kill, predecessor and retained final publication. Missing,
+duplicate, mixed or partial evidence fails. Native binaries and the built UI
+stay in the cloud and are hash-verified before execution; only reports return.
+
+Thed1266c7 macOS baseline did not execute: GitHub rejected its workflow because
+runner.temp is not allowed in job-level env. The profile now uses the allowed
+github.workspace context; checksum-verified actionlint confirms the correction.
+This is a workflow fix, not a native-window implementation or runtime PASS.
+The real macOS baseline, AppKit/WebKit host and complete retained features are
+still required. Full exact-source CI/Evidence/coverage/platform, ownership,
+MCP/media/provider/config/capacity/recovery/package/zero-Python/server-TypeScript/
+security/performance migration remain ACTIVE/NOT_READY.
+
+# Current checkpoint: witness each publication predecessor, 2026-11-01
+
+Source f12d1701946046fb8562791d662b38bfdb4371dc, tree
+5d48008d488afec80767baf15d7002e1fd160911, recovery run41261832532
+is terminal FAIL. Its196 hash-verified reports retain all nine original PASS
+cases and the first webpage-processing PASS on each of SQLite and SQLiteVec.
+Both next webpage-final cases fail the original initial-inode inequality;
+the remaining20 PROCESS cases were not executed. These two passes are not the
+required24-case recovery qualification or complete source CI.
+
+The PROCESS observer now requires the real processing publication before the
+final publication, binds their original Go/Rust operation, epoch, claim, plan
+and inner preparation, and compares each inode to its immediate predecessor.
+A final inode may equal the initial inode after two atomic replacements. Missing
+processing evidence and in-place writes at either boundary still fail closed.
+A single descriptor binds bounded library bytes to their file identity; a
+concurrent replacement or in-place change is retried rather than mixed.
+The original tracer, delays, timeouts, all24 cases, production code, protocol,
+workflows and coverage floors are unchanged. Local observer regression has
+218 PASS and the same three host skips; Linux/Win32 mypy each check1002 files.
+
+Still required: all24 actual cloud cases and original nine at this new source,
+full exact-source Go95/Android-Go95/Rust80/Python95/race/CI/Evidence and platform
+qualification, plus the full retained feature, ownership, recovery, package,
+zero-Python/server-TypeScript, security and performance matrix. macOS window
+implementation and the retained MCP test engine remain open. ACTIVE/NOT_READY.
+
+# Current checkpoint: bind the inner PROCESS preparation, 2026-11-01
+
+The parentb98 run41255601880 passes all nine original recovery cases, but both
+new backend cases fail on their first webpage-processing metadata check after
+real worker SIGKILL and automatic original-operation APPLIED. The180 verified
+reports now retain both index snapshots: every original namespace value is
+unchanged; exactly the original operation's clear/final keys are added, both with
+the same inner preparation digest. It differs from the outer journal digest.
+
+The previous observer incorrectly used the journal preparation_sha256, which
+binds the complete unsigned planned outcome. Index phase markers instead bind
+processed.preparation_sha256 inside that outcome: the SHA256 of process.pb.
+This correction reads the original journal through a read-only connection,
+decodes its existing versioned Protobuf using the frozen descriptor and existing
+pinned offline tooling, verifies the original operation/fences/request hash and
+library hashes, then hashes the retained private preparation file. No private
+signing key or raw claim/plan/private payload is exported. The inner digest is
+captured before SIGKILL and remains immutable during recovery and another full
+restart; index comparison still permits exactly two new original-bound keys.
+All old namespace values, foreign operation markers, unrelated rows and vectors
+remain protected. No production Go/Rust, protocol, workflow, pin, filter, timeout
+or original coverage floor changes. The actual24-case re-run remains pending.
+
+The new observer corpus has202 tests:199passed and the original3 host skips.
+Original-parent comparisons reproduce the wrong-digest check and absent binding;
+typed fixtures reject corrupt plans, rebound fences/requests and missing/changed
+private files. Full Ruff and Linux/Win32 mypy cover1002 files under the original
+configuration. One earlier asynchronous RED capture actually passed and is
+explicitly excluded; frozen-parent RED and the separate intent-hash RED are
+preserved. No local Go/Cargo build/test or Docker stack runs.
+
+Parentb98 has two qualified105-family/624-case focused Go race corpora and actual
+six-kind force/read/restart execution; controlled Windows app/file restart and
+five Android x86_64 emulator levels have separate source-bound evidence. Android
+packages include both arm64-v8a/x86_64, but ARM64 device execution, all desktop/
+Android features, production promotion and global zero-Python acceptance are
+not inferred. Its complete Rust jobs pass; current report qualification is
+recorded separately. Its full CI still awaits the complete Go race/Android flow.
+Earlier parent8b's37 original CI jobs and50 Evidence artifacts are qualified at
+Go95.026889%, Android-Go95.014463%, full-CI Rust82.421718% and Python95.583910%.
+These parent results do not qualify this new source.
+
+The full server/desktop/Android/background migration remains ACTIVE/NOT_READY.
+Retain every recovery commit phase, provider/OCR/credentials/progress/config/
+capacity/backup feature, the unchanged MCP test-engine requirement, ownership,
+zero-Python/server-TypeScript, platform/security/performance/CI/Evidence/release
+acceptance. macOS still has an unavailable native window host and remains an
+implementation task. Preserve the dirty root and keep all compiler/cache/image
+work in GitHub Actions. Do not merge main, release, touch real data or mutate PRs
+outside the daily09:00 Asia/Shanghai batch.
+
+---
+
+# Current checkpoint: bind PROCESS index phase evidence, 2026-10-31
+
+At parent8b26c0ff/run41203337217 the nine original recovery steps pass. Both
+new backend cases reach actual worker SIGKILL, exit every original process and
+automatically settle the same original Go/Rust operation as APPLIED. They then
+fail MEDIA_PROCESS_CRASH_NAMESPACE_METADATA_CHANGED. They do not qualify the
+24-case corpus: only the first webpage-processing case ran on each backend.
+
+The observer compared the entire rag_meta map to its pre-operation value. The
+production transaction deliberately adds clear/final phase markers under the
+original operation ID, each containing the original preparation SHA256. An
+offline reproduction confirms the old observer rejects exactly those additions;
+the old cloud reports did not retain the two index snapshots, so the actual
+metadata values still need independent confirmation in a new run.
+
+This child permits exactly those two new keys, bound to the witnessed original
+operation and preparation, and still requires all original namespace keys,
+foreign operation markers, rows and vectors unchanged. A nonempty target project
+also preserves same-media rows/vectors belonging to another project. Both index
+snapshots are now retained before assertions, including on failure. Nineteen
+focused regressions first fail; the complete178-case observer corpus has175
+passed and the same three host skips. No production source, workflow, original
+recovery case or coverage floor changes. Actual24-case and this child's complete
+CI/Evidence/platform results remain CLOUD_PENDING.
+
+Parent8b's complete Rust workflow has two successful jobs; report qualification
+is recorded separately. Its full CI is still in the complete Go race step after
+the original Go95 gate succeeded; exact profile/Android-Go totals remain pending.
+Those parent observations are not qualifications of this new source.
+
+The full server/desktop/Android/background migration remains ACTIVE/NOT_READY.
+Every original recovery phase, OCR/provider/configuration/capacity/backup feature,
+retained MCP test engine without a Python exception, production ownership,
+zero-Python/server-TypeScript, platform, security, performance and exact-source
+CI/Evidence/release requirement remains open. Keep compilation and containers in
+GitHub Actions, preserve the dirty workspace, and keep PR handling in the daily
+09:00 Asia/Shanghai batch only.
+
+---
+
+# Current checkpoint: external recovery observer corrections, 2026-10-31
+
+Native recovery run41197847611 at7228a63a has164 verified report files. The new
+SQLite/SQLiteVec PROCESS observers failed before business admission because the
+media-only HTTP helper rejected `/api/control/status`; no processing semantic
+failure is inferred. The old PATCH observer held the actual final publication
+with original GoDISPATCHED/RustAPPLYING rows, then encountered ProcessLookupError
+before proving complete process exit. The exact racing call was not captured.
+Other CREATE/DELETE/source-sync reports do not erase those three failed gates.
+
+Use the existing bounded control observer for startup health, retaining the
+media helper's path restriction. Bind signals with Linux pidfds and recheck
+original start ticks; never signal a reused PID. A vanished peer cannot count as
+frozen. Termination may only accept independently confirmed exit. Reap an
+already exited tracer through its original Popen handle, kill the root launcher
+last, and explicitly require the worker's SIGKILL delivery and every original
+process's exit. All actual re-execution remains CLOUD_PENDING.
+
+The inherited f1e488f6 Go tests preserve105 families and target the original
+16416/17293=94.928584% RED,13 covered statements below95%. Its dispatch suffered
+an ambiguous connection failure with no remote run observed; do not assign old
+results to it. This corrected child must run the complete inherited tests and
+unchanged95/95/95/80 gates at its own exact source. Production code is unchanged.
+
+The full server/desktop/Android/background migration remains ACTIVE/NOT_READY.
+No feature, recovery phase, provider/OCR/configuration/capacity/backup behavior,
+MCP test-engine requirement, ownership, zero-Python, platform/security/performance
+or full CI/Evidence/release requirement is waived. Preserve the dirty root;
+native compilers/caches/images stay in the cloud. No main merge, release, real
+production data or unscheduled PR is authorized by this observer correction.
+
+---
+
+# Current checkpoint: exact-source PROCESS proof and physical crash observer, 2026-10-31
+
+Parent `020065e` has qualified105/105 focused Go/race families in two independent
+runs,53 Rust media tests, two actual targeted source-sync EIO cases, six real
+JSON processing creations and six standalone force200/read/restart cases.
+The complete original Rust workflow passed1672 tests and94389/114522=82.419972%
+line coverage, preserving the80% floor and the one original Redis-only ignore.
+Full source CI41195790266 is a separate pending gate; no PR merge-candidate or
+full-product readiness is inferred.
+
+This candidate adds24 real external SIGKILL cases at processing/final library
+publication across all six kinds and both index backends. It requires original
+operation-only autonomous reconciliation, unchanged source identity, exact
+foreign rows and namespace metadata, actual vector bytes/bindings, independent
+original-ASGI public reads and another complete retained restart. No production
+Go/Rust source, private-key boundary, pinned tool, old recovery step or coverage
+floor changes. The new crash/SQLiteVec results remain CLOUD_PENDING.
+See [the full scope and evidence boundaries](media-reprocessing.md).
+
+The entire server/desktop/Android/background migration remains ACTIVE/NOT_READY.
+All commit-phase recovery, configuration/provider/OCR/credentials/telemetry,
+capacity, backups, retained MCP test execution, ownership/cutover, zero-Python,
+platform/security/performance/full CI/Evidence/release requirements remain.
+Preserve the dirty root, keep native builds/caches/images in the cloud, and
+perform no unscheduled PR, main merge, release or production data operation.
+
+---
+
+# Current checkpoint: standalone PROCESS implementation, 2026-10-31
+
+The separate PROCESS contract at `7c1a6b12` passed pinned cloud source generation
+(run41175785006), including all four reviewed outputs and the historical PATCH
+digest. This candidate adds the actual Go admission/HTTP/result path and Rust
+source reads, conditional segment/index replacement and original-operation phase
+reconciliation. Its runtime qualification is still pending; source code is not
+proof of successful processing or recovery.
+
+The older exact source `4688a38c` now has qualified37/37 original CI jobs and50
+Evidence artifacts, default Go95.022810%, Android Go95.010323%, Rust82.167259% and
+Python95.573611%, with both complete Go race corpora. None of those results is
+assigned to this child or a PR merge candidate. Parent `c4aae0c0` proved all six
+JSON processing creations but retained an actual standalone-force semantic RED.
+The new105-family Go inventory preserves every original97 family. Actual force,
+processing restart/crash evidence, all original floors and full product/platform
+acceptance remain required. See [the complete reprocessing boundaries](media-reprocessing.md).
+
+Overall goal remains ACTIVE/**NOT_READY** across server, desktop, Android,
+background and every retained feature. OCR/provider credentials and telemetry,
+configuration/errors/capacity, backups, MCP test execution, production ownership,
+zero-Python and exact-source full CI/Evidence/platform requirements are not
+waived. Rust/Go/Docker verification and caches remain in the cloud; preserve the
+local dirty root and perform no unscheduled PR, main merge, release or real data
+operation.
+
+---
+
+# Current checkpoint: multipart parser conformance correction, 2026-10-30
+
+Source `b96e66d5` captured an actual cloud RED at run41062512473/job124085519945:
+all97 required Go/race families finished;94 passed and3 failed, containing16
+specific parser/status/header/Unicode conformance failures. Compilation succeeded.
+This candidate preserves those assertions and the original97 required families.
+It replaces the incompatible raw-header preflight/Go MIME parsing with the original
+64 KiB event framing, logical unfolded-header bounds, duplicate-header/parameter
+semantics,415 parser errors and413 resource limits. UTF-7 and native-/explicit-endian
+UTF-16/UTF-32 retain strict decoding and legitimate replacement characters.
+The checked-in reference corpus records45 requests and44 codec observations from
+the original offline ASGI helper/multipart1.3.1 and CPython bytes.decode, including
+framing across read boundaries, part Content-Length and malformed/padded encodings.
+This candidate's runtime evidence is CLOUD_PENDING; local checks do not compile Go.
+
+At parent `48f14d01`, actual launcher run41059443777 passed the existing10 multipart
+cases, including50 MiB, an exact220000000-byte/20-file request, ordered partial
+refusal and retained bytes after whole-launcher restart. Its corrected report
+separates11 JSON creations,31 stored uploads and42 total retained observations.
+Those are parent-source observations and do not qualify this new parser candidate.
+Original full CI41059589502 failed Go coverage at16088/16948=94.925655%,13 covered
+statements short of95%. The original95%/95%/95%/80% floors remain mandatory.
+Parent Rust workflow41059508892 must be observed by its existing handles; metadata
+transport failures are not a reason to redispatch it.
+
+Full server/desktop/Android/background migration remains ACTIVE/NOT_READY. Media
+processing/OCR/indexing, all retained codecs/forms, upload-specific crash and
+concurrency recovery, actual affected browser/platform behavior, retained MCP
+pytest-equivalent engine and complete exact-source CI/Evidence/release acceptance
+remain open. No Python production fallback or scope exception was approved.
+The root dirty checkout is preserved; compilation/caches/containers remain cloud-only.
+
+# Current checkpoint: retained media publication synchronization, 2026-10-28
+
+The complete original source CI/Rust and controlled platform proofs at `0acac3b5`
+are now collected:37/37 CI jobs, Rust1636 tests/82.124921%, Go95.036276% and
+Android-Go95.023107%, plus the scoped Windows/Android/browser/process reports.
+They are source workflow_dispatch evidence, not PR merge-candidate or product
+release readiness.
+
+Actual push run40610956860 at `35281ce9` independently captured original Go/Rust
+APPLIED rows with identical outcome digests and unchanged operation identity,
+while the targeted retained-file trace contained zero fsync/fdatasync calls.
+The file EIO filter was independently calibrated. The run also had a traced
+cleanup failure; the directory case never reached its mutation. These limits
+are preserved in the scoped RED receipt, not counted as successful recovery.
+
+This candidate reopens and validates the exact retained regular-file after-image,
+synchronizes its contents/metadata and, on Unix, its containing directory, checks
+the retained path again, then enters the generation scope and signs settlement.
+Any synchronization error leaves the original operation unresolved and cannot
+create, truncate or republish the library. Windows obtains the write-capable
+handle required for FlushFileBuffers; dedicated native Windows journal tests
+cover successful synchronization and read-only-file refusal/recovery.
+
+The cloud observer now drains identity-checked native tracees before terminating
+the tracer, recording any forced cleanup, and preserves the first failure code.
+Normal/file-error/directory-error process cases, the new native tests, full source
+CI/Rust and affected platforms remain CLOUD_PENDING at this candidate.
+No thresholds or original tests are removed. Full product stays NOT_READY;
+physical power loss, Windows directory durability, other media operations,
+retained pytest MCP and all remaining product/release requirements remain open.
+
+# Current native migration execution — actual native media PATCH reproduction, 2026-10-26
+
+## Current checkpoint: real media process recovery regression
+
+Candidate `cf4f986e87c01aa7e5f466b7e9ee72b6af2d37fc` passed the exact Rust
+workflow:1636 tests,82.1249214% at the original80% floor,33 named checks and59
+controlled reports. Go scoped race checks passed71 top-level tests/126 cases.
+All six actual media PATCH cases passed; the999,964-byte scalar-array request
+persisted a2,500,166-byte Rust claim and retained generation0→2→2 after restart.
+Its full37-job source CI and affected platform qualification remain separate.
+
+This test-only follow-up adds a real Linux process-crash regression. Production
+Rust/Go/Proto/frontend/Android bytes remain identical to that candidate. External
+strace descriptor-path filtering and post-rename file-sync exit delay first qualify themselves on a
+separate fixture; they must execute the actual rename and hold its subsequent file-sync return,
+without substituting success or errno. The actual native worker is then killed
+after replacement while its journal remains APPLYING and Go remains DISPATCHED.
+The other three owned native processes are stopped before SIGKILL so no response
+fallback can settle the operation before the controlled whole-launcher restart.
+
+After restart the original operation must autonomously converge to signed
+APPLIED evidence, under a newer Go writer, without another write request, a new
+operation, changed original fences/claim/digest or library republication. All
+observers use read-only SQLite and owned temporary paths. This gate is pending
+cloud reproduction; source inspection alone does not prove the runtime defect.
+It is neither a production fix nor power-loss, Windows, all-media recovery or
+whole-product qualification. Original coverage floors and retained MCP test-engine
+requirements remain; keep NOT_READY.
+
+
+## Current checkpoint: versioned media persistence capacity
+
+The actual parent Rust HTTP run40442478399 passed the four metadata-order
+workloads but refused the999,964-byte maximum-array request with503
+`EFFECT_UNKNOWN`. Its workspace generation stayed0; that observation does not
+prove an arbitrary uncertain effect absent and does not authorize retry.
+The latest parent Go workflow40444394609 passed all66 required top-level tests
+and113 observed cases. These are distinct source-bound qualifications.
+
+The exact schema-19 SQLite constraint independently rejects a legal999,967-byte
+JSON witness whose typed intent is2,499,893 bytes. Schema20 preserves the exact
+schema19 contract for historical validation and transactionally rebuilds only
+the media admission table with4 MiB intent/outcome bounds. Every original rowid,
+column, operation identity, signature byte and unresolved barrier is retained;
+all original immutability/state guards are recreated. An interrupted transaction
+must retain the complete old schema, rows, migration ledger and version marker.
+
+Five additional Go regression tests require genuine version19 upgrades across
+all six states, signed terminal replay, a large real typed admission/reopen,
+exact SQL bounds, rollback, schema-tamper denial and history-retirement denial.
+The original66 required Go tests remain required, for71 top-level tests total.
+Local SQLite SQL evaluation and formatting do not qualify native execution.
+Exact-source cloud Go/race, the six actual HTTP/restart/journal cases, original
+37-job CI and affected platforms remain pending. Original95/95/95/80 floors,
+MCP test-engine compatibility and whole-product scope remain; keep NOT_READY.
+
+
+## Current checkpoint: ordered media inputs and transport overhead
+
+Parent `5471ed09edba16e6769bec3abd8b87110204cb36` passed
+[the Rust workflow](https://github.com/leizd/DeepSeek-Infra/actions/runs/40428090974):
+1630 tests, original80% floor at82.1113513%, all32 named checks and54 controlled
+reports. Its actual normal-auth media PATCH advanced workspace generation0→2
+and retained2 after whole-launcher restart. The original full37-job source CI
+and affected platforms are separate qualifications; earlier1e6cb22e platform
+and full-CI success does not qualify this candidate.
+
+Test-only `65edd2d8344eaa549150d8d505005f4ba98cdd01` reproduced
+[exactly four ordered-metadata failures](https://github.com/leizd/DeepSeek-Infra/actions/runs/40430653341)
+while all12 original journal tests passed. Sorting input keys changed the value
+retained after sanitization/truncation, including nested/array metadata.
+
+This candidate adds an explicit typed source ordinal while keeping canonical
+wire key sorting, old zero-ordinal bytes, frozen v1 descriptors and normalized
+outcome compatibility. Go retains raw field order before the typed boundary;
+Rust alone normalizes/publishes data. A legal999,994-byte public JSON array
+expands to2,499,955 typed bytes, so only media RPCs grow to4 MiB; public JSON
+stays1,000,000 bytes and all other control methods stay1 MiB.
+
+Local25 observer/verifier cases and pinned12-source/21-output protocol
+regeneration pass. Go66 scoped regressions, Rust1636/original80%, original full
+Go/Android-Go95%, Python95%,33 Rust check steps/59 controlled reports, five
+actual public metadata/maximum-input workloads and current-source platforms are
+PENDING. Runtime compilers/caches/containers stay in GitHub Actions. Next:
+qualify that exact source, inspect the first actual failure, then continue full
+media interruption/takeover and remaining operations. Full server/desktop/
+Android/background/provider/Fleet, numeric/large-record/hostile-path/durability,
+data migration/rollback, original arbitrary pytest with zero production Python,
+cutover and release obligations remain open. Keep `NOT_READY`.
+
+The dated sections below are historical source-specific checkpoints.
+
+
+## Current checkpoint: media workspace-generation repair
+
+The qualified parent is `1e6cb22e0537f68c5b519b50125153bc114836f1`, tree
+`bbe4f4e645e60fc883e685a9b13a9bca5eb1838e`. Its original
+[37-job source CI](https://github.com/leizd/DeepSeek-Infra/actions/runs/40324277592)
+passed with default Go95.0481766%, Android-Go95.0406310% and the original95%
+floors. Its Rust1626/original80% gate passed at82.0905338%; controlled browser,
+normal-auth media PATCH/restart, Windows and five-API Android70 device tests
+also passed on that source. These source/platform scopes do not qualify a PR
+merge candidate, full media recovery or the5.0 release.
+
+Test-only source `83b495ed487ef7b1058ca166407e2d7b17267cb1`
+[reproduced exactly four new Rust journal failures](https://github.com/leizd/DeepSeek-Infra/actions/runs/40425803329)
+while preserving all prior journal tests. This candidate integrates the existing
+workspace mutation scope before first publication and exact-original-publication
+settlement. Counter failure must leave the effect phase unsettled; terminal
+replay and unknown-effect refusal remain unchanged. The actual launcher probe
+now measures counter values/hashes before/after PATCH and after restart.
+
+Local offline verifier tests pass12 cases; native Rust1630/original80%, full
+Go/Android-Go95%, actual process/browser and affected platform qualification are
+PENDING for this candidate. Native compilation/caches/containers remain in
+GitHub Actions and only reports return. Next: qualify the precise source, then
+continue actual interruption/takeover/backup recovery and retained media
+operations. Keep full server/desktop/Android/background/provider/Fleet, hostile
+path/durability, data migration/rollback, arbitrary pytest with zero production
+Python and release scope open. Status remains `NOT_READY`.
+
+The dated sections below are historical checkpoints; their pending results do
+not supersede this source-specific qualification boundary.
+
+
+Execution branch: `codex/rust-cloud/media-patch-red-20261026`; base `b01de5e5ebd6a989c662b23ffff2b3a8feb2aefa`. Exact candidate commit/tree are recorded in `artifacts/native-20261026-media-patch-red/manifest.json`. Original root HEAD/index and163 dirty/untracked source files remain preserved.
+
+The next retained operation is authenticated PATCH /api/media/{id}. This test-only candidate adds the acceptance slice docs/specs/native-media-mutation-acceptance.md and an actual default-launcher public-TCP probe. It starts a fresh normal-auth native profile, observes real Go/Rust processes and control health, stops its owned processes, explicitly seeds the eighteen-record legacy media fixture, and uses an independent offline original-library mirror to establish a valid title/metadata update. Native GET and missing-auth PATCH must first pass their prerequisites. Only an observed authenticated PATCH refusal after those conditions is a semantic RED; compile/startup/fixture failures are not. Successful responses must match the entire original record except the measured dynamic updatedAt and survive whole-launcher restart. The probe cannot qualify all patch inputs, authority or lost-response recovery; those remain required for production implementation.
+
+Five offline verifier tests pass, covering cloud-only execution before any subprocess, plain non-JSON HTTP refusal, bounded error bodies, preserving nested timestamps/input bytes, and EFFECT_UNKNOWN without another attempt after reply loss. The original-library patch succeeds in its isolated mirror. No local native compilation occurs. Actual native PATCH is PENDING; this candidate changes no production Rust/Go/Proto/frontend/Android, ownership, dependency or frozen runtime test. Existing workflow steps are byte-identical, with an added early source-only inventory check before expensive native work and the new process gate/report. The source inventory continues to retain unported media POST/PATCH/DELETE.
+
+Base b01 has strict Rust1617 tests/original Redis ignore,82.20426727803869% >= original80%,28 required checks/53 controlled reports and actual media39 GET/39 HEAD with normal auth/restart. Its three original Python full-suite jobs now pass after the inventory repair; complete full CI40261365572 is still waiting on the original Go race job. Separate c57ea45e source reports qualify Windows2025 MCP46 library/five custody cases/zero late effects, actual app windows plus a test-host file workload, and Android70 tests/25 app-UID custody cases/zero late effects. None is inherited as this new source's qualification.
+
+Implement media mutations through Go durable authority and sole Rust data/effect writes, additive versioned Protobuf/gRPC, original-operation/epoch recovery and independent proof. No Python fallback, task-program substitute, optional media delegate, fake journal or duplicate write is permitted. Creation/upload/delete/processing/indexing and the entire server/desktop/Android/background/provider/Fleet/recovery/upgrade/sandbox/resource/environment/path-race/package/release scope remain mandatory. Arbitrary pytest and zero production Python remain required together; start_test_run is unfinished per the human decision. Keep NOT_READY and all original Rust80/Go95/Python95 floors. Native builds/tests/caches/containers stay in GitHub Actions; only reports return. Standing reviewed-upload authorization applies; PR only once daily09:00 Asia/Shanghai, no main merge/release/real-data operation.
+
+## Historical source-bound records
+
+Earlier entries describe their recorded source/date; use the current snapshot and exact-source reports for present status.
+
+# Current native migration execution — media library read repair, 2026-10-26
+
+Execution branch: `codex/rust-cloud/media-library-read-fix-20261026`, base `80ac9e64d71fd72b771718b47480140c95a0e24f`; the exact candidate commit/tree are recorded in `artifacts/native-20261026-media-library-read-fix/manifest.json`. Preserved root HEAD remains `0caf8ec4a652a21d037b06e995fe21ffa7ecdbf2` with163 dirty/untracked source bytes unchanged.
+
+Cloud run40249416425/job121337819228 confirmed three actual production-router failures: original populated media list/detail requests return200 while native dispatch reaches `GO_CONTROL_PROXY_NOT_READY` with503; the existing segment-route test still passes. The independent original-library oracle passed22 read cases. This is an in-process HTTP compatibility counterexample, not default-launcher/browser acceptance.
+
+The repair connects native GET/HEAD collection and detail handlers to existing media normalization. It validates project/type/status filters before store reads, preserves the last query value and stable updatedAt list ordering, and reads the first valid duplicate for detail independently of list sorting. Readers do not create stores or add a writer. Other methods retain the existing Go proxy, including opaque URI/body handling, so unported media creation/upload/patch/process/index remain unfinished. No dependencies, schemas, ownership, frozen protocols or original coverage floors changed. The entire22-case original/native test matrix is byte-identical to RED. Exact-source workspace1617/original Redis ignore, original80% coverage and complete native process/browser/platform qualification remain pending.
+
+Source2e2ecce94688dde1fbd91140e745e88c33f3de36 separately has strict1614 Rust tests/82.13373792695111%/26 checks/52 controlled reports,46 Windows library tests/5 custody cases,70 Android x86_64 device tests/25 app-UID custody cases/zero late effects, and14 actual MCP input cases with zero divergences. Older98c97f973c9d580d3e55d7e4e7da25e7659ee6ea separately passed all37 original source-dispatch jobs. These results do not qualify the current source, a PR merge candidate or full migration.
+
+Original arbitrary pytest compatibility and zero production Python remain mandatory together; start_test_run stays unfinished per human decision. Complete all server/desktop/Android/background/provider/Fleet/recovery/upgrade/sandbox/resource/environment/path-race/package/release obligations. Keep NOT_READY. Native builds/tests/containers/caches stay in GitHub Actions; only reports return. Standing reviewed-upload authorization applies; PR only once daily09:00 Asia/Shanghai, no main merge, release or real data operation.
+
+## Historical source-bound records
+
+Earlier entries describe their recorded source/date. The current snapshot and exact-source reports determine present status.
+
+# Current native migration execution — 2026-10-26
+
+Execution branch: `codex/rust-cloud/media-library-read-red-20261026`; source base `2e2ecce94688dde1fbd91140e745e88c33f3de36`. The frozen candidate's exact published commit/tree are recorded in `artifacts/native-20261026-media-library-read-red/manifest.json`. Original root HEAD `0caf8ec4a652a21d037b06e995fe21ffa7ecdbf2` and163 dirty/untracked source bytes remain preserved.
+
+Source2e2 has strict1614 Rust tests/original Redis ignore,82.13373792695111% coverage >= original80%,26 named checks/52 controlled reports,46 Windows library tests/5 actual custody cases,70 Android x86_64 device tests/25 app-UID custody cases/zero late effects, and14 original/native public-MCP input cases with zero remaining acceptance divergences. Source98c97f973c9d580d3e55d7e4e7da25e7659ee6ea separately passed all37 original source-dispatch CI jobs in run40193199937. Those results do not qualify a newer source, PR merge candidate or complete migration; full CI has not run for2e2.
+
+Current executable gap: the media segment/home readers already normalize retained media records, but `/api/media` list and `/api/media/{id}` detail still fall through to the Go control proxy. Three new production-router tests use22 original-library cases, GET/HEAD, authentication, filter/error behavior, first duplicate selection, byte preservation and unchanged routing for unported POST/PATCH. The local offline original oracle passes all22 cases (13 success,7 invalid input,2 not found) without media-store writes. Native RED is PENDING; no production code is changed by this test candidate. Next: observe the exact cloud counterexample, reuse existing native normalization to connect both reads, then verify real process/browser behavior. Media creation/upload/patch/process/index, full authority/cutover and other product/platform obligations remain unfinished.
+
+The original arbitrary pytest requirement and zero production Python remain mandatory together; start_test_run is unfinished per the human decision. All original Rust80/Go95/Python95 floors and frozen protocols remain. Keep server/desktop/Android/background/provider/Fleet/recovery/upgrade/sandbox/resource/environment/path-race/package/release scope and NOT_READY. Native builds/tests/containers/caches stay in GitHub Actions; reports only return. Standing reviewed upload authorization applies; PR only daily09:00 Asia/Shanghai, once/day; no main merge, release or real data operation.
+
+## Historical source-bound records
+
+The entries below describe their recorded source and date; this current snapshot and source-bound reports take precedence for present status.
+
+<!-- native-20261025-unicode-input-fix -->
+2026-10-25 actual public MCP source29efc21c/run40194965675 proved all14 original input controls and six native divergences: valid300/500 Chinese and250/500 emoji queries plus200-emoji keys were rejected, while a2-emoji short key was accepted and independently read back from real Redis. Prior source98's actual search GREEN, Windows42 tests/5 custody cases,1610 Rust tests/82.1222948331081% coverage and70 Android tests/25 custody cases/zero late effects are separate evidence; full Rust process/browser workflow and37-job source CI still require exact-source completion.
+
+The follow-up changes required/optional string bounds to Unicode scalar/code-point counting, matching the original pinned Zod4.6.6 behavior, and adds four Rust boundary regressions for500/501-character queries,8-character key minimum including surrogate-pair traps,200/201-character key maximum and nonempty200/201-character optional filters. It changes no schema limits, parameter defaults, payload schema, hashing, durable-store format or test engine. All14 real input cases, complete original search resource benchmark, workflows, production TS and dependencies stay byte-identical. Expected complete Rust1614/original Redis ignore, original80% floor and exact public GREEN/platform checks remain pending. Other schema/path/sandbox/resource and whole-product gaps remain open.
+
+The human retained arbitrary pytest compatibility and zero production Python together; start_test_run remains unfinished. Entire server/desktop/Android/background/provider/recovery/sandbox/package/release migration stays NOT_READY. Native compilation/caches/images remain cloud-only; only reports return. Root163 source bytes and HEAD/index preserved. Dedicated reviewed uploads are authorized; PR only daily09:00 Asia/Shanghai once/day, no merge/release/real data operation.
+
+<!-- native-20261025-unicode-input-red -->
+2026-10-25 follow-up test-only candidate: preserve the unchanged actual-image search liveness/memory benchmark and all original26 Node checks. Add an independent cloud-only public-MCP input matrix against the original service and actual stock native image, with the same production rg13 binary and separately isolated real Redis prefixes. Fourteen cases per service cover ASCII controls,300/500 Chinese characters,250/500/501 emoji, empty/500/501 ASCII queries and8 ASCII/2/8/200/201 emoji idempotency keys. Successful task admission is read back through get_task; this does not qualify test-engine execution. Real native Unicode divergence remains unproven until the new exact-source cloud report.
+
+Original Zod4.6.6 measures Unicode code points; native required_len currently uses UTF-8 byte length. The test first requires all original public-service controls to match the declared acceptance matrix, retains every native observation, then compares acceptance. No production Rust/Go/Proto/TS/Android code or dependency/lockfile change. Source98c97f97 search GREEN (0.383ms health,12KiB parent VmHWM growth) and Windows42 tests/5 custody cases passed; its Rust/Android/full37 source gates are separate and may remain pending. No result applies to a different source or PR candidate.
+
+Human decision keeps arbitrary pytest compatibility and zero production Python mandatory; start_test_run remains unfinished. Whole server/desktop/Android/background/provider/recovery/sandbox/package/release migration remains NOT_READY. No local native compilation or executable/cache/image download. Root163 source bytes, HEAD/index stay preserved. Dedicated reviewed upload is authorized; daily PR only09:00 Asia/Shanghai, no merge/release/real data operation.
+
+
+<!-- native-20261025-search-resource-fix -->
+2026-10-25: matched actual production rg13 in source d20997126aa59bc4b1dd4ea5177b34d789ceec38/run40190828477 proved both code-search defects: native health did not respond within500ms while a valid FIFO search remained in flight, and native parent VmHWM grew65368KiB for a64MiB corpus despite a4096-byte response cap. Original Node functional controls passed; its physical peak remains an observation, not a native memory-budget pass. Preserve the raw RED and all earlier setup/partial failures.
+
+The follow-up uses Tokio subprocess I/O and concurrently drains stdout/stderr while retaining only each configured output prefix; the HTTP tools/call path awaits search without blocking the runtime worker. Existing rg arguments, exit0/1 handling, raw byte-prefix/lossy UTF-8 decoding and response schema remain. Normal stderr errors retain their format; oversized diagnostics now carry an explicit truncation marker. Five new reader tests cover complete draining, exact/exceeded/zero limits, raw UTF-8 boundaries and interruption/error handling. No dependency, workflow, benchmark, coverage floor or task-custody change. The unchanged actual-image500ms/32MiB/4096-byte/64MiB GREEN and exact-source Rust/platform checks remain pending.
+
+Human decision retains arbitrary pytest compatibility and zero production Python together; start_test_run remains unfinished. Source934's1605 Rust tests/82.119328% and70 Android tests/25 app-UID custody cases, and olderb73's37-job CI/original Go95% results qualify only their own revisions. Whole server/desktop/Android/background/provider/recovery/sandbox/package/release scope stays NOT_READY. Native builds/caches/images stay in GitHub Actions; local source/head/index remain preserved. Daily PR only09:00 Asia/Shanghai, once/day.
+## Native MCP observed HTTP blocking and matched production search engine — 2026-10-25
+
+Actual source7375921d run40189313715/job121156717093 passed original semantic
+search controls and short native search. With an actual rg FIFO held open,
+original health responded0.878ms; native did not succeed within500ms (502.924ms)
+while still alive. This is a scoped real HTTP liveness RED. Native memory was
+not reached: host rg14 includes FIFO filenames while stock bookworm rg13 omits
+them. Preserve http-liveness-red-evidence.json as HTTP-only; no memory claim.
+Legacy Node VmHWM remains an observation; native32MiB budget is unchanged.
+
+The original Node production image used node:24-bookworm-slim with apt ripgrep
+(7fe490d6e parent). Both test services now use the exact actual stock-image rg
+binary: its SHA is checked inside the image and after cloud-only extraction,
+and its real version is retained. Only the original offline service PATH is
+set to this native tool; no script/fake rg or new SDK is introduced. Native image
+is unchanged. FIFO results validate exact selected-file/line/column/payload and
+compare every byte after only replacing each configured workspace prefix.
+Thus CLI version differences do not masquerade as Rust implementation failures.
+All500ms/32MiB/4096-byte/64MiB bounds and functional controls remain. Actual
+complete memory/HTTP RED on this source is PENDING. Production Rust/Go unchanged.
+
+Earlier3d7 interpreter exit-status and9cb FIFO shape assumptions andd27 legacy
+V8-budget precondition are retained as NOT_REACHED, never native failures.
+Source934 strict70 real Android tests/25 app-UID custody cases with zero late
+effects plus1605 Rust tests/82.119328% >=80%/26 checks/52 reports passed. Olderb73b
+full37 source CI and both95% Go floors passed separately, no PR merge candidate.
+
+The user retained original arbitrary pytest compatibility and zero production
+Python; test engine unfinished. Whole server/desktop/Android/background/provider/
+Fleet/recovery/upgrade/sandbox/resource/env/path-race/package/release scope remains
+NOT_READY. Root163 bytes preserved. All native compile/test/tools/caches/images
+stay cloud-only; reports only return. Unified daily PR09:00 Asia/Shanghai once/day;
+no PR, main merge, release or real data operation now.
+
+## Native MCP real code-search concurrency/output reproduction — 2026-10-25
+
+Current Rust invokes Command::output synchronously from an async tools/call
+handler and caps only after collecting all stdout. The original Node service
+reads asynchronously and caps while draining. This snapshot changes no production
+runtime bytes: only an actual-service cloud reproduction, npm command, workflow
+step/branch filter and3 task lists. Actual RED remains PENDING.
+
+Actual original TS service is an offline oracle, using the original SDK/client,
+search engine and Redis code. Stock source-labeled native image must contain
+neither Node/Python nor a native task fixture. Both need a short successful public
+search first. A real FIFO holds actual rg open during a500ms HTTP health probe.
+The same64MiB corpus then keeps4096 output bytes; kernel VmHWM growth must be
+<=32MiB. Exact outputs, live status and memory peaks are saved before cleanup.
+One Tokio worker is an explicitly configured supported setting. There is no rg
+substitute or mocked native endpoint. A synthetic read-only host bind and cloud
+host network are declared; this is not full sandbox or platform qualification.
+
+The previously unpublished draft based on198224e6 is preserved locally. This
+candidate now descends from cumulative934c3e24, retaining all seven Android
+fixture fixes and avoiding a remote fork. Source934 Android and Rust runs remain
+live and separately source-bound. Parent198 complete1605 Rust tests/82.120255%
+>=80%,26 required checks and52 controlled reports passed. Its actual Android
+failures stay archived; no report retry relabels that failed workflow PASS.
+Olderb73b full37 CI and independently counted default Go95.021686% and Android
+Go95.008309% passed at original95% floors; no PR merge candidate is qualified.
+
+Original arbitrary pytest compatibility and zero production Python remain jointly
+required; the user left the test engine unfinished. Whole server/desktop/Android/
+background/provider/Fleet/recovery/upgrade/sandbox/resource/env/path-race/package/
+release migration remains NOT_READY. No local native build or cache; reports only
+return. Root163 bytes preserved. Unified PR09:00 Asia/Shanghai once/day; no PR now,
+no merge/release or real data operation.
+
+## Android MCP fixture compatibility and observation barrier — 2026-10-25
+
+Actual source198224e6 run40174691281 built both ABIs, then API28/34 passed all14
+methods; API26 passed14 methods but report collection failed. API24 passed the
+original9 methods and driver-death case; four new assertions rejected actual
+NDK linker warnings. API30 reaped root/descendant with no late writes, but its
+cancel case observed empty stdout because cancellation could precede the root's
+println. The original workload is unchanged; do not relabel this failed run PASS.
+
+Three fixture/collector corrections retain all14 cases and original9 methods.
+Bounded report retrieval uses the already proven tail -c through shell -T,
+with actual remote exit status; Android24/26 head does not support -c. The
+native fixture now publishes an output-ready marker only after root stdout is
+flushed. Java requires it before triggering cancellation/death/root exit.
+API24's exact loader diagnostic for this test-APK executable and flag0x8000001
+is preserved and matched byte-for-byte (one root for the short control, root+
+descendant for task stderr); other APIs require empty stderr. Arbitrary stderr
+is never filtered or ignored. Probe path, hash, UID, real outcomes and output
+barrier are independently checked in the report validator. Full5-API rerun is
+PENDING. No production Rust/Go/Proto/frontend/TS, build toolchain or floors change.
+
+Parent198224e6 complete Rust1605/original80% coverage passed; full workflow is
+source-bound and being collected. Olderb73b37-job CI stays a separate live run.
+An unpublished six-file code-search concurrency/memory reproduction draft exists;
+it must be moved onto this cumulative line before any later upload, avoiding a
+remote branch fork. No actual code-search RED has yet been claimed.
+
+Original arbitrary pytest compatibility plus zero production Python remain
+jointly required; the user left that feature unfinished. Entire product server,
+desktop, Android, background, provider/recovery/Fleet, upgrade, sandbox/resource/
+env/path-race and package/release scope remains NOT_READY. Root163 bytes preserved.
+Native builds/tests/caches/images stay cloud-only; reports only return. Daily
+unified PR09:00 Asia/Shanghai once/day; no PR, merge, release or real data now.
+
+## Android MCP app-UID custody qualification — 2026-10-25
+
+The user explicitly retained both original arbitrary pytest compatibility and
+zero production Python. The stock test engine remains unfinished; no language
+reduction, fixture substitution or Python exception is authorized.
+
+Parent00d70ddb qualified actual Windows5-case custody with zero late effects,
+Windows Clippy and37 original library tests. Its Linux5-case custody also passed;
+its stock MCP workflow still fails at the retained test-engine success gate.
+Complete Rust1605 tests and82.119328% >=original80% coverage passed; all26 named checks and52 controlled reports also passed on that source.
+Olderb73b37-job CI remains in progress and separately source-bound.
+
+This snapshot adds an instrumentation-APK-only Android native runner fixture,
+not a production engine. Five actual app-UID cases cover ordinary/detached
+timeout, normal root exit, driver death and real AtomicBool cancellation.
+Each first proves a short native success control, binds actual PID/startTicks,
+UID and detached session, observes reaping at3 seconds and a real possible late
+write after6.5 seconds, and preserves original outcomes. No descendant PID is
+blindly killed. NDK27d builds both existing ABIs; actual execution remains five
+x86_64 emulators API24/26/28/30/34. The original9 instrumentation methods stay
+unchanged; five additional methods make14 per API. Product APK must exclude
+the fixture. Device JSON independently binds the test-APK executable hash.
+Actual Android results are PENDING; source code alone does not qualify it.
+
+All product server/desktop/Android/background features, existing-data upgrades,
+ARM64 device execution, provider/recovery/Fleet, hostile-code/resource/env/path
+race confinement and release Evidence remain required. Whole migration NOT_READY.
+Compilers, tests, caches and images stay cloud-only; download reports only.
+Root163 dirty/untracked source bytes remain unchanged. Unified daily PR09:00
+Asia/Shanghai once/day; no PR/merge/release/production data operation now.
+
+## Native MCP Windows task custody — 2026-10-25
+
+Actual Windows sourcecb64c1c run40168858082/job121095415426 passed a real native
+short success control, then reproduced5 surviving descendants and5 late-effect
+files after ordinary timeout, detached/new-group timeout, normal root exit,
+actual driver termination and AtomicBool cancellation. Four normal/timeout/cancel
+outcomes were still blocked by descendant-owned pipes at the3-second sample.
+The crash root also exited; its descendant still survived and wrote the effect.
+This is Windows2025 process-plane RED, not a Redis lease or full GUI/device test.
+Sourcec7261eb's zero-job workflow failure is NOT_REACHED; its only context fix
+uses an allowed github.workspace target directory on the cloud host.
+
+Windows execution now creates a non-inheritable kill-on-close Job Object,
+creates the root suspended, assigns the actual Child handle and reopens/resumes
+its verified initial thread only after admission. Cancellation is checked before
+spawn/admission/resume. Timeout, cancellation and normal root exit terminate the
+whole job and wait until kernel ActiveProcesses reaches0 before joining pipes
+or settling. Parent death closes the sole job handle. Admission errors retain
+no unfenced fallback; original output caps, complete pipe draining, exit code
+handling and all11 runner regressions remain. Existing Go launcher kernel policy
+is reused; existing locked windows-sys0.61.2 is promoted without changing package
+versions/checksums. Linux/Android supervisor code and Go/Proto remain unchanged.
+New Windows native Clippy/library tests and the unchanged5-case fixture run in cloud.
+Actual GREEN/current Rust1605/original80% qualification is pending.
+
+Parentb73b complete1605 tests/82.117475% >=80%,26 named checks and52 controlled
+process/browser reports passed, with corrected derived v2 metadata at tree33be421.
+Original raw results were unchanged; stale v1 report tree/count literals remain
+archived as superseded. Linux5-case custody passed with zero late effects.
+Original37-job CI for that older source remains separate/currently in progress.
+
+Actual source3c4ea811 run40167843108 proved the offline original pytest executor
+passed a real selected test, while the stock native image failed with task program
+is not configured. The user explicitly chose to retain the original requirements
+and leave this feature unfinished. Both pytest compatibility and zero production
+Python stay required; no native-only language reduction or Python exception is
+authorized. Do not count fixture success as retained test-engine acceptance.
+
+Full hostile-code/resource/environment/filesystem-race confinement, Android and
+other platform/device/package qualification, provider/recovery/Fleet and release
+Evidence remain required. Every server/desktop/Android/background feature stays
+in scope; whole migration NOT_READY. Builds/caches stay cloud-only, reports return.
+Preserve root163 bytes. Daily unified PR09:00 Asia/Shanghai once/day; no PR now.
+
+## Native MCP task descendant custody — 2026-10-25
+
+Actual source1728419 run40155708941 reproduced surviving descendants and real
+late-effect files in all5 cases: ordinary timeout, detached timeout, successful
+root exit, server SIGKILL and real Redis/lease loss. Original durability, identity,
+restore and workspace gates passed first. The normal-exit observer now has an
+explicit live-process release barrier; corrected RED onbf095b97 run40164662168
+again confirmed all5 surviving descendants and all5 real late effects.
+
+Linux/Android task execution now reexecutes a dedicated native supervisor before
+Tokio starts. It alone reaps that task's descendants, resets inherited SIGCHLD
+no-wait disposition, enables the kernel subreaper and checks a service-owned
+lifetime pipe. Timeout, cancellation, lost parent or normal root exit terminates
+verified immediate children and adopted descendants until kernel ECHILD. It
+never signals an already-reaped PID or abandons custody at a cleanup deadline.
+No Android pidfd syscall or Go/Rust bridge is introduced. The supervisor frames
+captured bytes separately from cleanup/exit/error metadata; user output cannot
+forge control frames. Both output caps keep draining and retain UTF-8 byte limits,
+original root exit/signal semantics and native spawn failures. Five new Rust
+regressions cover framing, limits, malformed input and kernel parent parsing.
+The existing11 completion/output regressions are byte-identical.
+
+Actual corrected5-case GREEN and current1605 expected Rust tests/80% are pending.
+Parent501a complete Rust1600/82.292606% and26 named checks/52 controlled reports
+passed. Older2606 andd81f original37-job CI and both original95% Go coverage floors
+passed; those different commits do not qualify this revision. No release or PR
+merge candidate qualification is implied. Other operating systems retain their
+existing runner and still need descendant-custody repair/platform evidence.
+
+Full hostile-code/resource/environment/filesystem-race sandboxing and a working
+retained native test-tool engine without production Python remain open. The
+stock task program is not configured and forwards pytest-shaped arguments;
+qualification fixtures do not prove that feature migrated. Retain every server,
+desktop, Android and background feature, unique writers, original effect/recovery
+identities, EFFECT_UNKNOWN, provider and platform/package/release Evidence.
+Whole migration NOT_READY. Native builds/caches stay cloud-only, reports return.
+Preserve root163 source bytes. Daily PR09:00 Asia/Shanghai, once/day; no PR now.
+
+## Native MCP workspace file boundaries — 2026-10-25
+
+Actual run 40151342282 on b486bbb8 confirmed four forbidden native task targets
+read the outside fixture: parent traversal, absolute outside path, sibling-prefix
+path and external symlink. Code search independently returned outside content
+through that symlink. Six legitimate task targets and inside code search passed.
+All observations used copied synthetic files, actual native processes and Redis,
+without host mounts, published ports or user data. This was semantic RED.
+
+Task execution and code search now share path policy. Relative workspace roots
+are anchored before lexical checks; existing filesystem ancestry is checked for
+external or dangling links. Task arguments become absolute, with selectors and
+valid internal symlink names retained. Durable original arguments and request
+hashing remain unchanged. Forbidden tasks still settle through the original
+journal, with one attempt and no child spawn. The old lexical HTTP helper remains
+available through its existing public re-export. The qualification child's old
+fixed-target expectation now uses the absolute reference argument contract;
+its original lease, completion latch, SHA-256 and timing controls are retained.
+Nine new Rust regressions cover boundaries, relative roots, option-like file
+names, selectors, nulls, missing paths and link behavior. New cloud GREEN is
+pending and cannot be inferred from parent2606's1591 tests/82.276123% coverage.
+
+This is current-path validation, not race-resistant process sandbox acceptance.
+Filesystem swaps after validation, descendant cleanup and resource/environment
+confinement remain required. The stock test-run feature requires MCP_TASK_PROGRAM
+and always passes pytest-shaped arguments; a working retained native test engine
+without production Python is still unqualified. Retain every server, desktop,
+Android and background capability, unique writers, original recovery identities,
+EFFECT_UNKNOWN, provider and release/platform Evidence requirements: NOT_READY.
+Native execution/caches stay cloud-only; reports return. Preserve root163 bytes.
+PR handling is one unified daily09:00 Asia/Shanghai batch.
+
+## Native MCP process identity and remaining production scope — 2026-10-25
+
+Actual production-image run 40149022139 on 916bf5b9 reproduced shared default
+owner identities in three configurations: unset, empty and whitespace. Each
+configuration used two independently observed native Rust PID 1 containers and
+a real restart. All three observations reused the same identity; the explicit
+operator-identity control remained stable. Original Redis startup refusal,
+instance-loss/idempotency and committed-restore outcome retention passed first.
+
+The native entry point now normalizes missing/blank instance settings and uses
+an OS-entropy UUID v4 for each new process. A provided nonempty identity remains
+stable. Entropy failure propagates before admission; there is no PID or clock
+fallback. The exact existing getrandom 0.2.17 pin/checksum is reused. New tests
+cover UUID version/variant bits with known entropy and refusal when entropy is
+unavailable. The unchanged production-image probe requires nine distinct UUIDs
+across the three configurations and their real restarts. New exact-source cloud
+qualification is pending; no old commit's CI is counted as this source passing.
+
+This is a native instance-ownership repair, not full MCP or whole-product
+acceptance. The public test-run feature still defaults to a pytest-shaped child
+command; the native failover fixture proves runner/recovery mechanics only.
+A successful retained test-tool workload with no production Python dependency
+is still required, along with workspace confinement and descendant lifecycle.
+Retain every server/desktop/Android/background capability, original provider
+identities, EFFECT_UNKNOWN, platform and release Evidence requirements: NOT_READY.
+Builds and caches remain cloud-only; download reports only. Preserve original
+root worktree bytes. PR handling is one unified daily 09:00 Asia/Shanghai batch.
+
+## Native MCP default durable startup — 2026-10-25
+
+Actual production-image run40147633992 on f23dd9a7 reproduced a retained-contract
+violation in all three default Redis configurations: unset, empty and whitespace
+REDIS_URL. With network none, no mounts or published ports, each actual Rust
+service returned ready200 and server_info reported memory. The original26
+reference tests, native instance-loss/idempotency and committed-restore-fence
+completion workloads passed first; this was a semantic RED, not a setup failure.
+The production target contained no native qualification fixture.
+
+The native entry point now uses the existing documented localhost Redis default
+and must connect before binding HTTP or admitting work. Explicit Redis settings
+are retained; MemoryTaskStore remains available to isolated library/unit fixtures.
+The exact production-image regression covers all three missing/blank settings.
+Its new cloud result is required before declaring this repair qualified.
+The prior5545d30a source separately passed both Rust-cloud jobs, all26 named check
+steps,1589 tests plus the original Redis ignore, and82.278988% lines against the
+unchanged80% floor. Original full CI37/37 and both95% Go profiles are qualified on
+a6d1387a only; these are not the new source or a PR merge candidate.
+
+Full server/desktop/Android/background migration, all retained functionality,
+original provider/recovery identities, EFFECT_UNKNOWN and release/platform
+Evidence remain required: NOT_READY. Native execution and caches remain cloud
+only, with reports returned. Preserve the original root163 changes. The latest
+human schedule is one unified PR daily at09:00 Asia/Shanghai, superseding older
+21:40 notes below; do not create or update PRs between scheduled daily batches.
+
+## Native launcher shared settings reach scoped children — 2026-10-20
+
+The actual b0b6d825 empty-profile gate returned401 after launching all three
+native children. Source inspection found an independent concrete propagation
+bug: ProductionPlan creates role-specific Process.Env values first, whereas
+Options.Apply and WithLocalAuth subsequently changed only Plan.Env. Run prefers
+the existing child Env, so CLI auth-disabled/OCR/provider/host/port overrides and
+newly created local auth tokens never reached those already isolated children.
+The exact first401 body was not retained; do not assign its precise origin from
+the status alone. The source propagation gap is directly established.
+
+This descendant of30ead95f merges explicit shared updates into each child's own
+environment, then reapplies the existing role restrictions. Child-only settings
+remain. Parent/process/environment slices are copied to avoid changing another
+prepared plan. Nil child environments become explicit role-restricted copies.
+Existing operator tokens/auth-disabled behavior and create-exclusive token
+persistence remain, including zero file writes for supplied operator auth.
+No custody file is read by Go, no private Go/Rust TLS setting crosses its denied
+role, and provider keys remain subject to the existing gateway-only policy.
+
+Four new required Go regression groups cover CLI updates, generated/retained
+local tokens, operator bypasses and nil/duplicate environments. The development
+workflow now runs every config/lifecycle/launch test, including old launch and
+local-auth cases, with the unchanged3m Go timeout. This is not full Go/coverage
+qualification. FullCI39396010444 on the unchanged-Go race repair source30ead95f
+is separately pending and cannot qualify the new launcher code. Native builds
+and tests remain cloud-only. The actual default4-request/restart gate must still
+pass after full private transport, Rust custody and Go ownership initialization;
+this fix alone cannot claim default bootstrap or full migration: NOT_READY.
+Retain all product/platform/Evidence scope, original recovery identities and
+EFFECT_UNKNOWN. Preserve root163 changes. PR remains daily21:40 Shanghai once.
+
+## Complete race corpus after the actual package deadline — 2026-10-20
+
+Exact712e81f9 full CI39379681848 reached the original90m store package deadline:
+568 top-level store cases completed before Go timed out while initializing a
+fresh fixture; the active nested case was only1s old. No assertion failure or
+data race was reported before that deadline. This is not a successful full Go
+qualification: Android checks and later native boundaries were not executed.
+Go source bytes are identical to qualified95adf8c2, whose retained race artifact
+12239309163 has1339 default/1323 Android top-level cases, including716/717 store
+cases and the single original vector-generator skip in each variant.
+
+The CI repair builds one race-instrumented store binary per variant, obtains its
+actual top-level catalog, and assigns every Test/Fuzz seed/Example to exactly one
+of four anchored groups, at most two concurrent. It disables result caching,
+retains the original90m Go invocation timeout and adds a150m whole-variant bound.
+This changes the old package-wide budget into per-group budgets; it does not
+claim the old total90m boundary remains. Non-store packages run unfiltered once.
+Original package/test names and the one existing skip are retained from exact
+qualified report bytes. Every started parent/child test must finish exactly once;
+partial groups, new skips, missing names or package terminals fail closed.
+Original Go default/Android95%, Python95%, Rust80%, full37-job structure and all
+business behavior remain unchanged. No local Go/Cargo/Docker execution occurs.
+
+Default bootstrap probe b0b6d825 has now produced actual semantic RED in
+cloud39389511985: the real three Go/Rust children started from an absent profile,
+but the public Agent request returned401 with zero provider requests. The worker
+logged authority=uninitialized and plaintext-loopback. The response body was not
+retained, so the precise401 source is not yet proven. All prior Rust workflow
+steps and the separate coverage job passed; the new default gate failed. Fix
+this observed full-race gate before changing production bootstrap. Whole-product
+server/desktop/Android/background, Rust custody, original recovery identities,
+EFFECT_UNKNOWN, ARM64, all retained features and15 Evidence gates remain required:
+NOT_READY. Original root163 changes are preserved. User standing authorization
+covers reviewed dedicated-branch pushes; PR only daily21:40 Shanghai once.
+
+## Default native launcher acceptance, before implementation — 2026-10-20
+
+This test-first descendant of712e81f9 adds a real empty-profile launcher gate.
+It builds the actual Go launcher/control binaries in the cloud and launches
+them with the packaged Rust worker/gateway and built React frontend. It does
+not seed a control store, invoke the offline signer provisioner, provide a
+signer public key, or manually supply private RPC/TLS credentials. The required
+behavior is public Agent creation, a plan-confirmation pause, whole-launcher
+restart with an advanced Go writer fence and identical pending run, then two
+dependent tasks and synthesis through four actual controlled provider requests.
+It checks actual native child processes and refuses Rust custody environment
+paths in the Go control child. This environment check alone is not a complete
+private-key custody proof. Existing process, recovery and coverage gates remain.
+
+Production bootstrap is deliberately unchanged until this probe produces an
+actual semantic failure. Build/setup failures do not qualify as the required
+public-API RED. Original runtime snapshot712e81f9 has18 Android device methods
+and Rust1563/original Redis ignore1 qualified; its full37-job source CI remains
+separate and pending. Android worker/Go production authority, ARM64 execution,
+desktop/server/default provisioning, all retained features and15 Evidence gates
+remain NOT_READY. No local native compilation, source-root application, daily
+PR submission, merge, release or real production data operation is introduced.
+
+## Private RPC client and launcher TDD — 2026-10-19
+
+`CONTROL_RPC_CLIENT_RED_20261019` adds executable regression cases only. The
+actual Go lifecycle mTLS on c36b5e0b passed nine selected groups/41 subcases;
+its Rust and full37-job source CI are still separate pending qualifications.
+Exactad7131b9 adds bounded API24 SQLite diagnostics and remote-exit/kernel
+reporting, with696 offline checks and both972-file type checks passed. Its
+actual Android39257274454, Rust39257273989 and source39257877628 are pending.
+
+A real wiring gap remains: worker AgentExecutionControl only accepts the old
+HTTP origin, gateway Agent RPC channels have no configured client TLS identity,
+and ProductionPlan does not forward the new private transport configuration.
+New Rust lookup tests require dedicated HTTPS selection while preserving the
+public HTTP proxy and no fallback on broken explicit TLS configuration. Three
+Go plan regressions require paired endpoints, refusal of partial/mismatched
+settings, and separation of Go server transport, Rust client transport, Rust
+signer custody paths and model/search credentials by child process. The focused
+cloud workflow additionally selects these launch tests; all original full gates
+remain. This snapshot intentionally has no production implementation and is
+NOT_READY; valid semantic RED must precede the connecting implementation.
+
+Cloud-only compilation/cache policy, original authority/fencing/recovery and
+Rust private-key custody remain. Full Android worker/bootstrap, API24 repair,
+ARM64/desktop, all retained capabilities and15 Evidence gates remain required.
+PR handling stays daily21:40 once; no main merge/release/real production data.
+
+## API24 SQLite failure isolation — 2026-10-19
+
+Exactc36b5e0b lifecycle mTLS development39254502610 is collected PASS: nine
+required groups,41 finishes including subcases,zero failure/skip. This proves
+selected real lifecycle transport/race cases only. Full source39254613484 and
+Rust39254502629 remain separate pending qualifications; full product NOT_READY.
+
+Exact7d4497af Android39251758715 package and seven API34 methods passed; API24
+still failed. Actual Go child stderr repeats SQLite invalid_pragma disk I/O.
+New numeric extended-code/errno diagnostics preserve the original error chain
+and failed admission. Fixed kernel facts are collected without app data. No
+VFS/lock/journal/sync/schema change is made until the actual failed operation and
+kernel are known. The pinned VFS documents OFD Linux>=3.15 and incompatible lock
+families; guessing a flock switch would not establish safe existing-data use.
+
+The old collector mislabeled missing worker.log text as collected because
+exec-out lacked the remote failure status. Two offline RED cases now drive the
+shell-T and kernel-report correction, without upgrading failed instrumentation.
+Native compilation/tests/emulators remain cloud-only; original37 jobs and all
+coverage floors remain. Continue real API24 repair, Rust client/launcher wiring,
+Android worker/bootstrap/authority, all retained features and platform/Evidence
+gates. No PR mutation outside daily21:40, no main merge/release/real data action.
+
+## Real control lifecycle mTLS — 2026-10-19
+
+`CONTROL_RPC_LIFECYCLE_MTLS_20261019` follows the executable cloud RED on
+d7d45e8c / run39252816884: all four expected groups ran and failed for ignored
+transport configuration or the missing actual lifecycle endpoint. Earlier9a1b
+had a fixture enum compile error and7d4497 had race/Cgo setup failure; neither
+was a semantic RED. Their raw evidence is retained.
+
+The actual deepseekd config/start/supervisor now supports a separate loopback
+TLS1.3 mutually authenticated RPC listener with the existing bearer and Proto
+services. No TLS configuration promotes a domain. Broken material, port conflicts
+and partial direct config fail before acquiring the writer. Both listeners must
+stop before the existing writer is released; faults preserve original fencing.
+Negative tests cover trust/authentication, plaintext bypass, startup cleanup,
+listener loss, writer expiry and the successor's persisted fence. Native testing
+of this implementation is CLOUD_PENDING; local formatting is not Go execution.
+See docs/NATIVE_CONTROL_RPC_TLS.md for deployment settings and scope.
+
+Exact1334b6d8 Rust39211011008 and source CI39211115895 are now collected PASS:
+1560 Rust passes, original1 ignore,86451/105335=82.07243556% against80%; all37
+source jobs, Go14012/14747=95.01593544%, Android Go13838/14557=95.06079549%
+against95%; Python6412 passes/1skip/61subtests per version with95.51–95.58%.
+Those results do not qualify this later implementation. Android286bd0e1 built
+both ABIs and passed7 API34 methods but failed4 API24 native-readiness cases.
+New7d4497 Android39251758715 retains child diagnostics and is still running.
+
+Next retain original95% Go/Python and80% Rust floors, qualify the exact source,
+wire Rust clients and isolated launcher environments to the private endpoint,
+complete Android worker/authority/bootstrap and fix actual API24 child startup.
+All retained capabilities, real desktop/ARM64/zero-Python workloads, frozen-wire
+parity and fifteen native Evidence gates remain required; NOT_READY. No main
+merge, release or production data action. PR processing remains daily21:40 once.
+
+## Android runner SDK command discovery — 2026-10-19
+
+`ANDROID_SDK_PATH_FIX_20261019` corrects only the cloud workflow's SDK manager
+lookup. Exact Android push39211011146 on1334b6d8 failed package preparation with
+sdkmanager: command not found (exit127); no APK or emulator test ran. Native
+source CI39211115895 and Rust push39211011008 are independent and remain pending.
+
+The exact ubuntu24/20261012.334 image documentation and install-android-sdk.sh
+show ANDROID_SDK_ROOT and cmdline-tools/latest/bin/sdkmanager. Invoke that
+absolute executable, require it to exist, and retain SDK output in the report.
+This changes no tool/NDK pin, license acceptance, source/runtime behavior or
+coverage floor. Local native compilation remains prohibited. Package and both
+emulators must actually pass at this new source; Android production authority,
+missing Rust worker, ARM64 execution and full migration remain unqualified.
+
+## Android cloud acceptance with corrected failure fixtures — 2026-10-19
+
+`ANDROID_FENCE_FIXTURE_FIX_20261019` combines the unuploaded Android cloud
+candidate with two test-only corrections on c6985bae. No production Go/Rust/
+Android source or native schema changes are included. The new workflow, strict
+source/APK/device report verifier and29 offline boundary cases are preserved.
+
+Exact source CI39209415516 failed default Go tests in two new fixtures:
+leader-failure resume supplied only two event artifact references even though
+its committed default scope emits running, four task resets and final reset;
+and attempted original witness corruption was correctly refused by SQLite's
+OPERATOR_MUTATION_IMMUTABLE guard before the expected final validator.
+
+The leader fixture now requires all four reset IDs and final reset and supplies
+six distinct event references, preserving the original public event contract.
+The custody test keeps that actual immutable-write refusal and separately injects
+a disposable conditional read fault withholding the original witness only after
+the final FAILED action row. It changes no immutable row or signature and still
+requires complete rollback, original reservation retention and successful
+reconciliation after the read fault is removed. No assertion or coverage floor
+is weakened. Other new17 Go regression groups reported no failure in that run.
+Coverage/race/Android gates of that failed source were not reached.
+
+All native builds/tests and APK/emulator execution remain cloud-only. A separate
+exact source dispatch, Rust push and Android push must qualify this new candidate.
+The seven existing Java device tests do not prove the missing Android Rust worker,
+production authority, successful zero-Python workload metrics or ARM64 device
+execution. Keep those qualification flags false and whole-product NOT_READY.
+
+## Cloud Android package and device acceptance — 2026-10-19
+
+`ANDROID_PLATFORM_CLOUD_20261019` adds a dedicated workflow and strict reports on
+c6985bae. Its push builds debug runtime/instrumentation APKs for both packaged
+ABIs in a disposable cloud runner, then installs and executes every existing Java
+instrumentation method on API24 and API34 x86_64 emulators. All seven existing
+methods are required. NDK, Gradle, Java, Go and Rust builds stay in GitHub Actions.
+APKs move only between jobs of the same run; local collection permits reports only.
+
+Runtime APK inspection verifies the exact clean source, asset digests, ABI payloads
+and absence of packaged Python entries. Device reports bind source, run/attempt,
+event/ref, both APK hashes and the entire source test inventory. Every method
+must start and finish successfully exactly once; skips, incomplete transcripts,
+duplicates and rebound contexts fail closed.
+
+This remains UNQUALIFIED until actual cloud build and both emulator jobs succeed.
+The existing app still packages Rust gateway plus Go shadow control, without the
+Rust Agent worker. These seven retained skills/files/OCR/persistence/lifecycle
+tests cannot qualify Android production authority, full Agent functionality,
+measured successful zero-Python workloads, ARM64 device execution or release
+readiness. Corresponding qualification flags stay false. Subsequent product work
+must close those gaps, not relabel a shadow result as a production migration.
+
+The parent's source CI and Rust push for17 new Go refusal groups are still running
+at preparation time; they need separate exact-source evidence. Original95% Go/
+Python and80% Rust floors and all previous process/cloud gates remain mandatory.
+No local native compilation. Whole-product readiness remains NOT_READY.
+
+- [ ] Collect the exact Android push: package, device(API24), device(API34).
+- [ ] Collect separate exact-source full CI and Rust/browser push.
+- [ ] Complete Android Rust worker/Go production ownership, all retained product
+      and platform behavior, and all15 native Evidence gates.
+
+## Final failure commit boundaries and exact-source evidence — 2026-10-19
+
+`FINAL_FAILURE_BOUNDARIES_20261019` is a test-only candidate on
+`9fb10c3aff89c79e39b3eff5afa76f5069b11979`; no production source, workflow,
+Proto, schema, coverage denominator or threshold changes are included.
+
+That exact parent now has a fully collected Rust push 39188443267 PASS:
+1560 workspace tests, zero failures, original Redis ignore1; line coverage
+86453/105335 = 82.07433426686286% against the original80% floor. All six
+terminal process cases passed with21 actual HTTP requests, including synthesis
+explicit resume to done/index12. The ordinary failed-task/public-browser and
+original signing/recovery process gates also passed within their bounded scope.
+
+The separate source workflow_dispatch39188536303 FAILED:33 successful jobs,
+three failures and one skipped. Default Go vet/tests passed; default coverage
+13988/14747 = 94.85319047941955% still misses the original95% floor by22 covered
+statements. Full Go race and Android Go checks were skipped after that failure.
+Python3.10/3.11/3.12 each passed6383 tests,1 skip and61 subtests, with original
+coverage95.57/95.51/95.58%. These are parent-source observations, not qualification
+of this new candidate or a PR merge candidate.
+
+New signed offline Go fixtures distinguish absent/successful source outcomes
+from conclusive failures; verify independent original checkpoint/custody; refuse
+stale public cursors and lost action authority; recheck action/writer deadlines
+and writer tokens at final commit and replay; and roll back final witness damage
+without losing the original receipt or reservation. Successful plan/synthesis
+settlements also refuse lost trust, rebound operation journals and missing run
+metadata. Driver coverage includes committed leader-failure resume choosing only
+tasks, unavailable authoritative history, and projection transport loss without
+retry. These fixtures do not replace actual Rust/provider acceptance.
+
+Correction: earlier prose saying the f9078db7 race gate passed was wrong; that
+gate and Android checks were skipped because coverage failed first. Frozen
+historical review artifacts remain preserved with a separate correction record.
+
+- [ ] Qualify this exact new source in cloud: full default/Android Go tests,
+      races and original95% floors, all Rust/process gates and all37 source-CI jobs.
+- [ ] Rebase and qualify the separately retained Android cloud/emulator candidate.
+- [ ] Complete Android/desktop production ownership, every retained capability,
+      successful zero-Python workload measurements and all15 native Evidence gates.
+      Whole-product readiness remains NOT_READY.
+
+<!-- BEGIN TERMINAL_CUSTODY_FIX_20261019 -->
+
+## Proved synthesis failure across explicit recovery generations — 2026-10-19
+
+`SYNTHESIS_FAILURE_RECOVERY_20261019` combines the unuploaded coverage regressions
+with the actual conclusive-synthesis recovery fix on f9078db7. That parent passed
+1560 Rust workspace tests (original Redis ignore1) and five of six terminal process
+cases; synthesis resumed to running/index10 and then stopped. Its source CI also
+failed the original default Go95% floor (13924/14713). Neither run is an overall pass.
+
+The driver previously classified the preceding typed FAILED synthesis action as
+unresolved when the explicit recovery request changed. It now retires that prior
+action only after re-reading the exact committed recovery header and independently
+verifying the original signed failure, its immutable dispatch/outcome pair and
+source metadata cursor. Older generations retain their committed preceding scope
+and still reverify the original terminal receipt. EFFECT_UNKNOWN is never skipped.
+No failure record is rewritten and no task/provider retry is admitted implicitly.
+
+Thirteen new Go test groups include the ten refusal/rollback boundaries plus
+synthesis-only explicit resume, rebound/unknown source refusal and a second explicit
+recovery retaining both failed generations. Existing workflows, Proto, Rust code,
+coverage floors, dependency locks and frozen corpus remain unchanged. These signed
+offline fixtures do not qualify actual Rust/provider behavior.
+
+- [ ] Re-run the complete native Go, race and both original95% coverage variants
+      plus six actual terminal process cases/21HTTP and all37 source-CI jobs.
+- [ ] Continue the unuploaded Android cloud/emulator candidate after native repair.
+- [ ] Complete all retained capabilities, platform/device acceptance and measured
+      zero-Python workloads with all15 native Evidence gates. NOT_READY.
+
+
+## Failure custody refusal boundaries and original Go coverage — 2026-10-19
+
+`FAILURE_COVERAGE_20261019` is the latest unqualified corrective candidate on
+`f9078db7459c2cf5dd1e4c7ba86c61ae7073f656`; the original root remains unchanged.
+Correction: source dispatch 39184406764 passed default Go vet/tests, but
+statement coverage was 13924/14713 = 94.63739550057772%, below the original
+95% floor. Full Go race and Android checks occur after coverage and were
+SKIPPED, not passed. Evidence/RC failures are downstream. No exclusions,
+denominator changes or lower threshold are allowed.
+
+This candidate adds Go refusal and corruption regressions for malformed wire,
+rebound action/run/epoch/operation/owner, missing cutover and reservations, original
+proof/cursor/termination history, ignored lease updates, writer/clock loss and
+rollback. Restore-and-reconcile assertions retain original immutable custody.
+Driver tests refuse malformed custody queries, keep the original fence and ensure
+synthesis-only recovery does not admit task execution. Production sources, Proto,
+locked tools and both existing workflows are unchanged. These are offline signed
+Go fixtures; actual Rust/provider/public recovery still requires its process gates.
+
+[ ] Qualify the new tests and both original 95% Go coverage variants in cloud.
+[ ] Collect the separate exact Rust push including six terminal cases/21 HTTP.
+[ ] Rebase the unuploaded Android cloud/emulator candidate after native repairs.
+[ ] Complete all retained product/platform ownership, measured successful zero-
+    Python workloads and all 15 native Evidence gates. Overall remains NOT_READY.
+
+
+## Conclusive failure publication and original checkpoint custody — 2026-10-19
+
+Exact source8c1fc1ce completed Rust strict lint/workspace tests and its coverage
+job, but the source CI Go gate failed two planner-original body/time tampering
+cases. Actual terminal process acceptance also failed: publish_known omitted
+retained typed errors, the Rust workflow missed its already hash-pinned Protobuf
+report dependency, and the planner probe assumed a planning cursor not admitted
+by the current controller. These are failed-source observations, not qualification.
+
+Rust publication now accepts only the canonical retained_failure envelope for
+leader/synthesizer. Rebound/forged errors, unknown5xx, private extra fields and
+other nodes remain refused before any public artifact write. Go binds the whole
+original planner checkpoint to its separate immutable operator receipt, including
+payload, domain/id/revision/state, original epoch, original writer and time. A
+later error reducer cannot silently overwrite evidence of tampered original body
+or timestamp. New source-witness and Rust publication regressions preserve all
+previous refusal, replay, migration and unknown-effect checks.
+
+The process probe uses actual native planner admission(created/index1): a single
+confirmed error closes at2 and explicit default-DAG resume ends at14; unknown
+planning stays at1 and cancellation at2. No phantom planning event is counted.
+Synthesis counts, six scenarios,21 actual HTTP requests, original effect identity,
+no duplicate dispatch, actual signature/effect journals and resource checks stay.
+Offline report tests additionally refuse the old fabricated cursor. The cloud
+workflow installs the existing requirements-native-protocol.txt unchanged; no
+runtime fallback or unpinned dependency is introduced.
+
+This source requires fresh cloud native builds, full original Rust80/Go95/Python95
+floors, process custody and complete CI. Whole-product status remains NOT_READY,
+including real providers, production ownership, desktop/Android and zero-Python
+packages/Evidence. Root dirty source/index remain preserved. PRs are handled only
+by the daily21:40 Asia/Shanghai batch, at most once per date.
+
+<!-- END TERMINAL_CUSTODY_FIX_20261019 -->
+
+<!-- BEGIN FAILURE_STATE_READER_FIX_20261018 -->
+
+## Conclusive action failure read repair — 2026-10-18
+
+Cloud source a69bacbb removed the v16 lease CHECK failure, but Go phase settlement
+still failed with CORRUPT_RECORD. Source inspection found that the typed writer
+permits FAILED while scanControlRecord rejects it through knownState. This repair
+recognizes that terminal in action readers only. The generic transition map stays
+byte-identical, and only the existing signed typed edge may create the terminal.
+Two new Go regression groups require both phases to read and independently verify
+their original history, and prove that reader recognition grants no generic
+transition or resource release. All earlier proof/tampering/rollback cases stay.
+
+The twenty existing history refusals receive static internal stage labels using
+wrapped ErrCorruptRecord. The unchanged public RPC mapper retains DataLoss with
+AGENT_CONTROL_HISTORY_INVALID; labels contain no credential/provider/body values.
+No rejection predicate, schema constraint, corpus, dependency or coverage floor
+is removed. Source a69bacbb native and full CI remain unqualified. This increment
+requires new exact-source cloud native tests, six real HTTP scenarios and full
+CI. Whole-product state remains NOT_READY, including desktop/Android and zero
+production Python evidence. Original root files/index are retained. PR handling
+stays in the single daily21:40 Asia/Shanghai batch.
+
+<!-- END FAILURE_STATE_READER_FIX_20261018 -->
+
+<!-- BEGIN TERMINAL_SCHEMA_REPAIR_20261018 -->
+
+## Conclusive failure lease migration repair — 2026-10-18
+
+The uploaded efe993e7 source failed real cloud validation: the Gateway TLS peer
+fixture lacked two required AgentPlanExecutor methods, and the Go v16 lease CHECK
+rejected the typed failure settlement. Rust push run39128512639 failed; the
+source workflow_dispatch run39128650417 ended31 success/5 failure/1 skipped.
+These results do not qualify the new terminal failure feature or its six actual
+planner/synthesis HTTP cases. The last separately collected Rust+full-CI source
+remains1eef89e3; whole-product readiness remains NOT_READY.
+
+This repair keeps the v5/v16 definitions intact and advances the Go store through
+v17 in one transaction. It copies every original lease column and terminal value,
+then adds only FAILED_CONFIRMED to the lease constraint. The business action
+remains FAILED. Only independently verified typed failure settlement can close
+this lease; generic completion gains no new terminal capability. Ambiguous
+transport/5xx effects remain EFFECT_UNKNOWN and keep original resources/custody.
+Historical v16 cancellation tests retain their v16 assertion before upgrading to
+the current schema for mutation. New Go cases cover every durable row, original
+terminal values, restart admission, migration fault rollback, unchanged version
+history, generic refusal and immutable history verification. The test-only Rust
+TLS peer refuses both new RPCs as NOT_A_PROVIDER_FIXTURE.
+
+Native builds/tests, coverage and actual process acceptance remain cloud-only.
+Local formatting and offline/source checks are preparation, not qualification.
+No PR is created or edited outside the daily21:40 Asia/Shanghai batch; no main
+merge, release or production data operation is included. Root dirty state stays
+untouched. Desktop/Android, zero-Python production and final Evidence requirements
+still apply to the full product migration.
+
+<!-- END TERMINAL_SCHEMA_REPAIR_20261018 -->
+
 <!-- BEGIN CURRENT_NATIVE_CLOUD_CHECKPOINT -->
-## Current cloud verification checkpoint
 
-2026-10-14: latest reviewed snapshot `9c38f1dd9e68238f6cc5b06274e405004b567b1b`
-(tree `465f3c6741721fc1523ae1c495f249e0c040e269`, parent6e3b0b4d,8files)
-repairs credential-path test peers and narrows the Go worker client to only its
-six execution/projection methods. Credential preparation remains private Rust
-TLS RPC. Existing metadata/sanitization assertions remain; missing peer, wrong
-hostname and bearer refusal tests are added. Real worker crypto/restart proof
-remains mandatory; the new controlled TLS unit peer is not encryption proof.
+## Typed terminal Agent failure and recovery — 2026-10-18
 
-Rust: https://github.com/leizd/DeepSeek-Infra/actions/runs/38501431635
-CI: https://github.com/leizd/DeepSeek-Infra/actions/runs/38501553143
-Exact source proof:902 native /3676 whole files. Rust expects1502 passes plus
-the existing Redis ignore; original80% coverage remains required. All37CI,
-all14Go-Docker and Go/Android/Python95% floors are unchanged. The complete Go
-race binaries keep all tests and instrumentation with a measured90-minute
-package bound. Earlier identical Go source passed in40minutes but exhausted
-60minutes with a4-second test running; archived timing/digests explain the change.
+The exact1eef89e3 source has collected Rust1554 tests, original Redis ignore,
+82.0755 percent coverage and both actual failed-task public resume/rerun cases
+(12 actual HTTP requests,17 Go observation cases per mode and original Rust
+signer/effect/recovery custody). Its37/37 workflow_dispatch jobs have reported
+success; final report collection remains separate from this new source.
 
-Local188 offline boundary checks, formatting, pinned codegen, ownership/shadow,
-docs and exact non-secret review pass. Python type input bytes are unchanged,
-so the prior Linux/Win32 963-file proofs are explicitly reused. No local native
-builds or compiler caches; only reports return. Root dirty source/index remain
-preserved. Prior1a74b532 checks failed one outdated gateway fixture and Go fake
-interface compilation; these are not PASS. Superseded affected runs were cancelled
-and recorded. Prior b1d5c323 bounded Rust fully passed1494+1ignore /82.17874352578164%.
+This candidate closes only completely received documented provider rejections
+for planner/synthesis with typed Rust-owned failure metadata and a separately
+signed failure projection. Go atomically appends one public error, marks only
+that action FAILED, terminates its lease and releases only its resources.
+Replay reads the original failed checkpoint before committing its transaction.
+Ordinary task failures, ambiguous transport results and5xx retain their existing
+semantics. Known receipt queries require the mandatory read-only retained-proof
+RPC and cannot recreate a missing original Rust signature document.
 
-Overall `NOT_READY`. Collect this head's real credential override and encrypted
-vault reopen across actual worker restart, fix genuine failures, then implement
-retained runtime updates, resume/rerun and admitted tool continuation. No main
-merge, release or real data operation. Review/checkpoint:
-`artifacts/native-20261014-credential-peer-fixture/`.
+Explicit resume preserves original actions and events. A planner without output
+uses the retained Python controller's default four-role DAG, keeping the original
+empty public plan snapshot; nil and empty input plans select the same effective
+DAG. A synthesis rejection retains completed task outputs and resumes synthesis.
+The new real-process matrix requires both known recovery paths plus planner and
+synthesis EOF/5xx quarantine: public cancellation,409 resume/rerun refusal,
+original action/epoch/reservation retention and no second provider dispatch.
+Each case binds real HTTP headers and bytes to decoded Protobuf receipts,
+original Rust signature/effect journals, public artifact bodies and request hashes.
+
+Offline report-boundary/tamper guards, formatting and generated-code checks are
+local evidence only. New native compilation, Go/Rust unit/race/coverage and all
+six actual process cases remain CLOUD_PENDING for this candidate. No original
+Go/Python95 percent or Rust80 percent floor, frozen corpus or old mandatory gate
+is weakened. The browser frontend stays TypeScript; new terminal-error UI,
+provider/platform workloads, production ownership cutover, zero-Python package
+measurements and complete Evidence still require final acceptance. NOT_READY.
+
+<!-- END CURRENT_NATIVE_CLOUD_CHECKPOINT -->
+
+<!-- BEGIN CURRENT_NATIVE_CLOUD_CHECKPOINT -->
+
+## Failed-task recovery observation repair — 2026-10-18
+
+Source67afdb1d Rust push39105837913 passed strict lint, workspace tests and
+coverage, but its actual failed-task public rerun probe failed after Go reached
+done/index16. Resume passed. The compound assertion did not identify the field;
+the original failure log and reports remain preserved, so this failure is not
+claimed to be explained or qualified by the independent coverage result.
+
+The probe previously read public HTTP before Go metadata and stopped on Go alone.
+It now requires both reads to show the same terminal run/cursor and complete event
+count. All existing failed/successful role, runtime, request, final answer, custody,
+immutable history and resource assertions remain mandatory. A17-case Go regression
+runs in the actual cloud-compiled process binary before each failed-task scenario;
+missing execution or missing coherent-read evidence is rejected by report validation.
+Failure output now identifies each status/cursor/role condition without private bodies.
+
+No production Rust, Go, Protobuf, frontend or workflow implementation changes are
+included. Native compilation and both actual public recovery cases remain cloud
+qualification requirements; Go/Python95 percent and Rust80 percent floors stay.
+The separate planner/synthesis terminal-failure WIP is preserved and held until
+this mandatory process gate is repaired. Whole-product readiness remains NOT_READY.
+
+<!-- END CURRENT_NATIVE_CLOUD_CHECKPOINT -->
+
+<!-- BEGIN CURRENT_NATIVE_CLOUD_CHECKPOINT -->
+
+## Rust task outcome representation repair — 2026-10-18
+
+Source232b4c26 Rust push39105008378 and workflow_dispatch CI39105019536
+reported the same Clippy large_enum_variant failure: the successful result
+contained at least264 bytes while the rejection contained26. Original logs
+and SHA256 digests are retained under the failed candidate; other active jobs
+are preserved. No actual failed-task process qualification is claimed from a
+lint-failed source or from a different source's passing coverage.
+
+The successful UpstreamTurn now uses Box, and both the legacy turn wrapper and
+actual task consumer unwrap it explicitly. Conclusive rejection admission,
+provider response hashes, original fencing, public bodies and all nine new
+regression tests remain unchanged. No warning suppression, test deletion or
+original Go/Python95 percent or Rust80 percent gate change is introduced.
+
+Fresh Rust formatting and448 offline boundary tests pass. All Python/type
+configuration, Go and249 frontend inputs are byte-identical to the prior locally
+validated source, so only those scoped local type/Go-format/frontend results
+are reused. Native lint,1554 Rust tests plus the original Redis ignore, full
+coverage, actual public failed-task resume/rerun matrix, actual React recovery
+and all37 workflow_dispatch jobs remain CLOUD_PENDING for this corrective tree.
+
+The generated-title browser repair on7c1b40d6 is independently collected PASS:
+1545 Rust tests,82.0399 percent coverage, complete actual rerun/title/mirror/
+reload evidence and37/37 CI. Its results do not qualify this new task feature.
+Typed planner/synthesis failure remains a separate unuploaded incomplete WIP;
+Go failure settlement/history/writer denial, complete recovery/tool/live output,
+real providers, server/desktop/Android/background and zero-Python release chains
+and final exact-source Evidence Assembly remain required. NOT_READY.
+Root163 files and its index remain preserved. PRs remain the daily21:40 unified
+batch; this corrective upload does not create or update a PR outside that time.
+
+## Signed failed-task recovery candidate on title repair — 2026-10-17
+
+The complete retained21-file native implementation is prepared on source
+7c1b40d6, including the current actual-public-field, completed-card and generated
+conversation-title repairs. All18 non-documentation feature files exactly match
+the reviewed9ad14b5f candidate; their parent bytes were checked individually
+before reapplication. There is no executable overlap with the title repair.
+The full native input set remains byte-identical to that retained candidate.
+
+Local448 offline tests pass. The entire249-file frontend and actual public-view
+fixture exactly match the newly completed74-file/638-test frontend type/build/
+bundle validation; only that identical frontend scope is reused. Native Go/Rust
+compilation, full coverage and actual public-process acceptance remain
+CLOUD_PENDING. Expected Rust tests are1554 passes plus the original Redis ignore,
+with2 added Go tests and9 added Rust tests. No local native build/test or Docker.
+
+The candidate is preserved without upload until actual Rust/browser repair
+run39029467763 on its precise parent succeeds. Source58cac61c Rust push
+run39027301212 failed the generated-title mirror predicate despite rendering
+the recovered answer; its passing coverage does not qualify that browser gate.
+All old logs, reports, source snapshots and this complete feature are retained.
+No original Go/Python95 percent or Rust80 percent gate is lowered.
+
+A fully received bounded JSON rejection for documented provider statuses
+400/401/402/422/429 is retained as a Rust-owned signed failed task outcome, with
+a generic public HTTP-status message. Raw private error text is not projected.
+Partial bodies, redirects, unsupported statuses and transport/server failures
+remain EFFECT_UNKNOWN. No automatic provider retry is introduced.
+
+Go requires the original verified Rust receipt and matching task settlement
+before a failed dependency is considered settled. Task-phase completion releases
+its own reservation while retaining the failed role. Dependents and synthesis
+receive its failure warning. The actual public-process matrix requires explicit
+resume that recovers the role and an explicit rerun rejected again, with original
+actions/history retained, no duplicate fresh phases, exact provider response
+hashes, unique Rust signer receipts and immutable recovery-context bodies.
+
+Typed terminal planner/synthesis failure remains incomplete in a separate
+private WIP. Remaining whole-run recovery, tool/live-output closure, real
+provider/crash acceptance, all server/desktop/Android/background packages,
+zero-Python production release and exact-source Evidence Assembly remain required.
+Full-product readiness stays NOT_READY. Root163 files and index are preserved.
+PR creation/update is only the daily21:40 Asia/Shanghai unified batch.
+
+## Native browser generated-title retention repair — 2026-10-17
+
+Source58cac61c completed1545 Rust tests with zero failures and the original
+single Redis ignore. Its Rust coverage job succeeded, while mandatory actual
+React recovery run39027301212 failed waiting for the recovered frontend mirror.
+The original failure log,280 report files and screenshots are retained. Actual
+rerunHTTP200 reached the controlled provider, old final/coder were retained at
+cursor12, and the recovered final plus exactly two completed cards rendered.
+The screenshot also showed the generated title reverting to the first question.
+
+The shared conversation message replacement preserved custom titles but ignored
+`autoTitleDone`. It now retains either kind of completed title while continuing
+to update unfinished provisional titles. Three regressions first failed with
+18 existing tests passing, then all21 passed. A fourth case retains provisional
+title updates. The complete74-file/638-test frontend type/build/bundle check and
+420 offline boundary tests passed. Actual browser acceptance still requires the
+same generated-title/final-answer mirror, successful sealed restore and reload;
+it additionally checks the generated title before, during and after rerun.
+A missing/false title proof is rejected by two offline report guards.
+
+Full-source Rust/browser push and workflow_dispatch CI remain CLOUD_PENDING for
+this repair. Go/Rust/Proto, dependencies, main CI and the original Go/Python95
+percent and Rust80 percent floors are unchanged. No local native build/test or
+Docker stack ran. The complete failed-task snapshot9ad14b5f and planner/synthesis
+failure WIP are preserved without upload until the browser repair passes.
+Remaining task/run recovery/tool/live-output paths, real providers, all platform
+and zero-Python release acceptance and final Evidence Assembly remain required.
+Full-product readiness remains NOT_READY. PR processing is once daily at21:40
+Asia/Shanghai; this repair does not create or update a PR outside that window.
+
+## Browser in-flight contract and terminal note repair — 2026-10-17
+
+The actual React rerun on source2e95b2f2 reached the native public endpoint
+with HTTP200, then the in-flight observer failed because a remaining callback
+still read `outputs` instead of the real `agentOutputs` field. Rust push
+run39024557310 retains that failure; its passing coverage is not browser
+recovery qualification. The full workflow_dispatch CI remains a separate gate.
+
+Baseline, in-flight and final inspection now share the actual public output
+contract. Eight in-flight regressions use the controlled native public-view
+fixture; the existing wrong-field logic first failed2 tests and passed6, then
+all8 passed after repair. Failure observations record bounded counts/types and
+the controlled provider is released even when an inspector rejects the state.
+
+Recovery notes now attach to an existing completed/error role rather than
+creating a second running card. Actual browser acceptance requires one completed
+coder and critic, zero running cards, and visible rerun controls before and after
+the real request. This also preserves the prior final during task execution.
+Local418 boundary tests, Linux/Win32 each966 source-file types and Ruff pass.
+The entire249-file frontend and native public-view fixture are byte-identical
+to the complete74-file/634-test frontend check; that local result is reused only
+within its identical frontend scope. New full-source native/browser validation
+remains CLOUD_PENDING. No local Go/Cargo builds/tests or Docker ran.
+
+Go/Rust/Proto, dependencies, main CI and the original Go/Python95 percent and
+Rust80 percent floors are unchanged. The complete failed-task implementation
+remains preserved and unuploaded under artifacts/native-20261017-failed-task-
+recovery-v3. Typed planner/synthesis rejection, remaining run recovery/tool/live
+output paths, real providers, platform/zero-Python release acceptance and final
+Evidence Assembly remain required. Full-product readiness remains NOT_READY.
+PR handling stays once daily at21:40 Asia/Shanghai.
+
+## Native Agent output timeline and browser contract repair — 2026-10-17
+
+Source `9e0f3962` completed workflow_dispatch CI run39012405690 with37/37
+jobs successful, including original Go/Python95 percent and Rust80 percent
+coverage gates. Separately, Rust push run39012294859 retained a failed mandatory
+React recovery gate; its other native probes and coverage succeeded. The new
+browser case is not qualified by the separate full-CI success.
+
+The controlled native HTTP report exposes `agentOutputs`, not `outputs`; the
+recovery oracle and its old synthetic fixture had assumed the wrong field. The
+real browser screenshot also showed no completed Agent cards. React previously
+ignored native `agent_output` frames; those are the only task-output frames in
+the actual native stream. This repair upserts bounded completed/error cards from
+public output fields, preserves existing legacy cards, excludes private provider
+fields, and keeps the prior final answer until its explicit reset. It retains
+the existing rerun controls and layout.
+
+A checked-in raw public-view fixture comes from that controlled exact-source
+cloud report. New regressions first reproduced the incorrect field and four
+missing/incorrect timeline behaviors; targeted checks now pass. Complete local
+frontend type/tests/build/bundle checks,410 offline boundary tests, Linux/Win32
+966-file types and Ruff pass. Rust/Go/Proto and main CI source are unchanged.
+Actual repaired React rerun acceptance and exact-new-source cloud validation
+remain pending. Compiler caches, Docker images and volumes stay in the cloud.
+
+The separately frozen21-file signed failed-task implementation is preserved
+under artifacts/native-20261017-failed-task-recovery and has not been uploaded.
+Carry it forward only after fixing this failure and addressing its recorded
+review finding. Full-product migration, real provider/crash recovery, remaining
+tool/timeline/live-output behavior, desktop/Android and zero-Python release
+acceptance remain required. Readiness remains NOT_READY; PR handling stays at
+most once daily at21:40 Asia/Shanghai.
+## Actual React native recovery candidate - 2026-10-17
+
+This candidate starts from339a6582e6fb1e2fd0ed3880ea52f66a60abb935 and adds an
+actual built-React critic rerun after initial native execution/plan confirmation.
+It observes the POST from the shipped control, pauses the real controlled-provider
+task, requires the old final and retained coder to remain visible, then requires
+fresh critic/synthesis results, durable typed progress and the recovered final
+after reload. All initial/private/public/alias/browser gates remain present.
+New native/browser execution is pending; source tests do not qualify those flows.
+
+A Go inspector must independently verify schema4/runtime3/generation1, five settled
+phases, released resources and the pinned Rust progress signature. Read-only
+snapshots must preserve three original Go action rows, four Rust effects, the
+first ten public events and original coder output; six total Agent provider
+calls plus one title request, a unique actual Rust signer journal document,
+encrypted credentials and the new mirror ciphertext are required. New snapshot
+unit tests exposed and fixed a mutable history alias; the observation now retains
+independent data and a fixed prefix digest. No initial application data is seeded
+by the browser fixture and no mutating API is called outside actual React controls.
+
+Local408 offline public/browser validator tests, Linux/Win32966-file types, Ruff
+and Go fixture format/syntax pass. Production Go/Rust/Proto/frontend and main CI
+workflow inputs are unchanged. Native builds and browser acceptance remain
+cloud-only with original Rust80% and Go/Android/Python95% floors intact. Latest
+339 Rust and full source CI are still live; earlierb96 Rust qualification is
+1545 tests,1 original Redis ignore,85536/104259 lines=82.04183811469512% plus
+four actual public task-rerun scenarios. This is not qualification of a later
+commit or any PR merge candidate. Whole-product readiness remains NOT_READY.
+
+Orphaned/partial/failed/cancelled recovery, payload/credential variants, signed
+failed-task/tool/timeline/live-output closure, real-provider/crash recovery, all
+retained domains, desktop/Android/background packages, default zero-Python and
+complete exact-source CI/Evidence remain in scope.
+
+## Prior public completion candidate - 2026-10-17
+
+The candidate starts fromb96ada4fe7e8d4e354696c18eeab8c3e8d09944e. Its exact
+Rust workspace test step, original80% coverage gate and actual public HTTP task
+rerun/refusal matrix have passed in run39008917742; final report collection is
+pending. Source CI39008999116 has passed Docker, Go default tests and the
+original95% coverage gate; full race/Android and downstream qualification are
+still running. A previous3ff Docker download timeout remains a failed historical
+result, not a pass borrowed fromb96. No PR merge candidate has been qualified.
+
+This test-only candidate adds actual Rust HTTP completed-resume and all three
+synthesis aliases (synth/leader/synthesizer). It requires completed resume to
+retain the original final, outputs, actions and history without a new provider
+call. Alias reruns send literal resynthesize=false, retain task outputs, reset
+the current final, admit only one new synthesis, verify exact original operation
+replay, release phase resources and exercise seven HTTP refusals while paused.
+These four new cases expect25 recovery POST commands and19 provider exchanges;
+GET inspection is separate. They have not run natively yet. The original private
+RPC, public task-rerun, browser and full CI gates remain retained. No production
+Go/Rust/Proto/frontend or main CI workflow input is changed by this candidate.
+
+Local252 offline validator tests, Linux/Win32965-file types, Ruff and Go fixture
+format/syntax checks pass; the new guards first failed before implementation.
+All native compilation and process qualification remains on GitHub Actions.
+Failed/partial/cancelled resume, payload/credential variants, actual React
+recovery controls, failed task/tools/timeline/live outputs, real providers,
+all retained domains, platforms/background workloads, default zero-Python and
+complete exact-source Evidence remain required. Whole product stays NOT_READY.
+
+## Prior public recovery candidate - 2026-10-17
+
+The candidate is based on3ff6492902cd4027b105af620b1b8d6b3f801638. That
+source has passed cloud Go vet, default tests and the unchanged95% statement
+coverage gate (job117321342183, completed coverage at05:52:19Z). Exact profile
+counts, full race, Android and all37 source-CI jobs are not yet collected. Docker
+job117321342091 failed because crates.io indexmap download timed out; its failure
+is retained and a same-source retry remains pending. Source CI39006972812 and
+Rust push39006914824 are distinct validations, neither is a PR merge candidate.
+
+This candidate wires public Rust POST resume/rerun through fresh Go recovery
+preview, authenticated Rust custody, hash-checked draft/context/base/final bodies,
+and Go CAS commit. RPC conflict statuses are retained and missing custody config
+is refused before draft persistence. Credentials and private keys stay in Rust;
+Go stores metadata and opaque body references. Nine new Rust boundary tests and
+an additional actual HTTP rerun matrix (critic/researcher, synthesize true/false,
+seven refusals each) are source only until the exact cloud revision qualifies.
+The existing private-RPC matrix, original workflows, all coverage floors and
+249 frontend inputs remain retained. Public HTTP and provider HTTP request counts
+are separate, and public admission does not claim the private preparation retry.
+
+Local222 offline validator tests, Linux/Win32965-file mypy, Ruff and installed
+Rust/Go formatting checks pass. No local native compile, Go test, Docker build,
+real data action, PR mutation or release operation was performed. These local
+checks do not establish native runtime success. Whole-product readiness remains
+NOT_READY. Completed/failed resume, synthesis aliases, payload/credential variants,
+actual React recovery entry, failed-task/tools/timeline/live-output behavior,
+real-provider recovery, all retained domains, desktop/Android/background workloads,
+default zero-Python ownership and complete exact-source Evidence remain required.
+
+## Historical source verification checkpoint
+
+2026-10-17: source e738e4648f08e4de85a1f5ff43bdc61e5f7433ef
+(tree8e23cce0797b1ae1027b26514e4c68659c9fa232) has fully collected Rust
+push qualification:1536 passed,1 original Redis ignore,84764/103272
+lines=82.07839491827406%, all15 crates and the original80% floor.
+Actual Go/Rust critic/researcher reruns with synthesis true/false passed all
+four scenarios,22 HTTP requests, final cursors16/14, pinned progress signatures,
+original task/output/public history, inherited Rust credentials and independent
+body/signer journal checks. This is controlled-provider process qualification;
+full public HTTP resume/rerun and production providers remain unfinished.
+Rust: https://github.com/leizd/DeepSeek-Infra/actions/runs/38989635767
+
+Its full source workflow_dispatch CI38989706184 failed33/37:default Go tests
+passed, but coverage is13550/14305=94.72212513107306%, below the unchanged95%
+floor. Full race and Android were skipped; Evidence Assembly, release package
+and RC readiness did not pass. Python3.10/3.11/3.12 each passed6123 tests plus
+1 original skip and61 subtests, with95.57/95.51/95.57% coverage. Source dispatch,
+Rust push and PR merge-candidate evidence must remain separate.
+CI: https://github.com/leizd/DeepSeek-Infra/actions/runs/38989706184
+
+Earlier source b74329593c0e6fead2314cf57f373ad6698198f5 independently completed
+37/37 source CI38985019190, including full race and Android. That older tree
+has no typed progress production changes and cannot qualify the new source.
+The a283a253 source's Go replay assertion failure is preserved; e738 fixes its
+comparison of process-local protobuf internals with complete serialized run
+metadata plus unchanged original events, record and event count.
+
+This candidate adds only boundary regression tests and checkpoint documents.
+It checks missing/corrupt authoritative metadata, lost resource evidence,
+malformed or rebound operations, atomic rollback when the operation receipt
+cannot persist, missing/tampered signed event prefixes, ordinary metadata
+writer denial and central proof revalidation. Raw Go production/Rust/protocol/
+frontend/workflow inputs are unchanged; no tests, coverage files or floors are
+excluded. At least40 additional covered statements are required; new coverage
+must be measured in cloud, not inferred from added cases.
+
+No root source/index replacement, local Go/Cargo/Docker execution, main merge,
+release or production-data operation. Native compilation/caches/containers stay
+in GitHub Actions and only reports return. Original Rust80/Go95/AndroidGo95/
+Python95 floors, all37CI/all14Go-Docker and full instrumentation remain.
+Reviewed source uploads follow the standing human authorization; PR handling
+is daily21:40 Asia/Shanghai only, once for the complete work.
+
+Six unpublished Rust public recovery files are preserved separately and excluded
+from this candidate. Their TLS/context/body coherence and actual HTTP/React
+cases still need review/qualification. Continue public resume/rerun, failed-task
+typed closure, tools/timeline/live-output, real-provider fault/restart recovery,
+all retained domains and default server/desktop/Android/background packages,
+actual app/device workloads, zero-Python production and complete Evidence.
+Product readiness remains **NOT_READY**.
 <!-- END CURRENT_NATIVE_CLOUD_CHECKPOINT -->
 
 
@@ -97,6 +3500,43 @@ confirmation, cancellation, retries, resynthesis and platform requirements.
 <!-- docs-language-switcher:start -->
 [中文](../../README.md) / [English](../../README.en.md)
 <!-- docs-language-switcher:end -->
+
+<!-- native-20261020-control-rpc-transport-refusal-test checkpoint -->
+
+Exact fc5ef9c4 Rust run39350633745 now passes the real sealed-mirror regression (private TLS seal/status/replay and refusal/HEAD/public-decoy assertions). Its only observed failing Rust case is worker untrusted-client refusal: the production wrapper returns FailedPrecondition after later TLS/RPC rejection, while the new test incorrectly required Unavailable. This test-only repair retains rejection and adds stronger evidence: count private handler entries before authentication, calibrate an actually successful public HTTP RPC decoy, require0 public requests during all private calls, require no handler entry on rejected transport, exactly1 authentication entry for bad bearer, and re-prove valid private RPC after every negative. Late client-certificate and cleartext refusals may use the wrapper's existing Unavailable or FailedPrecondition outcomes; production mapping is unchanged. No test is removed, no production runtime source or authorization changes, all1563 Rust cases plus original Redis ignore1 and all original coverage floors remain required.
+
+The newer45d2b36c typed SQLite diagnostic implementation has exact cloud62 race and15 Android-host cases PASS via39351995889, without full-suite/device qualification. Original %w identities, ordered PRAGMAs, locks/WAL/query_only/writer/retry semantics unchanged. Its actual Android run39351995817 and full CI39352126549 are still being collected; these source-specific results do not automatically qualify this test descendant. New exact Rust/full37CI are required. Runtime builds/tests/containers/emulators stay cloud-only, reports only. Root163 changes preserved. Default private bootstrap, API24 compatibility, Android worker/authority, ARM64, full retained product workloads and15 Evidence gates remain NOT_READY. One PR daily21:40 Asia/Shanghai; no development PR submission.
+
+
+<!-- native-20261020-android-sqlite-code-values checkpoint -->
+
+Exact fc5ef9c4 development39350633836 executed all original required7 race groups and4 Android-host SQLite groups successfully, then failed the new primary-value, extended-value and known-os-cause assertions as intended. The production connector now uses the documented ExtendedErrorCode errors.As interface, covering code values and full SQLite errors, and emits errnoUNAVAILABLE unless a real OS cause is retained. Original %w error identity remains, and opaque text is never reclassified. Ordered PRAGMAs, driver query_only caching, WAL, synchronization, VFS/locks, schemas, writer admission and retries are byte-identical. Documentation corrects the upstream string-loss hypothesis and records actual API24 kernel3.10.0+ with still-unobserved failing syscall. This is diagnostic repair, not an API24 compatibility fix.
+
+This exact source must pass all selected62 Go race cases and all15 Android-host cases including typed representations, Rust1563 plus original Redis ignore1, full37CI and original Rust80%/Go95%/Python95%, and actual Android build/API24/API34 reports. All native compilation/tests/Docker/emulators remain cloud-only; download reports only, never caches/images/volumes/APKs. Root163 files/HEAD/index stay intact. Original recovery identities, Rust custody and EFFECT_UNKNOWN remain unchanged. Default secure provisioning/real Go-Rust process chain, API24 repair, Android worker/bootstrap/authority, ARM64, complete retained product workloads and all15 Evidence gates remain incomplete: NOT_READY. PR is daily21:40 Asia/Shanghai once for the whole work; development pushes do not create PRs.
+
+
+<!-- native-20261020-control-rpc-mirror-and-sqlite-code-red checkpoint -->
+
+The exact e262acda Rust job118387340882 passed all-target/all-feature clippy, then executed the new sealed-mirror regression and failed it with NATIVE_MIRROR_RECIPIENT_SOURCE_UNAVAILABLE (334 observed passes,1 failure; later workspace binaries may not have run). The production backup recipient-source now selects the same pinned private TLS endpoint as worker, Agent Run reads and chat scheduling, retaining the public HTTP proxy and refusing explicit transport errors without fallback. Original snapshot/group validation remains unchanged; successful sealing/status/idempotent replay and all refusal cases must now execute on this exact descendant.
+
+Separately, fixed upstream SQLite v0.35.6/commit091633ebb62b0c78988d3e079149333b36337599 source disproves the earlier string-loss hypothesis: invalid_pragma wraps with %w and errorFor can return a typed ExtendedErrorCode value instead of *Error. The current diagnostic only recognizes the pointer form. New Android-host tests cover wrapped primary/extended code values, a known OS cause and an opaque untyped error; the first three should produce executable RED before the diagnostic implementation changes. The development workflow now requires this fifth SQLite group. The actual API24 error representation and failing syscall remain unobserved directly; kernel3.10/OFD compatibility remains a source-backed lead. Do not relocate PRAGMAs, alter query_only caching, disable locks/WAL, invent errno0, or add a retry. Production SQLite code remains unchanged in this test batch.
+
+Expected Rust1563 plus original Redis ignore1; Go selected race62 and original11 SQLite cases retained, with one new diagnostic test group. This mixed implementation/test-first snapshot runs push Rust and development checks; full37CI and original Rust80%/Go95%/Python95% remain required after the diagnostic fix. All native execution stays cloud-only, reports only; original163 changes stay intact, no merge/release/production data operation. Daily PR is once at21:40 Asia/Shanghai. API24 repair, native default provisioning/process proof, Android worker/bootstrap/authority, ARM64, all product workloads and full Evidence remain incomplete: NOT_READY.
+
+
+<!-- native-20261020-control-rpc-mirror-red checkpoint -->
+
+Exact source9518b3dbf400d987b3d753ed194ebceadc2a81bf passed its selected Go race/launch/lifecycle and pure Go Android-tagged SQLite diagnostics workflow39347207978. Its Rust checks job118382580314 instead found E0063: the retained Agent Run read fixture omitted the newly introduced endpoint field. This test-only batch sets that fixture to explicit legacy endpointNone and adds a real sealed-mirror route regression using a private mTLS recipient service plus a decoy public HTTP service. The regression requires successful encrypted publication/status/idempotent replay, refuses malformed CA, wrong server identity, cleartext and bad bearer without modifying HEAD, and verifies no request reaches the public decoy. It preserves every original test; expected Rust total1563 plus the original Redis ignore1. Production backup recipient-source code is deliberately unchanged until this executable test yields semantic RED; a compiler or setup failure is not a valid RED. Native execution remains cloud-only, reports only. Full37CI and original80/95/95 floors remain required after implementation. API24, native platform/default bootstrap, all retained capabilities and full Evidence remain incomplete: NOT_READY. Preserve original163 changes and one PR daily21:40 Asia/Shanghai.
+
+
+<!-- native-20261020-control-rpc-clients checkpoint -->
+
+The current client implementation follows exact semantic RED on `9ca9ca43179619b33f2f088a993f1b26f6e31983` (three launcher groups and two Rust cases). The Go production launcher now validates the paired private transport and gives each native child only its role's transport, Rust custody paths and provider credentials. Rust worker recovery/dispatch, gateway Agent Run reads and multi-agent chat select a shared bounded, pinned mTLS endpoint; explicit configuration failures never select the public HTTP proxy. No action, epoch, operation, domain admission or unknown-effect semantics changed. Cargo manifests/lockfile are unchanged; certificate parsing reuses the existing pinned reqwest dependency.
+
+The retained positive Rust case now performs an actual worker recovery-preview RPC through a mutually authenticated Rust fixture, preserving its original metadata fence and bearer, and refuses wrong CA, server identity, client CA, bearer and cleartext. This is not an actual Rust-to-Go production-process result. Go lifecycle mTLS qualification remains separate: exact c36b5e0b selected41 cloud race cases PASS and full Rust1560/82.074334% PASS, while its full CI failed documentation navigation and a store-package90-minute race timeout. The later ad7131b9 default full race passed; its Android-tagged suite exposed a test incorrectly requiring primary code14 instead of actual extended CANTOPEN782. This batch compares the retained primary category, real typed extended code and OS cause; production SQLite locks/WAL are unchanged. The development workflow separately verifies the pure Go Android-tagged sqlitedb package, without claiming device acceptance. New documentation navigation is repaired.
+
+The combined exact source must still pass full37CI, original Go/Python95% and Rust80% floors, and all1562 Rust cases plus the original Redis ignore. Local execution is limited to source checks/offline Python; all native builds/tests/containers remain in cloud, reports only. The protected original163-file worktree is not applied or staged. API24 still reports kernel3.10.0+ and SQLite I/O failure; OFD-lock compatibility is a primary lead, not an observed failing syscall. Android worker/bootstrap, API24 repair, actual ARM64, default secure provisioning, full retained product workloads and all Evidence gates remain incomplete: NOT_READY. Continue the complete migration. Daily PR processing remains21:40 Asia/Shanghai once for the entire work; no PR is submitted by development pushes.
+
 
 ## 2026-10-11 exact cloud results and source-contract/package repair
 
@@ -11724,3 +15164,1161 @@ Latest reviewed dedicated cloud commit `324821021bb3e68fccab1f5af5968ff84f4fe040
 
 
 Latest reviewed cloud commit `198f8e1c756929fff97f346ba5960ca7511b4ac2`, tree `4ccda334dd1116003235741dfc5ab20ea8ccedb2`, fourteenfiles +245/-3 adds v16 cancellation-terminal lease migration. Original v5 schema SQL is byte-identical; old rows and immutable journals retained; late migration faults roll back. Legacy fixtures materialize actual old lease constraints. Actual cloud job115247717322 has passed Go vet and full unit tests including migration/retained cancellation/replay/reopen/rollback; defaultGo95 coverage is running. Rust run38382901625 and CI38382962657 remain pending full qualification (observers79163/65594, reports only). Native888/all3659; Rust1480+originalignore and all37CI/all14Go-Docker/floors80/95/95 remain mandatory. Prior3248210 unit failure is the actual old terminal CHECK rejection; prior25179f5 failed invalid free-function receiver. All failure records are retained. No root native source applied or local native builds/tests/Docker execution. Full migration NOT_READY; continue exact-head recovery/provider/platform/ownership/zero-Python/Evidence acceptance.
+# Android SQLite lock-family regression before the production repair — 2026-10-20
+
+The exact source `95adf8c250f31cdb786be642e729bcc1bb4dc39a` passed Rust
+`39354035008` (1563 passed, one original ignored case, 82.1735% coverage) and
+all 37 jobs of full CI `39354290366`, including the original 80/95/95/95 floors.
+Android `39354302655` packaged both ABIs and passed all seven API 34 methods.
+The actual API 24 app on Linux `3.10.0+` failed with extended SQLite code 2314
+(`IOERR_RDLOCK`); its OS errno remains unavailable. The pinned VFS issues OFD
+read locks, documented upstream as requiring Linux 3.15. This is an observed
+device failure, separate from the preceding SDK archive installation failure.
+
+Before changing the production locking family, add an instrumentation-only Go
+syscall probe to the test APK. The new real-app test requires the running native
+control to exclude both POSIX and supported OFD readers, release exclusion after
+child shutdown, reject an already-running legacy lock holder, and reopen after
+that holder exits. The probe never opens SQLite or reads/writes database bytes;
+it is absent from product bundles. The current runtime has no cross-family
+exclusion, so the API 34 idle-reader assertion is expected to fail. API 24 still
+retains its existing startup failure. No production driver, PRAGMA, WAL,
+durability, authority or SDK minimum is changed by this regression candidate.
+
+Next: collect this exact device RED, then implement the supported file-locking
+family together with lifecycle-bound exclusion of legacy processes. Continue
+default secure bootstrap, Android Rust worker/Go production authority, desktop,
+all retained functions and the complete Evidence Assembly. `NOT_READY` remains.
+
+# Android older-kernel locking and legacy-process exclusion repair — 2026-10-20
+
+The regression source `cc148e273947c68560c0c0846bcfd59acbd389cd` produced
+an actual API34 semantic RED in `39375073051` / job `118475054645`: eight
+methods started, seven original methods passed, and the new idle POSIX-reader
+assertion failed (actual exit0 ACQUIRED, expected73 BLOCKED). Both ABI probe
+payloads compiled into the test APK. This is distinct from the earlier exact
+API24 `2314 / IOERR_RDLOCK` result on Linux 3.10.0+ at source `95adf8c2`.
+
+The repair switches the APK and corresponding Linux Go gates together to the
+pinned official `sqlite3_flock` variant, retaining WAL and every original
+Go/Rust/Python threshold. Android startup holds a separate parent-process
+POSIX exclusive lock over its Go database to exclude older locking families.
+It checks a canonical-path registry before opening another Java descriptor,
+refuses an existing legacy lock owner, rejects path links, and binds release
+to actual child exit rather than a stop request. The added second lock method
+uses a real waiting child to verify early-close refusal and a duplicate JVM
+attempt cannot release the first lock. A recreated supervisor waits for the
+actual previous child, outside the spawn/shutdown monitor; the real-process
+test verifies notification/handoff and that an old exit waiter cannot release
+the successor's lease. Syscall probes report unsupported OFD
+errno separately; do not replace the original unavailable driver errno.
+
+Native compilation, tests and emulator work remain cloud-only. Collect this
+exact descendant's nine device methods on API24/API34, Rust and all 37 full-CI
+jobs, including both default and Android Go race and original coverage floors.
+Keep the source snapshots and original dirty checkout. Do not create a PR
+outside the single daily 21:40 Asia/Shanghai batch. Android worker/Go production
+authority, secure default bootstrap, real ARM64 execution, all retained server/
+desktop/background capabilities and all original Evidence gates remain open;
+the full-product status stays `NOT_READY`.
+
+
+## 2026-10-20 — default managed transport/custody implementation
+
+The faaf0945 source workflow_dispatch CI passed all 37 jobs, while its independent
+Rust push workflow still failed the mandatory empty-profile startup gate with
+HTTP503, an uninitialized/plaintext worker and zero provider requests. These are
+different scopes, not a complete product qualification. The prior CLI propagation
+repair changed the observed 401 to503; the exact earlier401 body was not retained.
+
+The next source implements default supervised Rust custody initialization,
+private worker/control transport, typed public-binding discovery, a retained
+public pin, role-isolated key paths, a profile lifetime lock and an actual writer
+fence admission check. See docs/NATIVE_MANAGED_BOOTSTRAP.md for acceptance and
+remaining work. It must be compiled and executed at its own exact cloud revision.
+Fresh native-origin domain genesis, safe long-running credential renewal and full
+platform/product acceptance remain incomplete. Existing Python migration proofs,
+unknown-effect recovery identities and original coverage floors stay enforced.
+Readiness remains NOT_READY; no PR, merge, release or real-data operation occurs.
+
+
+The d1422808 bootstrap source Go development run39423126218 passed the complete
+101 top-level config/lifecycle/launch corpus, but failed the additional preview
+assertion for .memory. The shared legacy denylist had covered older backup/control
+domains and omitted core capability paths. The descendant expands that mechanical
+path denial, retains the failing assertion, and tests both preview and actual
+OpenControl refusal before creating any files. Rust run39423126275 failed strict
+Clippy on six unnecessary borrows of the new environment closure; these are
+removed without changing warnings, coverage or test gates. Rust coverage remained
+a separate live job at observation time. All failures and exact-source reports
+are retained. Neither source is a whole-product readiness qualification.
+
+## 2026-10-21 — managed bootstrap failure recovery and original coverage gates
+
+At source 32b5e177, Go development run39425177578 passed its complete 101-case
+config/lifecycle/launch corpus, six focused binding/preview groups and the eight
+Android-tagged host SQLite cases. Independent Rust push run39425177512 passed
+coverage and all checks before the mandatory empty-profile public startup gate,
+which still returned HTTP503. Native builds succeeded, all three production
+processes were present, no offline store/custody/private-transport seeding was
+used, and the full-product gate correctly stayed NOT_READY.
+
+Source workflow_dispatch run39426623878 failed: native-go coverage was
+14483/15300 statements (94.660131%, below the unchanged 95% floor), so its later
+race and Android steps did not execute. Python3.10/3.11/3.12 each failed the same
+three source-isolation assertions because the bounded Rust custody initializer
+was absent from the static process contract. Downstream Evidence/readiness
+failures do not supply missing upstream qualification.
+
+This descendant retains the original assertions and adds a narrowly checked
+initializer contract: Rust-worker target, absolute non-interpreter path, bounded
+deadline, native process fence/guardian lifetime, explicit environment and
+observed child exit. Adversarial source mutations must fail. Startup fault tests
+exercise actual child initialization/TLS discovery and isolated I/O/permission
+failures. A failed permission change now removes the already-owned Go transport
+session; bounded metadata reads also reject files truncated after their stat.
+No failed startup may start Go control/gateway or replace Rust custody. Writer
+preflight tests corrupt real closed SQLite stores and verify refusal without
+repairing their bytes or claiming a writer.
+
+Development coverage profiles are diagnostics for the selected packages; they
+do not replace the full unfiltered Go coverage/race corpus. All original 95% Go
+and Python and 80% Rust floors, complete CI, and the mandatory default startup
+gate remain required at this descendant's exact revision. No whole-product
+readiness, fresh native-origin domain authority, credential renewal, platform
+execution or production-provider qualification is claimed. No PR is handled
+outside the daily21:40 batch; no merge/release or real-data operation occurs.
+
+
+## 2026-10-21 — patch frontend security advisories without audit exceptions
+
+Source71387d27 Go development run39520023153 passed all107 config/lifecycle/
+launch tests plus96 subtests, all8 binding/preview groups plus24 subtests,
+Android-host SQLite8+7 and pure-Go Windows cross-compilation. Scoped coverage is
+only diagnostic; original full95% and complete race gates remain required.
+
+Its source workflow_dispatch39520571002 exposed a separate security failure:
+Vite8.1.5 is in the affected range for GHSA-587h-7wmj-h5pm,
+GHSA-698v-4r3x-3vcv and GHSA-r825-w8mm-5pxw. The maintainer-patched8.1.6 release
+is applied without changing major/minor versions. React Router's7.18.2 backport
+also removes GHSA-qwww-vcr4-c8h2, satisfying the old exception's removal
+condition; the exception is deleted and its direct/transitive refusal regression
+is retained. Vitest4.1.11 fixes GHSA-82fw-gwwq-j7x9 in the test toolchain. The
+matching package-lock is updated; the high/critical audit gate is unchanged and
+has no current exceptions. Live lockfile audit reports zero vulnerabilities.
+
+Authoritative patch references:
+- https://github.com/advisories/GHSA-587h-7wmj-h5pm
+- https://github.com/advisories/GHSA-698v-4r3x-3vcv
+- https://github.com/advisories/GHSA-r825-w8mm-5pxw
+- https://github.com/advisories/GHSA-qwww-vcr4-c8h2
+- https://github.com/advisories/GHSA-82fw-gwwq-j7x9
+
+Local work resolves lockfiles without installing node_modules, executing package
+scripts or compiling Rust/Go. Frontend type/tests/build/bundle and complete CI
+must run against this exact descendant in the cloud. No parent success, scoped
+projection or unrelated PR candidate qualifies the new source. Native-origin
+initialization/recovery, credential renewal and full platform/product acceptance
+remain open; readiness stays NOT_READY. The original dirty checkout is preserved.
+
+
+## 2026-10-21 — complete the MCP SDK security configuration
+
+The frontend npm audit passed on06291448 in source CI39523187056; its next
+security step exposed @modelcontextprotocol/server2.0.0 advisories
+GHSA-jm63-cq47-j5jp, GHSA-46jr-4wx8-v453 and GHSA-rvq5-wwqv-78pq. The SDK is
+pinned to2.3.1, and its official-registry lockfile audit has zero vulnerabilities.
+The published SDK archive's SHA512 integrity and option declarations were checked.
+
+The service already uses a new server per request through createMcpHandler;
+that isolation is retained. The new SDK's input-count option is explicitly set
+to10000 elements before schema validation, and only the MCP HTTP route receives
+a1MiB request bound. Internal backup/restore streaming retains its separate
+limits. The service uses its existing constant-time opaque-token check, not the
+SDK OAuth requireBearerAuth helper; no OAuth flow or audience acceptance is added.
+Actual SDK regressions must reject oversized input before durable task creation,
+keep normal serving after413, and keep concurrent client response identities
+separate. A disposable cloud copy without both bounds must fail the two relevant
+assertions; the reviewed source and its complete retained test suite must pass.
+
+The development workflow also executes the original CI security job's commands
+without omitting npm, pip-audit, Bandit or baseline secret scanning. It does not
+replace complete source CI, original coverage floors or the default native
+startup gate. Rust/Go/Proto remain unchanged. Native-origin authority/recovery,
+credential renewal and whole-product/platform acceptance remain required;
+readiness stays NOT_READY. No PR, main merge, release or real-data action occurs.
+
+
+## 2026-10-21: native origin candidate and exact-source CI
+
+Source `0992fc6aa631f54e6d92caca239aabcaf48ff8df` completed all 37 original
+workflow-dispatch CI jobs in run `39528399911`. Replayed race reports cover all
+37 Go packages in both variants, original skips only, with Go coverage
+95.03462694368223% / 95.0747058045749%, Rust 82.22526930698648%, and Python
+6479 passed plus the original skip in each of 3.10/3.11/3.12. Independent Rust
+push run `39528276980` still failed the actual empty-profile bootstrap gate.
+A successful source CI is not a successful default launcher or PR merge candidate.
+
+The next connected candidate adds typed native birth/publication custody and
+Go schema 18 initialization described in [the native-origin specification](../../docs/specs/native-origin-initialization.md).
+It keeps v1 custody and existing stores on their original migration path, calls
+the existing sole Go authority-head claim, keeps the original initialization
+action/epoch on a lost response, and refuses a missing Go database after Rust
+publication. Test fixtures use isolated stores and fake keys; the mandatory
+actual launcher/Go/Rust/edge provider-and-restart probe remains the acceptance
+path. Native tests and platform acceptance are pending until exact-source cloud
+reports are collected. No production fallback, feature removal, coverage-floor
+change, release, main merge, or whole-migration qualification is implied.
+
+A crash after the public signer pin is retained but before a Go creation intent
+is persisted still fails closed; automatic recovery of that earlier boundary
+remains to be completed. Custody corruption also remains a refusal, never
+permission to recreate private keys. Keep the complete server, desktop, Android,
+background, provider recovery, credential renewal and Evidence requirements;
+readiness remains `NOT_READY`.
+
+
+## 2026-10-26 media PATCH implementation candidate — qualification pending
+
+The original authenticated launcher counterexample is retained at source
+`b61ac48b49cf13bbb9ef8e33cb2ff504ca2fd19f`: actual native PATCH was HTTP 501 after
+healthy control, authentication and media-read prerequisites; the independent
+original library accepted the same request. That refusal is not acceptance.
+
+The cumulative `codex/rust-cloud/media-patch-implementation-20261026` candidate
+adds typed media v1 gRPC, Go schema-19 operation admission and collection fencing,
+Rust-owned media normalization/publication/effect custody, independently verified
+purpose-bound Rust receipts and original-operation queries. Go never opens the
+media library; Rust never opens the Go control database. Python's retained media
+library writer is mechanically denied in `python_disabled` mode. Production
+execution has no Python, task-program or optional media delegate.
+
+This is an implementation candidate, not authority/recovery or media completion.
+Cloud compilation, regression and actual launcher results remain pending. In
+particular an interrupted APPLYING operation without its exact publication
+witness remains EFFECT_UNKNOWN, holds the collection and cannot be retried from
+an absent/old file. Complete recovery for that case, OS-level path/reparse races,
+Windows directory durability, real process-kill/fault/cancellation/takeover tests,
+all body/error/large-record parity and Android execution remain open. The bounded
+implementation currently limits a library read to 128 MiB and typed messages to
+2 MiB; these bounds require compatibility/resource acceptance rather than a
+blanket retained-functionality claim. Create/upload/delete/process/index remain
+unfinished. Keep all media/product readiness claims false until those pass.
+
+Separately, parent runtime source `b01de5e5ebd6a989c662b23ffff2b3a8feb2aefa`
+completed all original 37 CI jobs in workflow_dispatch run 40261365572. Reports
+independently retain default Go 95.02168583820479% and Android Go 95.00830922631872%
+against their unchanged original 95% floors. Its previously qualified Rust and
+platform reports stay bound to that source; they do not qualify this candidate,
+a PR merge candidate or 5.0 release. Python/Go/Android-Go 95% and Rust 80% floors
+are unchanged. No skip/threshold/ownership/readiness evidence was relaxed.
+
+Native compilation, Go tests and verification containers remain in GitHub Actions;
+only reports return locally. Keep primary checkout bytes/index/dirty files intact.
+No PR outside the daily 09:00 Asia/Shanghai batch, no main merge, release or real
+user/provider-data operation. Full server/desktop/Android/background migration
+stays NOT_READY. The original arbitrary pytest engine requirement remains held
+unfinished per the human decision; no Python exception or feature reduction.
+
+
+### 2026-10-26 first media implementation cloud corrections
+
+Source d8caa8913e193bd774b4b4654558ea943521bec6 was uploaded as an explicitly
+unqualified implementation candidate. The new actual cloud Go -race run
+40292348616 compiled all four packages, but the unsupported-method test read a
+flat code from the unchanged nested GO_API_NOT_IMPLEMENTED error envelope.
+Keep HTTP501, the original envelope and its complete message; correct only the
+new assertion. The cloud Rust coverage job in run40292348780 reached a real
+compiler error at the extracted policy media helper: its old gateway-qualified
+crate path is invalid inside the policy crate. Use crate::core_utils there.
+The source snapshot and failed reports remain immutable; neither failure counts
+as media acceptance or as an observed post-startup PATCH compatibility result.
+
+This three-file follow-up changes no Go production logic, Proto, workflows,
+thresholds, existing tests or readiness evidence. Native compilation/regressions
+remain cloud-only and pending for the new source. All authority/liveness/path
+race/platform/full-media gaps documented in the implementation acceptance stay
+open; retain NOT_READY and the unchanged original95/80percent floors.
+
+
+### 2026-10-26 media import and authenticated transport regressions
+
+The exact follow-up5e4ca1c7 passed the cloud Go media development suite in
+run40293872555. Its Rust lint job121475090471 in run40293872561 then identified
+three retained gateway references missing after extraction: serde_json::Map,
+declared_media_type and media_status. Keep their original behavior and expose/
+import the existing shared helpers rather than duplicate their normalization.
+The failure is compilation, not post-startup PATCH acceptance.
+
+Add five Go-only TCP+TLS+gRPC control/HTTP regressions with a deliberately explicit
+synthetic wire peer. They exercise successful signed settlement, lost reply to
+original-operation query without redispatch, absence preserving EFFECT_UNKNOWN
+and its reservation, forged result denial, and conclusive HTTP404 settlement.
+This test peer creates no Rust/data-plane evidence and never enters production;
+the actual default-launcher Rust write/restart probe remains independently
+mandatory. Original full95percent Go/Android-Go gates remain mandatory and
+pending; scoped coverage cannot substitute for either. Production Go/Proto/
+workflows/readiness bytes are unchanged in this increment. All earlier complete
+media recovery, path race, OS durability/platform and full-product gaps remain
+open. Native compilation/tests remain cloud-only; keep NOT_READY.
+
+
+### 2026-10-26 media lint preservation
+
+Exact source de096243 passed16 Go media top-level tests and26 observed cases
+with race detection in run40296053154, including five real TCP/TLS/gRPC tests
+with the explicitly synthetic peer. This is not Rust file-effect acceptance or
+the original full Go/Android-Go95percent gates. Rust lint job121482266946 in
+run40296053162 rejected an unused normalize_source_ref import and orphaned
+function documentation left behind by extraction. Remove the unused import and
+move the four original comments to their actual shared helper definitions.
+Keep -D warnings, original tests and all coverage floors unchanged. No executable
+normalization, Go/Proto/workflow or readiness behavior changes in this increment.
+Rust compilation/tests and actual default-launcher PATCH remain pending.
+Complete media recovery, path races, Windows durability, all retained metadata
+ordering/key-collision/large-number semantics and full-platform/product scope
+remain unfinished. Keep NOT_READY; all native builds/tests/caches stay cloud-only.
+
+
+## 2026-10-26 original full-gate media contract corrections — pending cloud
+
+Source5aafd954 reached the real original37-job CI graph (run40298668219), and
+its separate Rust coverage job passed the original80percent floor. Full Go
+found the existing1MiB RPC guard had been accidentally raised globally, plus
+historical fixtures still carried empty v19 media tables while claiming older
+schemas. Restore per-method1MiB request/response bounds for every legacy RPC;
+only the three exact typed-media methods may use2MiB. The original oversized/
+duplicate-auth regression stays byte-identical. Add a real RPC case whose
+public-HTTP-valid sub1MB metadata has a typed representation above1MiB.
+
+The common historical-fixture builder may drop v19 media objects only after
+proving its table empty; never relax production foreign-schema validation or
+remove retained history. Keep all v18-specific interruption/provenance and exact
+schema assertions, then complete the additive chain before using current-only
+public lease/outcome readers. Original Go migration failures are explicitly
+selected in the bounded cloud -race development gate, alongside17 media tests.
+
+The full Python3.11 run passed6574 tests plus61 subtests and retained95.51percent
+coverage, but failed three real catalog assertions: the new media denial domain
+was not declared, and the committed protocol catalog still expected11 files/no
+media package. Declare media_library_store with current_owner=python and target
+rust (not a readiness promotion), and explicitly retain all old packages while
+adding media.v1/file12. No skip, threshold, old denial assertion or release
+readiness field is removed. Keep NOT_READY and full product/metadata/recovery/
+path/platform gaps open; actual native patch and exact-source complete gates
+remain independently pending. Native compilers/tests/caches stay cloud-only.
+
+
+## 2026-10-26 media Go failure/recovery regressions — cloud qualification pending
+
+Source d9d4b3ad passed the original full Go test command, but its unmodified
+coverage gate failed at94.65788510793999percent (15522/16398 statements) against
+the original95percent floor. Exact run40315762537/job121547908204 and its raw
+profile are retained; this is an actual full-gate failure, not full qualification.
+Add20 top-level regressions covering malformed typed nesting/numbers/UTF-8 and
+wire bounds, invalid/signed outcome bindings, RPC authorization and replay,
+forwarding credential conflicts, absent/incomplete recovery replies, expired
+undispatched cancellation versus dispatched reservation, host/path/body fields,
+closed or fenced stores, exact-schema/data corruption, atomic SQL-abort rollback,
+short-lease expiry, invalid pinned public identity and retained history.
+
+All original tests/assertions, production Rust/Go/Proto and the original full CI
+and coverage scripts/floors remain unchanged. The bounded development selector
+retains the24 original top-level regressions and now includes all37 media tests
+(61 total); its scoped profile is not the original full Go/Android-Go95 gate.
+Synthetic RPC/response fixtures are explicit and cannot qualify a Rust file
+effect. Parent-source actual default-launcher PATCH/restart/raw-response proof,
+1626 Rust tests and82.0905337766249percent coverage remain separate. New-source
+native tests/compilation are pending cloud; do not transfer older exact-source
+acceptance. All complete media recovery/liveness, retained semantics, path races,
+Windows durability, platforms and full-product requirements remain mandatory.
+Keep NOT_READY and the retained arbitrary pytest/zero-production-Python item
+unfinished without an exception. Native builds/caches/images remain cloud-only.
+
+
+The same source d9d4b3ad also failed Rust push run40314796576 at its first browser
+step before browser execution: Ubuntu Azure-mirror package downloads consumed
+the entire10-minute step. Retain this as setup failure, not a semantic UI result.
+Keep the original pinned Chromium/dependency command and the original10-minute
+actual browser deadline; give dependency setup its own bounded stage with APT
+connection/data timeout30seconds and two retries, plus bounded pip networking.
+No native/browser assertion, report requirement or original floor is removed.
+
+
+### 2026-10-27 media original-operation recovery candidate
+
+Actual cloud RED run40473482975 (df26c547): publication retained after SIGKILL/restart and successor fence2→3, but original Go DISPATCHED/Rust APPLYING never reconciled without a second write. A separate query-only recovery loop is now implemented in the shared Go lifecycle, with live-request exclusion, signed historical settlement, ambiguity barriers and cancellation/drain. Source/unit/race/process qualification is still pending. Keep full migration NOT_READY; do not retry the original uncertain write. The arbitrary pytest MCP engine remains unfinished under the unchanged zero-production-Python requirement.
+
+
+### 2026-10-27 active media intent polling regression
+
+Controlled diagnostics94bcb486/run40495720177: largest legal request timed out within the original10-second observer boundary; Rust retained APPLIED, Go DISPATCHED. Go dominated CPU while the recovery loop repeatedly parsed the live2.5MB intent. Metadata-first expiry/writer filtering is implemented but awaits the unchanged cloud maximum-array workload and all recovery/race/original-floor gates. Never retry that uncertain operation; every verification uses a fresh owned profile. Full migration, remaining media methods and retained pytest MCP execution stay unfinished/NOT_READY.
+
+
+## Current development: native multipart ingestion, still NOT_READY
+
+Source 046f4d231bd966cf55d23c51889493c191bc31e6 has an actual cloud RED
+(run41047503993): the independent original ASGI app accepted one975-byte
+five-file request and stored all five, while the actual native launcher returned
+503 MEDIA_UPLOAD_NOT_READY. Its94 Go/race families passed. Eleven JSON cases
+were observed first, but that failed multipart run did not reach the final
+whole-launcher restart and must not be reported as complete JSON/restart proof.
+
+This child implements process=false uploads through the existing typed
+MediaCreatePayload upload variant, bounded256KiB chunks and original signed
+CREATE admission. Go parses the original220000000-byte body,20 files,24 parts,
+4096-byte fields and eight individual4096-byte header lines, preserving repeated
+fields, last query values, basename cleanup and ordered partial effects. It
+never writes source files or payloads into the control database. Rust alone
+prepares and publishes source bytes, validates the original50MiB/file limit,
+retains suffixes and public records, and verifies original staged content during
+recovery. Each file receives its own original operation/fence; uncertain writes
+are never retried as new operations. Edge framing preserves a missing incoming
+Content-Length so Go authenticates before refusing it; legal multipart forwarding
+has a bounded660-second transport budget.
+
+Three additional Go families and five Rust tests complement all original
+regressions; the existing proxy test adds actual loopback framing and an
+11-second upload. The unchanged actual multipart observer requires five kinds,
+raw byte hashes, partial failure,50MiB and220000000-byte20-file capacity plus
+whole-launcher restart. Local native compilation is prohibited; exact-source
+cloud execution remains pending. Strict field codec equivalence across every
+legacy Python encoding, all malformed multipart inputs, processing/OCR/index,
+upload-specific controlled crashes, browser interaction, Windows/Android and
+whole-product zero-Python CI/Evidence remain unqualified. Do not turn these
+pending requirements into an approved scope reduction or permanent fallback.
+
+Ancestral source cd651621b70609bfd689d8290d753a3958784c4f separately passed its
+original37-job workflow_dispatch CI41014345462: Go15899/16732=95.0215156586%,
+Android Go16219/17070=95.0146455770%, Rust91483/111394=82.1256082015%, and
+Python branch83522/87385=95.5793328374%;50 Evidence files were hash-verified.
+These are original95/95/80/95 floors for that source, not this child or a PR
+merge candidate. The earlier immutable-message fix9834e0bc separately passed
+94 Go/race families and all27 retained-message subcases in41045355443.
+No PR outside the daily09:00 schedule, no main merge, release or real data.
+# Current checkpoint: retained JSON media processing candidate, 2026-10-31
+
+The isolated processing candidate now connects the native six-kind processor
+and exact legacy index projection to the original Go-admitted CREATE. Its
+Rust-only typed preparation binds the processing/final records, segments,
+embedding rows and final public error to the original action/epoch. The journal
+publishes `processing`, retains/confirms source and segment bytes, commits the
+index plus an original-operation marker in one Rust-owned transaction, then
+publishes the final record and signs the outcome. A processing failure retains
+the failed record/source as an applied effect; it does not claim no mutation.
+Historical unprocessed CREATE/PATCH/DELETE bytes and recovery paths remain.
+
+This is a candidate awaiting exact-source cloud compilation and actual HTTP
+qualification, not a readiness claim. Four new Rust journal regressions cover
+the six kinds, retained failed processing, an unresolved source conflict and a
+lost terminal commit; Go signature/TLS regressions preserve the applied-error
+boundary. The actual observer now checks all six creation/index paths and a
+failed PDF's original422/source/failed record before the still-required force
+requests. No original force/index/search or95%/80% threshold is removed.
+
+The pure processor parent fbf3d56e is separately running full Rust tests/coverage.
+Its source-generated bindings came from pinned push run41156749232 at a3482c28;
+that code-generation result is not runtime or PR-candidate validation. At older
+source4688a38c, the original default Go profile is16247/17098=95.022810%; its full
+CI has progressed to Android Go and is not yet qualified as a whole. Never pool
+those revisions or workflow events into one exact-source result.
+
+Standalone force, multipart processing/OCR options, ONNX/provider embedding,
+actual binary OCR/PDF and telemetry, index failure/dimension migration behavior,
+processing-specific process kills and all intermediate recovery phases,
+Windows/Android durability, aggregate legal library capacity and backup
+interactions still require implementation/qualification. Preserve uncertain
+effects as EFFECT_UNKNOWN and reconcile the same original operation. Full
+server/desktop/Android/background functionality, retained MCP test execution,
+zero production Python/server TypeScript, CI/Evidence/platform/release remain
+required. Overall migration remains ACTIVE/NOT_READY; keep local native builds,
+caches and Docker validation in the cloud and retain the original dirty root.
+
+
+## 2026-11-07 multipart upload processing parity checkpoint
+
+Source base: branch `codex/native-media-patch-json-diagnostics-20261106`, tip
+`5548113da591238c34047fcf4a9f35197e99ed76`, tree `074eb417c1d679d385840609e5061982bae8a9d2` — the last exact-source snapshot with three green cloud
+workflows (Rust `42187574976`, media development `42187591554`, Windows
+`42187607273`). Root checkout `D:/deepseek` remains untouched (`b0316d098`, 184
+preserved dirty/untracked entries); this slice lives in the isolated worktree
+`D:/deepseek-worktrees/tip20261106`.
+
+Implemented the original multipart ingestion `process`/`ocrEnabled` options,
+which were previously a permanent `503 MEDIA_PROCESSING_NOT_READY` refusal:
+
+- `go/internal/api/media_upload.go` parses the original `process`,
+  `ocrEnabled` and `apiKey` form/query precedence, derives the request
+  correlation identifier (sanitized header, otherwise one system identifier;
+  `derive_ocr_correlation_id`-style truncation per stored file) and, after each
+  file's settled CREATE, executes the same explicit PROCESS operation used by
+  `POST /api/media/{id}/process`. Earlier files keep their applied effects when
+  a later file fails, matching the original ordered ingestion loop. The success
+  response returns the processed record and the original
+  `X-DeepSeek-Request-ID` header; an unusable header is replaced, never echoed.
+- `go/internal/api/media_process.go` now shares one `runMediaProcess` /
+  `finishMediaProcessed` implementation between the standalone route and the
+  upload loop. Uncertain effects still return `503 EFFECT_UNKNOWN` with the
+  original operation id and are never retried as a new operation.
+- A caller-supplied OCR credential override for image/PDF uploads is refused
+  before any file is stored (`501 MEDIA_OCR_CREDENTIAL_OVERRIDE_NOT_READY`);
+  webpage/audio/video ingestion never invokes OCR and keeps the original
+  ignore-the-key behavior. The request-bound credential custody transport that
+  would remove this refusal remains unimplemented.
+
+Local verification (win32 host, CGO_ENABLED=0):
+
+- `gofmt` clean on all five changed Go files (LF-normalized);
+  `go vet ./internal/api ./internal/media ./internal/worker` PASS.
+- `go test ./internal/api ./internal/media ./internal/worker -count=1` PASS
+  (full `internal/api` package 237s). New multipart subcases: process,
+  process-failure, process-unknown, process-refused,
+  process-credential-refused, process-long-correlation, process-webpage-key,
+  unsafe-request-id. The broader `./internal/store` package timed out at 603s
+  on this constrained host; it is not part of this change and cloud runs it.
+- 207 local Python media/verifier cases PASS, including the real original ASGI
+  route pinned for process=true (ready record, segmentCount, stored segments).
+  Ruff and targeted mypy PASS.
+- `scripts/verify_native_media_upload.py` replays four process=true cases
+  through both the real original ASGI route and the native public route,
+  compares exact records, stored media, source hashes and the segment read
+  model; the report no longer claims `multipartProcessFalseOnly`.
+
+CLOUD_PENDING: the new Go tests, real native launcher upload/process HTTP
+cases, Rust/Windows workflows and the original coverage floors must run on a
+pushed snapshot. No native compilation, Docker or provider workload ran
+locally. Full migration remains NOT_READY.
+
+Next: (1) push the reviewed snapshot and collect the three exact-source cloud
+workflows plus the original Go/Android coverage floors; (2) implement the
+request-bound OCR credential custody transport that removes the remaining 501;
+(3) multipart processing process-kill/intermediate recovery phases and the
+aggregate library capacity/backup interactions; (4) continue the ordered
+remaining chain (diagnostics status blocks, eval report engine, launcher
+platform packages, zero-Python workload, Evidence Assembly).
+
+
+Reviewed local snapshot is recorded in
+`artifacts/native-20261107-multipart-process/manifest.json`. It is committed
+only in the isolated worktree: it has not been pushed and no cloud result is
+claimed.
+
+
+### 2026-11-07 exact-source cloud qualification (eec2853f)
+
+All three user-authorized workflows are green at commit `eec2853f653594289951790fb8b93b91f62a7fd0`, tree
+`094d9a047669b13922db019f37d07f4dd9ff23be`, branch `codex/native-media-multipart-process-20261107`:
+Rust cloud `42323068395` (checks success, coverage success: 1822 tests,
+101319/122016 = 83.0374704956727% against the unchanged 80% floor,
+sourceTreeDirty=false), media development `42323075782` (media-go PASS with
+`-race`, 115 required tests including all eight new multipart process
+subcases), Windows app `42323082715` (windows-app PASS: actual native launcher
+window/WebView2 workload, restart and retained native origin). Only report
+artifacts were downloaded; no caches, binaries, images or volumes.
+
+Not qualified by these runs: full 37-job CI, original Go/Android-Go 95%
+coverage floors, and actual native launcher multipart `process=true` HTTP
+acceptance (`native-media-create.yml` not dispatched). Request-bound OCR
+credential custody, processing process-kill/intermediate recovery, aggregate
+capacity/backup interactions, remaining ordered chain and full migration stay
+open. **NOT_READY**.
+
+Evidence: `artifacts/native-20261107-multipart-process/` review.md,
+cloud-evidence.json, ci-dispatch.json.
+
+
+## 2026-11-07 native `/api/mcp` status route — local, cloud pending
+
+Base: the three-workflow-qualified commit `eec2853f653594289951790fb8b93b91f62a7fd0`
+(tree `094d9a04...`). This slice stays in the same isolated worktree.
+
+- `rust/crates/deepseek-gateway/src/mcp_status_routes.rs` implements `GET /api/mcp`
+  with the original `mcp_status()` shape, derived from the same environment knobs:
+  `MCP_ENABLED`, protocol `2025-06-18`, endpoint `/mcp`, the validated
+  `MCP_CAPABILITY` profile (unknown → `full`), `toolCount` from the native tool
+  catalog restricted to that profile (0 when disabled), both expose flags, and the
+  `MCP_CLIENT_*` family including Python integer/float parsing, clamping, the
+  ordered `MCP_CLIENT_SERVERS` list and per-server timeout overrides. The route is
+  merged ahead of the Go `/api/*` catch-all; the existing `/api/` auth layer
+  requires the token. HEAD returns 200 with an empty body, other methods 405 with
+  `Allow: GET, HEAD`, and nothing is written.
+- `rust/crates/deepseek-gateway/tests/mcp_status_routes.rs` compares the native body
+  with a fresh Python oracle (`deepseek_infra.infra.mcp.server.mcp_status`) under the
+  identical environment across ten case families: defaults, disabled hub,
+  coder/unknown capability, blank and `\x1c`-`\x1f` flags, expose flags off, client
+  overrides and clamps, invalid servers JSON, enabled-without-servers, and
+  underscored/`+` integers. It also asserts the 401 envelope, query-string
+  invariance, 405/HEAD semantics and an empty workspace tree.
+- Local: `rustfmt --check` clean on both new files and on the `lib.rs` addition; the
+  ported environment/precedence algorithm was cross-checked against the real
+  Python oracle for every case (all matched); oracle runs created no files.
+  Native compilation is cloud-only, so no local Rust result is claimed.
+
+CLOUD_PENDING: push this commit and dispatch `rust-cloud.yml`; the workflow runs the
+full workspace tests (including the new oracle integration test), clippy and the
+unchanged 80% coverage floor at the exact source. `/api/mcp` remains listed as
+pending in the ordered chain until that exact-source result is collected.
+
+
+
+### 2026-11-07 native /api/mcp status route (local; cloud pending)
+
+Reviewed local snapshot commit `4394329d760eacf34656dc7d464f24e783c8565b`, tree `b4d799698efeb73fcafbf46325dcdac86e3f9650`, parent `eec2853f653594289951790fb8b93b91f62a7fd0`
+(the three-workflow-qualified multipart process commit). It implements
+`GET /api/mcp` in the Rust gateway with the original `mcp_status()` shape,
+environment precedence/clamps, native tool-catalog counts, ordered client
+servers and per-server timeouts, plus a ten-family Python-oracle integration
+test. Local: rustfmt clean; the ported algorithm matched the real oracle on
+10/10 families and every oracle run left the workspace empty; ruff/mypy pass on
+the committed cross-check tool. No local Rust compilation.
+
+CLOUD_PENDING: push this commit and dispatch `rust-cloud.yml`; workspace tests
+(including the new oracle integration test), clippy and the unchanged 80%
+coverage floor must run at the exact source. Remaining status block:
+`/api/semantic-cache/status`. Full migration remains **NOT_READY**.
+
+Evidence: `artifacts/native-20261107-mcp-status-route/`.
+
+
+### 2026-11-07 rust-cloud qualification of the native /api/mcp route (4394329d)
+
+`rust-cloud.yml` run `42331664556` completed **success** on branch
+`codex/native-mcp-status-route-20261107` at commit `4394329d760eacf34656dc7d464f24e783c8565b`, tree `b4d799698efeb73fcafbf46325dcdac86e3f9650`
+(event `workflow_dispatch`). Both jobs passed:
+
+- Rust checks: success (formatting, clippy, full workspace tests and every
+  actual native process verification, including the new oracle integration
+  test).
+- Rust coverage: success — 1825 Rust tests, `sourceTreeDirty=false`,
+  `101520/122241 = 83.0490588264167%` against the unchanged 80% floor.
+
+`test mcp_status_matches_the_oracle_without_creating_a_store ... ok` is present
+in both the checks-job and coverage-job logs, alongside the two new unit tests.
+Only report/log artifacts were downloaded (722 files); no compiler caches,
+binaries, images or volumes. The native `/api/mcp` status block is now
+exact-source qualified for the bounded Rust workflow.
+
+Not qualified by this run: full 37-job CI and the original Go/Android-Go 95%
+coverage floors, actual native launcher multipart `process=true` HTTP acceptance,
+public-route auth error-envelope parity, request-bound OCR credential custody,
+processing process-kill/intermediate recovery, the eval report engine, launcher
+packages, zero-Python workloads and Evidence Assembly. **NOT_READY.**
+
+Evidence: `artifacts/native-20261107-mcp-status-route/cloud-evidence.json` and
+`received-reports/rust-cloud/`.
+
+
+## 2026-11-07 public auth host and refusal semantics — local, cloud pending
+
+Base: committed slices on top of the three-workflow-qualified multipart snapshot;
+parent `4394329d` (native `/api/mcp`).
+
+- `rust/crates/deepseek-gateway/src/auth.rs` now implements the original
+  `require_api_auth` contract for every public route (`/api/*`, `/v1/*`, `/mcp`,
+  `/a2a*`): the caller's `Host` is checked against the oracle allow-list before
+  the token, both refusals are the flat `{"error": ..., "code": ...}` documents
+  (`unauthorized` / `forbidden`), and the previously special-cased inventory
+  host check is subsumed by the general rule.
+- `rust/crates/deepseek-gateway/src/openai_facade.rs` ports `local_ip()` (UDP
+  probe with the oracle's `is_lan_ip` rules and 30-second cache) and adds it to
+  `allowed_auth_hosts`, so LAN-address deployments stay reachable exactly as
+  before. Only the UDP half of the oracle's detection is ported; a Windows
+  `ipconfig` scan is not (multi-homed hosts may pick a different adapter —
+  recorded as a narrowing).
+- Missing `Host` headers are treated as internal: hyper rejects HTTP/1.1
+  requests without `Host` and HTTP/2 carries `:authority`, so only in-process
+  test requests lack it; this keeps the existing in-process route tests legal.
+- `tests/auth_semantics.rs` compares the native edge with a fresh Python
+  `TestClient` oracle under the identical environment for twenty cases: every
+  public family without a token, wrong-method ordering, `/mcp` `/a2a` `/v1`,
+  localhost/host-with-port/foreign host, foreign host with a valid token,
+  the oracle-detected LAN address, and valid-token successes (status only).
+  It also asserts JSON content types and an empty workspace tree.
+- Local: `rustfmt --check` clean on all changed Rust files; the model of the new
+  middleware matched the real oracle on all 20 cases (see
+  `tasks/native-runtime/auth_semantics_crosscheck.py`); ruff and mypy pass on
+  that tool. No local Rust compilation.
+
+CLOUD_PENDING: push and dispatch `rust-cloud.yml`; the workspace tests, clippy
+and 80% floor must run at the exact source. Remaining known divergences recorded
+for follow-up: offline `/rag/*` sidecar endpoints stay unauthenticated on the
+native edge (they lived on the sidecar in the original topology), unknown
+`/api/*` paths proxy to Go 501 instead of the original SPA/JSON catch-all, and
+full-route auth ordering (route match before auth) is still middleware-first.
+
+
+### 2026-11-07 public auth semantics slice (local; cloud pending)
+
+Reviewed local snapshot commit `2a4f84b149d6f2e5e6ec4e86188bf151e0b33cc8`, tree `c72ed31f7c89f601d0498969ca7b3acc54d5018f`, parent `4394329d760eacf34656dc7d464f24e783c8565b`.
+Public-route auth now matches the original contract: Host allow-list checked
+before the token on every `/api/*`, `/v1/*`, `/mcp` and `/a2a*` route, both
+refusals are the flat `{"error": ..., "code": ...}` documents, and
+`allowed_auth_hosts` includes the machine's LAN address through a ported
+`local_ip()` (UDP probe, oracle `is_lan_ip` rules, 30-second cache; the Windows
+`ipconfig` scan is recorded as a narrowing). A new `tests/auth_semantics.rs`
+compares the edge with a fresh Python `TestClient` oracle for twenty cases;
+locally the model-vs-oracle crosscheck passed 20/20 and rustfmt is clean, while
+the updated route suites now assert the flat envelope.
+
+CLOUD_PENDING: push and dispatch `rust-cloud.yml` at the exact source. Recorded
+follow-ups: `/rag/*` sidecar auth ownership, unknown `/api/*` catch-all parity,
+route-vs-auth ordering, full 37-job CI/Go floors, launcher packages and
+zero-Python workloads. **NOT_READY.**
+
+
+## 2026-11-07 native `POST /api/fetch-url` — local, cloud pending
+
+Parent `f366886c` (public auth semantics slice). The route now runs on the native
+edge:
+
+- `rust/crates/deepseek-gateway/src/fetch_url_route.rs` wires the already
+  probe-verified `deepseek_policy::fetch_url` (SSRF check, DNS-pinned
+  connection, redirect revalidation, cache, HTML extraction) through
+  `fetch_provider`. It reproduces `read_json_body(request)` (declared
+  `Content-Length`, Python `int()` parsing and the `Invalid Content-Length`
+  refusal, 2,000,000-byte bound, empty-body and non-object errors), Python's
+  `str(payload.get("url") or "")` coercion, and `AppError.to_response()` /
+  unhandled-500 envelopes. Non-POST verbs match the original routing: GET and
+  HEAD answer the `/api/{path:path}` catch-all's flat 404, OPTIONS answers the
+  global 204 with both allow lists, and other verbs get FastAPI's 405 with
+  `Allow: OPTIONS`.
+- `rust/crates/deepseek-gateway/tests/fetch_url_route.rs` seeds the real
+  `fetch-url-<sha>.json` cache with the policy's own writer and compares native
+  responses with a fresh Python application under the same workspace root for
+  seventeen cases: cache-hit success envelope, loopback/localhost/`.local`/
+  metadata-IP 403s, ftp/credentials/bad-port/empty/numeric-URL 400s, non-object
+  and empty bodies, invalid JSON (status+code only; the Python JSON parser
+  message is recorded as a narrowing), GET 404, PUT 405 with `Allow: OPTIONS`,
+  OPTIONS 204 with both access-control allow lists, and unauthenticated POST
+  401. A 2,000,001-byte body is refused as 413 by both. The test also asserts
+  the only file under the root is the seeded cache entry.
+
+Local: `rustfmt --check` clean on both new files and the `lib.rs` addition; the
+seventeen oracle outcomes and the single-cache-file workspace were measured
+against the real Python application before writing the test. No local Rust
+compilation.
+
+CLOUD_PENDING: push and dispatch `rust-cloud.yml` at the exact source. Recorded
+narrowings/follow-ups: Python JSON syntax-error messages are not byte-ported
+(status/code are compared), real-network success for a public host is covered by
+the existing policy parity probe rather than this route test, and unauthenticated
+OPTIONS/PUT still hit the auth middleware before routing (the original global
+OPTIONS route and method matching run before auth).
+
+
+### 2026-11-07 native POST /api/fetch-url slice (local; cloud pending)
+
+Reviewed local snapshot commit `573f4166b21edfce78be273761e44dfb5322132f`, tree `6bf07a2b36f4bc0e9602a08f55811fd5ce0a88aa`, parent `2a4f84b149d6f2e5e6ec4e86188bf151e0b33cc8`.
+`POST /api/fetch-url` now runs on the Rust edge: original `read_json_body`
+contract (declared Content-Length with Python int parsing, 2,000,000-byte bound,
+empty-body/non-object errors), Python `str(url or "")` coercion,
+`AppError.to_response()`/unhandled-500 envelopes, and non-POST verb parity
+(GET/HEAD flat 404, OPTIONS global 204 with both allow lists, other verbs 405
+`Allow: OPTIONS`). URL handling reuses the probe-verified
+`deepseek_policy::fetch_url` through `fetch_provider`. A seventeen-case
+Python-oracle test seeds the real fetch cache and compares offline responses
+(success envelope, all URL/body refusals, method semantics, 401, 2,000,001-byte
+413) plus a single-cache-file workspace assertion. `rustfmt` clean; oracle
+statuses/bodies were measured against the real application; no local Rust
+compilation. CLOUD_PENDING: push and dispatch `rust-cloud.yml` at the exact
+source. Recorded follow-ups: Python JSON diagnostics, global OPTIONS/CORS before
+auth, real-network route evidence. **NOT_READY.**
+
+
+### 2026-11-07 auth/fetch slice test fix and redispatch
+
+The auth slice's first full run exposed a test-only bug: in
+`tests/auth_semantics.rs` the `__LOCAL_IP__` placeholder was substituted for the
+oracle request but sent literally as the `Host` header by the native request, so
+the native edge correctly refused it. The fix substitutes the oracle-detected LAN
+address for the native request too. The fixed commits are `2a4f84b1` (auth
+branch, tree `c72ed31f`) and `573f4166` (fetch branch, tree `6bf07a2b`), each
+dispatched again as `rust-cloud` runs `42341457580` and `42341459922`. Earlier
+failures (clippy in run `42339344029`; the placeholder failure in run
+`42340140916`) are retained as prior-failure evidence in the corresponding
+artifact directories. **NOT_READY.**
+
+
+## 2026-11-07 native `POST /api/auth/logout` — local, cloud pending
+
+Parent `573f4166` (native fetch-url). The route now runs on the Rust edge:
+
+- `rust/crates/deepseek-gateway/src/auth_logout_route.rs` returns the original
+  `{"ok": true}` and the Python `SimpleCookie`-rendered expired token
+  (`auth_token=""; HttpOnly; Max-Age=0; Path=/; SameSite=Strict`), and keeps the
+  original non-POST routing: GET/HEAD -> `/api/{path:path}` flat 404, OPTIONS ->
+  global 204 with both access-control allow lists, other verbs -> FastAPI 405
+  with `Allow: OPTIONS`. Authentication itself stays in the shared edge
+  middleware.
+- `rust/crates/deepseek-gateway/tests/auth_logout_route.rs` compares five cases
+  with a fresh Python application under the identical environment: logout with a
+  token (status, body and the exact `Set-Cookie` bytes), logout without a token
+  (flat 401), GET (flat 404), PUT (405 + `Allow: OPTIONS`) and OPTIONS (204 plus
+  `access-control-allow-methods`). It also asserts the workspace stays empty.
+
+Local: `rustfmt --check` clean; the five oracle outcomes and the exact cookie
+string were measured against the real Python application before the test was
+written. No local Rust compilation.
+
+CLOUD_PENDING: push and dispatch `rust-cloud.yml` at the exact source. Recorded
+routing follow-up: unauthenticated GET/PUT to this route still pass through the
+auth middleware before routing, like the other migrated routes.
+
+
+### 2026-11-07 combined gateway-routes qualification source
+
+The auth/fetch/logout slices share one linear reviewed source after a test-only
+fix: commit `6d7edf2d4008d70bd81ecca39374f369ffbf50d1` (branch `codex/native-gateway-routes-20261107`). The fix makes
+every oracle-driven route test snapshot the workspace *after* the Python
+`create_app()` oracle has initialized its request-queue / semantic-cache / trace
+/ workspace-fence stores, then asserts the native requests add no files. Earlier
+runs `42341457580` and `42341459922` failed on the previous empty-workspace
+assertion; that failure and fix are recorded in
+`artifacts/native-20261107-gateway-routes-combined/prior-failure-evidence.json`.
+`rust-cloud` run `42343126498` validates the combined source. **NOT_READY.**
+
+
+## 2026-11-07 native `POST /api/download-save` + shared route support — local, cloud pending
+
+Parent `6d7edf2d` (combined gateway-routes source). This slice adds a real
+top-level Python route and the shared plumbing the migrated routes now use:
+
+- `rust/crates/deepseek-gateway/src/download_save_route.rs` copies an
+  already-generated file from `.generated/` into the user's Downloads folder and
+  answers the original `{"ok","filename","path","downloadUrl"}` envelope.
+  Id resolution/traversal safety and the download URL are the shared
+  `deepseek_policy::generated_files` functions (also used by `GET /api/download`);
+  the module ports `_download_filename` (disk extension wins, doc-extension and
+  `下载`/`点击下载` cleanup, 60-char safe base), the `name (2).ext` collision
+  sequence and the `Path.home()/Downloads` lookup. Non-POST verbs mirror the
+  original catch-all / global-OPTIONS / FastAPI-405 behavior.
+- `rust/crates/deepseek-gateway/src/route_support.rs` now owns the shared
+  `read_json_body` contract (declared `Content-Length`, Python `int()` parsing,
+  bounds, UTF-8, JSON parse, object requirement), the `AppError.to_response()`
+  and unhandled-500 envelopes, and the flat-404 / global-OPTIONS / 405
+  fallbacks. `fetch_url_route` and `auth_logout_route` were refactored onto it
+  without behavior change.
+- `rust/crates/deepseek-gateway/tests/download_save_route.rs` seeds two real
+  generated files and runs the oracle and the native edge in separate home
+  directories under the same workspace root, comparing fifteen cases: six saves
+  including the collision sequence, both id refusals, body errors, GET/PUT/
+  OPTIONS routing and the unauthenticated 401. It compares every response body,
+  the exact downloaded bytes, the complete Downloads tree and that the native
+  requests add no workspace files.
+
+The previous combined run (`42343126498`, source `6d7edf2d`) failed only the
+Rust-formatting step: `cargo fmt --check` reorders `mod` declarations
+alphabetically and `auth_logout_route` had been inserted after `a2a_runner`
+instead of after `auth`. The formatting failure and fix are recorded as
+prior-failure evidence; this commit reorders the modules and adds the two new
+modules in the sorted positions, and `rustfmt --check` is clean on `lib.rs` and
+all new files.
+
+Local: all new/changed Rust files pass `rustfmt --check`; the fifteen oracle
+outcomes, filenames, collision sequence and workspace shapes were measured
+against the real Python application before the test was written. No local Rust
+compilation.
+
+CLOUD_PENDING: push and dispatch `rust-cloud.yml` at the exact source.
+
+
+### 2026-11-07 workspace backup/DR migration plan v1
+
+Added `tasks/native-runtime/workspace-backup-dr-migration-plan.md`: the
+`/api/workspace/*` backup/DR/resilience surface (~100 of the 116 Python routes
+without an explicit native route in the 2026-11-07 audit) is decomposed into
+nine ordered slices: S0 prerequisites (Rust data-domain declarations +
+export/import/fencing/rollback tooling + Go control authority), S1 pure control
+reads, S2 catalog/index, S3 retention, S4 policies/targets (Go control), S5
+restores (Rust data + worker fencing), S6 disaster recovery, S7 resilience,
+S8 workspace artifacts/exports/provenance. Each slice lists its Python modules,
+durable stores, owner plane, oracle/refusal/fault verification and the rule
+that writes only land behind the ownership gate. The plan also tracks the
+already-migrated routes with remaining gaps (`/api/agent-runs/{run_id}/{action}`
+unknown action 404, `/api/automation` root GET/POST, `/api/media/{media_id}/process`
+forwarding, `/api/edge/*`, `/api/mcp/external/tools`, `/api/rag/*` writes,
+`/api/semantic-cache*`, `/api/traces*`, `/api/compress-context`, share target).
+The route-gap audit JSON is retained under `artifacts/` for later matrix
+updates. **NOT_READY** — this is planning, not implemented behavior.
+
+
+### 2026-11-07 download-save source: clippy fix and redispatch
+
+The exact-source run `42345158362` for `67c0f880` failed only the Rust lint
+step: unused `std::path::PathBuf` import in the download-save unit-test module
+(`-D warnings`). The test-execution step in the coverage job had already
+passed. Fixed in `9a74dc56` (tree `29b0c5d4`, parent `67c0f880`) by dropping the
+import; the fixed source is pushed to
+`codex/native-gateway-download-save-20261107` and redispatched as
+`rust-cloud` run `42346115402`. The failure, fix and cancelled-old-run status are
+retained in the slice's prior-failure evidence. **NOT_READY.**
+
+
+### 2026-11-07 route coverage refresh and cloud run E
+
+Refreshed audit on the current source: 209 Python app routes; 99 Rust route
+declarations; 103 Python routes without an explicit native route, of which 14
+are Go-served control/media families (`/api/workspace/backup-policies*`,
+`/api/workspace/backup-targets*`, `/api/media/*`), leaving 89 genuinely
+unmigrated native paths: 71 `/api/workspace/*` backup/DR/resilience routes
+(restores 19, resilience 16, backups 10, disaster-recovery 9, authority 5,
+catalog/retention/exports/artifacts/capacity/budget/rebalances/projects/
+target-capabilities 12), 7 `/api/traces*|/trace/*`, and 11 top-level routes
+(`/api/agent-runs/{run_id}/{action}`, `/api/automation`, `/api/compress-context`,
+`/api/edge/reload|route-preview`, `/api/mcp/external/tools`, `/api/rag/*` writes,
+`/api/semantic-cache*`, `/api/share-target`, `/share-target`).
+
+Cloud run `42346115402` at `9a74dc56` (the auth/fetch/logout/download-save
+combined source): the Rust coverage job is **success** (coverage evidence status
+PASS, 101877/122589 = 83.1045% lines over the 80% floor, `sourceTreeDirty:false`,
+tested revision `9a74dc56`); the checks job passed formatting, lint and the full
+workspace test step and is still running the repo's media process-verification
+steps (45-minute per-step timeout) at the time of this entry. No final run
+conclusion is claimed yet. **NOT_READY.**
+
+
+## 2026-11-07 exact-source cloud qualification for the migrated gateway routes
+
+`rust-cloud.yml` run [42346115402](https://github.com/leizd/DeepSeek-Infra/actions/runs/42346115402) at exact revision `9a74dc56557b474eeef2990a6d032c788ba588ee` (tree
+`29b0c5d4ae5eb15dea446ffa51f829730c520b08`, branch `codex/native-gateway-download-save-20261107`) completed **success** for both jobs:
+
+- **Rust checks**: Rust formatting, clippy for all targets/features with
+  `-D warnings`, the complete workspace test suite (including
+  `tests/auth_semantics.rs`, `tests/fetch_url_route.rs`,
+  `tests/auth_logout_route.rs`, `tests/download_save_route.rs` and the shared
+  `route_support` coverage), and the repository's native process verifications.
+- **Rust coverage**: status PASS, 101877/122589 = 83.1045% lines against the
+  unchanged 80% floor, `sourceTreeDirty: false`,
+  `testedRevision: 9a74dc56557b474eeef2990a6d032c788ba588ee`.
+
+This one source contains and therefore re-qualifies four migrated route slices:
+the public auth host/refusal semantics (`POST /api/fetch-url`, `/api/auth/logout`
+included), the native `POST /api/fetch-url` route, the native
+`POST /api/auth/login`-adjacent logout route, and the native
+`POST /api/download-save` route plus the shared `route_support` read_json_body /
+error-envelope / routing-fallback module. Evidence is sealed under
+`artifacts/native-20261107-download-save-route/` (`cloud-evidence.json`,
+`received-reports/`, resealed review/manifest/local-validation/checkpoint) and
+`cloud-qualification.json` files in the auth/fetch/logout/combined artifact
+directories.
+
+Current native-edge route coverage (refreshed audit, not a completion claim):
+209 Python app routes; 99 Rust route declarations; 103 Python routes without an
+explicit native route, of which 14 are Go-served control/media families
+(`/api/workspace/backup-policies*`, `/api/workspace/backup-targets*`,
+`/api/media/*`), leaving **89 genuinely unmigrated native paths**: 71
+`/api/workspace/*` backup/DR/resilience routes (restores 19, resilience 16,
+backups 10, disaster-recovery 9, authority 5, catalog/retention/exports/
+artifacts/capacity/budget/rebalances/projects/target-capabilities 12), 7
+`/api/traces*|/trace/*`, and 11 top-level routes (`/api/agent-runs/{run_id}/{action}`,
+`/api/automation`, `/api/compress-context`, `/api/edge/reload|route-preview`,
+`/api/mcp/external/tools`, `/api/rag/*` writes, `/api/semantic-cache*`,
+`/api/share-target`, `/share-target`). The `/api/workspace/*` workstream is
+decomposed in `workspace-backup-dr-migration-plan.md` (S0 prerequisites through
+S8).
+
+The migration as a whole remains **ACTIVE / NOT_READY**: the 37-job full CI,
+Go/Android-Go 95% coverage floors, desktop/Android/launcher packaging,
+zero-Python clean-environment workloads, provider/persistence/fault evidence,
+the full backup/restore/DR surface and Evidence Assembly are still open.
+
+
+## 2026-11-07 final phase status for this goal run
+
+`tasks/native-runtime/HANDOFF.md` now records the complete handoff state:
+qualified source `9a74dc56` (run `42346115402`, checks+coverage success,
+83.1045% lines), the four cloud-qualified native-edge route slices, branch/
+worktree layout, sealed evidence locations, the 89 remaining unmigrated native
+paths, the S0-S8 backup/DR plan, the ownership-inversion execution steps, the
+platform/zero-Python gates, the full-CI/fault/provider verification requirements,
+and the next concrete slices. The whole-objective assessment is **ACTIVE /
+NOT_READY** and will not be marked complete: the 37-job CI, platform packages,
+zero-Python workloads, backup/restore/DR/resilience surface and Evidence
+Assembly are still open.
+
+
+## 2026-11-07 S1 first slice: native `GET /api/workspace/backup-target-capabilities`
+
+Parent `9a74dc56` (the cloud-qualified gateway sources). This is the first
+implemented route of the workspace backup/DR migration plan's S1 read-only
+control group; it reads no durable store and writes nothing, so it does not wait
+for S0 ownership declarations.
+
+- `rust/crates/deepseek-gateway/src/workspace_backup_routes.rs` answers the
+  original capability body from the native runtime's actual target support:
+  `s3TargetAvailable: true` (the native runtime ships a real S3 client in
+  `deepseek-storage`/`object_store`, unlike Python's optional `boto3` import),
+  `webdavTargetAvailable: false`, `supportedKinds: ["filesystem", "s3"]`,
+  `reservedKinds: ["webdav"]`. GET/HEAD are served by the route; OPTIONS and
+  non-matching verbs use the shared global-OPTIONS / FastAPI-405 fallbacks.
+- `rust/crates/deepseek-gateway/tests/workspace_backup_capabilities.rs` pins the
+  byte-exact oracle body by giving the Python subprocess a stub `boto3` module on
+  `PYTHONPATH` — the deployment shape where Python also advertises S3 — then
+  compares GET body, PUT (405 + `Allow: OPTIONS`), OPTIONS (204 + allow list)
+  and unauthenticated GET (401), plus a workspace-unchanged assertion. HEAD is
+  checked natively only, because the TestClient route path reaches the static
+  catch-all in this fixture.
+
+Recorded narrowing: when a Python deployment lacks the optional S3 SDK its
+original route reports `s3TargetAvailable: false`; the native runtime reports its
+actual support (`true`). The JSON schema is unchanged and the test pins the
+S3-enabled contract byte-for-byte.
+
+Local: `rustfmt --check` clean on the new files and `lib.rs`; the oracle body and
+method behavior were measured against the real Python application with the stub
+module before the test was written. No local Rust compilation.
+
+CLOUD_PENDING: push and dispatch `rust-cloud.yml` at the exact source.
+
+
+### 2026-11-07 S1 slice: inventory snapshot fix and redispatch
+
+The first exact-source run `42357826574` for `afb6cddd` failed at the first
+substantive step in both jobs: `scripts/production_runtime_inventory.py --check`
+reported a stale snapshot, because migrating a route changes
+`release/production_runtime_inventory_v1.json` (`http_routes_only_on_python`
+must lose the migrated path). Regenerated the committed snapshot with
+`--write` (diff removes exactly the one migrated route) and amended the slice to
+`e3aa9e22` (tree `fc54f077`, parent `9a74dc56`); force-pushed the validation
+branch and redispatched as `rust-cloud` run `42357942244`. The stale-snapshot
+failure and fix are retained in the slice's prior-failure evidence.
+**NOT_READY.**
+
+
+## 2026-11-07 S1 second slice: native `GET /api/workspace/backups/capabilities`
+
+Parent `e3aa9e22` (S1a backup-target capabilities). The route returns the
+original restorable-backup capability body from the native runtime:
+
+- `rust/crates/deepseek-gateway/src/workspace_backup_routes.rs` now serves both
+  `/api/workspace/backup-target-capabilities` and
+  `/api/workspace/backups/capabilities`. The second body is the Python
+  capability description with native capability truths: encryption always
+  available (`backup-crypto` is part of the Rust runtime: `formats: ["age-v1"]`,
+  all three protection modes, no `reason` field), static schema/purpose/modes/
+  restoreModes/coveragePolicies/contributor/projection/limits constants, and the
+  external stateless-MCP contributor probed over HTTP exactly like the original
+  2-second request (`STATELESS_MCP_BACKUP_URL` + optional
+  `STATELESS_MCP_BACKUP_TOKEN`; contributorId/schemaVersion validation; any
+  failure becomes `{"available": false, "reason": "service unavailable"}`).
+- `rust/crates/deepseek-gateway/tests/workspace_backup_restore_capabilities.rs`
+  exercises both probe states against the Python oracle: no stateless-MCP
+  endpoint configured (both sides "service unavailable") and a real local HTTP
+  contributor endpoint configured for both sides (both sides report available),
+  with byte-exact body comparison, PUT/OPTIONS/unauthenticated routing, a
+  crypto-helper stub file so Python also advertises encryption, and an unchanged
+  workspace assertion.
+- Regenerated `release/production_runtime_inventory_v1.json`: the machine
+  inventory loses `/api/workspace/backups/capabilities` from
+  `http_routes_only_on_python`, and `scripts/production_runtime_inventory.py
+  --check` passes.
+
+Recorded narrowing: a Python deployment without the optional backup-crypto
+helper reports encryption unavailable; the native runtime always reports its
+real built-in crypto capability.
+
+Local: `rustfmt --check` clean on the module, the new test and `lib.rs`; both
+probe-state bodies were measured against the real Python application before the
+test was written. No local Rust compilation.
+
+CLOUD_PENDING: push and dispatch `rust-cloud.yml` after the S1a run is collected.
+
+
+## 2026-11-07 S1 third slice: native read-only trace routes
+
+Parent `2a0f1ef9` (S1b backups capabilities). The three JSON trace routes now
+run on the Rust edge:
+
+- `rust/crates/deepseek-gateway/src/trace_routes.rs` is a read-only port of the
+  original `observability` store queries and `observability/export.py`
+  redaction: `GET /api/traces` (limit parsing with Python `int()` rules,
+  1..=1000 clamp, list order and `tracing` status), `GET /api/traces/{trace_id}`
+  (run + spans + summary, 404 `Trace not found`), and
+  `GET /api/traces/{trace_id}/export.json` (redacted trace + `_export`
+  `trace-export.v1` block and the original attachment filename). The Rust side
+  opens `.traces/traces.sqlite3` read-only, never creates the directory/schema,
+  and treats a missing store like an empty one. Redaction matches the original
+  key rules (`apiKey`/tokens/cookies/secrets, token-count exceptions), inline
+  secret regexes (Bearer, `sk-` keys, query/header tokens), character-based
+  clipping (1200 private-content / 2000 general) and the original span
+  offset/duration/token mapping.
+- Method routing reproduces the original: POST answers the `/api/{path:path}`
+  catch-all's flat 404, OPTIONS the global 204 with both allow lists, other
+  verbs FastAPI's 405 with `Allow: OPTIONS`; `/trace/{trace_id}` now requires
+  authentication (the page itself is served by the SPA fallback, with its
+  trace-existence 404 still recorded as a follow-up).
+- `rust/crates/deepseek-gateway/tests/trace_routes.rs` seeds the real WAL-mode
+  trace store through the Python writer (two traces: an older `a2a` run and a
+  newer `chat` run with sensitive metadata, a `sk-` key, a Bearer header, a
+  1500-character output and an error span), drops the WAL side files, then
+  compares list/detail/export bodies byte-for-byte (export timestamp normalised
+  and shape-checked), missing-trace 404s, POST 404, PUT 405 + `Allow: OPTIONS`,
+  OPTIONS access-control headers and the unauthenticated 401. It also asserts
+  the newest trace is first and that native reads change no workspace files
+  except the tolerated SQLite WAL companion files.
+
+Recorded narrowings: the route reads the Python-authoritative store (this is a
+read-only migration; `observability_trace_store` cutover still needs the native
+writer); `/trace/{trace_id}` keeps the SPA fallback instead of the original
+trace-existence check; SQLite may create `-shm`/`-wal` companions on a read-only
+WAL open.
+
+Local: `rustfmt --check` clean on the module, test, `auth.rs` and `lib.rs`; the
+production runtime inventory check passes. Every expected body used by the test
+was measured against the real Python application first. No local Rust
+compilation.
+
+CLOUD_PENDING: push after the S1a run is collected and dispatch `rust-cloud.yml`.
+
+
+### 2026-11-07 trace slice compile fixes and redispatch
+
+The first exact-source run `42362713997` for `f4419e7b` failed compilation in
+both jobs: `unresolved import regex` (the gateway crate did not depend on the
+workspace regex pin) and `no method json on reqwest::blocking::Response` (the
+gateway reqwest has no `json` feature). Fixed by adding
+`regex = { workspace = true }` to `deepseek-gateway` and parsing the external
+contributor probe with `response.text()` + `serde_json::from_str`; amended to
+`610624eda33880ebfb518d8b056d1b98ddd2d266` (tree `7dfff5a9`) and redispatched
+`rust-cloud` run `42363537198`. The failure/fix pair is retained in the trace
+slice's prior-failure evidence. **NOT_READY.**
+
+
+### 2026-11-07 trace slice: Cargo.lock fix and redispatch
+
+Run `42363537198` for `610624eda` (the first compile-fixed trace source) failed in
+both jobs at the very first cargo command: `the lock file rust/Cargo.lock needs to
+be updated but --locked was passed` — the new `regex` dependency of
+`deepseek-gateway` was not recorded. Refreshed the lock offline
+(`cargo metadata --offline`) and reduced the diff to exactly one added `regex`
+entry under the gateway package; `cargo metadata --locked --offline` now exits 0.
+Amended to `8a2b4c76a221f9fa897a4a823dd048c51e26b0a9` (tree `f24f715b`), pushed to
+`codex/native-workspace-traces-20261107`, and redispatched `rust-cloud` run
+`42458876560`. All three trace-run failures (`42362713997` compile errors,
+`42363537198` stale lock) and their fixes are retained in the slice's
+prior-failure evidence. **NOT_READY.**
+
+
+## 2026-11-07 S1a exact-source qualification (e3aa9e22)
+
+`rust-cloud.yml` run [42357942244](https://github.com/leizd/DeepSeek-Infra/actions/runs/42357942244)
+at exact revision `e3aa9e22bf5830e0f6c5e14992f7c5426ac6cd9c` (tree `fc54f077`,
+branch `codex/native-workspace-capabilities-20261107`) completed **success** for
+both jobs:
+
+- **Rust checks**: rustfmt, clippy (all targets/features, `-D warnings`), the full
+  workspace test suite and the repository's native process verifications.
+- **Rust coverage**: PASS, 101912/122624 = 83.1093% lines over the unchanged 80%
+  floor, `sourceTreeDirty: false`, **1837** tests.
+
+`test backup_target_capabilities_match_the_s3_enabled_oracle ... ok` is present in
+the coverage job log, proving the first S1 read-only control route
+(`GET /api/workspace/backup-target-capabilities`) was really exercised at this
+commit. Evidence is sealed in
+`artifacts/native-20261107-workspace-backup-capabilities/` (`cloud-evidence.json`,
+`received-reports/`, resealed review/manifest/local-validation/checkpoint,
+prior-failure-evidence for the stale-inventory run `42357826574`).
+
+Still **NOT_READY**: the S1b/S1c slices above this source are unqualified, and the
+remaining 71 `/api/workspace/*` routes, ownership inversion, platform packages,
+zero-Python workloads, full CI and Evidence Assembly stay open.

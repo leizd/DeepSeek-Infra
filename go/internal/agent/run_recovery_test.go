@@ -18,6 +18,28 @@ type recoveryReferenceCall struct {
 	OutputIDs    []string `json:"outputIds"`
 }
 
+func TestResumeWithoutPlannerOutputUsesLegacyDefaultDAGForNilAndEmptyPlans(t *testing.T) {
+	want := []RunPlanNode{
+		{ID: "researcher", Task: "核查事实、背景和可能需要搜索的信息"},
+		{ID: "coder", Task: "分析代码、架构、实现路径和工程风险", DependsOn: []string{"researcher"}},
+		{ID: "reasoner", Task: "梳理推理链路、边界条件和可执行方案", DependsOn: []string{"researcher"}},
+		{ID: "critic", Task: "检查方案风险、遗漏和反例", DependsOn: []string{"researcher", "coder", "reasoner"}},
+	}
+	for _, plan := range [][]RunPlanNode{nil, {}} {
+		checkpoint := RunRecoveryCheckpoint{Plan: plan, NodeStates: map[string]string{}}
+		decision, err := PlanRunRecovery(RunRecoveryRequest{Mode: "resume"}, checkpoint)
+		if err != nil || !reflect.DeepEqual(decision.Plan, want) || !reflect.DeepEqual(decision.Execute, want) ||
+			!decision.Synthesize || !decision.ResetFinal || decision.CompleteImmediately ||
+			!reflect.DeepEqual(decision.ResetIDs, []string{"researcher", "coder", "reasoner", "critic"}) ||
+			!reflect.DeepEqual(decision.SynthesisOutputIDs, []string{"researcher", "coder", "reasoner", "critic"}) {
+			t.Fatalf("empty public plan lost the retained Python default recovery DAG: %+v %v", decision, err)
+		}
+		if len(checkpoint.Plan) != 0 {
+			t.Fatal("effective recovery plan overwrote its public checkpoint")
+		}
+	}
+}
+
 func TestRunRecoveryMatchesRetainedControllerDecisions(t *testing.T) {
 	body, err := os.ReadFile("testdata/run_recovery_decisions_v2.json")
 	if err != nil {

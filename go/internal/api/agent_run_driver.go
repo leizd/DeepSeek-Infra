@@ -16,6 +16,7 @@ import (
 	agentv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/agentv1"
 	commonv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/commonv1"
 	"github.com/leizd/DeepSeek-Infra/go/internal/store"
+	"github.com/leizd/DeepSeek-Infra/go/internal/worker"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -37,6 +38,7 @@ type agentDriverWorker interface {
 	QueryAgentNodeEffect(context.Context, *agentv1.QueryAgentNodeEffectRequest) (*agentv1.AgentNodeEffectMetadata, error)
 	ProjectAgentPlan(context.Context, *agentv1.ProjectAgentPlanRequest) (*agentv1.AgentPlanProjectionReceipt, error)
 	ProjectAgentSynthesis(context.Context, *agentv1.ProjectAgentSynthesisRequest) (*agentv1.AgentSynthesisProjectionReceipt, error)
+	ProjectAgentFailure(context.Context, *agentv1.ProjectAgentFailureRequest) (*agentv1.AgentFailureProjectionReceipt, error)
 }
 
 type agentRunDriver struct {
@@ -99,18 +101,18 @@ func (driver *agentRunDriver) run(ctx context.Context) {
 					return
 				}
 				run, found, err := driver.service.control.AgentRunMetadata(record.ID)
-				if err != nil || !found || !driverRunnable(run) && !run.Cancelled {
+				if err != nil || !found || !driverRunnable(run) && !run.CancellationActive() {
 					continue
 				}
 				live[run.RunID] = true
-				if run.Cancelled {
+				if run.CancellationActive() {
 					err = driver.recoverCancellation(ctx, run)
 				} else {
 					err = driver.drive(ctx, run)
 				}
 				if err == nil {
 					delete(prior, run.RunID)
-				} else if prior[run.RunID] != err.Error() {
+				} else if ctx.Err() == nil && prior[run.RunID] != err.Error() {
 					// Never log bodies, grants, bearer tokens or claim tokens.
 					log.Printf("agent driver run=%s waiting: %s", run.RunID, driverErrorCode(err))
 					prior[run.RunID] = err.Error()
@@ -133,22 +135,27 @@ func driverErrorCode(err error) string {
 		return errAgentDriverTools.Error()
 	case errors.Is(err, context.Canceled):
 		return "AGENT_DRIVER_CANCELLED"
+	case errors.Is(err, worker.ErrControlSignerResponse):
+		return "AGENT_DRIVER_SIGNER_BINDING_INVALID"
+	case errors.Is(err, worker.ErrWorkerTLSConfigInvalid):
+		return "AGENT_DRIVER_WORKER_TRANSPORT_INVALID"
 	default:
 		return "AGENT_DRIVER_AUTHORITY_OR_TRANSPORT_UNAVAILABLE"
 	}
 }
 
 func driverRunnable(run agent.RunMetadata) bool {
-	return !run.Cancelled && (run.Status == "created" || run.Status == "planning" || run.Status == "running")
+	return !run.CancellationActive() && (run.Status == "created" || run.Status == "planning" || run.Status == "running")
 }
 
 func driverTasksComplete(run agent.RunMetadata) bool {
-	if len(run.Plan) == 0 {
+	plan := run.ExecutionTasks()
+	if len(plan) == 0 {
 		return false
 	}
 	nodes := run.Nodes()
-	for _, entry := range run.Plan {
-		if nodes[entry.ID].State != "succeeded" || nodes[entry.ID].Failed {
+	for _, entry := range plan {
+		if !nodes[entry.ID].TaskOutputSettled() {
 			return false
 		}
 	}
@@ -159,6 +166,9 @@ func (driver *agentRunDriver) phase(run agent.RunMetadata) (agentv1.AgentRunExec
 	phase := agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_PLAN
 	if run.Status == "running" {
 		phase = agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_TASKS
+		if run.Recovery != nil && run.Recovery.Metadata != nil && len(run.Recovery.Metadata.Execute) == 0 && run.Recovery.Metadata.Synthesize {
+			phase = agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_SYNTHESIS
+		}
 	}
 	records, err := driver.service.control.ListAuthoritativeRecords("action")
 	if err != nil {
@@ -175,8 +185,14 @@ func (driver *agentRunDriver) phase(run agent.RunMetadata) (agentv1.AgentRunExec
 		if err != nil || binding.RunID != run.RunID {
 			continue
 		}
+		if record.State == "FAILED" {
+			if err := driver.verifiedPriorFailure(run, record); err != nil {
+				return phase, nil, err
+			}
+			continue
+		}
 		matching := binding.Request == run.Request && binding.PlanDigest == planDigest && binding.MetadataIndex <= run.NextIndex
-		if !matching && binding.Phase == executionPhaseName(phase) && record.State != "SUCCEEDED" {
+		if !matching && binding.Phase == executionPhaseName(phase) && record.State != "SUCCEEDED" && record.State != "CANCELLED_CONFIRMED" {
 			return phase, nil, errAgentDriverUnknown
 		}
 		if !matching {
@@ -356,6 +372,9 @@ func (driver *agentRunDriver) drive(ctx context.Context, run agent.RunMetadata) 
 	if !ok {
 		return errAgentDriverCustody
 	}
+	if phase == agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_SYNTHESIS && driverNeedsRecoveryProgress(run) {
+		return driver.recoveryProgress(ctx, client, run)
+	}
 	claim, err := driver.admission(ctx, run, phase, existing)
 	if err != nil {
 		return err
@@ -373,6 +392,9 @@ func (driver *agentRunDriver) drive(ctx context.Context, run agent.RunMetadata) 
 		effect, err := driver.node(phaseCtx, client, nodes, claim, grant, "leader")
 		if err != nil {
 			return err
+		}
+		if effect.OutcomeReceipt.Evidence.Failure != nil {
+			return driver.failure(phaseCtx, client, nodes, claim, effect, run.NextIndex)
 		}
 		candidates := make([]agent.RunPlanNode, 0)
 		for _, node := range effect.OutcomeReceipt.Evidence.ProviderPlan {
@@ -400,6 +422,9 @@ func (driver *agentRunDriver) drive(ctx context.Context, run agent.RunMetadata) 
 		if err != nil {
 			return err
 		}
+		if effect.OutcomeReceipt.Evidence.Failure != nil {
+			return driver.failure(phaseCtx, client, nodes, claim, effect, run.NextIndex)
+		}
 		projection, err := client.ProjectAgentSynthesis(phaseCtx, &agentv1.ProjectAgentSynthesisRequest{SchemaVersion: 1,
 			Source: driverQuery(effect), SettlementFence: claim.Fence, SettlementWriterToken: claim.WriterFencingToken,
 			MetadataEpoch: claim.MetadataEpoch, ExpectedIndex: run.NextIndex})
@@ -415,8 +440,39 @@ func (driver *agentRunDriver) drive(ctx context.Context, run agent.RunMetadata) 
 	}
 }
 
+func (driver *agentRunDriver) failure(ctx context.Context, client agentDriverWorker, nodes *agentNodeService, claim *agentv1.AgentRunExecutionClaim, effect *agentv1.AgentNodeEffectMetadata, index int64) error {
+	projection, err := client.ProjectAgentFailure(ctx, &agentv1.ProjectAgentFailureRequest{SchemaVersion: 1, Source: driverQuery(effect),
+		SettlementFence: claim.Fence, SettlementWriterToken: claim.WriterFencingToken, MetadataEpoch: claim.MetadataEpoch, ExpectedIndex: index})
+	if err != nil {
+		return err
+	}
+	_, err = nodes.SettleFailure(ctx, &agentv1.SettleAgentFailureRequest{SchemaVersion: 1,
+		OperationId: driverOperation("settle-failure:", claim.Fence.ActionId, ":", claim.Fence.ExecutionEpoch), Actor: agentDriverActor,
+		Fence: claim.Fence, RunId: claim.RunId, Owner: claim.Owner, ClaimToken: claim.ClaimToken, Projection: projection})
+	return err
+}
+
+func driverReceiptDigest(receipt *agentv1.AgentNodeOutcomeReceipt) (string, error) {
+	if receipt == nil {
+		return "", errAgentDriverCustody
+	}
+	raw, err := proto.MarshalOptions{Deterministic: true}.Marshal(receipt)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:]), nil
+}
+
 func driverQuery(effect *agentv1.AgentNodeEffectMetadata) *agentv1.QueryAgentNodeEffectRequest {
-	return &agentv1.QueryAgentNodeEffectRequest{OperationId: effect.OperationId, Fence: effect.Fence, RunId: effect.RunId, NodeId: effect.NodeId}
+	if effect == nil {
+		return nil
+	}
+	digest, err := driverReceiptDigest(effect.OutcomeReceipt)
+	if err != nil {
+		return nil
+	}
+	return &agentv1.QueryAgentNodeEffectRequest{OperationId: effect.OperationId, Fence: effect.Fence, RunId: effect.RunId, NodeId: effect.NodeId, ExpectedReceiptSha256: digest}
 }
 
 func (driver *agentRunDriver) node(ctx context.Context, client agentDriverWorker, nodes *agentNodeService, claim *agentv1.AgentRunExecutionClaim, grant []byte, id string) (*agentv1.AgentNodeEffectMetadata, error) {
@@ -428,8 +484,15 @@ func (driver *agentRunDriver) node(ctx context.Context, client agentDriverWorker
 	if prior.Found {
 		// Only actual retained Rust custody can resolve a committed reservation.
 		// An absent response or lost connection never grants a second call.
-		effect, err = client.QueryAgentNodeEffect(ctx, &agentv1.QueryAgentNodeEffectRequest{OperationId: prior.Intent.OperationId,
-			Fence: prior.Intent.Fence, RunId: claim.RunId, NodeId: id})
+		query := &agentv1.QueryAgentNodeEffectRequest{OperationId: prior.Intent.OperationId, Fence: prior.Intent.Fence, RunId: claim.RunId, NodeId: id}
+		if prior.OutcomeReceipt != nil {
+			digest, digestErr := driverReceiptDigest(prior.OutcomeReceipt)
+			if digestErr != nil {
+				return nil, digestErr
+			}
+			query.ExpectedReceiptSha256 = digest
+		}
+		effect, err = client.QueryAgentNodeEffect(ctx, query)
 	} else if claim.ReconciliationRequired {
 		return nil, errAgentDriverUnknown
 	} else {
@@ -471,20 +534,17 @@ func (driver *agentRunDriver) node(ctx context.Context, client agentDriverWorker
 
 func (driver *agentRunDriver) tasks(ctx context.Context, client agentDriverWorker, nodes *agentNodeService, claim *agentv1.AgentRunExecutionClaim, grant []byte, run agent.RunMetadata) error {
 	for !driverTasksComplete(run) {
-		entries := append([]agent.RunPlanNode(nil), run.Plan...)
+		entries := run.ExecutionTasks()
 		sort.Slice(entries, func(i, j int) bool { return entries[i].ID < entries[j].ID })
 		ready := ""
 		states := run.Nodes()
 		for _, entry := range entries {
-			if states[entry.ID].State == "succeeded" && !states[entry.ID].Failed {
+			if states[entry.ID].TaskOutputSettled() {
 				continue
-			}
-			if states[entry.ID].State == "failed" || states[entry.ID].Failed {
-				return errAgentDriverUnknown
 			}
 			dependencies := true
 			for _, dependency := range entry.DependsOn {
-				if states[dependency].State != "succeeded" || states[dependency].Failed {
+				if !states[dependency].TaskOutputSettled() {
 					dependencies = false
 					break
 				}
@@ -532,7 +592,7 @@ func (driver *agentRunDriver) tasks(ctx context.Context, client agentDriverWorke
 // Cancelled recovery observes only retained dispatches. It cannot issue a grant,
 // execute a node, project output or schedule dependencies/synthesis.
 func (driver *agentRunDriver) recoverCancellation(ctx context.Context, run agent.RunMetadata) error {
-	if !run.Cancelled || run.Status != "cancelled" {
+	if !run.CancellationActive() || run.Status != "cancelled" {
 		return errAgentDriverUnknown
 	}
 	if err := driver.service.executionProcess(); err != nil {

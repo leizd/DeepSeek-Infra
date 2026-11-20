@@ -15,38 +15,42 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 
 /** Android startup glue. Business requests go through the Rust edge and Go control process. */
 final class NativeRuntime {
     static final int SERVER_PORT = 8000;
-    private static final int CONTROL_PORT = 8090;
     private static final String TAG = "DeepSeekNative";
     private final Context context;
     private final File root;
     private final Object childLock = new Object();
     private volatile boolean stopped;
-    private volatile Process gateway;
-    private volatile Process control;
+    private volatile Process launcher;
+    private OutputStream parentLifetime;
     private volatile PlatformOcrServer platform;
     private String authToken;
     private JSONObject bundle;
+    private File bundleRoot;
     private final AtomicLong generation = new AtomicLong();
 
     NativeRuntime(Context context) {
         this.context = context.getApplicationContext();
-        // Keep the legacy app's data root. Bundled resources never overwrite dot stores.
+        // Retain the legacy app's authoritative data root. Resources and logs
+        // live in sibling app directories, outside native profile admission.
         this.root = context.getFilesDir();
     }
 
     synchronized String start() throws Exception {
-        if (!stopped && alive(gateway) && alive(control)) {
+        if (!stopped && alive(launcher) && platform != null && platform.alive()) {
             return launchUrl();
         }
         stopped = false;
@@ -69,7 +73,7 @@ final class NativeRuntime {
         if (bundle == null) {
             return "native bundle not loaded";
         }
-        return "Rust/Go " + bundle.optString("version") + "; platform OCR: ML Kit; control ownership: shadow";
+        return "Rust/Go " + bundle.optString("version") + "; platform OCR: ML Kit; control ownership: managed Go native authority";
     }
 
     private String launchUrl() {
@@ -78,6 +82,7 @@ final class NativeRuntime {
     }
 
     private void installAssets() throws Exception {
+        bundleRoot = outsideDataDirectory("native-assets");
         try (InputStream stream = context.getAssets().open("native/bundle.json")) {
             bundle = new JSONObject(new String(readAll(stream), StandardCharsets.UTF_8));
         }
@@ -96,8 +101,8 @@ final class NativeRuntime {
                 || relative.contains("..") || relative.contains("\\")) {
                 throw new IOException("Invalid bundled resource path");
             }
-            File output = new File(root, relative);
-            if (!output.getCanonicalPath().startsWith(root.getCanonicalPath() + File.separator)) {
+            File output = new File(bundleRoot, relative);
+            if (!output.getCanonicalPath().startsWith(bundleRoot.getPath() + File.separator)) {
                 throw new IOException("Bundled resource escapes app storage");
             }
             String expected = entry.getString("sha256");
@@ -117,6 +122,16 @@ final class NativeRuntime {
             }
             writeAtomic(output, contents);
         }
+    }
+
+    private File outsideDataDirectory(String name) throws IOException {
+        File directory = context.getDir(name, Context.MODE_PRIVATE).getCanonicalFile();
+        File data = root.getCanonicalFile();
+        if (!directory.isDirectory() || directory.equals(data)
+                || directory.getPath().startsWith(data.getPath() + File.separator)) {
+            throw new IOException("Native resources and logs must remain outside runtime data");
+        }
+        return directory;
     }
 
     private String loadAuthToken() throws IOException {
@@ -146,10 +161,7 @@ final class NativeRuntime {
             }
         }
         File libraries = new File(context.getApplicationInfo().nativeLibraryDir);
-        File logs = new File(root, ".native-runtime-logs");
-        if (!logs.isDirectory() && !logs.mkdirs()) {
-            throw new IOException("Cannot create native runtime log directory");
-        }
+        File logs = outsideDataDirectory("native-logs");
         // A killed control process leaves a durable writer lease. Restart the
         // executables within a bounded readiness window; Go alone decides when
         // a successor may claim that lease. Never edit or bypass its journal.
@@ -157,7 +169,7 @@ final class NativeRuntime {
         while (!stopped && System.nanoTime() < deadline) {
             awaitPreviousChildren();
             launchChildren(libraries, logs);
-            while (!stopped && System.nanoTime() < deadline && alive(control) && alive(gateway)) {
+            while (!stopped && System.nanoTime() < deadline && alive(launcher)) {
                 if (ready()) {
                     return;
                 }
@@ -171,10 +183,10 @@ final class NativeRuntime {
     }
 
     private void awaitPreviousChildren() throws Exception {
-        Process previousGateway = gateway, previousControl = control;
+        Process previous = launcher;
         terminateChildren();
-        long stopDeadline = System.nanoTime() + 3_000_000_000L;
-        while (alive(previousGateway) || alive(previousControl)) {
+        long stopDeadline = System.nanoTime() + 6_000_000_000L;
+        while (alive(previous)) {
             if (stopped || System.nanoTime() > stopDeadline) {
                 throw new IOException("Native child shutdown did not complete");
             }
@@ -183,46 +195,50 @@ final class NativeRuntime {
     }
 
     private void launchChildren(File libraries, File logs) throws IOException {
-        // stop() may run on the UI thread during startup or recovery. Serialize
-        // only spawn/registration with shutdown, never the readiness wait.
         synchronized (childLock) {
-            if (stopped) {
-                throw new IOException("App startup cancelled");
+            if (stopped) throw new IOException("App startup cancelled");
+            for (String name : new String[]{"launch", "control", "worker", "gateway"}) {
+                File image = new File(libraries, "libdeepseek_" + name + ".so");
+                if (!image.isFile() || !image.canExecute()) {
+                    throw new IOException("Packaged native executable missing: " + image.getName());
+                }
             }
-            ProcessBuilder go = child(new File(libraries, "libdeepseek_control.so"));
-            go.environment().put("DEEPSEEKD_MODE", "shadow");
-            go.environment().put("DEEPSEEKD_LISTEN", "127.0.0.1:" + CONTROL_PORT);
-            go.environment().put("DEEPSEEKD_SHADOW_STORE", new File(root, "go-shadow").getAbsolutePath());
-            control = go.start();
-            pipeLog(control, new File(logs, "control.log"));
-            if (stopped) {
-                throw new IOException("App startup cancelled");
-            }
-            ProcessBuilder rust = child(new File(libraries, "libdeepseek_gateway.so"));
-            Map<String, String> env = rust.environment();
-            env.put("GATEWAY_BIND_ADDR", "127.0.0.1:" + SERVER_PORT);
-            env.put("GO_CONTROL_ADDR", "http://127.0.0.1:" + CONTROL_PORT);
+            // Go owns signed bootstrap, the control file and all three native
+            // child roles. The JVM never opens or precreates its database.
+            ProcessBuilder nativeRoot = child(new File(libraries, "libdeepseek_launch.so"),
+                "--server", "--no-open", "--no-prompt", "--ocr", "--host", "127.0.0.1", "--port", String.valueOf(SERVER_PORT));
+            Map<String, String> env = nativeRoot.environment();
+            env.put("DEEPSEEK_NATIVE_BIN", libraries.getAbsolutePath());
+            // Android's /data/user/0 alias is not a canonical native custody path.
+            env.put("DEEPSEEK_INFRA_ROOT", root.getCanonicalPath());
+            env.put("DEEPSEEK_INFRA_BUNDLE_ROOT", bundleRoot.getPath());
+            env.put("DEEPSEEK_INFRA_STATIC_DIR", new File(bundleRoot, "static").getPath());
+            env.put("DEEPSEEK_ANDROID_PARENT_PIPE", "stdin-v1");
             env.put("DEEPSEEK_ANDROID_PLATFORM_OCR_ADDR", platform.address());
             env.put("DEEPSEEK_ANDROID_PLATFORM_OCR_TOKEN", platform.credential());
-            env.put("DEEPSEEK_INFRA_ROOT", root.getAbsolutePath());
-            env.put("DEEPSEEK_INFRA_STATIC_DIR", new File(root, "static").getAbsolutePath());
-            env.put("DEEPSEEK_RUNTIME_MODE", "python_disabled");
             env.put("RUST_LOG", "error");
-            gateway = rust.start();
-            pipeLog(gateway, new File(logs, "gateway.log"));
+            launcher = nativeRoot.start();
+            // Keep only this JVM's pipe writer alive. EOF after JVM SIGKILL
+            // cancels Go, whose guardians drain the complete native child tree.
+            parentLifetime = launcher.getOutputStream();
+            pipeLog(launcher, new File(logs, "native-launcher.log"));
         }
     }
 
-    private ProcessBuilder child(File binary) throws IOException {
-        // Android forbids exec from writable app storage. PackageManager extracts
-        // these signed ELF payloads into nativeLibraryDir with executable permissions.
+    private ProcessBuilder child(File binary, String... arguments) throws IOException {
+        // PackageManager extracts these signed ELF payloads into executable,
+        // read-only nativeLibraryDir. Never copy them to writable app storage.
         if (!binary.isFile() || !binary.canExecute()) {
             throw new IOException("Packaged native executable missing: " + binary.getName());
         }
-        ProcessBuilder builder = new ProcessBuilder(binary.getAbsolutePath());
-        builder.directory(root);
+        List<String> command = new ArrayList<>();
+        command.add(binary.getAbsolutePath());
+        for (String argument : arguments) command.add(argument);
+        ProcessBuilder builder = new ProcessBuilder(command);
+        builder.directory(root.getCanonicalFile());
         builder.redirectErrorStream(true);
         builder.environment().put("AUTH_TOKEN", authToken);
+        builder.environment().put("TMPDIR", context.getCacheDir().getCanonicalPath());
         builder.environment().remove("AUTH_DISABLED");
         return builder;
     }
@@ -256,7 +272,10 @@ final class NativeRuntime {
                 return false;
             }
             try (InputStream stream = connection.getInputStream()) {
-                return new JSONObject(new String(readAll(stream), StandardCharsets.UTF_8)).optBoolean("ok");
+                JSONObject status = new JSONObject(new String(readAll(stream), StandardCharsets.UTF_8));
+                return status.optBoolean("ok") && "authoritative".equals(status.optString("mode"))
+                    && "go".equals(status.optString("mutationAuthority"))
+                    && !status.optBoolean("shadowStore") && status.optBoolean("productionMutation");
             }
         } catch (Exception ignored) {
             return false;
@@ -272,8 +291,8 @@ final class NativeRuntime {
         while (!stopped && generation.get() == currentGeneration) {
             try {
                 Thread.sleep(500);
-                if (!stopped && generation.get() == currentGeneration && (!alive(gateway) || !alive(control) || platform == null || !platform.alive())) {
-                    Log.w(TAG, "Native child stopped; restarting the pair");
+                if (!stopped && generation.get() == currentGeneration && (!alive(launcher) || platform == null || !platform.alive())) {
+                    Log.w(TAG, "Native child stopped; restarting the managed native tree");
                     synchronized (this) {
                         if (!stopped && generation.get() == currentGeneration) {
                             startChildren();
@@ -307,13 +326,15 @@ final class NativeRuntime {
 
     private void terminateChildren() {
         synchronized (childLock) {
-            Process rust = gateway, go = control;
-            if (rust != null) {
-                rust.destroy();
+            if (parentLifetime != null) {
+                try {
+                    parentLifetime.close();
+                } catch (IOException error) {
+                    Log.w(TAG, "Native parent lifetime pipe close failed", error);
+                }
+                parentLifetime = null;
             }
-            if (go != null) {
-                go.destroy();
-            }
+            if (launcher != null) launcher.destroy();
         }
     }
 

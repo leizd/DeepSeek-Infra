@@ -1,4 +1,4 @@
-import type { AgentStreamEvent, ChatMessage, JsonRecord, TimelineStep } from "./types";
+import type { AgentOutputStreamEvent, AgentStreamEvent, ChatMessage, JsonRecord, TimelineStep } from "./types";
 
 export const AGENT_NOTES_LIMIT = 20;
 export const AGENT_TEXT_LIMIT = 5_000;
@@ -123,9 +123,10 @@ export function appendTimelineAgentNote(timeline: readonly TimelineStep[], event
   const phase = event.phase ?? "";
   const note = (event.text ?? "").trim();
   if (!note) return timeline;
+  // A note enriches the latest attempt; it never starts a second execution.
   for (let index = timeline.length - 1; index >= 0; index -= 1) {
     const step = timeline[index];
-    if (step.type === "agent" && step.phase === phase && step.status === "running") {
+    if (step.type === "agent" && step.phase === phase) {
       const next = [...timeline];
       next[index] = { ...step, notes: [...(step.notes ?? []), note].slice(-AGENT_NOTES_LIMIT) };
       return capTimeline(next);
@@ -220,4 +221,42 @@ export function mergeAgentSearchStep(timeline: readonly TimelineStep[], event: A
     return capTimeline(next);
   }
   return capTimeline([...timeline, { type: "search", id: key, phase, status, search }]);
+}
+
+
+// Native tasks publish one complete, signed public output instead of a token
+// stream. Upsert the latest role card so legacy progress events do not duplicate
+// it, and copy only public display fields from the result.
+export function appendTimelineAgentOutput(timeline: readonly TimelineStep[], event: AgentOutputStreamEvent): readonly TimelineStep[] {
+  const phase = event.payload.phase;
+  const value = event.payload.output;
+  if (typeof phase !== "string" || !WORKER_AGENT_ORDER.some((role) => role.phase === phase) ||
+      !value || typeof value !== "object" || Array.isArray(value)) return timeline;
+  const output = value as JsonRecord;
+  if (output.id !== phase || (output.failed !== undefined && typeof output.failed !== "boolean")) return timeline;
+  const content = typeof output.content === "string" && output.content.trim()
+    ? output.content : typeof output.summary === "string" ? output.summary : "";
+  if (!content.trim()) return timeline;
+  let index = -1;
+  for (let position = timeline.length - 1; position >= 0; position -= 1) {
+    if (timeline[position].type === "agent" && timeline[position].phase === phase) {
+      index = position;
+      break;
+    }
+  }
+  const prior = index >= 0 ? timeline[index] : makeAgentPlaceholder(timeline, phase);
+  const duration = [output.latencyMs, output.duration_ms, event.payload.durationMs]
+    .find((candidate) => typeof candidate === "number" && Number.isFinite(candidate) && candidate >= 0);
+  const step: TimelineStep = {
+    ...prior,
+    name: typeof output.name === "string" && output.name.trim() ? capText(output.name, AGENT_TEXT_LIMIT) : prior.name,
+    status: output.failed === true ? "error" : "done",
+    output: capText(content, AGENT_OUTPUT_LIMIT),
+    durationMs: typeof duration === "number" ? duration : prior.durationMs,
+  };
+  step.collapsed = shouldCollapseAgentStep(step);
+  const next = [...timeline];
+  if (index >= 0) next[index] = step;
+  else next.push(step);
+  return capTimeline(next);
 }

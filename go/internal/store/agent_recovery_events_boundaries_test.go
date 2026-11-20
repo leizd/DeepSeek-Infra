@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/leizd/DeepSeek-Infra/go/internal/agent"
-	internalprotocol "github.com/leizd/DeepSeek-Infra/go/internal/protocol"
 )
 
 // Remaining recovery/event boundaries: direct validator calls, dropped tables,
@@ -86,7 +85,7 @@ func TestRecoveryReplayRefusesFinishedAndCraftedRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer tx.Rollback()
-	if _, err := recoveryReplayEventsTx(tx, run.RunID, crafted-1, crafted); !errors.Is(err, ErrCorruptRecord) {
+	if _, err := recoveryReplayEventsTx(tx, run.RunID, crafted, crafted+1); !errors.Is(err, ErrCorruptRecord) {
 		t.Fatalf("a crafted replay row was accepted: %v", err)
 	}
 }
@@ -133,14 +132,8 @@ func TestAgentRunEventsRefuseCreateOnExistingAndRuntimeSwapOnAScope(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	authority, err := control.GetCutover("agent_run")
-	if err != nil {
-		t.Fatal(err)
-	}
-	extra := AgentRunEventMutation{OperationID: "create-on-existing-boundary", Actor: "operator:boundary-test", RunID: confirmed.Run.RunID,
-		ExpectedIndex: confirmed.Run.NextIndex, Fence: &internalprotocol.ActionFence{ActionId: confirmed.Run.RunID, ExecutionEpoch: uint64(authority.Epoch)},
-		Create: &agent.RunMetadata{Request: agent.ArtifactRef{SHA256: strings.Repeat("c", 64), Length: 10}},
-		Event:  agent.RunEvent{Type: "agent_note", Phase: "coder", Body: agent.ArtifactRef{SHA256: strings.Repeat("a", 64), Length: 30}}}
+	extra := eventMutation(t, control, confirmed.Run.NextIndex, agent.RunEvent{Type: "agent_note", Phase: "coder"})
+	extra.Create = &agent.RunMetadata{Request: agent.ArtifactRef{SHA256: strings.Repeat("c", 64), Length: 10}}
 	if _, err := control.AppendAgentRunEvent(extra); !errors.Is(err, ErrAgentRunMetadataInvalid) {
 		t.Fatalf("create metadata was accepted on an existing run: %v", err)
 	}
@@ -149,15 +142,16 @@ func TestAgentRunEventsRefuseCreateOnExistingAndRuntimeSwapOnAScope(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	scopedAuthority, err := scoped.GetCutover("agent_run")
-	if err != nil {
-		t.Fatal(err)
-	}
-	swap := AgentRunEventMutation{OperationID: "runtime-swap-on-scope", Actor: "operator:boundary-test", RunID: result.Run.RunID,
-		ExpectedIndex: result.Run.NextIndex, Fence: &internalprotocol.ActionFence{ActionId: result.Run.RunID, ExecutionEpoch: uint64(scopedAuthority.Epoch)},
-		RuntimeUpdate: &AgentRunRuntimeUpdate{},
-		Event:         agent.RunEvent{Type: "agent_note", Phase: "coder", Body: agent.ArtifactRef{SHA256: strings.Repeat("a", 64), Length: 30}}}
+	swap := eventMutation(t, scoped, result.Run.NextIndex, agent.RunEvent{Type: "run_status", Status: "running"})
+	swap.Create = nil
+	swap.RuntimeUpdate = &AgentRunRuntimeUpdate{ExpectedRevision: result.Run.RuntimeVersion(), ExpectedRequest: result.Run.Request,
+		Request: agent.ArtifactRef{SHA256: strings.Repeat("f", 64), Length: 100}}
+	count := countControlEvents(t, scoped)
 	if _, err := scoped.AppendAgentRunEvent(swap); !errors.Is(err, ErrIllegalTransition) {
 		t.Fatalf("a scope accepted a legacy runtime swap: %v", err)
+	}
+	after, found, err := scoped.AgentRunMetadata(input.RunID)
+	if err != nil || !found || countControlEvents(t, scoped) != count || after.Request != result.Run.Request || after.RuntimeVersion() != result.Run.RuntimeVersion() {
+		t.Fatal("a rejected runtime swap changed the immutable request or events", err)
 	}
 }

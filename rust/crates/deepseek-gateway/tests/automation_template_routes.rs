@@ -279,8 +279,9 @@ async fn automation_templates_match_the_builtin_catalog_without_creating_a_store
 
     let (status, unauthenticated) = fixture.request("GET", TEMPLATES, false).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{unauthenticated}");
-    assert_eq!(unauthenticated["error"]["code"], "UNAUTHORIZED");
-    assert_eq!(unauthenticated["error"]["message"], "Auth required");
+    assert_eq!(unauthenticated["error"], "Auth required");
+    assert_eq!(unauthenticated["code"], "unauthorized");
+    assert_eq!(unauthenticated["code"], "unauthorized");
     let (status, unauthenticated_post) = fixture.request("POST", &create_uri, false).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{unauthenticated_post}");
     assert!(!fixture.automation_dir().exists());
@@ -466,7 +467,8 @@ async fn create_from_template_matches_the_oracle_only_after_python_is_disabled()
 
     let (status, unauthenticated) = fixture.request("POST", &create_uri, false).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{unauthenticated}");
-    assert_eq!(unauthenticated["error"]["code"], "UNAUTHORIZED");
+    assert_eq!(unauthenticated["error"], "Auth required");
+    assert_eq!(unauthenticated["code"], "unauthorized");
     assert!(!fixture.automation_dir().exists());
 
     let (status, empty) = fixture.request("POST", &create_uri, true).await;

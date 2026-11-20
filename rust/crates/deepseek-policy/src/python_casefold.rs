@@ -310,3 +310,67 @@ pub fn python_casefold(value: &str) -> String {
     }
     folded
 }
+
+#[cfg(test)]
+mod tests {
+    use super::python_casefold;
+
+    /// The multi-character expansions the table exists for, measured against
+    /// CPython 3.13 `str.casefold()`.
+    #[test]
+    fn the_documented_expansions_match_the_oracle() {
+        let cases: [(char, &[u32]); 7] = [
+            ('\u{b5}', &[0x3bc]),
+            ('\u{df}', &[0x73, 0x73]),
+            ('\u{149}', &[0x2bc, 0x6e]),
+            ('\u{17f}', &[0x73]),
+            ('\u{1f0}', &[0x6a, 0x30c]),
+            ('\u{345}', &[0x3b9]),
+            ('\u{3c2}', &[0x3c3]),
+        ];
+        for (input, expected) in cases {
+            let folded = python_casefold(&input.to_string());
+            let actual: Vec<u32> = folded.chars().map(u32::from).collect();
+            assert_eq!(actual, expected, "casefold({input:?})");
+        }
+    }
+
+    /// Characters outside the table fall through to `char::to_lowercase`, which
+    /// is what the reference implementation does. `U+0130` is the interesting
+    /// one: it lowers to two code points.
+    #[test]
+    fn characters_outside_the_table_use_lowercase() {
+        assert_eq!(python_casefold("A"), "a");
+        assert_eq!(python_casefold("z"), "z");
+        assert_eq!(python_casefold("Z"), "z");
+        let dotted: Vec<u32> = python_casefold("\u{130}").chars().map(u32::from).collect();
+        assert_eq!(dotted, vec![0x69, 0x307]);
+    }
+
+    /// Every scalar value must be accepted. The table is a `match` arm per
+    /// character, so walking the whole range is what exercises all of them
+    /// rather than the handful a fixture would name.
+    ///
+    /// Folding is not idempotent-to-lowercase: Cherokee is an uppercase-first
+    /// script, and CPython folds U+13A0 to itself, so the invariant checked here
+    /// is stability, not the absence of uppercase.
+    #[test]
+    fn every_scalar_value_folds_without_panicking() {
+        let mut changed = 0usize;
+        for code in 0u32..=0x10FFFF {
+            let Some(character) = char::from_u32(code) else {
+                continue;
+            };
+            let once = python_casefold(&character.to_string());
+            let twice = python_casefold(&once);
+            assert_eq!(once, twice, "casefold is not stable at U+{code:04X}");
+            if once != character.to_string() {
+                changed += 1;
+            }
+        }
+        assert!(
+            changed > 0,
+            "no scalar value folded, the table is not wired"
+        );
+    }
+}

@@ -26,14 +26,41 @@ mod agent_run_routes;
 mod artifact_preview_routes;
 pub mod assembly_env;
 mod auth;
+mod auth_logout_route;
+mod authority_retention_routes;
 mod automation_definition_routes;
+mod automation_root_routes;
 mod automation_run_routes;
 mod automation_template_routes;
+mod backup_archive_routes;
+pub mod backup_capacity_routes;
+pub mod backup_catalog_routes;
+pub mod backup_catalog_write_routes;
+pub mod backup_commit;
+mod backup_continuity_routes;
+mod backup_dr_audit_routes;
+mod backup_dr_drill_exec_routes;
+mod backup_dr_failover_routes;
+mod backup_dr_plan_routes;
+mod backup_dr_slo_routes;
+mod backup_dr_status_routes;
+mod backup_drain_routes;
 mod backup_drill_routes;
 pub mod backup_mirror_routes;
+mod backup_policy_routes;
+mod backup_policy_run_routes;
+mod backup_rebalance_routes;
+mod backup_recovery_identity_routes;
+mod backup_remote_restore_routes;
 mod backup_replication_routes;
+mod backup_restore_read_routes;
+mod backup_restore_tx_routes;
+mod backup_restore_write_routes;
+pub mod backup_retention_routes;
 mod backup_retirement_routes;
 mod backup_run_routes;
+mod backup_secret_slots;
+mod backup_target_routes;
 pub mod browser_engine_client;
 mod chat_cascade;
 pub mod chat_execution;
@@ -42,16 +69,22 @@ pub mod chat_ndjson;
 pub mod chat_stream;
 pub mod chat_tool_loop;
 mod control_proxy;
+pub mod control_rpc_client;
 mod conversation_search;
 pub mod data_routes;
 pub mod download_route;
+mod download_save_route;
+mod edge_action_routes;
 mod edge_status_routes;
+mod external_mcp_routes;
 pub mod fetch_provider;
+mod fetch_url_route;
 pub mod file_reader_route;
 pub mod file_source_route;
 pub mod file_text_route;
 pub mod local_clock;
 pub mod mcp_hub;
+mod mcp_status_routes;
 mod media_segment_routes;
 pub mod native_chat;
 pub mod observability;
@@ -59,14 +92,27 @@ pub mod openai_facade;
 pub mod policy_routes;
 pub mod project_files_route;
 pub mod project_routes;
+mod rag_action_routes;
 pub mod request_assembly;
 pub mod request_preparation;
+mod resilience_action_exec;
+mod resilience_advisory_routes;
 mod resilience_federation_routes;
+mod resilience_plan_routes;
+mod resilience_read_routes;
+mod resilience_state_support;
+mod resilience_wave_routes;
+mod resilience_whatif_routes;
+mod route_support;
 mod rust_status_routes;
 mod scheduler_routes;
 pub mod search_provider;
+mod semantic_cache_routes;
 mod skills_routes;
+mod workspace_backup_routes;
+mod workspace_export_routes;
 mod workspace_home_routes;
+mod workspace_provenance_routes;
 /// The Skill actions the oracle serves and this edge does not, kept reachable so the route test can
 /// assert that the action it pins as "refused by name" is still on this list — otherwise
 /// implementing that action would silently change what the assertion means.
@@ -74,6 +120,8 @@ pub use skills_routes::ACTION_NOT_MIGRATED;
 pub mod static_files;
 pub mod title_route;
 pub mod tool_rounds;
+mod trace_routes;
+mod transfer_budget_routes;
 
 pub fn gateway_version() -> &'static str {
     // Root VERSION is the release the public routes already advertised.
@@ -186,23 +234,65 @@ fn create_routes() -> Router {
         // the store's authoritative writer is Rust, not Go.
         .merge(data_routes::router())
         .merge(project_routes::router())
+        .merge(workspace_backup_routes::router())
         .merge(workspace_home_routes::router())
         .merge(skills_routes::router())
         .merge(backup_mirror_routes::router())
+        .merge(backup_policy_routes::router())
+        .merge(backup_policy_run_routes::router())
+        .merge(backup_continuity_routes::router())
+        .merge(backup_drain_routes::router())
+        .merge(backup_rebalance_routes::router())
+        .merge(backup_recovery_identity_routes::router())
         .merge(backup_retirement_routes::router())
         .merge(backup_run_routes::router())
+        .merge(backup_target_routes::router())
+        .merge(backup_catalog_routes::router())
+        .merge(backup_catalog_write_routes::router())
+        .merge(backup_retention_routes::router())
+        .merge(authority_retention_routes::router())
+        .merge(transfer_budget_routes::router())
         .merge(backup_replication_routes::router())
         .merge(backup_drill_routes::router())
+        .merge(backup_dr_drill_exec_routes::router())
+        .merge(backup_dr_slo_routes::router())
+        .merge(backup_dr_status_routes::router())
+        .merge(backup_dr_plan_routes::router())
+        .merge(backup_dr_audit_routes::router())
+        .merge(backup_dr_failover_routes::router())
+        .merge(backup_remote_restore_routes::router())
+        .merge(backup_restore_read_routes::router())
+        .merge(backup_restore_write_routes::router())
+        .merge(backup_restore_tx_routes::router())
+        .merge(backup_archive_routes::router())
         .merge(automation_template_routes::router())
         .merge(automation_run_routes::router())
         .merge(automation_definition_routes::router())
+        .merge(automation_root_routes::router())
         .merge(media_segment_routes::router())
         .merge(resilience_federation_routes::router())
+        .merge(resilience_advisory_routes::router())
+        .merge(resilience_plan_routes::router())
+        .merge(resilience_read_routes::router())
+        .merge(resilience_wave_routes::router())
+        .merge(resilience_whatif_routes::router())
         .merge(artifact_preview_routes::router())
+        .merge(workspace_export_routes::router())
+        .merge(workspace_provenance_routes::router())
         .merge(agent_run_routes::router())
         .merge(scheduler_routes::router())
+        .merge(rag_action_routes::router())
         .merge(edge_status_routes::router())
+        .merge(edge_action_routes::router())
         .merge(rust_status_routes::router())
+        .merge(fetch_url_route::router())
+        .merge(auth_logout_route::router())
+        .merge(trace_routes::router())
+        .merge(download_save_route::router())
+        .merge(mcp_status_routes::router())
+        .merge(external_mcp_routes::router())
+        .merge(semantic_cache_routes::router())
+        .merge(backup_capacity_routes::router())
         .route("/api/*path", any(control_proxy::proxy_api_to_go))
         // Private control handlers must not fall through to either proxy or SPA.
         .route("/internal", any(|| async { StatusCode::NOT_FOUND }))
@@ -711,8 +801,37 @@ const MEMORY_VECTOR_INDEX_NOT_REPRODUCIBLE: &str = "NATIVE_MEMORY_VECTOR_INDEX_N
 ///    4.9.4. A store that is **not** here stays refused whatever the mode says — setting the mode alone
 ///    must not be able to enable a store nobody declared — which is why the list is the second
 ///    condition rather than a detail of the first. A test pins it as a subset of the contract's.
-pub(crate) const DECLARED_NATIVE_DATA_DOMAINS: [&str; 7] = [
+pub(crate) const DECLARED_NATIVE_DATA_DOMAINS: [&str; 18] = [
     "memory_store",
+    // The append-only catalog chain under `.backup-catalog/` and
+    // `.backups/catalog/catalog-v1.jsonl`. Every Python mutation funnels through
+    // `backup_catalog._append_entry`, which calls
+    // `assert_python_writer_allowed("backup_catalog_store")`, and that assertion
+    // denies only under PYTHON_DISABLED - the same condition this function checks.
+    // The two halves therefore cannot write at once; verified by driving all three
+    // runtime modes through both sides.
+    "backup_catalog_store",
+    // The DR evidence SQLite ledger under `.backup-dr/evidence.sqlite3`. Python's
+    // writers gate on `assert_python_writer_allowed("backup_dr_ledger_store")`, which
+    // likewise denies only under PYTHON_DISABLED; scrub evidence lands here under
+    // `python_disabled`.
+    "backup_dr_ledger_store",
+    // Scheduled backup retention policies, scheduler retention_runs & trash journals.
+    "backup_retention_store",
+    // Authority history retention policies, checkpoints and compaction jobs.
+    "authority_retention_store",
+    // Replica repair/rebalance jobs under `.backup-rebalance/` & `.backup-replication/`.
+    "backup_replication_store",
+    // Target drain job queue under `.backup-drains/drains.sqlite3`.
+    "backup_drain_store",
+    // Policy write-continuity and failover state under `.backup-continuity/`.
+    "backup_write_continuity_store",
+    // Frozen manual/scheduled backup run plans under `.backup-run-plans/`.
+    "backup_run_plan_store",
+    // Verified spool staging under `.backup-spool/`.
+    "backup_spool_store",
+    // Rebuildable snapshot index under `.backup-index/index.sqlite3`.
+    "backup_index_store",
     "reminders_store",
     "project_metadata_store",
     "skills_store",
@@ -722,6 +841,7 @@ pub(crate) const DECLARED_NATIVE_DATA_DOMAINS: [&str; 7] = [
     "frontend_mirror_store",
     "observability_trace_store",
     "generated_files_store",
+    "restore_staging_store",
 ];
 
 /// Whether this process may write the store `domain` names.
@@ -1280,11 +1400,10 @@ mod tests {
 
         let api = get_response(app.clone(), "/api/policies").await;
         assert_eq!(api.status(), StatusCode::UNAUTHORIZED);
-        assert_eq!(
-            serde_json::from_str::<serde_json::Value>(&response_body(api).await).unwrap()["error"]
-                ["code"],
-            "UNAUTHORIZED"
-        );
+        let unauthorized =
+            serde_json::from_str::<serde_json::Value>(&response_body(api).await).unwrap();
+        assert_eq!(unauthorized["error"], "Auth required");
+        assert_eq!(unauthorized["code"], "unauthorized");
 
         let post = app
             .oneshot(

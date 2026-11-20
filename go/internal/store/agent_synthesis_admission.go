@@ -6,7 +6,7 @@ import "database/sql"
 // original task action has verifiable signed settlements, its immutable Go
 // checkpoint, and the independently validated terminal lease/resource journal.
 // This historical binding also remains necessary during takeover/reconciliation.
-func (store *Control) verifiedAgentSynthesisSourceTx(tx *sql.Tx, intent AgentRunExecutionBinding) (Record, error) {
+func (store *Control) verifiedSameRequestSynthesisSourceTx(tx *sql.Tx, intent AgentRunExecutionBinding, historicalEpoch bool) (Record, error) {
 	if intent.Phase != "synthesis" {
 		return Record{}, ErrAgentRunExecutionRequired
 	}
@@ -53,8 +53,9 @@ func (store *Control) verifiedAgentSynthesisSourceTx(tx *sql.Tx, intent AgentRun
 		return Record{}, err
 	}
 	if !present || binding.Phase != "tasks" || binding.RunID != intent.RunID || binding.Request != intent.Request ||
-		binding.PlanDigest != intent.PlanDigest || binding.MetadataEpoch != intent.MetadataEpoch ||
-		completion.MetadataEpoch != intent.MetadataEpoch || completion.MetadataIndex != intent.MetadataIndex {
+		binding.PlanDigest != intent.PlanDigest || binding.MetadataEpoch > intent.MetadataEpoch ||
+		(!historicalEpoch && binding.MetadataEpoch != intent.MetadataEpoch) ||
+		completion.MetadataEpoch != binding.MetadataEpoch || completion.MetadataIndex != intent.MetadataIndex {
 		return Record{}, ErrAgentNodeDependencyUnverified
 	}
 	if err := store.validateAgentTasksCompletionTx(tx, source); err != nil {

@@ -3,11 +3,11 @@
   "outputs": [
     {
       "path": "go/internal/protocol/actionv1/action.pb.go",
-      "sha256": "385b9ae59d5b06e6cfc29b2e3197e2fc9eccfdc9d91e068c60bc2b4a6e50a3a4"
+      "sha256": "a9f9c942b4c03167388a4871ecbdf0abdec0662b4760ea240b5148a4eb47dbb4"
     },
     {
       "path": "go/internal/protocol/actionv1/action_grpc.pb.go",
-      "sha256": "3fa496c1e52dc3b72f8a539c8ffb86e792e637d570f081573fcff9b407cbb329"
+      "sha256": "ff4aec11750fc48a21e125e0a5cbdd8cec4263776a6c95dccfd450779f72dd4c"
     },
     {
       "path": "go/internal/protocol/agentv1/a2a.pb.go",
@@ -27,11 +27,11 @@
     },
     {
       "path": "go/internal/protocol/agentv1/agent_node.pb.go",
-      "sha256": "d680dc1a181f433eaa02920faf1e5443a594259babb222b381a5da2afa0d5106"
+      "sha256": "1f79b45fb9e6535eb6bae2eeb85d2297833d6a82d3afb59935e93226b8613257"
     },
     {
       "path": "go/internal/protocol/agentv1/agent_node_grpc.pb.go",
-      "sha256": "23434b38b4f1d25572ec4219f5ef04be67bc062760328113b019aa2abf5e6084"
+      "sha256": "00c8d06c97707c9b6a7ec563979769c9003600bd8df919a5cdaeaafba01cb780"
     },
     {
       "path": "go/internal/protocol/browserv1/browser.pb.go",
@@ -62,6 +62,14 @@
       "sha256": "9f3b9c013e328bf0804cbcda9e2b95c434b9dbcab6d172d783720f59ac692a0a"
     },
     {
+      "path": "go/internal/protocol/mediav1/media.pb.go",
+      "sha256": "660277df6b12dec63b5926281b9bafb21d03cc2838ab99e0d84c48cc70061bca"
+    },
+    {
+      "path": "go/internal/protocol/mediav1/media_grpc.pb.go",
+      "sha256": "4eb8cffa3ff85ca981b6efa18558eaec9fa66fe122b87467768cebacde830131"
+    },
+    {
       "path": "go/internal/protocol/platform/v1/ocr.pb.go",
       "sha256": "924910e3e3aeba25398628b6b4475f88ddf7775a6556b53b8df4ab11f7ab24cc"
     },
@@ -75,14 +83,14 @@
     },
     {
       "path": "proto/generated/descriptor.pb",
-      "sha256": "1bb9202604422a473aa8efdadeb30a1825a4c4e119961707c4cdebcc732e836c"
+      "sha256": "b89137a390927d42147d3fa20201285af118dd4b86a94695c6fc5226ed63fe78"
     }
   ],
   "schema_version": 1,
   "sources": [
     {
       "path": "proto/action/v1/action.proto",
-      "sha256": "4c629c039a02ee674bd458399228e4c5d75e7352980bcc767b316c02ca54460d"
+      "sha256": "2e13fc4b6be04785d4f14a0a94c6cf84490d4855f3d42b01a1ebf0ccde7dd9d8"
     },
     {
       "path": "proto/agent/v1/a2a.proto",
@@ -94,7 +102,7 @@
     },
     {
       "path": "proto/agent/v1/agent_node.proto",
-      "sha256": "a70644da6c6b542f33fcdef95e9dba32144dab67b6977a88b4ac82fe6a658550"
+      "sha256": "61e3c5291178b65325a2c18d9622c6e2fb5fcc5d2ac6c819d62b87a95ca74a7a"
     },
     {
       "path": "proto/browser/v1/browser.proto",
@@ -115,6 +123,10 @@
     {
       "path": "proto/federation/v1/federation.proto",
       "sha256": "24c52e6132a5b186cb27312deedabf348e31b6a652c1baa50c3ea68ef507f32d"
+    },
+    {
+      "path": "proto/media/v1/media.proto",
+      "sha256": "3cf7e4b1a2a44036d271cfc10332928bcabb6823a307ba122b01ac4f0edb3c9e"
     },
     {
       "path": "proto/platform/v1/ocr.proto",

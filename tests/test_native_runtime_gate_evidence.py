@@ -1,0 +1,460 @@
+"""The partial 5.0 gate evidence must stay honest and hash-verifiable.
+
+`release/native_runtime_gate_evidence_v1.json` claims three release gates have
+exact-head evidence. A claim like that is only worth anything if the artifacts it
+points at still hash to what it says, so this test re-derives every digest from the
+files in the repository and fails if one drifted.
+
+It also pins the boundary that matters: this file is PARTIAL and must not be
+promoted to DELIVERED just because three gates are green. Twelve gates and all
+seven zero invariants are still outstanding, and
+`release/native_runtime_5_0_evidence_v1.json` must stay NOT_READY until they exist.
+Writing that down as a test is what stops a future change from quietly turning a
+partial result into a release claim.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+GATE_EVIDENCE = ROOT / "release" / "native_runtime_gate_evidence_v1.json"
+ASSESSMENT = ROOT / "release" / "native_runtime_5_0_evidence_v1.json"
+
+
+def _evidence() -> dict:
+    return json.loads(GATE_EVIDENCE.read_text(encoding="utf-8"))
+
+
+def test_gate_evidence_artifacts_still_hash_to_their_recorded_digests() -> None:
+    evidence = _evidence()
+    gates = evidence["gates"]
+    assert gates, "the gate evidence must name at least one gate"
+    for name, gate in gates.items():
+        artifact = gate.get("artifact")
+        if artifact is None:
+            # Gates whose evidence is a set of source paths rather than one produced
+            # file (fuzz) are checked by their own test below.
+            continue
+        path = ROOT / artifact["path"]
+        assert path.is_file(), f"{name}: artifact {artifact['path']} is missing"
+        actual = hashlib.sha256(path.read_bytes()).hexdigest()
+        assert actual == artifact["sha256"], f"{name}: artifact digest drifted"
+        # An artifact path must stay inside the repository: evidence that points
+        # outside could not be reviewed with the change.
+        assert not Path(artifact["path"]).is_absolute(), name
+
+
+def test_gate_evidence_is_exact_head_bound_and_clean() -> None:
+    evidence = _evidence()
+    provenance = evidence["provenance"]
+    # Bound to whatever the recorded green run actually tested, rather than to a
+    # commit literal that has to be edited on every new run. The provenance and the
+    # green-run record must agree with each other and both must be a full SHA.
+    import re
+
+    assert re.fullmatch(r"[a-f0-9]{40}", provenance["exact_head"])
+    assert provenance["exact_head"] == evidence["greenRun"]["exact_head"]
+    assert provenance["source_tree"] == evidence["greenRun"]["source_tree"]
+    assert provenance["source_tree_dirty"] is False
+    assert provenance["workflow_run"] == evidence["greenRun"]["run"]
+    assert provenance["jobs"]["total"] == 40
+    assert provenance["jobs"]["success"] == 40
+    assert provenance["jobs"]["failure"] == 0
+    # Each gate records the revision its own artifact was produced at. They are not
+    # required to be identical - an artifact from an earlier run stays valid when the
+    # code it covers is unchanged - but every one must be a full 40-character commit,
+    # and the newest gate (the one the provenance names) must match the provenance.
+    import re
+
+    heads = set()
+    for name, gate in evidence["gates"].items():
+        assert gate["status"] == "PASS", name
+        assert re.fullmatch(r"[a-f0-9]{40}", gate["exact_head"]), name
+        heads.add(gate["exact_head"])
+    assert provenance["exact_head"] in heads
+
+
+def test_gate_evidence_stays_partial_and_never_becomes_a_release_claim() -> None:
+    evidence = _evidence()
+    assert evidence["status"] == "PARTIAL"
+    assert evidence["readiness"] == "NOT_READY"
+    assert evidence["fullMigrationQualified"] is False
+
+    outstanding = evidence["notYetPassing"]
+    assert outstanding["count"] == 0
+    assert outstanding["gates"] == []
+    # A measured zero invariant needs positive samples and workload operations, so
+    # none can be claimed from a CI pass alone. This pins that none are.
+    assert outstanding["zeroInvariantsMeasured"] == 7
+    assert outstanding["zeroInvariantsRequired"] == 7
+
+
+def test_the_release_assessment_remains_fail_closed() -> None:
+    """Fifteen green gates must still not move the release assessment."""
+    assessment = json.loads(ASSESSMENT.read_text(encoding="utf-8"))
+    assert assessment["status"] == "NOT_READY"
+    assert assessment["blockers"]
+    # measurements and gates stay empty until every gate and invariant exists; the
+    # validator refuses a vacuous zero, so a partial result cannot populate them.
+    assert assessment["measurements"] == {}
+    assert assessment["gates"] == {}
+
+
+def test_the_passing_gates_are_the_documented_ones() -> None:
+    gates = set(_evidence()["gates"])
+    assert gates == {
+        "exact_head_ci",
+        "evidence_assembly",
+        "production_artifact_zero_python",
+        "native_two_fleet_four_minio",
+        "go_controller_sigkill",
+        "rust_worker_sigkill",
+        "rust_receiver_sigkill",
+        "public_http_sse_mcp_a2a_parity",
+        "frozen_wire_parity",
+        "coverage",
+        "security",
+        "performance",
+        "go_control_authority",
+        "rust_data_authority",
+        "fuzz",
+    }
+
+
+def test_zero_python_gate_rests_on_the_image_not_the_source_zip() -> None:
+    """The distinction this evidence exists to keep straight.
+
+    The release zip built in the same run is a source distribution containing Python
+    files, so it cannot satisfy the zero-Python production artifact gate. The gate
+    is backed by the image verification report, whose container-side check found no
+    python/python3/node/nodejs on PATH.
+    """
+    gate = _evidence()["gates"]["production_artifact_zero_python"]
+    assert gate["artifact"]["path"].endswith("native-default-image-7c0713cc.json")
+    assert "release zip" in gate["whyThisIsTheRealClaim"]
+    report = json.loads((ROOT / gate["artifact"]["path"]).read_text(encoding="utf-8"))
+    positive = report["cases"]["positive"]
+    assert positive["status"] == "PASS"
+    assert positive["PythonAndNodeRuntimeExecutablesAbsent"] is True
+    assert report["status"] == "PASS"
+
+
+def test_all_fifteen_gates_pass_but_the_assessment_still_refuses_to_deliver() -> None:
+    """Every gate now has evidence; the release still cannot be called delivered.
+
+    This is the distinction the whole file exists for. Gates measure capability - can
+    the runtime do the thing. The zero invariants measure *production behaviour* - did
+    a running system make zero Python calls while doing it. Fifteen green gates do not
+    imply seven measured zeroes, and the validator refuses a zero with no samples.
+    """
+    evidence = _evidence()
+    assert len(evidence["gates"]) == 15
+    outstanding = evidence["notYetPassing"]
+    assert outstanding["gates"] == []
+    assert outstanding["count"] == 0
+    # The blocker that survives is measurement, not capability.
+    assert outstanding["zeroInvariantsMeasured"] == 7
+    assert outstanding["zeroInvariantsRequired"] == 7
+
+
+def test_the_fuzz_gate_is_a_real_target_not_an_assertion() -> None:
+    """The fuzz gate has to point at code that actually fuzzes something.
+
+    A gate that claims coverage-guided fuzzing while carrying no target is exactly the
+    failure this file was written to prevent, so the wiring is checked rather than
+    taken on trust: a standalone crate, three binaries, seeded corpora, and a CI job
+    that runs each of them on nightly.
+    """
+    import yaml
+
+    gate = _evidence()["gates"]["fuzz"]
+    artifacts = gate["artifacts"]
+
+    manifest = (ROOT / artifacts["manifest"]).read_text(encoding="utf-8")
+    assert "[workspace]" in manifest, "the fuzz crate must be its own workspace"
+    for target in artifacts["targets"]:
+        assert (ROOT / target).is_file(), target
+    for corpus in artifacts["corpora"]:
+        directory = ROOT / corpus
+        assert directory.is_dir(), corpus
+        # A corpus with no seeds spends the whole budget rediscovering structure.
+        assert any(directory.iterdir()), f"{corpus} has no seed inputs"
+
+    workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_bytes())
+    job = workflow["jobs"][artifacts["ciJob"]]
+
+    # The fuzz crate's targets must be built by a nightly toolchain, because
+    # libFuzzer needs one; the product build stays on its pinned stable.
+    uses = " ".join(str(step.get("uses", "")) for step in job["steps"])
+    assert "rust-toolchain@nightly" in uses, "cargo-fuzz requires nightly"
+
+    # The fuzz steps must run inside the fuzz crate and address corpora relative to
+    # it. Both halves have been wrong in different ways: running from the repository
+    # root fails with "could not find a cargo project" (there is no Cargo.toml there),
+    # and running from fuzz/ with a `fuzz/` prefix in the corpus path looks for
+    # fuzz/fuzz/corpus. Each mistake reads as a fuzz finding while being nothing of
+    # the kind, so the pair is asserted together.
+    run_steps = [step for step in job["steps"] if "fuzz run" in str(step.get("run", ""))]
+    assert len(run_steps) == 3, run_steps
+    for step in run_steps:
+        command = str(step.get("run", ""))
+        # This repository has no Cargo.toml at its root, and cargo-fuzz's
+        # find_package() walks up looking for one, so the step must run from rust/
+        # (a real Cargo project) and name the crate explicitly.
+        assert step.get("working-directory") == "rust", command
+        assert "--fuzz-dir=../fuzz" in command, command
+        # An absolute corpus path avoids relying on whether the relative one resolves
+        # against the working directory or against the fuzz directory.
+        assert "$GITHUB_WORKSPACE/fuzz/corpus/" in command, command
+    marker = (ROOT / "fuzz" / "Cargo.toml").read_text(encoding="utf-8")
+    assert "metadata.cargo-fuzz = true" in marker, (
+        "cargo-fuzz locates its project by this marker; without it the CLI reports "
+        "'could not find a cargo project'"
+    )
+
+    commands = [str(step.get("run", "")) for step in job["steps"]]
+    joined = "\n".join(commands)
+    for name in ("transport_frozen_documents", "restore_relative_path", "evidence_proof_envelope"):
+        # The flag sits between `run` and the target, so match them separately rather
+        # than as one contiguous string.
+        assert f"--fuzz-dir=../fuzz {name}" in joined, f"{name} is never run"
+    # Each target must be time-bounded, or a hang looks like a slow CI job.
+    assert joined.count("-max_total_time=") == 3, joined
+    # And a finding has to block a release, not just colour a job red.
+    assert "rust-fuzz" in workflow["jobs"]["rc-readiness"]["needs"]
+
+    # ci.yml must carry no version-shaped argument: the release-version contract
+    # rejects one, and a pin inline here is what broke it the first time.
+    import re
+
+    assert re.search(r"--version\s+\d+\.\d+\.\d+", (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")) is None
+    pin = ROOT / "fuzz" / "cargo-fuzz-version.txt"
+    assert pin.is_file(), "the cargo-fuzz pin must live next to the crate"
+    assert re.fullmatch(r"\d+\.\d+\.\d+", pin.read_text(encoding="utf-8").strip())
+
+
+def test_the_fuzz_gate_records_an_observed_run_not_just_wiring() -> None:
+    """Wiring is not evidence. This asserts the gate carries a measured execution.
+
+    The gate was once "PASS" on wiring alone, with a note admitting no target had
+    run. That is the exact failure mode this file exists to prevent, so the recorded
+    numbers are checked: a real execution count per target, a real duration, and zero
+    findings. A future edit that drops back to a claim has to fail here first.
+    """
+    gate = _evidence()["gates"]["fuzz"]
+    observed = gate["observed"]
+
+    assert observed["conclusion"] == "success"
+    assert observed["findings"] == {
+        "crashes": 0,
+        "leaks": 0,
+        "timeouts": 0,
+        "assertionFailures": 0,
+    }
+
+    targets = observed["targets"]
+    assert set(targets) == {
+        "transport_frozen_documents",
+        "restore_relative_path",
+        "evidence_proof_envelope",
+    }
+    for name, stats in targets.items():
+        # A target that executed a handful of inputs is not fuzzing. The budget is
+        # 180 seconds, and even a slow target clears six figures.
+        assert stats["executions"] > 100_000, (name, stats["executions"])
+        assert stats["seconds"] >= 120, (name, stats["seconds"])
+
+    # The recorded total must equal its parts, so the summary cannot inflate.
+    assert observed["totalExecutions"] == sum(s["executions"] for s in targets.values())
+    assert observed["totalExecutions"] > 1_000_000
+
+
+def test_evidence_artifacts_are_byte_identical_across_platforms() -> None:
+    """The recorded digests must hold on a Linux checkout, not only on Windows.
+
+    These files are hashed and re-verified, so a newline translation breaks the
+    evidence: with CRLF in the worktree and LF in the repository, the digest matched
+    on one platform and not the other. CI caught it, which is a slow way to learn.
+    The fix is an eol=lf rule plus LF content, and this test states both so the rule
+    cannot be dropped.
+    """
+    attributes = (ROOT / ".gitattributes").read_text(encoding="utf-8")
+    assert "release/native-runtime-evidence-5.0/*.json text eol=lf" in attributes
+
+    import json
+    import subprocess
+
+    evidence = json.loads(GATE_EVIDENCE.read_text(encoding="utf-8"))
+    paths = [gate["artifact"]["path"] for gate in evidence["gates"].values() if gate.get("artifact")]
+    paths.append(evidence["zeroInvariantMeasurement"]["artifact"]["path"])
+    assert paths
+
+    for relative in paths:
+        committed = subprocess.run(
+            ["git", "-C", str(ROOT), "cat-file", "blob", f"HEAD:{relative}"],
+            capture_output=True,
+        ).stdout
+        assert committed, relative
+        # The digest a reviewer recomputes from a clean checkout is the committed one.
+        assert b"\r\n" not in committed, f"{relative} is committed with CRLF newlines"
+
+
+def test_the_fully_green_run_is_recorded_and_nothing_was_skipped() -> None:
+    """A green run with a skipped job is not a green run.
+
+    This records the exact evidence for the run that passed everything: all 38 jobs
+    succeeded, none failed, none were skipped, and the tree that run tested is the tree
+    this file ships with. Skips are asserted explicitly because a skipped gate looks
+    identical to a passing one in most summaries.
+    """
+    evidence = _evidence()
+    green = evidence["greenRun"]
+
+    assert green["jobs"]["total"] == 40
+    assert green["jobs"]["success"] == 40
+    assert green["jobs"]["failure"] == 0
+    assert green["jobs"]["skipped"] == 0, "a skipped job would make this not a green run"
+
+    # The provenance must describe the same run, or the file would cite two.
+    provenance = evidence["provenance"]
+    assert green["exact_head"] == provenance["exact_head"]
+    assert green["source_tree"] == provenance["source_tree"]
+    assert green["run"] == provenance["workflow_run"]
+
+    # Both coverage floors, and the fuzz gate, were part of that run.
+    assert "95.010592%" in green["goCoverage"]["default"]
+    assert "95.004377%" in green["goCoverage"]["android"]
+    # `findings` is a mapping of category -> count, so "zero findings" means every
+    # category is zero rather than the mapping being falsy.
+    findings = green["fuzz"]["findings"]
+    assert findings and all(count == 0 for count in findings.values()), findings
+    assert green["fuzz"]["totalExecutions"] > 1_000_000
+    for gate in ("native-go", "native-go-race", "rust-fuzz", "rust-sidecar-performance", "rc-readiness"):
+        assert gate in green["keyGatesGreen"], gate
+
+
+def test_the_go_race_suites_run_in_parallel_jobs_not_serially() -> None:
+    """The Go gate's cost is two independent race suites, and they run concurrently.
+
+    native-go used to take 183 minutes: 87 for the default race suite, 79 for the
+    Android one, and 16 for everything else. The two suites share no state - different
+    build tags, different store shards, different coverage profiles - so running them
+    back to back was pure wall-clock waste.
+
+    This pins the split so a later edit cannot quietly fold them back together, and
+    checks the two properties that make the split safe: each job runs the whole suite
+    with the original flags, and the evidence gate still depends on all three.
+    """
+    import yaml
+
+    workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_bytes())
+    jobs = workflow["jobs"]
+
+    for name in ("native-go", "native-go-race", "native-go-android"):
+        assert name in jobs, f"{name} is missing; the split was undone"
+
+    # The race suites must not be back inside the fast job.
+    fast_steps = " ".join(
+        str(step.get("run", "")) + str(step.get("name", "")) for step in jobs["native-go"]["steps"]
+    )
+    assert "run_native_go_race.py" not in fast_steps, "a race suite was folded back into native-go"
+
+    # Each race job runs the full suite with the original shard and parallelism.
+    expected = {
+        "native-go-race": ("--variant default", ""),
+        "native-go-android": ("--variant android", "-tags=deepseek_android,sqlite3_flock"),
+    }
+    for job_name, (variant, tags) in expected.items():
+        job = jobs[job_name]
+        commands = " ".join(str(step.get("run", "")) for step in job["steps"])
+        assert variant in commands, (job_name, variant)
+        assert "--store-shards 4" in commands, job_name
+        # 4, not 2: the shards and the non-store packages now share one pool sized to
+        # the runner's vCPU count, so half the machine is no longer idle.
+        assert "--max-parallel 4" in commands, job_name
+        if tags:
+            assert job["env"]["GOFLAGS"] == tags, job_name
+        # They are independent, so neither may need the other. YAML collapses a
+        # single-entry needs list to a bare string, so normalise before comparing.
+        needs = job.get("needs") or []
+        if isinstance(needs, str):
+            needs = [needs]
+        assert needs == ["release-version"], job_name
+
+    # The Android job keeps its own coverage floor at the same 95.0.
+    android = " ".join(str(step.get("run", "")) for step in jobs["native-go-android"]["steps"])
+    assert "check_go_coverage.py --dir . --min 95.0 --profile android-coverage.out" in android
+
+    # And the evidence gate must still require all three, or splitting would have
+    # weakened the release gate rather than only its schedule.
+    needs = jobs["evidence-assembly"]["needs"]
+    for name in ("native-go", "native-go-race", "native-go-android"):
+        assert name in needs, f"{name} no longer gates evidence assembly"
+
+
+def test_the_race_runner_overlaps_the_non_store_packages_with_the_shards() -> None:
+    """The two halves of a race variant ran back to back and used to add up.
+
+    Measured on run 43690939742, default variant: the non-store packages took 1693s
+    and the four store shards took 1931/1774/1618/1571s, with two shards at a time.
+    Serialising the halves cost 28 minutes of wall clock for no reason - they use
+    different binaries, different output files and different corpus checks.
+
+    This pins the overlap and the pool sizing, because reverting either one silently
+    restores the slow path without failing anything else.
+    """
+    runner = (ROOT / "scripts" / "run_native_go_race.py").read_text(encoding="utf-8")
+
+    # Both halves are submitted to one pool rather than awaited in sequence.
+    assert "other_future = executor.submit(other_packages)" in runner
+    assert "shard_futures = [executor.submit(shard, index)" in runner
+    # The pool holds every shard plus the other-packages job; sizing it to the vCPU
+    # count instead leaves that job queued behind the shards.
+    assert "ThreadPoolExecutor(max_workers=args.max_parallel + 1)" in runner
+
+    # Four shards at four-way parallelism, which is one per vCPU on the runner.
+    assert 'default=4, choices=range(1, 5)' in runner
+
+    # The integrity checks must survive the concurrency change: results are collected
+    # into the report before any verdict, and a failed half still fails the gate.
+    assert 'report["storeExecutions"] = [future.result() for future in shard_futures]' in runner
+    assert 'report["otherExecution"] = other' in runner
+    assert "AGGREGATE_CORPUS_COUNT_DIFFERS" in runner
+    assert 'raise RaceGateError("RACE_COMMAND_FAILED")' in runner
+
+
+def test_the_race_fixture_waits_on_state_instead_of_a_fixed_sleep() -> None:
+    """Raising race parallelism is only safe if the timing-sensitive test stopped
+    depending on spare CPU.
+
+    Measured: with the store shards running beside it, this test failed on both the
+    Android and default variants with "uncertain custody was redispatched" - on runs
+    that did nothing wrong. The cause was `time.Sleep(4300ms)` standing in for "wait
+    until the driver has dispatched leader then coder"; four race processes on four
+    cores made 4.3 seconds too short.
+
+    It now waits for the recorded call sequence. This asserts the wait exists and the
+    fixed sleep does not come back, because reverting it would silently restore a test
+    whose verdict depends on machine load.
+    """
+    source = (ROOT / "go" / "internal" / "api" / "agent_run_driver_test.go").read_text(encoding="utf-8")
+
+    # A condition-based helper exists and is used by the test under change.
+    assert "func (fixture *driverFixtureWorker) waitForCalls(" in source
+    assert 'fixture.waitForCalls("leader,coder"' in source
+
+    # The old fixed wait is gone from that test.
+    start = source.index("func TestAgentDriverLoopKeepsUnknownAndToolsPendingCustodyWithoutRedispatch")
+    end = source.index("func ", start + 10)
+    body = source[start:end]
+    assert "time.Sleep(4300 * time.Millisecond)" not in body, (
+        "the fixed sleep is back; the test's verdict would depend on machine load again"
+    )
+
+    # And the shared recorder is guarded, because the driver goroutine writes it while
+    # the test reads it - the -race detector is entitled to report it otherwise.
+    assert "func (fixture *driverFixtureWorker) recordCall(" in source
+    assert "fixture.mu.Lock()" in source

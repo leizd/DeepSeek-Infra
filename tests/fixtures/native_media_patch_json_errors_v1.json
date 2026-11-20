@@ -1,0 +1,390 @@
+{
+  "schemaVersion": 1,
+  "originalSourceCommit": "f842fce572c4c7d38a8121066af9324cfd679b29",
+  "originalSourceTree": "cf39b90a77bdcb27ae61c084c45db838411269c0",
+  "authEnabled": true,
+  "actualOriginalTCP": true,
+  "originalRequests": 73,
+  "seedSha256": "07f4cbab0ac671ef04f7e2a6319d91f35a139c64a7aafbdd16c487111b28fd8f",
+  "initialReadSha256": "b2aaf5d3c1f389671620d502aae523f7f242858a7291f0767cefd20c936a3e3b",
+  "corpusKind": "media-patch-malformed-json-v1",
+  "cases": [
+    {
+      "name": "syntax_whitespace_only",
+      "mediaId": "media_input_02",
+      "requestBase64": "IA0KCQ==",
+      "requestSha256": "708708aa72d48546834083dabeebec20af2cf4be1fd2c237dd74bc3c7f61ed75",
+      "status": 400,
+      "bodyJson": "{\"error\": \"Invalid JSON: Expecting value: line 2 column 2 (char 4)\", \"code\": \"invalid_payload\"}",
+      "storeChanged": false,
+      "getStatus": 200
+    },
+    {
+      "name": "syntax_bom",
+      "mediaId": "media_input_02",
+      "requestBase64": "77u/e30=",
+      "requestSha256": "aa25e978046d680ef8740d837e6de5bc1e2a2dc6089dbda1012544b538d53f65",
+      "status": 400,
+      "bodyJson": "{\"error\": \"Invalid JSON: Unexpected UTF-8 BOM (decode using utf-8-sig): line 1 column 1 (char 0)\", \"code\": \"invalid_payload\"}",
+      "storeChanged": false,
+      "getStatus": 200
+    },
+    {
+      "name": "syntax_bom_after_space",
+      "mediaId": "media_input_02",
+      "requestBase64": "IO+7v3t9",
+      "requestSha256": "3cfaa74ee79e21f9c8d605fcffbe850b86360360cbd8e8b1f2229a306f318796",
+      "status": 400,
+      "bodyJson": "{\"error\": \"Invalid JSON: Expecting value: line 1 column 2 (char 1)\", \"code\": \"invalid_payload\"}",
+      "storeChanged": false,
+      "getStatus": 200
+    },
+    {
+      "name": "syntax_trailing_ascii",
+      "mediaId": "media_input_02",
+      "requestBase64": "eyJtZXRhZGF0YSI6eyJ2YWx1ZSI6dHJ1ZX19IHRyYWlsaW5n",
+      "requestSha256": "ccbd61e649c9b1bf80e2b1f8c405126ad6fcc8cb5d77859504ed2c322ec5b9c0",
+      "status": 400,
+      "bodyJson": "{\"error\": \"Invalid JSON: Extra data: line 1 column 29 (char 28)\", \"code\": \"invalid_payload\"}",
+      "storeChanged": false,
+      "getStatus": 200
+    },
+    {
+      "name": "syntax_trailing_after_crlf",
+      "mediaId": "media_input_02",
+      "requestBase64": "eyJ0aXRsZSI6IuaYn/CfjI0ifQ0KICBb",
+      "requestSha256": "7d87b5398dc94c77702c536843f63300b458f248ac5dc2110ede6ab2636da9bd",
+      "status": 400,
+      "bodyJson": "{\"error\": \"Invalid JSON: Extra data: line 2 column 3 (char 18)\", \"code\": \"invalid_payload\"}",
+      "storeChanged": false,
+      "getStatus": 200
+    },
+    {
+      "name": "syntax_trailing_after_cr",
+      "mediaId": "media_input_02",
+      "requestBase64": "eyJ0aXRsZSI6IuaYn/CfjI0ifQ0gIFs=",
+      "requestSha256": "83c91167eabb0450d3cc06bcb48ebd14b4416f7ca82f22b46a9f61c738544f8e",
+      "status": 400,
+      "bodyJson": "{\"error\": \"Invalid JSON: Extra data: line 1 column 18 (char 17)\", \"code\": \"invalid_payload\"}",
+      "storeChanged": false,
+      "getStatus": 200
+    },
+    {
+      "name": "syntax_root_close",
+      "mediaId": "media_input_02",
+      "requestBase64": "fQ==",
+      "requestSha256": "d10b36aa74a59bcf4a88185837f658afaf3646eff2bb16c3928d0e9335e945d2",
+      "status": 400,
+      "bodyJson": "{\"error\": \"Invalid JSON: Expecting value: line 1 column 1 (char 0)\", \"code\": \"invalid_payload\"}",
+      "storeChanged": false,
+      "getStatus": 200
+    },
+    {
+      "name": "syntax_missing_first_key",
+      "mediaId": "media_input_02",
+      "requestBase64": "ew==",
+      "requestSha256": "021fb596db81e6d02bf3d2586ee3981fe519f275c0ac9ca76bbcf2ebb4097d96",
+      "status": 400,
+      "bodyJson": "{\"error\": \"Invalid JSON: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)\", \"code\": \"invalid_payload\"}",
+      "storeChanged": false,
+      "getStatus": 200
+    },
+    {
+      "name": "syntax_unquoted_key",
+      "mediaId": "media_input_02",
+      "requestBase64": "e3RpdGxlOjF9",
+      "requestSha256": "86e0c1d22d418cd7b601dfbeafd5813956ee3794836d054bc03943628f6df88b",
+      "status": 400,
+      "bodyJson": "{\"error\": \"Invalid JSON: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)\", \"code\": \"invalid_payload\"}",
+      "storeChanged": false,
+      "getStatus": 200
+    },
+    {
+      "name": "syntax_single_quoted_key",
+      "mediaId": "media_input_02",
+      "requestBase64": "eyd0aXRsZSc6MX0=",
+      "requestSha256": "f4e3f9ce31273c61a38ad1ba713f220fc8152047c3baea0226a9419c57f1645f",
+      "status": 400,
+      "bodyJson": "{\"error\": \"Invalid JSON: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)\", \"code\": \"invalid_payload\"}",
+      "storeChanged": false,
+      "getStatus": 200
+    },
+    {
+      "name": "syntax_missing_colon",
+      "mediaId": "media_input_02",
+      "requestBase64": "eyJ0aXRsZSIgDQogIuaYn/CfjI0ifQ==",
+      "requestSha256": "56ec3ff16cb93f70c4606ac6e7fad932282eb79b566a43e3be0713ca6a46eab8",
+      "status": 400,
+      "bodyJson": "{\"error\": \"Invalid JSON: Expecting ':' delimiter: line 2 column 2 (char 12)\", \"code\": \"invalid_payload\"}",
+      "storeChanged": false,
+      "getStatus": 200
+    },
+    {
+      "name": "syntax_missing_value",
+      "mediaId": "media_input_02",
+      "requestBase64": "eyJ0aXRsZSI6DQogfQ==",
+      "requestSha256": "81749bd353b63d9f9cb1836ee78b727e0e9f2a3161680bdff8f9318a433464e6",
+      "status": 400,
+      "bodyJson": "{\"error\": \"Invalid JSON: Expecting value: line 2 column 2 (char 12)\", \"code\": \"invalid_payload\"}",
+      "storeChanged": false,
+      "getStatus": 200
+    },
+    {
+      "name": "syntax_unterminated_object",
+      "mediaId": "media_input_02",
+      "requestBase64": "eyJ0aXRsZSI6MQ==",
+      "requestSha256": "732646b0cecb2cbf5dc94a254298ee4ea36a9c9c752f5de914f6db13bfd628ba",
+      "status": 400,
+      "bodyJson": "{\"error\": \"Invalid JSON: Expecting ',' delimiter: line 1 column 11 (char 10)\", \"code\": \"invalid_payload\"}",
+      "storeChanged": false,
+      "getStatus": 200
+    },
+    {
+      "name": "syntax_object_missing_comma",
+      "mediaId": "media_input_02",
+      "requestBase64": "eyJ0aXRsZSI6MSAibWV0YWRhdGEiOnt9fQ==",
+      "requestSha256": "b894e9c6d1d136816a93b194710edd7864266d14c81dc5db6773b1220efc6649",
+      "status": 400,
+      "bodyJson": "{\"error\": \"Invalid JSON: Expecting ',' delimiter: line 1 column 12 (char 11)\", \"code\": \"invalid_payload\"}",
+      "storeChanged": false,
+      "getStatus": 200
+    },
+    {
+      "name": "syntax_object_trailing_comma",
+      "mediaId": "media_input_02",
+      "requestBase64": "eyJ0aXRsZSI6MSx9",
+      "requestSha256": "15144eda9ec444456e926363d3c90d2deb103f719557614b103412f2ff956f3b",
+      "status": 400,
+      "bodyJson": "{\"error\": \"Invalid JSON: Expecting property name enclosed in double quotes: line 1 column 12 (char 11)\", \"code\": \"invalid_payload\"}",
+      "storeChanged": false,
+      "getStatus": 200
+    },
+    {
+      "name": "syntax_array_missing_first_value",
+      "mediaId": "media_input_02",
+      "requestBase64": "eyJtZXRhZGF0YSI6Ww==",
+      "requestSha256": "dd7c0ea435aa5ab076c0a328ffb1d94d4d89737ef0bd58b5765645e88e2325db",
+      "status": 400,
+      "bodyJson": "{\"error\": \"Invalid JSON: Expecting value: line 1 column 14 (char 13)\", \"code\": \"invalid_payload\"}",
+      "storeChanged": false,
+      "getStatus": 200
+    },
+    {
+      "name": "syntax_unterminated_array",
+      "mediaId": "media_input_02",
+      "requestBase64": "eyJtZXRhZGF0YSI6WzE=",
+      "requestSha256": "05715609b974d51fab5ccdbb1a4229769f4957df27307bd6d9d88d7de7173e08",
+      "status": 400,
+      "bodyJson": "{\"error\": \"Invalid JSON: Expecting ',' delimiter: line 1 column 15 (char 14)\", \"code\": \"invalid_payload\"}",
+      "storeChanged": false,
+      "getStatus": 200
+    },
+    {
+      "name": "syntax_array_missing_comma",
+      "mediaId": "media_input_02",
+      "requestBase64": "eyJtZXRhZGF0YSI6WzEgMl19",
+      "requestSha256": "dd8d0f43e6bc4674547fce67a3af7444763eb8b20ad776faf927531d8f95391e",
+      "status": 400,
+      "bodyJson": "{\"error\": \"Invalid JSON: Expecting ',' delimiter: line 1 column 16 (char 15)\", \"code\": \"invalid_payload\"}",
+      "storeChanged": false,
+      "getStatus": 200
+    },
+    {
+      "name": "syntax_array_trailing_comma",
+      "mediaId": "media_input_02",
+      "requestBase64": "eyJtZXRhZGF0YSI6WzEsXX0=",
+      "requestSha256": "650a9c555ef5503589a8f5afc32a17ba7d90014762d8adba059ef0cb67031bc8",
+      "status": 400,
+      "bodyJson": "{\"error\": \"Invalid JSON: Expecting value: line 1 column 16 (char 15)\", \"code\": \"invalid_payload\"}",
+      "storeChanged": false,
+      "getStatus": 200
+    },
+    {
+      "name": "syntax_unterminated_key",
+      "mediaId": "media_input_02",
+      "requestBase64": "eyJ0aXRsZQ==",
+      "requestSha256": "b016e6b95beaa73a4fb5d99ac2ca1506d2c7e795db371c078a699846391d4d9d",
+      "status": 400,
+      "bodyJson": "{\"error\": \"Invalid JSON: Unterminated string starting at: line 1 column 2 (char 1)\", \"code\": \"invalid_payload\"}",
+      "storeChanged": false,
+      "getStatus": 200
+    },
+    {
+      "name": "syntax_unterminated_unicode_value",
+      "mediaId": "media_input_02",
+      "requestBase64": "eyJ0aXRsZSI6ICLwn4yN",
+      "requestSha256": "77e4c1a2b409cecfd9a80c5976762ef26150798f46ac037ff6c93e776968f924",
+      "status": 400,
+      "bodyJson": "{\"error\": \"Invalid JSON: Unterminated string starting at: line 1 column 11 (char 10)\", \"code\": \"invalid_payload\"}",
+      "storeChanged": false,
+      "getStatus": 200
+    },
+    {
+      "name": "syntax_unterminated_escape",
+      "mediaId": "media_input_02",
+      "requestBase64": "eyJ0aXRsZSI6ImVuZFw=",
+      "requestSha256": "8ffe36dc7dbf4a831b394af703717a9c92349b3301888bb71d04a62dc82bb87c",
+      "status": 400,
+      "bodyJson": "{\"error\": \"Invalid JSON: Unterminated string starting at: line 1 column 10 (char 9)\", \"code\": \"invalid_payload\"}",
+      "storeChanged": false,
+      "getStatus": 200
+    },
+    {
+      "name": "syntax_invalid_escape",
+      "mediaId": "media_input_02",
+      "requestBase64": "eyJ0aXRsZSI6ImJhZFxxIn0=",
+      "requestSha256": "8f991d50983503acfece3fa542b281b81ff0e9c62cefb0cc170aa0b6768729aa",
+      "status": 400,
+      "bodyJson": "{\"error\": \"Invalid JSON: Invalid \\\\escape: line 1 column 14 (char 13)\", \"code\": \"invalid_payload\"}",
+      "storeChanged": false,
+      "getStatus": 200
+    },
+    {
+      "name": "syntax_invalid_unicode_escape",
+      "mediaId": "media_input_02",
+      "requestBase64": "eyJ0aXRsZSI6Ilx1MTJnZyJ9",
+      "requestSha256": "c12d32c9892fa625dacc17cb1bdf57e6922482a74857f21b814517455a4f2e8d",
+      "status": 400,
+      "bodyJson": "{\"error\": \"Invalid JSON: Invalid \\\\uXXXX escape: line 1 column 12 (char 11)\", \"code\": \"invalid_payload\"}",
+      "storeChanged": false,
+      "getStatus": 200
+    },
+    {
+      "name": "syntax_short_unicode_escape",
+      "mediaId": "media_input_02",
+      "requestBase64": "eyJ0aXRsZSI6Ilx1MQ==",
+      "requestSha256": "f58b11b35e198e827dc85a1d4bb867d776a014276f2d9c098d0654e8a686074e",
+      "status": 400,
+      "bodyJson": "{\"error\": \"Invalid JSON: Invalid \\\\uXXXX escape: line 1 column 12 (char 11)\", \"code\": \"invalid_payload\"}",
+      "storeChanged": false,
+      "getStatus": 200
+    },
+    {
+      "name": "syntax_invalid_second_unicode_escape",
+      "mediaId": "media_input_02",
+      "requestBase64": "eyJ0aXRsZSI6Ilx1ZDgwMFx1MTJnZyJ9",
+      "requestSha256": "a3e9ab4170cb50370d37a0eed59ce88e607f7a6c8751774f6d612d72b567f4a9",
+      "status": 400,
+      "bodyJson": "{\"error\": \"Invalid JSON: Invalid \\\\uXXXX escape: line 1 column 18 (char 17)\", \"code\": \"invalid_payload\"}",
+      "storeChanged": false,
+      "getStatus": 200
+    },
+    {
+      "name": "syntax_raw_nul",
+      "mediaId": "media_input_02",
+      "requestBase64": "eyJ0aXRsZSI6ImEAYiJ9",
+      "requestSha256": "b974de45b7c50e492fdeedd5125c1b5944f2863fdff628b48e6a74d46709734a",
+      "status": 400,
+      "bodyJson": "{\"error\": \"Invalid JSON: Invalid control character at: line 1 column 12 (char 11)\", \"code\": \"invalid_payload\"}",
+      "storeChanged": false,
+      "getStatus": 200
+    },
+    {
+      "name": "syntax_raw_line_feed",
+      "mediaId": "media_input_02",
+      "requestBase64": "eyJ0aXRsZSI6ImEKYiJ9",
+      "requestSha256": "76cd1ac24f75d10c3860fa5e9573491af851f80744b4c8ec761e8e0a900d328d",
+      "status": 400,
+      "bodyJson": "{\"error\": \"Invalid JSON: Invalid control character at: line 1 column 12 (char 11)\", \"code\": \"invalid_payload\"}",
+      "storeChanged": false,
+      "getStatus": 200
+    },
+    {
+      "name": "syntax_leading_zero",
+      "mediaId": "media_input_02",
+      "requestBase64": "eyJtZXRhZGF0YSI6WzAxXX0=",
+      "requestSha256": "fa7bd71045a51aa014f977af2f41138afeff2d5ceeaf79775d17bc43ce3dcd3d",
+      "status": 400,
+      "bodyJson": "{\"error\": \"Invalid JSON: Expecting ',' delimiter: line 1 column 15 (char 14)\", \"code\": \"invalid_payload\"}",
+      "storeChanged": false,
+      "getStatus": 200
+    },
+    {
+      "name": "syntax_lone_minus",
+      "mediaId": "media_input_02",
+      "requestBase64": "eyJtZXRhZGF0YSI6Wy1dfQ==",
+      "requestSha256": "f6b56bfd21301df7891947d0e788bc4c192a4f1e83a11a8d3a1c78437618e98e",
+      "status": 400,
+      "bodyJson": "{\"error\": \"Invalid JSON: Expecting value: line 1 column 14 (char 13)\", \"code\": \"invalid_payload\"}",
+      "storeChanged": false,
+      "getStatus": 200
+    },
+    {
+      "name": "syntax_fraction_without_digit",
+      "mediaId": "media_input_02",
+      "requestBase64": "eyJtZXRhZGF0YSI6WzEuXX0=",
+      "requestSha256": "2e65488fa7e4fcae048a88589dcd435eb9aa57b8d2cd077a68bd0fbe56718db4",
+      "status": 400,
+      "bodyJson": "{\"error\": \"Invalid JSON: Expecting ',' delimiter: line 1 column 15 (char 14)\", \"code\": \"invalid_payload\"}",
+      "storeChanged": false,
+      "getStatus": 200
+    },
+    {
+      "name": "syntax_exponent_without_digit",
+      "mediaId": "media_input_02",
+      "requestBase64": "eyJtZXRhZGF0YSI6WzFlK119",
+      "requestSha256": "e54087aba50275933e7bccfdda86e9e43bd70bf17bb955359b8be6f929647633",
+      "status": 400,
+      "bodyJson": "{\"error\": \"Invalid JSON: Expecting ',' delimiter: line 1 column 15 (char 14)\", \"code\": \"invalid_payload\"}",
+      "storeChanged": false,
+      "getStatus": 200
+    },
+    {
+      "name": "syntax_nonfinite_prefix",
+      "mediaId": "media_input_02",
+      "requestBase64": "eyJtZXRhZGF0YSI6W05hTnhdfQ==",
+      "requestSha256": "34455c84168982435e463e0babcec43f9d82ef002945deff25e06a6389cb4051",
+      "status": 400,
+      "bodyJson": "{\"error\": \"Invalid JSON: Expecting ',' delimiter: line 1 column 17 (char 16)\", \"code\": \"invalid_payload\"}",
+      "storeChanged": false,
+      "getStatus": 200
+    },
+    {
+      "name": "syntax_literal_prefix",
+      "mediaId": "media_input_02",
+      "requestBase64": "eyJtZXRhZGF0YSI6W3RydWV4XX0=",
+      "requestSha256": "cb1b6d7932601b269b000ecfb089ec7003fab8cf032d0da1f166be1e65202519",
+      "status": 400,
+      "bodyJson": "{\"error\": \"Invalid JSON: Expecting ',' delimiter: line 1 column 18 (char 17)\", \"code\": \"invalid_payload\"}",
+      "storeChanged": false,
+      "getStatus": 200
+    },
+    {
+      "name": "syntax_nested_missing_delimiter",
+      "mediaId": "media_input_02",
+      "requestBase64": "eyJtZXRhZGF0YSI6W1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW0luZmluaXR5IGZhbHNlXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXX0=",
+      "requestSha256": "e525cc69f1f8d665beae1ca88d669c7fb92b34d0de9a316ccd52e6f3a9c5e014",
+      "status": 400,
+      "bodyJson": "{\"error\": \"Invalid JSON: Expecting ',' delimiter: line 1 column 182 (char 181)\", \"code\": \"invalid_payload\"}",
+      "storeChanged": false,
+      "getStatus": 200
+    },
+    {
+      "name": "syntax_bad_discarded_field",
+      "mediaId": "media_input_02",
+      "requestBase64": "eyJpZ25vcmVkIjp7ImVudHJ5Ijp9LCJ0aXRsZSI6IldvdWxkIG11dGF0ZSJ9",
+      "requestSha256": "79637553d9b7d7f71c7a3146b47ef95e33cb81eba27c53c08fb486eb3626d3b9",
+      "status": 400,
+      "bodyJson": "{\"error\": \"Invalid JSON: Expecting value: line 1 column 21 (char 20)\", \"code\": \"invalid_payload\"}",
+      "storeChanged": false,
+      "getStatus": 200
+    }
+  ],
+  "originalTCPProofSha256": "978e3112bda162ed612025283795b855fea3e6f7bd2c1fa8e6be354827fdd14c",
+  "originalActualTCPVersion": "3.13.5",
+  "canonicalPythonVersion": "3.12.12",
+  "originalHelperSha256": "3a9b2b597b588d4a4dfd0e7fd9a3cae9e06b3121e461afedd562b00708a363af",
+  "originalRouteSha256": "3fa95a21bed557b18067316bcd1b4bc68cc6a1cd021ad3740d8ae8e47e2ac64b",
+  "diagnosticVersionDifferences": [
+    {
+      "name": "syntax_object_trailing_comma",
+      "python312": "Invalid JSON: Expecting property name enclosed in double quotes: line 1 column 12 (char 11)",
+      "python313": "Invalid JSON: Illegal trailing comma before end of object: line 1 column 11 (char 10)"
+    },
+    {
+      "name": "syntax_array_trailing_comma",
+      "python312": "Invalid JSON: Expecting value: line 1 column 16 (char 15)",
+      "python313": "Invalid JSON: Illegal trailing comma before end of array: line 1 column 15 (char 14)"
+    }
+  ]
+}

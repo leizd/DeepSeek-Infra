@@ -8,6 +8,9 @@ RUN cargo build --release --locked -p deepseek-stateless-mcp
 
 FROM debian:bookworm-slim AS runtime
 
+ARG NATIVE_SOURCE_REVISION=unknown
+LABEL org.opencontainers.image.revision=$NATIVE_SOURCE_REVISION
+
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl ripgrep \
     && rm -rf /var/lib/apt/lists/* \

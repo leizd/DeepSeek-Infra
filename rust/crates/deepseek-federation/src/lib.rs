@@ -12,7 +12,10 @@ pub use agent_credential_vault::{AgentCredentialObject, AgentCredentialVault};
 pub use agent_credentials::{
     AgentCredentialScope, AgentProviderCredentials, SealedAgentCredentials,
 };
-pub use control_custody::{ControlSigningKey, create_control_signer_bundle, load_control_signer};
+pub use control_custody::{
+    ControlSigningKey, create_control_signer_bundle, load_control_signer, verify_native_origin,
+    verify_native_origin_publication,
+};
 mod identity;
 pub use attestation::{
     AttestationError, CurrentSignerAuthorization, FailureDomainMetadata, MAX_REMOTE_COMMIT_BYTES,

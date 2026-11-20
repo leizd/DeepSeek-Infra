@@ -16,6 +16,9 @@ use tonic::{
     transport::{Certificate, ClientTlsConfig, Endpoint},
 };
 
+mod recovery;
+pub(crate) use recovery::{RecoveryPreparation, prepare_recovery};
+
 pub(crate) const PRIVATE_FIELD: &str = "_nativeProviderCredentials";
 pub(crate) const PREPARATION_FIELD: &str = "_nativeRuntimePreparation";
 
@@ -45,6 +48,7 @@ pub(crate) fn has_reserved_field(value: &Value) -> bool {
         Value::Object(values) => {
             values.contains_key(PRIVATE_FIELD)
                 || values.contains_key(PREPARATION_FIELD)
+                || values.contains_key("_nativeRecoveryContext")
                 || values.values().any(has_reserved_field)
         }
         Value::Array(values) => values.iter().any(has_reserved_field),
@@ -62,22 +66,9 @@ pub(crate) struct Preparation<'a> {
     pub(crate) runtime_update: Option<AgentCredentialRuntimeUpdate>,
 }
 
-pub(crate) async fn prepare(
+async fn connect(
     config: &WorkerConfig,
-    input: Preparation<'_>,
-) -> Result<Option<Value>, ()> {
-    let Preparation {
-        run_id,
-        epoch,
-        reference,
-        runtime_revision,
-        api_key,
-        tavily_api_key,
-        runtime_update,
-    } = input;
-    let updating = runtime_update.is_some();
-    let supplied_key = api_key.is_some_and(|key| !key.is_empty())
-        || tavily_api_key.is_some_and(|key| !key.is_empty());
+) -> Result<AgentNodeWorkerClient<tonic::transport::Channel>, ()> {
     let origin = &config.origin;
     let address: SocketAddr = origin
         .strip_prefix("https://")
@@ -115,7 +106,27 @@ pub(crate) async fn prepare(
         .connect()
         .await
         .map_err(|_| ())?;
-    let mut client = AgentNodeWorkerClient::new(channel).max_decoding_message_size(16 * 1024);
+    Ok(AgentNodeWorkerClient::new(channel).max_decoding_message_size(16 * 1024))
+}
+
+pub(crate) async fn prepare(
+    config: &WorkerConfig,
+    input: Preparation<'_>,
+) -> Result<Option<Value>, ()> {
+    let Preparation {
+        run_id,
+        epoch,
+        reference,
+        runtime_revision,
+        api_key,
+        tavily_api_key,
+        runtime_update,
+    } = input;
+    let updating = runtime_update.is_some();
+    let supplied_key = api_key.is_some_and(|key| !key.is_empty())
+        || tavily_api_key.is_some_and(|key| !key.is_empty());
+    let mut client = connect(config).await?;
+    let bearer = &config.bearer;
     let mut request = Request::new(PrepareAgentCredentialsRequest {
         schema_version: 1,
         fence: Some(ActionFence {
@@ -194,6 +205,8 @@ mod tests {
             json!({"messages":[{"content":{PRIVATE_FIELD:{}}}]}),
             json!({PREPARATION_FIELD:"caller-cannot-select-custody-scope"}),
             json!({"payload":{PREPARATION_FIELD:"caller-cannot-select-custody-scope"}}),
+            json!({"_nativeRecoveryContext":{}}),
+            json!({"messages":[{"_nativeRecoveryContext":{}}]}),
         ] {
             assert!(has_reserved_field(&value));
         }

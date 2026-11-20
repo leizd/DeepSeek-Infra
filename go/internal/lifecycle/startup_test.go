@@ -106,3 +106,21 @@ func TestStartupWaitReturnsNonLeaseErrorsImmediately(t *testing.T) {
 		t.Fatal("zero startup budget ignored", err)
 	}
 }
+
+func TestManagedLifecycleRejectsChangedWriterFenceBeforeServing(t *testing.T) {
+	root := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cfg := config.Config{Mode: config.ModeAuthoritative, Listen: "127.0.0.1:0", Owner: "managed-offline-fixture", ProductionStoreDir: root, ExpectedWriterFence: 2}
+	if server, err := Start(ctx, cfg); err == nil || server != nil {
+		t.Fatal("changed managed writer fence reached serving state")
+	}
+	successor, err := store.OpenControl(store.OpenOptions{Path: root, Owner: "after-refused-startup"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer successor.Close()
+	if successor.Writer().FencingToken != 2 {
+		t.Fatal("refused startup retained a writer")
+	}
+}

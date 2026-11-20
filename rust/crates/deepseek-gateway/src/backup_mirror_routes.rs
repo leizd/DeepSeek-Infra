@@ -127,12 +127,18 @@ pub(crate) struct RecipientSource {
 /// `recipient-mismatch` check, which is the check that stops a restore from being told
 /// a generation is current when the key it holds cannot open it.
 pub(crate) async fn recipient_source() -> Result<RecipientSource, ()> {
-    let origin = GO_CONTROL_ADDR_ENV
-        .iter()
-        .find_map(|name| std::env::var(name).ok())
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .ok_or(())?;
+    let private =
+        crate::control_rpc_client::private_endpoint_from_lookup(|name| std::env::var(name))
+            .map_err(|_| ())?;
+    let origin = match private.as_ref() {
+        Some(endpoint) => endpoint.uri().to_string(),
+        None => GO_CONTROL_ADDR_ENV
+            .iter()
+            .find_map(|name| std::env::var(name).ok())
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .ok_or(())?,
+    };
     let bearer = std::env::var(INTERNAL_BEARER_ENV)
         .unwrap_or_default()
         .trim()
@@ -157,8 +163,11 @@ pub(crate) async fn recipient_source() -> Result<RecipientSource, ()> {
     {
         return Err(());
     }
-    let channel = tonic::transport::Endpoint::from_shared(origin)
-        .map_err(|_| ())?
+    let endpoint = match private {
+        Some(endpoint) => endpoint,
+        None => tonic::transport::Endpoint::from_shared(origin).map_err(|_| ())?,
+    };
+    let channel = endpoint
         .connect_timeout(std::time::Duration::from_secs(3))
         .timeout(std::time::Duration::from_secs(10))
         .connect()

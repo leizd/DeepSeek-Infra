@@ -38,6 +38,21 @@ describe("titleFromMessages", () => {
   });
 });
 
+describe("replaceConversationMessages", () => {
+  it("preserves an automatically generated title when messages change", () => {
+    const original = { ...conversation("c", 1), title: "Generated title", autoTitleDone: true };
+    const replaced = replaceConversationMessages(original, [user("Updated question")]);
+    expect(replaced).toMatchObject({ title: "Generated title", customTitle: false, autoTitleDone: true });
+    expect(replaced.messages[0]?.content).toBe("Updated question");
+    expect(original.title).toBe("Generated title");
+  });
+
+  it("updates the provisional title while automatic title generation is unfinished", () => {
+    const replaced = replaceConversationMessages(conversation("c", 1), [user("Updated question")]);
+    expect(replaced).toMatchObject({ title: "Updated question", customTitle: false, autoTitleDone: false });
+  });
+});
+
 describe("sortConversations", () => {
   it("pins favorites ahead of newer non-favorites and caps the list", () => {
     const sorted = sortConversations([

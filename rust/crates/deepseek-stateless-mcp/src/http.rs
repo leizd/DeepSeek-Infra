@@ -1,4 +1,4 @@
-use std::path::{Component, Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::body::Bytes;
@@ -13,6 +13,8 @@ use crate::model::{
     BackupFence, CreateTaskInput, RestoreJournal, StoreError, TaskArguments, TaskStatus,
 };
 use crate::store::TaskBackend;
+use crate::workspace::resolve_workspace_io_path;
+pub use crate::workspace::resolve_workspace_path;
 
 #[derive(Clone)]
 pub struct ServiceConfig {
@@ -225,7 +227,7 @@ async fn mcp(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> 
     let result = match method {
         "initialize" => initialize_result(&state),
         "tools/list" => tools_list(),
-        "tools/call" => tools_call(&state, &params),
+        "tools/call" => tools_call(&state, &params).await,
         "ping" => json!({}),
         _ => return rpc_error(id, -32601, "method not found"),
     };
@@ -269,7 +271,7 @@ fn tool_schema(
     })
 }
 
-fn tools_call(state: &AppState, params: &Value) -> Value {
+async fn tools_call(state: &AppState, params: &Value) -> Value {
     let name = params.get("name").and_then(Value::as_str).unwrap_or("");
     let arguments = params
         .get("arguments")
@@ -281,7 +283,7 @@ fn tools_call(state: &AppState, params: &Value) -> Value {
             "clientSessionState": "none",
             "durableTaskState": state.config.durable_task_state,
         })),
-        "code_search" => match code_search(state, &arguments) {
+        "code_search" => match code_search(state, &arguments).await {
             Ok(value) => tool_ok(value),
             Err(error) => tool_err(error),
         },
@@ -416,7 +418,7 @@ fn query_logs(state: &AppState, arguments: &Value) -> Result<Value, String> {
     )
 }
 
-fn code_search(state: &AppState, arguments: &Value) -> Result<Value, String> {
+async fn code_search(state: &AppState, arguments: &Value) -> Result<Value, String> {
     let query = required_len(arguments, "query", 1, 500)?;
     let path = arguments.get("path").and_then(Value::as_str).unwrap_or(".");
     if path.is_empty() {
@@ -433,47 +435,17 @@ fn code_search(state: &AppState, arguments: &Value) -> Result<Value, String> {
     if !(1..=200).contains(&max_results) {
         return Err("maxResults is out of range".to_string());
     }
-    let root = resolve_workspace_path(&state.config.workspace_root, path)?;
+    let workspace = resolve_workspace_path(&state.config.workspace_root, ".")?;
+    let root = resolve_workspace_io_path(&workspace, path)?;
     crate::search::search_code(
-        &state.config.workspace_root,
+        &workspace,
         &root,
         &query,
         glob.as_deref(),
         max_results as usize,
         state.config.max_output_bytes,
     )
-}
-
-pub fn resolve_workspace_path(workspace_root: &Path, candidate: &str) -> Result<PathBuf, String> {
-    if candidate.contains('\0') {
-        return Err("path contains a null byte".to_string());
-    }
-    let candidate_path = Path::new(candidate);
-    let joined = if candidate_path.is_absolute() {
-        candidate_path.to_path_buf()
-    } else {
-        workspace_root.join(candidate_path)
-    };
-    let normalized = normalize_lexical(&joined);
-    let root = normalize_lexical(workspace_root);
-    if normalized != root && !normalized.starts_with(root.join("")) {
-        return Err("path must stay within the configured workspace".to_string());
-    }
-    Ok(normalized)
-}
-
-fn normalize_lexical(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                out.pop();
-            }
-            other => out.push(other.as_os_str()),
-        }
-    }
-    out
+    .await
 }
 
 fn required_len(value: &Value, field: &str, min: usize, max: usize) -> Result<String, String> {
@@ -481,7 +453,8 @@ fn required_len(value: &Value, field: &str, min: usize, max: usize) -> Result<St
         .get(field)
         .and_then(Value::as_str)
         .ok_or_else(|| format!("{field} is required"))?;
-    if text.len() < min || text.len() > max {
+    let length = text.chars().count();
+    if length < min || length > max {
         return Err(format!("{field} length is out of range"));
     }
     Ok(text.to_string())
@@ -490,7 +463,7 @@ fn required_len(value: &Value, field: &str, min: usize, max: usize) -> Result<St
 fn optional_len(value: &Value, field: &str, max: usize) -> Result<Option<String>, String> {
     match value.get(field).and_then(Value::as_str) {
         None => Ok(None),
-        Some(text) if text.len() <= max && !text.is_empty() => Ok(Some(text.to_string())),
+        Some(text) if text.chars().count() <= max && !text.is_empty() => Ok(Some(text.to_string())),
         Some(_) => Err(format!("{field} length is out of range")),
     }
 }
@@ -754,6 +727,7 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use axum::http::Request;
+    use std::path::Path;
     use tower::ServiceExt;
 
     fn state() -> AppState {
@@ -896,5 +870,77 @@ mod tests {
     fn workspace_path_rejects_parent_escape() {
         let error = resolve_workspace_path(Path::new("D:/workspace"), "../outside").unwrap_err();
         assert_eq!(error, "path must stay within the configured workspace");
+    }
+
+    #[test]
+    fn query_length_preserves_original_unicode_code_point_limits() {
+        for character in ["x", "汉", "🔬"] {
+            let accepted = character.repeat(500);
+            assert_eq!(
+                required_len(&json!({"query": &accepted}), "query", 1, 500).unwrap(),
+                accepted
+            );
+            assert_eq!(
+                required_len(&json!({"query": character.repeat(501)}), "query", 1, 500),
+                Err("query length is out of range".to_string())
+            );
+        }
+    }
+
+    #[test]
+    fn short_multibyte_idempotency_keys_cannot_bypass_the_minimum() {
+        for key in [
+            "a".repeat(7),
+            "汉".repeat(7),
+            "🔬".repeat(4),
+            "🔬".repeat(7),
+        ] {
+            assert!(
+                required_len(&json!({"idempotencyKey": key}), "idempotencyKey", 8, 200).is_err()
+            );
+        }
+        for character in ["a", "汉", "🔬"] {
+            let key = character.repeat(8);
+            assert_eq!(
+                required_len(&json!({"idempotencyKey": &key}), "idempotencyKey", 8, 200).unwrap(),
+                key
+            );
+        }
+    }
+
+    #[test]
+    fn idempotency_key_maximum_counts_characters_instead_of_storage_bytes() {
+        for character in ["a", "汉", "🔬"] {
+            let key = character.repeat(200);
+            assert_eq!(
+                required_len(&json!({"idempotencyKey": &key}), "idempotencyKey", 8, 200).unwrap(),
+                key
+            );
+            assert!(
+                required_len(
+                    &json!({"idempotencyKey": character.repeat(201)}),
+                    "idempotencyKey",
+                    8,
+                    200
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn optional_test_filters_preserve_unicode_boundaries_and_nonempty_values() {
+        for field in ["keyword", "markers"] {
+            assert_eq!(optional_len(&json!({}), field, 200).unwrap(), None);
+            assert!(optional_len(&json!({"keyword": "", "markers": ""}), field, 200).is_err());
+            for character in ["x", "汉", "🔬"] {
+                let text = character.repeat(200);
+                assert_eq!(
+                    optional_len(&json!({"keyword": &text, "markers": &text}), field, 200).unwrap(),
+                    Some(text)
+                );
+                assert!(optional_len(&json!({"keyword": character.repeat(201), "markers": character.repeat(201)}), field, 200).is_err());
+            }
+        }
     }
 }

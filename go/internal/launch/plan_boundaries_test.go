@@ -18,6 +18,9 @@ import (
 // These are native Go child processes holding real loopback listeners. The
 // supervisor must release their resources before reporting termination.
 func runLaunchHelper() int {
+	if role := os.Getenv("DEEPSEEK_MANAGED_FIXTURE_ROLE"); role != "" {
+		return runManagedFixtureHelper(role)
+	}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return 70

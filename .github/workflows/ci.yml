@@ -698,7 +698,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: docker build -t deepseek-infra:test .
+      - run: docker build --build-arg VCS_REF=${{ github.sha }} -t deepseek-infra:test .
+      - name: Verify default native container resources, authority and restart
+        run: python3 scripts/verify_native_default_image.py --image deepseek-infra:test
+      - name: Preserve native default image workload reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-default-image-${{ github.sha }}
+          path: artifacts/native-default-image/
+          if-no-files-found: warn
+          retention-days: 7
       - run: docker build -f stateless-mcp/Dockerfile -t deepseek-infra-stateless-mcp:test .
       - run: cp .env.example .env && docker compose config
       - run: docker compose -f docker-compose.stateless-mcp.yml config
@@ -1293,7 +1303,11 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install offline compatibility oracle dependencies
-        run: python -m pip install -r requirements.txt -r requirements-ocr.txt
+        # The Rust gateway tests spawn the real Python application through
+        # starlette's TestClient, which needs httpx2. That pin lives in
+        # requirements-dev.txt, so this job must install it too; without it every
+        # oracle-backed test fails with "requires the httpx2 package".
+        run: python -m pip install -r requirements.txt -r requirements-dev.txt -r requirements-ocr.txt
       - uses: dtolnay/rust-toolchain@1.85.0
         with:
           components: rustfmt, clippy
@@ -1417,6 +1431,108 @@ jobs:
       - run: python scripts/native_runtime_evidence.py
       - run: python scripts/control_plane_shadow.py --check --export-report artifacts/control-shadow-report.json
 
+  # The race suites are the entire cost of the Go gate: 87 minutes for the default
+  # variant and 79 for the Android one, against 16 minutes for everything else in
+  # native-go. They are independent - separate build tags, separate store shards,
+  # separate coverage profiles - so they run as their own jobs now instead of
+  # back-to-back inside one 183-minute job.
+  #
+  # Each job still runs the whole suite with the same shard and parallelism settings.
+  # Nothing was dropped, bounded shorter, or run without -race.
+  native-go-race:
+    needs: release-version
+    runs-on: ubuntu-latest
+    env:
+      GOTOOLCHAIN: local
+      GOSUMDB: sum.golang.org
+    defaults:
+      run:
+        working-directory: go
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install checksum-pinned Go 1.27.1
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/go1.27.1.linux-amd64.tar.gz"
+          install_dir="$RUNNER_TEMP/go-1.27.1"
+          curl --fail --location --silent --show-error \
+            --output "$archive" \
+            https://go.dev/dl/go1.27.1.linux-amd64.tar.gz
+          echo "63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445  $archive" | sha256sum --check --strict
+          mkdir -p "$install_dir"
+          tar -xzf "$archive" -C "$install_dir"
+          echo "$install_dir/go/bin" >> "$GITHUB_PATH"
+      - run: test "$(go env GOVERSION)" = "go1.27.1"
+      # The full pure-Go SQLite race suite exceeded 30m while creating its final fixtures.
+      # Keep every test, bound each package at 60m, and preserve per-test timing evidence.
+      - name: Full Go race tests with timing reports
+        run: |
+          mkdir -p ../artifacts/go-race
+          python ../scripts/run_native_go_race.py --variant default --out ../artifacts/go-race/default --store-shards 4 --max-parallel 4
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: go-race-timing-reports-1.27.1
+          path: artifacts/go-race/default/
+          if-no-files-found: warn
+          retention-days: 7
+
+  native-go-android:
+    needs: release-version
+    runs-on: ubuntu-latest
+    env:
+      GOTOOLCHAIN: local
+      GOSUMDB: sum.golang.org
+      # Propagate the connector selection to process tests' child builds.
+      GOFLAGS: "-tags=deepseek_android,sqlite3_flock"
+    defaults:
+      run:
+        working-directory: go
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install checksum-pinned Go 1.27.1
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/go1.27.1.linux-amd64.tar.gz"
+          install_dir="$RUNNER_TEMP/go-1.27.1"
+          curl --fail --location --silent --show-error \
+            --output "$archive" \
+            https://go.dev/dl/go1.27.1.linux-amd64.tar.gz
+          echo "63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445  $archive" | sha256sum --check --strict
+          mkdir -p "$install_dir"
+          tar -xzf "$archive" -C "$install_dir"
+          echo "$install_dir/go/bin" >> "$GITHUB_PATH"
+      - run: test "$(go env GOVERSION)" = "go1.27.1"
+      - run: go vet ./...
+      - name: Android Go SQLite compatibility checks
+        run: |
+          mkdir -p ../artifacts/go-race
+          python ../scripts/run_native_go_race.py --variant android --out ../artifacts/go-race/android --store-shards 4 --max-parallel 4
+          python ../scripts/check_go_coverage.py --dir . --min 95.0 --profile android-coverage.out
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: go-android-coverage-profile-1.27.1
+          path: go/android-coverage.out
+          if-no-files-found: warn
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: go-race-timing-reports-android-1.27.1
+          path: artifacts/go-race/android/
+          if-no-files-found: warn
+          retention-days: 7
+
   native-go:
     needs: release-version
     runs-on: ubuntu-latest
@@ -1457,38 +1573,12 @@ jobs:
         # `select` whose two cases race, a drive-letter rule that only a Windows path can reach —
         # and the gate's whole margin above its 95.0% floor is about two of them.
         run: python ../scripts/check_go_coverage.py --dir . --min 95.0 --profile coverage.out
-      - name: Full Go race tests with timing reports
-        run: |
-          mkdir -p ../artifacts/go-race
-          go test -race -json -timeout=90m ./... > ../artifacts/go-race/default.jsonl 2> ../artifacts/go-race/default.stderr.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: go-coverage-profile-1.27.1
           path: go/coverage.out
           if-no-files-found: warn
-      - name: Android Go SQLite compatibility checks
-        env:
-          # Propagate the same connector selection to process tests' child builds.
-          GOFLAGS: "-tags=deepseek_android"
-        run: |
-          go vet ./...
-          mkdir -p ../artifacts/go-race
-          go test -race -json -timeout=90m ./... > ../artifacts/go-race/android.jsonl 2> ../artifacts/go-race/android.stderr.log
-          python ../scripts/check_go_coverage.py --dir . --min 95.0 --profile android-coverage.out
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: go-android-coverage-profile-1.27.1
-          path: go/android-coverage.out
-          if-no-files-found: warn
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: go-race-timing-reports-1.27.1
-          path: artifacts/go-race/
-          if-no-files-found: warn
-          retention-days: 7
       - name: Build fail-closed Rust worker boundary
         run: cargo build --locked --manifest-path ../rust/Cargo.toml -p deepseek-worker
       - name: Run real Go-to-Rust worker boundary
@@ -1636,7 +1726,10 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install offline compatibility oracle dependencies
-        run: python -m pip install -r requirements.txt -r requirements-ocr.txt
+        # Same reason as the `rust` job: the gateway tests spawn the real Python
+        # application through starlette's TestClient, and httpx2 lives in
+        # requirements-dev.txt.
+        run: python -m pip install -r requirements.txt -r requirements-dev.txt -r requirements-ocr.txt
       - uses: dtolnay/rust-toolchain@1.85.0
         with:
           components: llvm-tools-preview
@@ -1670,6 +1763,64 @@ jobs:
             docs/evidence/rust-coverage-v${{ env.RELEASE_VERSION }}.json
           if-no-files-found: error
 
+  # Bounded, coverage-guided fuzzing of the frozen parsers with libFuzzer.
+  #
+  # This runs on nightly because cargo-fuzz and the sanitizer toolchain it needs are
+  # nightly-only. The rest of the repository pins 1.85 on purpose and keeps doing so:
+  # this job installs nightly in its own step and never changes the toolchain the
+  # product builds with.
+  #
+  # It fails on any finding. libFuzzer exits non-zero when it finds a crash, a hang or
+  # a failed assertion, and each target asserts contract invariants (determinism,
+  # idempotent acceptance, no escape) rather than only "did not panic", so a green run
+  # means the parsers still hold their promises for arbitrary input.
+  rust-fuzz:
+    needs:
+      - release-version
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install nightly for cargo-fuzz only
+        uses: dtolnay/rust-toolchain@nightly
+      - name: Install pinned cargo-fuzz
+        run: |
+          set -eu
+          # The version lives in fuzz/cargo-fuzz-version.txt rather than here: ci.yml
+          # must carry no version-shaped argument, which the release-version contract
+          # enforces, and the pin belongs next to the crate it pins anyway.
+          version="$(cat fuzz/cargo-fuzz-version.txt)"
+          cargo install cargo-fuzz --version "$version" --locked
+          cargo fuzz --version
+      # Run from rust/, where a real Cargo.toml exists, and point --fuzz-dir at the
+      # fuzz crate. cargo-fuzz's find_package() walks up from the working directory
+      # for a Cargo.toml that is not itself a fuzz manifest, and this repository has
+      # none at its root - so running from the root can only ever report "could not
+      # find a cargo project". --fuzz-dir then names the crate explicitly, which also
+      # removes the fuzz/ vs fuzz/fuzz/ ambiguity that broke the previous attempt.
+      - name: Fuzz the frozen transport validators
+        run: >-
+          cargo +nightly fuzz run --fuzz-dir=../fuzz transport_frozen_documents
+          "$GITHUB_WORKSPACE/fuzz/corpus/transport_frozen_documents" -- -max_total_time=180
+        working-directory: rust
+      - name: Fuzz the restore path sanitiser
+        run: >-
+          cargo +nightly fuzz run --fuzz-dir=../fuzz restore_relative_path
+          "$GITHUB_WORKSPACE/fuzz/corpus/restore_relative_path" -- -max_total_time=180
+        working-directory: rust
+      - name: Fuzz the evidence proof envelope
+        run: >-
+          cargo +nightly fuzz run --fuzz-dir=../fuzz evidence_proof_envelope
+          "$GITHUB_WORKSPACE/fuzz/corpus/evidence_proof_envelope" -- -max_total_time=180
+        working-directory: rust
+      - name: Upload any crash artifact
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-fuzz-crashes
+          path: fuzz/artifacts/
+          if-no-files-found: warn
+
   rust-sidecar-performance:
     needs:
       - evidence-context
@@ -1693,14 +1844,20 @@ jobs:
       - run: python -m pip install -r requirements.txt
       - name: Build locked release sidecar
         run: cargo build --release --locked --manifest-path rust/Cargo.toml -p deepseek-gateway
+      # 12 samples per layer: the absolute latency gate needs at least 10 to assert a
+      # p95 at all, and below that it reports itself unmeasured rather than passing.
+      # 2 was never enough to support a percentile. A comment inside a `>-` block is
+      # not a YAML comment - it becomes part of the shell command, and it swallowed
+      # every flag after it the first time this was attempted.
       - name: Run bounded layered benchmark
         run: >-
           python scripts/run_rust_sidecar_benchmarks.py
           --skip-build
-          --iterations 2
-          --warmups 1
+          --iterations 12
+          --warmups 3
           --concurrency 1,8,32
           --timeout 45
+          --require-latency-gate
           --artifact-out artifacts/rust-sidecar-performance.json
           --evidence-out docs/evidence/rust-sidecar-performance-v$RELEASE_VERSION.json
       - run: >-
@@ -1751,6 +1908,8 @@ jobs:
       - rust-sidecar-performance
       - native-protocol
       - native-go
+      - native-go-race
+      - native-go-android
       - native-s3-transport
       - release-version
     runs-on: ubuntu-latest
@@ -1882,6 +2041,7 @@ jobs:
       - rust
       - rust-coverage
       - rust-sidecar-performance
+      - rust-fuzz
       - evidence-assembly
       - release-package
       - release-version

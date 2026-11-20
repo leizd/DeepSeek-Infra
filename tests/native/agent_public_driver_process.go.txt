@@ -103,6 +103,16 @@ func TestNativeAgentPublicDriverProcess(t *testing.T) {
 	if json.Unmarshal(raw, &created) != nil || created.RunID == "" {
 		t.Fatal("creation omitted durable identity")
 	}
+	if mode := os.Getenv("DEEPSEEK_TEST_AGENT_TERMINAL_FAILURE"); mode != "" {
+		var result map[string]any
+		if mode == "plan" || mode == "synthesis" {
+			result = nativeTerminalFailureRecovery(t, control, public.Origin, client, created.RunID, ready.PublicKey, mode)
+		} else {
+			result = nativeTerminalUnknownEffect(t, control, public.Origin, client, created.RunID, ready.PublicKey, mode, directory)
+		}
+		nativeSigningWrite(t, filepath.Join(directory, "result.json"), result)
+		return
+	}
 	if os.Getenv("DEEPSEEK_TEST_AGENT_CANCEL_ACTIVE") == "1" {
 		planningCancellation := os.Getenv("DEEPSEEK_TEST_AGENT_CANCEL_ACTIVE_PLAN") == "1"
 		expectedPhases, expectedNode, cancelledPhase := 2, expectedPlan[0].ID, "tasks"
@@ -418,6 +428,14 @@ func TestNativeAgentPublicDriverProcess(t *testing.T) {
 		time.Sleep(200 * time.Millisecond)
 	}
 	metadata, found, err := control.AgentRunMetadata(created.RunID)
+	if os.Getenv("DEEPSEEK_TEST_AGENT_FAILED_TASK_RECOVERY") != "" {
+		if err != nil || !found {
+			t.Fatal(err)
+		}
+		result := nativeFailedTaskRecovery(t, control, public.Origin, client, metadata, publicRun, ready.PublicKey)
+		nativeSigningWrite(t, filepath.Join(directory, "result.json"), result)
+		return
+	}
 	if err != nil || !found || (expectedConfirmation && !confirmed) || metadata.ConfirmPlan != expectedConfirmation || metadata.Preset != preset ||
 		metadata.Status != "done" || metadata.NextIndex != int64(eventCount) {
 		t.Fatal("public state differs from actual Go durable settlement", err)
@@ -460,13 +478,19 @@ func TestNativeAgentPublicDriverProcess(t *testing.T) {
 	if !bytes.Contains(raw, []byte("Controlled final answer")) || bytes.Contains(raw, []byte("request-only-credential")) {
 		t.Fatal("public final answer missing or private credential leaked")
 	}
-	nativeSigningWrite(t, filepath.Join(directory, "result.json"), map[string]any{
+	result := map[string]any{
 		"status": "PASS", "runId": created.RunID, "runStatus": metadata.Status, "nextIndex": metadata.NextIndex,
 		"durablePhases": len(records), "resourcesReleased": true, "requestSha256": metadata.Request.SHA256, "requestLength": metadata.Request.Length,
 		"publicEventCount": len(events), "finalAnswerVisible": true, "publicResponseLength": len(serialized),
 		"inputBodySeededByOfflineOracle": false, "productionProviderQualified": false, "fullMigrationQualified": false,
 		"productionRuntimeProcesses": []string{"Go", "Rust"}, "providerFixtureIsOfflineTestTool": true,
 		"publicCreationAndDAGDriverQualified": true, "publicPlanConfirmationQualified": expectedConfirmation && confirmed, "noTasksBeforePublicConfirmation": expectedConfirmation && confirmed,
-		"planConfirmationRequired": metadata.ConfirmPlan, "actualPreset": metadata.Preset, "actualPlan": metadata.Plan, "sourceCommit": os.Getenv("DEEPSEEK_TEST_HEAD_SHA")})
+		"planConfirmationRequired": metadata.ConfirmPlan, "actualPreset": metadata.Preset, "actualPlan": metadata.Plan, "sourceCommit": os.Getenv("DEEPSEEK_TEST_HEAD_SHA")}
+	if os.Getenv("DEEPSEEK_TEST_AGENT_RECOVERY_DRIVING") == "1" {
+		result = nativeRecoveryDrive(t, control, origin, ready, os.Getenv("DEEPSEEK_AGENT_SIGNING_WORKER_BEARER"), public.Origin, client, metadata, publicRun, result)
+	} else if os.Getenv("DEEPSEEK_TEST_AGENT_RECOVERY_PREPARATION") == "1" {
+		result = nativeRecoveryPreparation(t, control, origin, ready, os.Getenv("DEEPSEEK_AGENT_SIGNING_WORKER_BEARER"), public.Origin, client, metadata, publicRun, result)
+	}
+	nativeSigningWrite(t, filepath.Join(directory, "result.json"), result)
 	fmt.Println("actual native public create / leader / dependent DAG / synthesis / final settlement PASS")
 }
