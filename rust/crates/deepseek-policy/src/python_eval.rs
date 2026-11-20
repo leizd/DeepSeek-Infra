@@ -1536,3 +1536,171 @@ mod tests {
         assert_eq!(result["result"], "1");
     }
 }
+
+#[cfg(test)]
+mod oracle_parity_tests {
+    use super::*;
+
+    /// Every expectation here was produced by
+    /// `deepseek_infra.infra.tool_runtime.tools.python_eval`, so these pin the
+    /// port against the oracle rather than against itself.
+    fn expect(expression: &str, expected: &str) {
+        let result = python_eval(expression)
+            .unwrap_or_else(|error| panic!("{expression} failed: {}", error.message));
+        assert_eq!(result["result"], expected, "expression: {expression}");
+        assert_eq!(result["expression"], expression);
+    }
+
+    fn refuse(expression: &str, message: &str) {
+        let error = python_eval(expression)
+            .err()
+            .unwrap_or_else(|| panic!("{expression} unexpectedly succeeded"));
+        assert_eq!(error.message, message, "expression: {expression}");
+        assert_eq!(error.code, codes::INVALID_PAYLOAD);
+        assert_eq!(error.status, 400);
+    }
+
+    #[test]
+    fn builtins_match_the_oracle() {
+        expect("abs(-5)", "5");
+        expect("abs(-2.5)", "2.5");
+        expect("abs(True)", "1");
+        expect("round(2.567)", "3");
+        expect("round(2.567, 2)", "2.57");
+        expect("round(2.5)", "2");
+        expect("round(-2.5)", "-2");
+        expect("round(2.5, 0)", "2.0");
+        expect("min(3, 1, 2)", "1");
+        expect("max(3, 1, 2)", "3");
+        expect("max([1,5,3])", "5");
+        expect("min('abc')", "'a'");
+        expect("sum([1,2,3])", "6");
+        expect("sum((1,2,3))", "6");
+        expect("sum({1,2,3})", "6");
+        expect("sum([])", "0");
+        expect("pow(2,10)", "1024");
+        expect("pow(2,10,1000)", "24");
+    }
+
+    #[test]
+    fn length_of_every_sequence_matches_the_oracle() {
+        expect("len('hello')", "5");
+        expect("len([1,2,3])", "3");
+        expect("len((1,2))", "2");
+        expect("len({1,2,3})", "3");
+        expect("len({'a':1})", "1");
+    }
+
+    #[test]
+    fn math_functions_match_the_oracle() {
+        expect("factorial(0)", "1");
+        expect("comb(5,2)", "10");
+        expect("perm(5,2)", "20");
+        expect("gcd(12,18)", "6");
+        expect("lcm(4,6)", "12");
+        expect("sqrt(16)", "4.0");
+        expect("sqrt(2)", "1.4142135623730951");
+        expect("log(1)", "0.0");
+        expect("log(8, 2)", "3.0");
+        expect("sin(0)", "0.0");
+        expect("cos(0)", "1.0");
+        expect("tan(0)", "0.0");
+        expect("pi", "3.141592653589793");
+        expect("e", "2.718281828459045");
+    }
+
+    #[test]
+    fn math_attribute_form_matches_the_oracle() {
+        expect("math.sqrt(16)", "4.0");
+        expect("math.pi", "3.141592653589793");
+        expect("math.e", "2.718281828459045");
+        expect("math.factorial(5)", "120");
+        expect("math.log(1, 10)", "0.0");
+    }
+
+    #[test]
+    fn arithmetic_matches_the_oracle() {
+        expect("1/2", "0.5");
+        expect("7//2", "3");
+        expect("7%3", "1");
+        expect("2**10", "1024");
+        expect("2 ** -1", "0.5");
+        expect("-3", "-3");
+        expect("+4", "4");
+        expect("1 + 2.5", "3.5");
+        expect("10 - 3.5", "6.5");
+        expect("3 * 4.0", "12.0");
+        expect("1_000", "1000");
+        expect("0.5", "0.5");
+    }
+
+    #[test]
+    fn comparisons_and_boolean_operators_match_the_oracle() {
+        expect("1 == 1", "True");
+        expect("1 != 2", "True");
+        expect("1 <= 2", "True");
+        expect("1 >= 2", "False");
+        expect("True and False", "False");
+        expect("True or False", "True");
+        expect("1 if True else 2", "1");
+    }
+
+    #[test]
+    fn subscripts_and_slices_match_the_oracle() {
+        expect("[1,2,3][0]", "1");
+        expect("[1,2,3][-1]", "3");
+        expect("'abcdef'[1:3]", "'bc'");
+        expect("(1,2)[0]", "1");
+        expect("[1,2,3][1:]", "[2, 3]");
+        expect("[1,2,3][:2]", "[1, 2]");
+    }
+
+    #[test]
+    fn literals_and_reprs_match_the_oracle() {
+        expect("None", "None");
+        expect("True", "True");
+        expect("False", "False");
+        expect("()", "()");
+        expect("[]", "[]");
+        expect("{}", "{}");
+        expect("{1,2,3}", "{1, 2, 3}");
+        expect("'a' + 'b'", "'ab'");
+        expect("[1,2] + [3]", "[1, 2, 3]");
+        expect("'x' * 3", "'xxx'");
+    }
+
+    #[test]
+    fn disallowed_calls_are_refused_with_the_oracle_message() {
+        refuse("open('x')", "Function is not allowed: open");
+        refuse("__import__('os')", "Function is not allowed: __import__");
+        refuse("exec('1')", "Function is not allowed: exec");
+        refuse("eval('1')", "Function is not allowed: eval");
+        refuse("globals()", "Function is not allowed: globals");
+        refuse("print(1)", "Function is not allowed: print");
+        refuse("unknown(1)", "Function is not allowed: unknown");
+    }
+
+    #[test]
+    fn non_math_attributes_are_refused_with_the_oracle_message() {
+        refuse(
+            "math.__dict__",
+            "Only math.<function> attributes are allowed",
+        );
+        refuse(
+            "math._private",
+            "Only math.<function> attributes are allowed",
+        );
+        refuse("'a'.upper()", "Only math.<function> attributes are allowed");
+        refuse(
+            "math.unknown(1)",
+            "Only math.<function> attributes are allowed",
+        );
+    }
+
+    #[test]
+    fn unsupported_syntax_is_refused() {
+        refuse("lambda: 1", "Unsupported syntax: Lambda");
+        refuse("[x for x in [1]]", "Unsupported syntax: ListComp");
+        refuse("not True", "Unsupported syntax: Not");
+    }
+}
