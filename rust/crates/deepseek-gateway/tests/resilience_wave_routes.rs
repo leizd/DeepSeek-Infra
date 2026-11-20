@@ -352,15 +352,34 @@ fn seed_repair_source_fixture(root: &Path) -> (String, String, String, Connectio
             metadata_json TEXT
          );
          CREATE TABLE recovery_point_copies (
-            logical_id INTEGER PRIMARY KEY AUTOINCREMENT,
             target_id TEXT NOT NULL,
             policy_id TEXT NOT NULL,
             backup_id TEXT NOT NULL,
-            committed_at TEXT NOT NULL,
-            recoverable INTEGER NOT NULL,
-            state TEXT NOT NULL,
+            logical_id TEXT NOT NULL,
             object_set_digest TEXT,
-            role TEXT NOT NULL,
+            committed_at TEXT NOT NULL,
+            recoverable INTEGER NOT NULL DEFAULT 0,
+            role TEXT NOT NULL DEFAULT 'primary',
+            mode TEXT NOT NULL DEFAULT 'required',
+            state TEXT NOT NULL DEFAULT 'healthy',
+            last_verified_at TEXT,
+            last_scrub_at TEXT,
+            last_drill_at TEXT,
+            last_repair_at TEXT,
+            last_failure TEXT,
+            verified_at TEXT,
+            metadata_json TEXT,
+            PRIMARY KEY (target_id, policy_id, backup_id)
+         );
+         CREATE TABLE logical_recovery_points (
+            logical_id TEXT PRIMARY KEY,
+            policy_id TEXT NOT NULL,
+            backup_id TEXT NOT NULL,
+            object_set_digest TEXT,
+            committed_at TEXT NOT NULL,
+            snapshot_kind TEXT NOT NULL DEFAULT 'full',
+            retained INTEGER NOT NULL DEFAULT 1,
+            retired_at TEXT,
             metadata_json TEXT
          );",
     )
@@ -374,29 +393,24 @@ fn seed_repair_source_fixture(root: &Path) -> (String, String, String, Connectio
         rusqlite::params![payload.len() as i64, payload.len() as i64],
     )
     .unwrap();
-    // `pol_rep` requires `minCommittedCopies: 2` across two failure domains, so
-    // the ledger must already hold both copies: the verifier reads the ledger
-    // and never writes a copy itself (`resilience_outcome_verifier` and
-    // `verify_action_outcome` both only filter the rows they are given). t1 is
-    // the primary; t2 is the copy the repair is asked to restore.
-    for (target, role, fd) in [("t1", "primary", "fd-a"), ("t2", "replica", "fd-b")] {
-        dr.execute(
-            "INSERT INTO recovery_point_copies (
-                target_id, policy_id, backup_id, committed_at, recoverable,
-                state, object_set_digest, role, metadata_json
-             ) VALUES (
-                ?, 'pol_rep', 'bk_1', '2026-11-18T01:00:00Z',
-                1, 'healthy', ?, ?, ?
-             )",
-            rusqlite::params![
-                target,
-                &obj_digest,
-                role,
-                format!("{{\"failureDomain\":\"{fd}\"}}")
-            ],
-        )
-        .unwrap();
-    }
+    // `pol_rep` requires `minCommittedCopies: 2`, so seeding only the t1 primary
+    // leaves REPLICA_LAG open and the planner emits CREATE_REPAIR_JOB. The
+    // repair execution then writes the t2 replica itself
+    // (`resilience_action_exec` inserts a `role='replica'` copy), which is what
+    // satisfies the verifier. Seeding both copies up front would clear the risk
+    // and the planner would have nothing to repair.
+    dr.execute(
+        "INSERT INTO recovery_point_copies (
+            target_id, policy_id, backup_id, logical_id, object_set_digest,
+            committed_at, recoverable, role, mode, state, verified_at, metadata_json
+         ) VALUES (
+            't1', 'pol_rep', 'bk_1', 'bk_1', ?,
+            '2026-11-18T01:00:00Z', 1, 'primary', 'required', 'healthy',
+            '2026-11-18T01:00:00Z', '{\"failureDomain\":\"fd-a\"}'
+         )",
+        [&obj_digest],
+    )
+    .unwrap();
 
     (
         obj_digest,
