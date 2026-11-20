@@ -7,31 +7,47 @@ import (
 	agentv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/agentv1"
 )
 
+// TestSettlementEntryPointsRefuseAMismatchedPhase pins that each settlement
+// entry point refuses an action whose recorded phase is not its own.
+//
+// The two directions need different fixtures: `planSettlementFixture` owns a
+// run whose only action is a plan, and `tasksCompletionFixture` owns one whose
+// action is tasks. Reading both actions out of a single fixture was not
+// possible, and the earlier version skipped the whole test when the missing
+// phase was not found, so none of the three assertions ran.
 func TestSettlementEntryPointsRefuseAMismatchedPhase(t *testing.T) {
-	control, runID := recoveryCompletedRun(t)
-	actionOf := func(phase string) string {
-		t.Helper()
-		var id string
-		if err := control.db.QueryRow(`SELECT id FROM action_journal WHERE json_extract(payload_json,'$.nativeAgentExecution.runId')=?
-            AND json_extract(payload_json,'$.nativeAgentExecution.phase')=? LIMIT 1`, runID, phase).Scan(&id); err != nil {
-			t.Skipf("no %s action in the fixture: %v", phase, err)
+	t.Run("a task settlement refuses a plan action", func(t *testing.T) {
+		control, plan, _ := planSettlementFixture(t, true)
+		if _, err := control.SettleAgentTask(AgentTaskSettlementRequest{
+			OperationID: "phase-task-on-plan", Actor: "operator:boundary-test",
+			ActionID: plan.ActionID, RunID: plan.RunID, NodeID: "coder",
+			Epoch: plan.Epoch, ExpectedIndex: 1, SourceReceiptSHA256: strings.Repeat("a", 64),
+		}); err == nil {
+			t.Fatal("a task settlement accepted a plan action")
 		}
-		return id
-	}
-	tasks := actionOf("tasks")
-	plan := actionOf("plan")
-	if _, err := control.SettleAgentTask(AgentTaskSettlementRequest{OperationID: "phase-task-on-plan", Actor: "operator:boundary-test",
-		ActionID: plan, RunID: runID, NodeID: "coder", Epoch: 1, ExpectedIndex: 1, SourceReceiptSHA256: strings.Repeat("a", 64)}); err == nil {
-		t.Fatal("a task settlement accepted a plan action")
-	}
-	if _, err := control.SettleAgentPlan(AgentPlanSettlementRequest{OperationID: "phase-plan-on-tasks", Actor: "operator:boundary-test",
-		ActionID: tasks, RunID: runID, Epoch: 1, Projection: &agentv1.AgentPlanProjectionReceipt{}}); err == nil {
-		t.Fatal("a plan settlement accepted a tasks action")
-	}
-	if _, err := control.SettleAgentSynthesis(AgentSynthesisSettlementRequest{OperationID: "phase-synthesis-on-tasks", Actor: "operator:boundary-test",
-		ActionID: tasks, RunID: runID, Epoch: 1, Projection: &agentv1.AgentSynthesisProjectionReceipt{}}); err == nil {
-		t.Fatal("a synthesis settlement accepted a tasks action")
-	}
+	})
+
+	t.Run("a plan settlement refuses a tasks action", func(t *testing.T) {
+		control, complete := tasksCompletionFixture(t, false)
+		if _, err := control.SettleAgentPlan(AgentPlanSettlementRequest{
+			OperationID: "phase-plan-on-tasks", Actor: "operator:boundary-test",
+			ActionID: complete.ActionID, RunID: complete.RunID, Epoch: 1,
+			Projection: &agentv1.AgentPlanProjectionReceipt{},
+		}); err == nil {
+			t.Fatal("a plan settlement accepted a tasks action")
+		}
+	})
+
+	t.Run("a synthesis settlement refuses a tasks action", func(t *testing.T) {
+		control, complete := tasksCompletionFixture(t, false)
+		if _, err := control.SettleAgentSynthesis(AgentSynthesisSettlementRequest{
+			OperationID: "phase-synthesis-on-tasks", Actor: "operator:boundary-test",
+			ActionID: complete.ActionID, RunID: complete.RunID, Epoch: 1,
+			Projection: &agentv1.AgentSynthesisProjectionReceipt{},
+		}); err == nil {
+			t.Fatal("a synthesis settlement accepted a tasks action")
+		}
+	})
 }
 
 func TestSettlementRefusesAForeignLeaseClaim(t *testing.T) {
