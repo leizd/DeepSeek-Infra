@@ -20,30 +20,34 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def _ladder() -> dict[str, float]:
+def _ladder() -> tuple[list[float], int]:
+    """Return the declared stage floors and the index of the stage CI enforces."""
     source = (ROOT / "scripts" / "run_rust_coverage.py").read_text(encoding="utf-8")
     match = re.search(
         r"RUST_COVERAGE_STAGE_FLOORS: tuple\[float, \.\.\.\] = \(([^)]*)\)",
         source,
     )
     assert match, "RUST_COVERAGE_STAGE_FLOORS declaration not found"
-    values = [float(item) for item in re.findall(r"\d+(?:\.\d+)?", match.group(1))]
-    assert values, "the ladder declares no stages"
-    return {
-        "stages": values,
-        "current": float(
-            re.search(
-                r"^RUST_COVERAGE_CURRENT_FLOOR = RUST_COVERAGE_STAGE_FLOORS\[(\d+)\]",
-                source,
-                re.M,
-            ).group(1)
-        ),
-    }
+    stages = [float(item) for item in re.findall(r"\d+(?:\.\d+)?", match.group(1))]
+    assert stages, "the ladder declares no stages"
+    current = re.search(
+        r"^RUST_COVERAGE_CURRENT_FLOOR = RUST_COVERAGE_STAGE_FLOORS\[(\d+)\]",
+        source,
+        re.M,
+    )
+    assert current, "RUST_COVERAGE_CURRENT_FLOOR must index the ladder"
+    return stages, int(current.group(1))
+
+
+def _enforced_floor() -> float:
+    stages, index = _ladder()
+    assert 0 <= index < len(stages), f"current stage index {index} is outside the ladder"
+    return stages[index]
 
 
 def test_the_ladder_rises_and_ends_at_the_target() -> None:
     """A ladder that does not rise never gates anything; one that ends low is not the target."""
-    stages = _ladder()["stages"]
+    stages, _ = _ladder()
     assert stages == sorted(stages), f"stages are not monotonic: {stages}"
     assert len(set(stages)) == len(stages), f"duplicate stage values: {stages}"
     assert stages[-1] == 95.0, f"final stage must be 95.0, got {stages[-1]}"
@@ -51,9 +55,7 @@ def test_the_ladder_rises_and_ends_at_the_target() -> None:
 
 
 def test_the_enforced_floor_is_one_of_the_declared_stages() -> None:
-    ladder = _ladder()
-    index = int(ladder["current"])
-    stages = ladder["stages"]
+    stages, index = _ladder()
     assert 0 <= index < len(stages), f"current stage index {index} is outside the ladder"
     current = stages[index]
     source = (ROOT / "scripts" / "run_rust_coverage.py").read_text(encoding="utf-8")
@@ -71,8 +73,7 @@ def test_the_enforced_floor_is_one_of_the_declared_stages() -> None:
 def test_the_release_manifest_records_the_enforced_floor() -> None:
     from deepseek_infra.infra.diagnostics.release_manifest import RUST_COVERAGE_FLOOR
 
-    stages = _ladder()["stages"]
-    current = stages[int(_ladder()["current"])]
+    current = _enforced_floor()
     assert RUST_COVERAGE_FLOOR == current, (
         f"release manifest records {RUST_COVERAGE_FLOOR} but CI enforces {current}"
     )
@@ -127,7 +128,7 @@ def test_the_gate_evidence_keeps_the_floor_that_was_actually_measured() -> None:
     gate = (document.get("gates") or {}).get("coverage")
     if gate is None:
         return
-    current = _ladder()["stages"][int(_ladder()["current"])]
+    current = _enforced_floor()
     recorded = gate.get("minimumPercent")
     if recorded is None:
         return
