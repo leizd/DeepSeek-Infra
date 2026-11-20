@@ -374,14 +374,21 @@ mod tests {
     /// ASCII `0`..`9`, and refuses everything else.
     #[test]
     fn decimal_digits_cover_every_zero_point_and_reject_the_rest() {
-        for zero in [0x30u32, 0x660, 0x966, 0xff10, 0x104a0, 0x1d7ce, 0x1fbf0] {
+        // 0x1D7CE is deliberately absent: its run ends exactly at 0x1D7D8,
+        // which is the next zero point, so "the value after the run" is a digit
+        // there rather than a rejection.
+        for zero in [0x30u32, 0x660, 0x966, 0xff10, 0x104a0, 0x1fbf0] {
             for offset in 0u32..10 {
                 let character = char::from_u32(zero + offset).expect("valid scalar");
                 let digit = decimal_digit(character).expect("digit");
                 assert_eq!(digit, char::from(b'0' + offset as u8));
             }
             let after = char::from_u32(zero + 10).expect("valid scalar");
-            assert!(decimal_digit(after).is_none(), "U+{after:04X}");
+            assert!(
+                decimal_digit(after).is_none(),
+                "U+{:04X} was accepted as a digit",
+                zero + 10
+            );
         }
         assert!(decimal_digit('a').is_none());
         assert!(decimal_digit(' ').is_none());
