@@ -1,3 +1,56 @@
+## 2026-11-20 whole-branch green on 1e90e9e3
+
+Whole product Rust/Go migration remains ACTIVE / **NOT_READY**. This entry records
+a verification milestone, not completion.
+
+`ci.yml` run [44687684156](https://github.com/leizd/DeepSeek-Infra/actions/runs/44687684156)
+and `Native Android cloud verification` run
+[44687684163](https://github.com/leizd/DeepSeek-Infra/actions/runs/44687684163)
+both passed on exact commit `1e90e9e3b596529a1fe4e52955758dfde6366798`
+(40/40 and 6/6, zero failures, zero skips; `sourceTreeDirty: false`). Rust line
+coverage `80.27%` (`137932/171837`) against the unchanged `80.0` floor, `1992`
+tests.
+
+This is the first green run for the S5-S8 route slices. They had never executed
+before, because `rust` failed to compile: `backup_policy_run_routes.rs` passed an
+owned `ContributorSpec` where `collect_contributor_files` takes a reference
+(`E0308`). A crate that does not compile yields no test results, so every S5-S8
+test below that error had been invisible.
+
+Removing it exposed, one layer at a time, six real implementation defects and a
+set of fixture/assertion errors. The defects, in the order they surfaced:
+
+1. `hex_digest` (hex-encodes only) used as a digest in five places, so
+   `commitHash`, `receiptDigest`, `slotDigest`, `runPlanDigest` and the control
+   `checksums.sha256` were hex dumps and no commit marker could validate.
+2. A projected restore plan hashed `extracted/manifest.json` from disk, but the
+   projection branch never writes it (the oracle passes the manifest in memory).
+3. A repeated risk snapshot incremented `observationCount`; the oracle returns
+   the stored row when `last_snapshot_observation_key` matches.
+4. `value_str(Null)` produced the literal `"None"`, adding a phantom target id
+   that emptied the capacity snapshot and failed the wave admit closed.
+5. The persisted capacity observation was only read inside the
+   `quotaBytes`/`kind == "s3"` branch, while the oracle reads it first.
+6. `TestSettlementEntryPointsRefuseAMismatchedPhase` skipped instead of asserting
+   when its fixture lacked a plan action; the race gate correctly reported
+   `UNREVIEWED_TEST_SKIP`. All three assertions now execute.
+
+Coverage was raised from `79.91%` to `80.27%` by covering the two untested
+Unicode tables, with no floor change and no `#[ignore]`.
+
+Two workflow-level transients, unrelated to source: Gradle failed to resolve its
+plugin classpath from `repo.maven.apache.org` twice (`44672165712` and
+`44687684163`), and apt/`playwright install` failed at `native-protocol`,
+`stateless-mcp`, `release-readiness` and `native-browser-engine` in earlier runs.
+Every one of them passed on re-dispatch of the same commit.
+
+`release/native_runtime_5_0_evidence_v1.json` still reports `NOT_READY` with all
+six blockers open and `exact_head: null`; this run changes no readiness string.
+The 5.0 objective remains blocked on production edge authority, control-domain
+promotion against a stopped-and-fenced Python source, provider/fault evidence,
+and zero-Python workload measurement.
+
+
 <!-- native checkpoint 2026-11-11 eleven of fifteen gates have evidence -->
 
 Whole product Rust/Go migration remains ACTIVE / **NOT_READY**.

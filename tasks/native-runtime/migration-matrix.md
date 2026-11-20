@@ -1,3 +1,91 @@
+<!-- native checkpoint 2026-11-20 whole-branch green: S5-S8 route slices first qualified end to end -->
+
+**Whole-branch green, first time for the S5-S8 slices.** Both workflows passed on
+exact commit `1e90e9e3b596529a1fe4e52955758dfde6366798` (the commit immediately
+below is `57733adc`, which was green before the diagnostic cleanup; the cleanup
+itself is `1e90e9e3`):
+
+- `ci.yml` run [44687684156](https://github.com/leizd/DeepSeek-Infra/actions/runs/44687684156)
+  completed **40/40 jobs `success`**, `0` failure, `0` skipped, and assembled
+  `release-evidence-v4.8.0` with `sourceTreeDirty: false`.
+- `Native Android cloud verification` run
+  [44687684163](https://github.com/leizd/DeepSeek-Infra/actions/runs/44687684163)
+  completed **6/6 `success`** (`package` + five `device` emulators).
+- Read from the downloaded artifacts, not from job conclusions:
+  - `rust-coverage`: `PASS` - **80.27%** lines (`137932/171837`, unchanged 80.0%
+    floor), `1992` tests.
+  - `rust`: the whole gateway test corpus now runs, including every
+    `resilience_*`, `backup_*` and `rag_action_routes` module added by S5-S8.
+  - Go statement coverage and the Android floor are enforced by `native-go`,
+    `native-go-race` (1h27m) and `native-go-android` (1h21m), all `success`.
+
+This is the first run in which the S5-S8 route slices have ever executed green.
+They could not have before: `rust` was blocked by an `E0308` compile error in
+`backup_policy_run_routes.rs`, and a crate that does not compile produces no test
+results at all. Fixing that error exposed, one layer at a time, the defects below.
+
+**Six real implementation defects were found and fixed** (the rest of the work
+was fixture and assertion corrections):
+
+1. `hex_digest` used as a hash in five places in `backup_policy_run_routes.rs`.
+   It only hex-encodes its input, so `commitHash`, `receiptDigest`, `slotDigest`,
+   `runPlanDigest` and the control `checksums.sha256` map were all hex dumps of
+   their inputs rather than digests. `valid_commit_markers_by_backup` therefore
+   discarded every marker as uncommitted.
+2. A projected restore plan read `extracted/manifest.json` from disk
+   (`backup_archive_routes.rs`). The projection branch of
+   `backup_incremental_restore.materialize_chain` writes only
+   `projection.output_files`; the manifest stays in memory, which is what the
+   oracle's `_inspect_verified_tree(manifest, ...)` consumes.
+3. `observe_risk_snapshot_and_slo` had no branch for an unchanged snapshot key
+   (`resilience_state_support.rs`), so a repeated assess/plan in the same second
+   incremented `observationCount` where the oracle returns the stored row.
+4. `action_target_ids` rendered a JSON null as the literal string `"None"`
+   because it used `value_str` directly (`resilience_state_support.rs`). The
+   oracle's `str(value or "")` collapses null to the empty string and drops it.
+   The stray id made the capacity snapshot empty and the wave admit fail closed.
+5. The persisted capacity observation was only consulted inside the
+   `quotaBytes`/`kind == "s3"` branch (`backup_capacity_routes.rs`), while
+   `backup_capacity.get_target_capacity(probe=False)` reads it before either.
+6. `TestSettlementEntryPointsRefuseAMismatchedPhase` called `t.Skipf` when its
+   fixture lacked a `plan`-phase action (`agent_settlement_phase_test.go`), so
+   none of its three assertions ever ran. The race gate reported it correctly as
+   `UNREVIEWED_TEST_SKIP`; each direction now uses the fixture that owns that
+   phase and all three subtests execute.
+
+Coverage rose from **79.91%** to **80.27%** without lowering the floor, adding
+`#[ignore]` or touching any readiness string: the two previously untested
+Unicode tables (`deepseek-policy/src/python_casefold.rs` at 2.63% and
+`deepseek-proof/src/legacy_values/unicode.rs` at 6.09%) now walk every scalar
+value. Those tests assert fold *stability* rather than "no uppercase in the
+result", because Cherokee is an uppercase-first script and CPython folds
+`U+13A0` to itself.
+
+Prior-failure evidence retained for this stretch:
+
+- `44672165757` at `57733adc`: green before the cleanup; superseded by
+  `1e90e9e3` once the temporary diagnostics were removed.
+- `44672165712` at `57733adc`: `Native Android cloud verification` `package`
+  failed while Gradle could not resolve its plugin classpath from
+  `repo.maven.apache.org` (asm, javapoet, protobuf-java-util, guava, netty,
+  jcommander, ...). The commit changed only
+  `go/internal/store/agent_settlement_phase_test.go`; a re-run of the same
+  commit and workflow passed 6/6. The same transient failed again at
+  `44687684163` and passed on re-run.
+- Repeated `Install ...` / `playwright install` apt failures at
+  `native-protocol`, `stateless-mcp`, `release-readiness` and
+  `native-browser-engine` across earlier runs, all network-transient and all
+  green after re-dispatch.
+
+**Still `NOT_READY`.** CI green means the repository is self-consistent under its
+current gates; it is not release evidence. `release/native_runtime_5_0_evidence_v1.json`
+keeps `status: NOT_READY`, `exact_head: null`, empty `measurements` and `gates`,
+with all six blockers open: `PUBLIC_EDGE_AUTHORITY_INCOMPLETE`,
+`CONTROL_CUTOVER_INCOMPLETE`, `EFFECT_RECONCILIATION_UNPROVEN`,
+`PROVIDER_EVIDENCE_MISSING`, `EXACT_HEAD_CI_MISSING`,
+`ZERO_PYTHON_MEASUREMENTS_MISSING`. This checkpoint deliberately does not
+change them.
+
 <!-- native checkpoint 2026-11-17 S4 cloud-verified: policies, targets, drain, continuity, rebalances, recovery-identities -->
 
 **S4 (`backup-policies/{policy_id}` PATCH/DELETE/promote-primary/continuity, `backup-targets/register-new`, `backup-targets/{target_id}` probe/adopt/drain/drain-cancel/activate/DELETE, `backup-rebalances` GET/POST, `backups/recovery-identities`, `authority/retention/policy` POST) is now cloud-verified on exact remote commit `28ec08c80bdef22152379550e64238f4ea5ab6ca` (local `70557f5b55b82792d7a274b186bbe42a3e261146` after `9fa23a36`, tree `698bffaaab86da3d3a3e975d6f33d847db33f18e`):**
