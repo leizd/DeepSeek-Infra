@@ -1785,9 +1785,12 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// label, the mutation that breaks a valid tree, and the message it must yield.
+    type BrokenTree = (&'static str, fn(&Path), &'static str);
+
     #[test]
     fn manifest_tree_refuses_every_broken_shape() {
-        let cases: Vec<(&str, fn(&Path), &str)> = vec![
+        let cases: Vec<BrokenTree> = vec![
             (
                 "missing manifest",
                 |root| {
