@@ -1841,12 +1841,16 @@ mod tests {
             (
                 "duplicate entry",
                 |root| {
+                    // The first entry passes its own checksum check before the
+                    // duplicate is noticed on the second, so both must describe
+                    // the real file rather than a placeholder digest.
+                    let digest = sha256_file(&root.join("data/one.txt")).unwrap();
                     let manifest = serde_json::json!({
                         "schemaVersion": BACKUP_SCHEMA,
                         "purpose": PACKAGE_PURPOSE,
                         "files": [
-                            {"path": "data/one.txt", "size": 5, "sha256": "a".repeat(64)},
-                            {"path": "data/one.txt", "size": 5, "sha256": "a".repeat(64)}
+                            {"path": "data/one.txt", "size": 5, "sha256": digest},
+                            {"path": "data/one.txt", "size": 5, "sha256": digest}
                         ]
                     });
                     std::fs::write(root.join("manifest.json"), manifest.to_string()).unwrap();
