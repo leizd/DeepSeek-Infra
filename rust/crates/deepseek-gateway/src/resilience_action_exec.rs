@@ -3699,3 +3699,207 @@ pub(crate) fn execute_autonomous_action_db(
     }
     inner_res
 }
+
+#[cfg(test)]
+mod unit_tests {
+    use super::*;
+    use rusqlite::Connection;
+    use serde_json::json;
+
+    fn conn() -> Connection {
+        Connection::open_in_memory().unwrap()
+    }
+
+    /// The four keys are derived from `parameters` first and the action's own
+    /// fields second, matching
+    /// `deepseek_infra.infra.workspace.resilience_resource_locks`.
+    #[test]
+    fn resource_locks_follow_the_oracle_precedence() {
+        // A policy and a backup together lock the backup, not the policy.
+        assert_eq!(
+            derive_resource_locks_for_action(
+                &json!({"parameters": {"policyId": "p1", "backupId": "b1"}})
+            ),
+            vec!["backup:p1:b1".to_string()]
+        );
+        // A policy alone locks the policy.
+        assert_eq!(
+            derive_resource_locks_for_action(&json!({"parameters": {"policyId": "p1"}})),
+            vec!["policy:p1".to_string()]
+        );
+        // Source and destination yield two target locks, deduplicated when equal.
+        assert_eq!(
+            derive_resource_locks_for_action(&json!({
+                "parameters": {"sourceTargetId": "t1", "destTargetId": "t2"}
+            })),
+            vec!["target:t1".to_string(), "target:t2".to_string()]
+        );
+        assert_eq!(
+            derive_resource_locks_for_action(&json!({"parameters": {"sourceTargetId": "t1"}})),
+            vec!["target:t1".to_string()]
+        );
+        // `parameters` wins over the action fields of the same name.
+        assert_eq!(
+            derive_resource_locks_for_action(&json!({
+                "parameters": {"sourceTargetId": "from-params"},
+                "source": "from-action"
+            })),
+            vec!["target:from-params".to_string()]
+        );
+        // Without parameters the action fields are used, and `target` is the
+        // last fallback for the destination.
+        assert_eq!(
+            derive_resource_locks_for_action(&json!({"source": "s1", "target": "d1"})),
+            vec!["target:d1".to_string(), "target:s1".to_string()]
+        );
+        // Nothing to lock.
+        assert!(derive_resource_locks_for_action(&json!({})).is_empty());
+        // A falsy parameter falls through to the action field.
+        assert_eq!(
+            derive_resource_locks_for_action(&json!({
+                "parameters": {"policyId": ""},
+                "policyId": "p2"
+            })),
+            vec!["policy:p2".to_string()]
+        );
+    }
+
+    /// `action_param_str` prefers `parameters`, ignores falsy values and
+    /// returns an empty string when nothing matches.
+    #[test]
+    fn action_param_lookup_prefers_parameters() {
+        let action = json!({"parameters": {"a": "from-params", "empty": ""}, "b": "from-action"});
+        assert_eq!(action_param_str(&action, "a", &["b"]), "from-params");
+        assert_eq!(action_param_str(&action, "empty", &["b"]), "from-action");
+        assert_eq!(action_param_str(&action, "missing", &["b"]), "from-action");
+        assert_eq!(action_param_str(&action, "missing", &["absent"]), "");
+        // Numbers and booleans render through `value_str`.
+        assert_eq!(
+            action_param_str(&json!({"parameters": {"n": 7}}), "n", &[]),
+            "7"
+        );
+        assert_eq!(
+            action_param_str(&json!({"parameters": {"b": true}}), "b", &[]),
+            "True"
+        );
+    }
+
+    #[test]
+    fn locks_are_acquired_released_and_contended() {
+        let conn = conn();
+        let keys = vec!["target:t1".to_string()];
+        // First acquisition succeeds.
+        assert_eq!(
+            acquire_action_locks(
+                &conn,
+                "a1",
+                &keys,
+                "owner",
+                "2030-01-01T00:00:00Z",
+                "2024-01-01T00:00:00Z"
+            )
+            .unwrap(),
+            Ok(())
+        );
+        // A second action is refused while the lease is still in the future.
+        let refused = acquire_action_locks(
+            &conn,
+            "a2",
+            &keys,
+            "owner",
+            "2030-01-01T00:00:00Z",
+            "2024-01-01T00:00:00Z",
+        )
+        .unwrap();
+        assert_eq!(
+            refused,
+            Err("resource-locked:target:t1:held-by:a1:until:2030-01-01T00:00:00Z".to_string())
+        );
+        // Re-acquiring for the same action is allowed and refreshes the lease.
+        assert_eq!(
+            acquire_action_locks(
+                &conn,
+                "a1",
+                &keys,
+                "owner2",
+                "2031-01-01T00:00:00Z",
+                "2024-06-01T00:00:00Z"
+            )
+            .unwrap(),
+            Ok(())
+        );
+        // Releasing by action id drops only that action's locks.
+        release_action_locks(&conn, "a1").unwrap();
+        let remaining: i64 = conn
+            .query_row("SELECT COUNT(*) FROM resilience_resource_locks", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(remaining, 0);
+        // A released key can be taken by another action.
+        assert_eq!(
+            acquire_action_locks(
+                &conn,
+                "a2",
+                &keys,
+                "owner",
+                "2032-01-01T00:00:00Z",
+                "2024-07-01T00:00:00Z"
+            )
+            .unwrap(),
+            Ok(())
+        );
+    }
+
+    /// An expired lease is not contention: the new action takes the lock.
+    #[test]
+    fn an_expired_lease_does_not_block() {
+        let conn = conn();
+        let keys = vec!["target:expired".to_string()];
+        acquire_action_locks(
+            &conn,
+            "old",
+            &keys,
+            "owner",
+            "2020-01-01T00:00:00Z",
+            "2019-01-01T00:00:00Z",
+        )
+        .unwrap();
+        assert_eq!(
+            acquire_action_locks(
+                &conn,
+                "new",
+                &keys,
+                "owner",
+                "2030-01-01T00:00:00Z",
+                "2024-01-01T00:00:00Z"
+            )
+            .unwrap(),
+            Ok(())
+        );
+        let holder: String = conn
+            .query_row(
+                "SELECT action_id FROM resilience_resource_locks WHERE lock_key = ?",
+                ["target:expired"],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(holder, "new");
+    }
+
+    /// `ensure_locks_schema` is idempotent, so repeated calls are safe.
+    #[test]
+    fn locks_schema_is_idempotent() {
+        let conn = conn();
+        ensure_locks_schema(&conn).unwrap();
+        ensure_locks_schema(&conn).unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'resilience_resource_locks'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+}
