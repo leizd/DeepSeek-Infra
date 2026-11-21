@@ -1761,7 +1761,8 @@ mod tests {
 
     const DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
-    /// Schema 2 keys entries by blob id and carries each pack's size.
+    /// Schema 2 lists entries as `[packOrdinal, offset, length]` triples and
+    /// names the resulting blobs positionally; there is no per-entry digest.
     #[test]
     fn pack_index_schema_two_accepts_aligned_entries() {
         let root = pack_root("v2-ok");
@@ -1770,24 +1771,24 @@ mod tests {
             serde_json::json!({
                 "schemaVersion": 2,
                 "packs": [{"path": "payload/packs/one.pack", "size": 64, "sha256": DIGEST}],
-                "entries": {"blob-a": {"pack": "payload/packs/one.pack", "offset": 8, "length": 16, "sha256": DIGEST}}
+                "entries": [[0, 8, 16]]
             }),
         )
         .unwrap();
         assert_eq!(parsed.packs.len(), 1);
         assert_eq!(parsed.entries.len(), 1);
-        let entry = &parsed.entries["blob-a"];
+        let entry = &parsed.entries["blob_000000"];
         assert_eq!(entry.pack, "payload/packs/one.pack");
         assert_eq!(entry.offset, 8);
         assert_eq!(entry.length, 16);
-        assert_eq!(entry.sha256.as_deref(), Some(DIGEST));
-        // An empty entry map is legal: a pack-only index declares no blobs.
+        assert_eq!(entry.sha256, None);
+        // A pack-only index declares no blobs, which is legal.
         let parsed = pack_index(
             &root,
             serde_json::json!({
                 "schemaVersion": 2,
                 "packs": [{"path": "payload/packs/one.pack", "size": 64, "sha256": DIGEST}],
-                "entries": {}
+                "entries": []
             }),
         )
         .unwrap();
@@ -1795,12 +1796,23 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// Schema 1 keys entries by blob id but still uses objects, and its packs
-    /// may omit the per-entry digest.
+    /// Schema 1 keys entries by blob id in an object, and each entry must carry
+    /// a hex `sha256` - unlike schema 2, which has no per-entry digest at all.
     #[test]
-    fn pack_index_schema_one_accepts_entries_without_a_digest() {
+    fn pack_index_schema_one_requires_a_hex_digest_per_entry() {
         let root = pack_root("v1-ok");
         let parsed = pack_index(
+            &root,
+            serde_json::json!({
+                "schemaVersion": 1,
+                "packs": [{"path": "payload/packs/one.pack", "size": 64, "sha256": DIGEST}],
+                "entries": {"blob-a": {"pack": "payload/packs/one.pack", "offset": 0, "length": 8, "sha256": DIGEST}}
+            }),
+        )
+        .unwrap();
+        assert_eq!(parsed.entries["blob-a"].sha256.as_deref(), Some(DIGEST));
+        // Omitting the digest is refused.
+        let missing = pack_index(
             &root,
             serde_json::json!({
                 "schemaVersion": 1,
@@ -1808,8 +1820,8 @@ mod tests {
                 "entries": {"blob-a": {"pack": "payload/packs/one.pack", "offset": 0, "length": 8}}
             }),
         )
-        .unwrap();
-        assert_eq!(parsed.entries["blob-a"].sha256, None);
+        .unwrap_err();
+        assert_eq!(missing.message, "Delta pack entry is invalid");
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -1868,38 +1880,68 @@ mod tests {
                 invalid_index,
             ),
             (
-                "entries not an object",
-                serde_json::json!({"schemaVersion": 2, "packs": [], "entries": []}),
+                "entries not an array in schema 2",
+                serde_json::json!({"schemaVersion": 2, "packs": [], "entries": {}}),
                 invalid_index,
             ),
             (
-                "empty blob id",
-                serde_json::json!({"schemaVersion": 2, "packs": [], "entries": {"": {"pack": "p", "offset": 0, "length": 0}}}),
+                "entries not an object in schema 1",
+                serde_json::json!({"schemaVersion": 1, "packs": [], "entries": []}),
+                invalid_index,
+            ),
+            (
+                "entry arity",
+                serde_json::json!({"schemaVersion": 2, "packs": [{"path": "payload/packs/one.pack", "size": 64, "sha256": DIGEST}], "entries": [[0, 0]]}),
                 invalid_entry,
             ),
             (
-                "entry not an object",
-                serde_json::json!({"schemaVersion": 2, "packs": [], "entries": {"a": 1}}),
+                "entry pack ordinal out of range",
+                serde_json::json!({"schemaVersion": 2, "packs": [{"path": "payload/packs/one.pack", "size": 64, "sha256": DIGEST}], "entries": [[9, 0, 8]]}),
                 invalid_entry,
             ),
             (
-                "entry names an unknown pack",
-                serde_json::json!({"schemaVersion": 2, "packs": [], "entries": {"a": {"pack": "payload/packs/absent.pack", "offset": 0, "length": 0, "sha256": DIGEST}}}),
+                "entry offset not an int",
+                serde_json::json!({"schemaVersion": 2, "packs": [{"path": "payload/packs/one.pack", "size": 64, "sha256": DIGEST}], "entries": [[0, "0", 8]]}),
                 invalid_entry,
             ),
             (
-                "unaligned offset",
-                serde_json::json!({"schemaVersion": 2, "packs": [{"path": "payload/packs/one.pack", "size": 64, "sha256": DIGEST}], "entries": {"a": {"pack": "payload/packs/one.pack", "offset": 3, "length": 8, "sha256": DIGEST}}}),
+                "entry unaligned in schema 2",
+                serde_json::json!({"schemaVersion": 2, "packs": [{"path": "payload/packs/one.pack", "size": 64, "sha256": DIGEST}], "entries": [[0, 3, 8]]}),
                 invalid_entry,
             ),
             (
-                "range past the pack",
-                serde_json::json!({"schemaVersion": 2, "packs": [{"path": "payload/packs/one.pack", "size": 8, "sha256": DIGEST}], "entries": {"a": {"pack": "payload/packs/one.pack", "offset": 8, "length": 8, "sha256": DIGEST}}}),
+                "schema 1 empty blob id",
+                serde_json::json!({"schemaVersion": 1, "packs": [], "entries": {"": {"pack": "payload/packs/one.pack", "offset": 0, "length": 0, "sha256": DIGEST}}}),
                 invalid_entry,
             ),
             (
-                "entry digest not hex",
-                serde_json::json!({"schemaVersion": 2, "packs": [{"path": "payload/packs/one.pack", "size": 64, "sha256": DIGEST}], "entries": {"a": {"pack": "payload/packs/one.pack", "offset": 0, "length": 8, "sha256": "nope"}}}),
+                "schema 1 entry not an object",
+                serde_json::json!({"schemaVersion": 1, "packs": [], "entries": {"a": 1}}),
+                invalid_entry,
+            ),
+            (
+                "schema 1 entry names an unknown pack",
+                serde_json::json!({"schemaVersion": 1, "packs": [], "entries": {"a": {"pack": "payload/packs/absent.pack", "offset": 0, "length": 0, "sha256": DIGEST}}}),
+                invalid_entry,
+            ),
+            (
+                "schema 1 unaligned offset",
+                serde_json::json!({"schemaVersion": 1, "packs": [{"path": "payload/packs/one.pack", "size": 64, "sha256": DIGEST}], "entries": {"a": {"pack": "payload/packs/one.pack", "offset": 3, "length": 8, "sha256": DIGEST}}}),
+                invalid_entry,
+            ),
+            (
+                "schema 1 range past the pack",
+                serde_json::json!({"schemaVersion": 1, "packs": [{"path": "payload/packs/one.pack", "size": 8, "sha256": DIGEST}], "entries": {"a": {"pack": "payload/packs/one.pack", "offset": 8, "length": 8, "sha256": DIGEST}}}),
+                invalid_entry,
+            ),
+            (
+                "schema 1 entry digest not hex",
+                serde_json::json!({"schemaVersion": 1, "packs": [{"path": "payload/packs/one.pack", "size": 64, "sha256": DIGEST}], "entries": {"a": {"pack": "payload/packs/one.pack", "offset": 0, "length": 8, "sha256": "nope"}}}),
+                invalid_entry,
+            ),
+            (
+                "schema 2 range past the pack",
+                serde_json::json!({"schemaVersion": 2, "packs": [{"path": "payload/packs/one.pack", "size": 8, "sha256": DIGEST}], "entries": [[0, 8, 8]]}),
                 invalid_entry,
             ),
         ];
