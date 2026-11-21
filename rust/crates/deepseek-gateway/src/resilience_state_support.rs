@@ -5499,3 +5499,248 @@ pub(crate) fn materialize_resilience_plan_db(
         "createdAt": now_iso,
     }))
 }
+
+#[cfg(test)]
+mod unit_tests {
+    use super::*;
+    use rusqlite::Connection;
+    use serde_json::json;
+    use std::path::PathBuf;
+
+    /// The environment-variable readers use `set_var`, which is `unsafe` in
+    /// edition 2024 because a concurrent `getenv` on another thread is a data
+    /// race. This spin flag keeps the guarded sections apart, matching
+    /// `EnvLock` in `lib.rs`.
+    static ENV_BUSY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+    struct EnvLock;
+
+    impl EnvLock {
+        fn acquire() -> Self {
+            use std::sync::atomic::Ordering;
+            while ENV_BUSY
+                .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+                .is_err()
+            {
+                std::hint::spin_loop();
+            }
+            Self
+        }
+    }
+
+    impl Drop for EnvLock {
+        fn drop(&mut self) {
+            ENV_BUSY.store(false, std::sync::atomic::Ordering::Release);
+        }
+    }
+
+    struct EnvGuard {
+        saved: Vec<(&'static str, Option<std::ffi::OsString>)>,
+        _lock: EnvLock,
+    }
+
+    impl EnvGuard {
+        fn set(pairs: &[(&'static str, Option<&str>)]) -> Self {
+            let lock = EnvLock::acquire();
+            let mut saved = Vec::new();
+            for (name, value) in pairs {
+                saved.push((*name, std::env::var_os(name)));
+                unsafe {
+                    match value {
+                        Some(value) => std::env::set_var(name, value),
+                        None => std::env::remove_var(name),
+                    }
+                }
+            }
+            Self { saved, _lock: lock }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            for (name, value) in &self.saved {
+                unsafe {
+                    match value {
+                        Some(value) => std::env::set_var(name, value),
+                        None => std::env::remove_var(name),
+                    }
+                }
+            }
+        }
+    }
+
+    struct Scratch {
+        root: PathBuf,
+    }
+
+    impl Scratch {
+        fn new(tag: &str) -> Self {
+            let root = std::env::temp_dir().join(format!(
+                "resilience-state-{tag}-{}-{:?}",
+                std::process::id(),
+                std::thread::current().id()
+            ));
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(&root).unwrap();
+            Self { root }
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    #[test]
+    fn severity_rank_follows_the_oracle_ladder() {
+        assert_eq!(severity_rank("healthy"), 1);
+        assert_eq!(severity_rank("warning"), 2);
+        assert_eq!(severity_rank("degraded"), 3);
+        assert_eq!(severity_rank("critical"), 4);
+        assert_eq!(severity_rank("blocked"), 5);
+        // Anything unrecognised is treated as healthy rather than ranked below it.
+        assert_eq!(severity_rank(""), 1);
+        assert_eq!(severity_rank("unknown"), 1);
+        assert_eq!(severity_rank("HEALTHY"), 1);
+    }
+
+    #[test]
+    fn is_open_severity_covers_every_opening_level() {
+        for open in ["warning", "degraded", "critical", "blocked"] {
+            assert!(is_open_severity(open), "{open} should be open");
+        }
+        for closed in ["healthy", "", "unknown", "WARNING"] {
+            assert!(!is_open_severity(closed), "{closed} should not be open");
+        }
+    }
+
+    /// `parse_python_iso` mirrors `datetime.fromisoformat(...).timestamp()`: it
+    /// only yields an epoch when the text carries an explicit offset, because a
+    /// naive datetime has no instant.
+    #[test]
+    fn parse_utc_epoch_requires_an_explicit_offset() {
+        assert_eq!(
+            parse_utc_epoch(Some("2024-01-01T00:00:00+00:00")),
+            Some(1_704_067_200)
+        );
+        assert_eq!(
+            parse_utc_epoch(Some("2024-01-01T00:00:00Z")),
+            Some(1_704_067_200)
+        );
+        assert_eq!(
+            parse_utc_epoch(Some("2024-01-01T12:30:45+02:00")),
+            Some(1_704_105_045)
+        );
+        assert_eq!(
+            parse_utc_epoch(Some("2024-01-01T00:00:00-05:00")),
+            Some(1_704_085_200)
+        );
+        // No offset means no instant.
+        assert_eq!(parse_utc_epoch(Some("2024-01-01T00:00:00")), None);
+        assert_eq!(parse_utc_epoch(Some("2024-01-01")), None);
+        assert_eq!(parse_utc_epoch(Some("")), None);
+        assert_eq!(parse_utc_epoch(None), None);
+        // An invalid calendar date is refused rather than silently clamped.
+        assert_eq!(parse_utc_epoch(Some("2024-02-30T00:00:00+00:00")), None);
+        assert_eq!(parse_utc_epoch(Some("not-a-date")), None);
+    }
+
+    #[test]
+    fn control_and_dr_paths_are_the_oracles_dot_directories() {
+        let scratch = Scratch::new("paths");
+        assert_eq!(
+            control_db_path(&scratch.root),
+            scratch.root.join(".backup-control").join("control.sqlite3")
+        );
+        assert_eq!(
+            dr_db_path(&scratch.root),
+            scratch.root.join(".backup-dr").join("evidence.sqlite3")
+        );
+    }
+
+    #[test]
+    fn sha256_compact_matches_the_oracles_sorted_json_digest() {
+        // Same payload the oracle hashes: sorted keys, compact separators.
+        assert_eq!(
+            sha256_compact(&json!({"b": 1, "a": 2})),
+            sha256_compact(&json!({"a": 2, "b": 1})),
+            "key order must not change the digest"
+        );
+        assert_ne!(
+            sha256_compact(&json!({"a": 1})),
+            sha256_compact(&json!({"a": 2}))
+        );
+        assert_eq!(sha256_compact(&json!(null)).len(), 64);
+    }
+
+    /// With no control database the readers answer with empty collections
+    /// instead of failing, which is what makes the degraded path readable.
+    #[test]
+    fn control_readers_return_empty_without_a_connection() {
+        assert_eq!(list_control_policies(None).unwrap(), Vec::<Value>::new());
+        assert_eq!(list_control_targets(None).unwrap(), Vec::<Value>::new());
+    }
+
+    /// A database that exists but has never been migrated answers empty too,
+    /// because `table_exists` gates the query.
+    #[test]
+    fn control_readers_return_empty_when_the_tables_are_absent() {
+        let conn = Connection::open_in_memory().unwrap();
+        assert_eq!(
+            list_control_policies(Some(&conn)).unwrap(),
+            Vec::<Value>::new()
+        );
+        assert_eq!(
+            list_control_targets(Some(&conn)).unwrap(),
+            Vec::<Value>::new()
+        );
+    }
+
+    #[test]
+    fn control_policies_are_returned_in_policy_id_order() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE control_policies (policy_id TEXT PRIMARY KEY, payload_json TEXT NOT NULL);
+             INSERT INTO control_policies VALUES ('p2', '{\"policyId\":\"p2\"}');
+             INSERT INTO control_policies VALUES ('p1', '{\"policyId\":\"p1\"}');",
+        )
+        .unwrap();
+        let policies = list_control_policies(Some(&conn)).unwrap();
+        assert_eq!(policies.len(), 2);
+        assert_eq!(policies[0], json!({"policyId": "p1"}));
+        assert_eq!(policies[1], json!({"policyId": "p2"}));
+    }
+
+    #[test]
+    fn a_single_control_policy_is_found_by_id_and_missing_ones_are_none() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE control_policies (policy_id TEXT PRIMARY KEY, payload_json TEXT NOT NULL);
+             INSERT INTO control_policies VALUES ('p1', '{\"policyId\":\"p1\",\"name\":\"one\"}');",
+        )
+        .unwrap();
+        assert_eq!(
+            get_control_policy(Some(&conn), "p1").unwrap(),
+            Some(json!({"policyId": "p1", "name": "one"}))
+        );
+        assert_eq!(get_control_policy(Some(&conn), "absent").unwrap(), None);
+        assert_eq!(get_control_policy(None, "p1").unwrap(), None);
+    }
+
+    #[test]
+    fn control_targets_are_returned_in_target_id_order() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE control_targets (target_id TEXT PRIMARY KEY, payload_json TEXT NOT NULL);
+             INSERT INTO control_targets VALUES ('t2', '{\"targetId\":\"t2\"}');
+             INSERT INTO control_targets VALUES ('t1', '{\"targetId\":\"t1\"}');",
+        )
+        .unwrap();
+        let targets = list_control_targets(Some(&conn)).unwrap();
+        assert_eq!(
+            targets,
+            vec![json!({"targetId": "t1"}), json!({"targetId": "t2"})]
+        );
+    }
+}
