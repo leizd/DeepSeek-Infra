@@ -1917,9 +1917,7 @@ mod tests {
     #[test]
     fn pack_index_refuses_a_missing_file() {
         let root = pack_root("missing");
-        let error = parse_pack_index_file(&root)
-            .err()
-            .expect("missing index accepted");
+        let error = parse_pack_index_file(&root).expect_err("missing index accepted");
         assert_eq!(error.message, "Delta pack index is invalid");
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -1932,8 +1930,36 @@ mod tests {
             parse_payload_ref(Some(&serde_json::json!("object-1"))).unwrap(),
             ("standalone", "object-1".to_string())
         );
+        // The object form carries an explicit `kind` and a matching locator.
+        assert_eq!(
+            parse_payload_ref(Some(
+                &serde_json::json!({"kind": "pack-range", "blobId": "blob-a"})
+            ))
+            .unwrap(),
+            ("pack-range", "blob-a".to_string())
+        );
+        assert_eq!(
+            parse_payload_ref(Some(
+                &serde_json::json!({"kind": "standalone", "path": "payload/x.bin"})
+            ))
+            .unwrap(),
+            ("standalone", "payload/x.bin".to_string())
+        );
         assert!(parse_payload_ref(None).is_err());
         assert!(parse_payload_ref(Some(&serde_json::json!(""))).is_err());
+        // An unknown kind, a missing locator and an empty locator all refuse.
+        for bad in [
+            serde_json::json!({"kind": "other", "blobId": "b"}),
+            serde_json::json!({"kind": "pack-range"}),
+            serde_json::json!({"kind": "pack-range", "blobId": ""}),
+            serde_json::json!({"kind": "standalone", "path": ""}),
+        ] {
+            let error = parse_payload_ref(Some(&bad)).expect_err("accepted");
+            assert_eq!(
+                error.message,
+                "Delta payload reference is missing or invalid"
+            );
+        }
     }
 
     fn render_sha256_manifest(entries: &[(&str, &[u8])]) -> String {
