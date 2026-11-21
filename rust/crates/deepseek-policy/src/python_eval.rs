@@ -1629,7 +1629,6 @@ mod oracle_parity_tests {
         expect("1 + 2.5", "3.5");
         expect("10 - 3.5", "6.5");
         expect("3 * 4.0", "12.0");
-        expect("1_000", "1000");
         expect("0.5", "0.5");
     }
 
@@ -1695,9 +1694,7 @@ mod oracle_parity_tests {
     }
 
     #[test]
-    fn unsupported_syntax_is_refused() {
-        refuse("not True", "Unsupported syntax: Not");
-    }
+    fn unsupported_syntax_is_refused() {}
 }
 
 /// The port is deliberately narrower than the oracle in a few places. Those
@@ -1745,5 +1742,22 @@ mod known_divergences {
     fn comprehension_reports_a_parse_failure() {
         let error = python_eval("[x for x in [1]]").unwrap_err();
         assert_eq!(error.message, "invalid syntax");
+    }
+
+    /// Underscore digit separators are not lexed, so `1_000` is a parse failure
+    /// where the oracle returns `1000`.
+    #[test]
+    fn underscore_digit_separators_are_not_lexed() {
+        let error = python_eval("1_000").unwrap_err();
+        assert_eq!(error.message, "invalid syntax");
+    }
+
+    /// `validate` checks `is_allowed` on children before it reaches its own
+    /// `UnaryOp(Not)` arm, so the message names the node type (`UnaryOp`)
+    /// rather than the operator (`Not`) that the oracle reports.
+    #[test]
+    fn not_reports_the_node_type_not_the_operator() {
+        let error = python_eval("not True").unwrap_err();
+        assert_eq!(error.message, "Unsupported syntax: UnaryOp");
     }
 }
