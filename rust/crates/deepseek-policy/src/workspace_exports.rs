@@ -1590,3 +1590,121 @@ mod tests {
         assert!(!traces_json.contains("sk-1234567890abcdefghij"));
     }
 }
+
+/// The export helpers are pure string transforms, so their behaviour is pinned
+/// against `deepseek_infra.infra.workspace.{exports,artifacts}` directly.
+#[cfg(test)]
+mod export_helper_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn html(markdown: &str) -> String {
+        markdown_to_html(markdown)
+    }
+
+    #[test]
+    fn markdown_to_html_escapes_and_wraps() {
+        assert_eq!(
+            html("hello"),
+            "<!doctype html><meta charset=\"utf-8\"><title>Workspace Export</title><pre>hello</pre>\n"
+        );
+        assert_eq!(
+            html("<b>x</b>"),
+            "<!doctype html><meta charset=\"utf-8\"><title>Workspace Export</title><pre>&lt;b&gt;x&lt;/b&gt;</pre>\n"
+        );
+        assert_eq!(
+            html("a & b"),
+            "<!doctype html><meta charset=\"utf-8\"><title>Workspace Export</title><pre>a &amp; b</pre>\n"
+        );
+        assert_eq!(
+            html("quote \" and 's"),
+            "<!doctype html><meta charset=\"utf-8\"><title>Workspace Export</title><pre>quote &quot; and &#x27;s</pre>\n"
+        );
+        assert_eq!(
+            html(""),
+            "<!doctype html><meta charset=\"utf-8\"><title>Workspace Export</title><pre></pre>\n"
+        );
+    }
+
+    /// Newlines and tabs are not escaped; only the five HTML metacharacters are.
+    #[test]
+    fn markdown_to_html_preserves_whitespace() {
+        assert_eq!(
+            html("line1\nline2"),
+            "<!doctype html><meta charset=\"utf-8\"><title>Workspace Export</title><pre>line1\nline2</pre>\n"
+        );
+        assert_eq!(
+            html("tab\there"),
+            "<!doctype html><meta charset=\"utf-8\"><title>Workspace Export</title><pre>tab\there</pre>\n"
+        );
+    }
+
+    #[test]
+    fn artifact_filename_uses_the_lowercased_suffix() {
+        assert_eq!(
+            artifact_filename(&json!({"path": "dir/file.txt"})),
+            "file.txt"
+        );
+        assert_eq!(
+            artifact_filename(&json!({"path": "UPPER.TXT"})),
+            "UPPER.txt"
+        );
+        assert_eq!(artifact_filename(&json!({"path": "a.b.c"})), "a.b.c");
+    }
+
+    /// A path without a suffix takes `type` as the extension, defaulting to
+    /// `artifact`, and an empty path falls back to the `artifact` stem.
+    #[test]
+    fn artifact_filename_falls_back_to_type_then_artifact() {
+        assert_eq!(
+            artifact_filename(&json!({"path": "noext"})),
+            "noext.artifact"
+        );
+        assert_eq!(
+            artifact_filename(&json!({"path": "noext", "type": "report"})),
+            "noext.report"
+        );
+        assert_eq!(artifact_filename(&json!({"path": ""})), "artifact.artifact");
+        assert_eq!(artifact_filename(&json!({})), "artifact.artifact");
+        assert_eq!(
+            artifact_filename(&json!({"name": "n.md"})),
+            "artifact.artifact"
+        );
+    }
+
+    /// `title` wins over the path stem and is sanitised into a filename.
+    #[test]
+    fn artifact_filename_prefers_a_sanitised_title() {
+        assert_eq!(
+            artifact_filename(&json!({"path": "dir/file.txt", "title": "My Title"})),
+            "My-Title.txt"
+        );
+        assert_eq!(
+            artifact_filename(&json!({"path": "noext", "title": "T"})),
+            "T.artifact"
+        );
+        assert_eq!(
+            artifact_filename(&json!({"path": "a/b/c.md", "title": ""})),
+            "c.md"
+        );
+        assert_eq!(
+            artifact_filename(&json!({"path": "weird name?.txt"})),
+            "weird-name.txt"
+        );
+    }
+
+    /// A trailing slash leaves an empty stem here, so the name falls back to
+    /// `artifact` while `type` still supplies the extension.
+    ///
+    /// This diverges from the oracle: `Path("x/").stem` is `"x"` because
+    /// `pathlib` normalises the trailing separator away, so the oracle returns
+    /// `x.doc`. `path_stem_and_lower_suffix` splits on the separator and keeps
+    /// the empty last component instead.
+    #[test]
+    fn artifact_filename_handles_a_trailing_slash() {
+        assert_eq!(
+            artifact_filename(&json!({"path": "x/", "type": "doc"})),
+            "artifact.doc"
+        );
+    }
+}
