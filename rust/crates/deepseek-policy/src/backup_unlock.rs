@@ -1740,6 +1740,202 @@ mod tests {
     use zip::write::FileOptions;
     use zip::{CompressionMethod, ZipWriter};
 
+    /// Write a `payload/packs/index.json` under `root` and parse it back.
+    fn pack_index(root: &Path, document: serde_json::Value) -> Result<ParsedPackIndex, AppError> {
+        let dir = root.join("payload").join("packs");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("index.json"), document.to_string()).unwrap();
+        parse_pack_index_file(root)
+    }
+
+    fn pack_root(tag: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "pack-index-{tag}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    const DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    /// Schema 2 keys entries by blob id and carries each pack's size.
+    #[test]
+    fn pack_index_schema_two_accepts_aligned_entries() {
+        let root = pack_root("v2-ok");
+        let parsed = pack_index(
+            &root,
+            serde_json::json!({
+                "schemaVersion": 2,
+                "packs": [{"path": "payload/packs/one.pack", "size": 64, "sha256": DIGEST}],
+                "entries": {"blob-a": {"pack": "payload/packs/one.pack", "offset": 8, "length": 16, "sha256": DIGEST}}
+            }),
+        )
+        .unwrap();
+        assert_eq!(parsed.packs.len(), 1);
+        assert_eq!(parsed.entries.len(), 1);
+        let entry = &parsed.entries["blob-a"];
+        assert_eq!(entry.pack, "payload/packs/one.pack");
+        assert_eq!(entry.offset, 8);
+        assert_eq!(entry.length, 16);
+        assert_eq!(entry.sha256.as_deref(), Some(DIGEST));
+        // An empty entry map is legal: a pack-only index declares no blobs.
+        let parsed = pack_index(
+            &root,
+            serde_json::json!({
+                "schemaVersion": 2,
+                "packs": [{"path": "payload/packs/one.pack", "size": 64, "sha256": DIGEST}],
+                "entries": {}
+            }),
+        )
+        .unwrap();
+        assert!(parsed.entries.is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Schema 1 keys entries by blob id but still uses objects, and its packs
+    /// may omit the per-entry digest.
+    #[test]
+    fn pack_index_schema_one_accepts_entries_without_a_digest() {
+        let root = pack_root("v1-ok");
+        let parsed = pack_index(
+            &root,
+            serde_json::json!({
+                "schemaVersion": 1,
+                "packs": [{"path": "payload/packs/one.pack", "size": 64, "sha256": DIGEST}],
+                "entries": {"blob-a": {"pack": "payload/packs/one.pack", "offset": 0, "length": 8}}
+            }),
+        )
+        .unwrap();
+        assert_eq!(parsed.entries["blob-a"].sha256, None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Every rejection below is the same `Delta pack index is invalid` /
+    /// `Delta pack entry is invalid` pair the route surfaces.
+    #[test]
+    fn pack_index_refuses_malformed_documents() {
+        let invalid_index = "Delta pack index is invalid";
+        let invalid_entry = "Delta pack entry is invalid";
+        let cases: Vec<(&str, serde_json::Value, &str)> = vec![
+            (
+                "missing schema",
+                serde_json::json!({"packs": [], "entries": {}}),
+                invalid_index,
+            ),
+            (
+                "wrong schema",
+                serde_json::json!({"schemaVersion": 3, "packs": [], "entries": {}}),
+                invalid_index,
+            ),
+            (
+                "packs not an array",
+                serde_json::json!({"schemaVersion": 2, "packs": {}, "entries": {}}),
+                invalid_index,
+            ),
+            (
+                "pack not an object",
+                serde_json::json!({"schemaVersion": 2, "packs": [1], "entries": {}}),
+                invalid_index,
+            ),
+            (
+                "pack outside payload",
+                serde_json::json!({"schemaVersion": 2, "packs": [{"path": "other/one.pack", "size": 8, "sha256": DIGEST}], "entries": {}}),
+                invalid_index,
+            ),
+            (
+                "pack without suffix",
+                serde_json::json!({"schemaVersion": 2, "packs": [{"path": "payload/packs/one.zip", "size": 8, "sha256": DIGEST}], "entries": {}}),
+                invalid_index,
+            ),
+            (
+                "pack size not an int",
+                serde_json::json!({"schemaVersion": 2, "packs": [{"path": "payload/packs/one.pack", "size": "8", "sha256": DIGEST}], "entries": {}}),
+                invalid_index,
+            ),
+            (
+                "pack digest not hex",
+                serde_json::json!({"schemaVersion": 2, "packs": [{"path": "payload/packs/one.pack", "size": 8, "sha256": "zz"}], "entries": {}}),
+                invalid_index,
+            ),
+            (
+                "duplicate pack",
+                serde_json::json!({"schemaVersion": 2, "packs": [
+                {"path": "payload/packs/one.pack", "size": 8, "sha256": DIGEST},
+                {"path": "payload/packs/one.pack", "size": 8, "sha256": DIGEST}], "entries": {}}),
+                invalid_index,
+            ),
+            (
+                "entries not an object",
+                serde_json::json!({"schemaVersion": 2, "packs": [], "entries": []}),
+                invalid_index,
+            ),
+            (
+                "empty blob id",
+                serde_json::json!({"schemaVersion": 2, "packs": [], "entries": {"": {"pack": "p", "offset": 0, "length": 0}}}),
+                invalid_entry,
+            ),
+            (
+                "entry not an object",
+                serde_json::json!({"schemaVersion": 2, "packs": [], "entries": {"a": 1}}),
+                invalid_entry,
+            ),
+            (
+                "entry names an unknown pack",
+                serde_json::json!({"schemaVersion": 2, "packs": [], "entries": {"a": {"pack": "payload/packs/absent.pack", "offset": 0, "length": 0, "sha256": DIGEST}}}),
+                invalid_entry,
+            ),
+            (
+                "unaligned offset",
+                serde_json::json!({"schemaVersion": 2, "packs": [{"path": "payload/packs/one.pack", "size": 64, "sha256": DIGEST}], "entries": {"a": {"pack": "payload/packs/one.pack", "offset": 3, "length": 8, "sha256": DIGEST}}}),
+                invalid_entry,
+            ),
+            (
+                "range past the pack",
+                serde_json::json!({"schemaVersion": 2, "packs": [{"path": "payload/packs/one.pack", "size": 8, "sha256": DIGEST}], "entries": {"a": {"pack": "payload/packs/one.pack", "offset": 8, "length": 8, "sha256": DIGEST}}}),
+                invalid_entry,
+            ),
+            (
+                "entry digest not hex",
+                serde_json::json!({"schemaVersion": 2, "packs": [{"path": "payload/packs/one.pack", "size": 64, "sha256": DIGEST}], "entries": {"a": {"pack": "payload/packs/one.pack", "offset": 0, "length": 8, "sha256": "nope"}}}),
+                invalid_entry,
+            ),
+        ];
+        for (label, document, expected) in cases {
+            let root = pack_root(&format!("bad-{}", label.replace(' ', "-")));
+            let error = pack_index(&root, document)
+                .err()
+                .unwrap_or_else(|| panic!("{label} was accepted"));
+            assert_eq!(error.message, expected, "{label}");
+            let _ = std::fs::remove_dir_all(&root);
+        }
+    }
+
+    /// A missing index file is refused before any parsing happens.
+    #[test]
+    fn pack_index_refuses_a_missing_file() {
+        let root = pack_root("missing");
+        let error = parse_pack_index_file(&root)
+            .err()
+            .expect("missing index accepted");
+        assert_eq!(error.message, "Delta pack index is invalid");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// `parse_payload_ref` maps a bare string to standalone and a table with
+    /// `pack`/`offset`/`length` to a pack range.
+    #[test]
+    fn payload_ref_forms() {
+        assert_eq!(
+            parse_payload_ref(Some(&serde_json::json!("object-1"))).unwrap(),
+            ("standalone", "object-1".to_string())
+        );
+        assert!(parse_payload_ref(None).is_err());
+        assert!(parse_payload_ref(Some(&serde_json::json!(""))).is_err());
+    }
+
     fn render_sha256_manifest(entries: &[(&str, &[u8])]) -> String {
         use std::fmt::Write as _;
 
