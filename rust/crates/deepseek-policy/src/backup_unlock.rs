@@ -1740,6 +1740,166 @@ mod tests {
     use zip::write::FileOptions;
     use zip::{CompressionMethod, ZipWriter};
 
+    /// Build a complete (non-incremental) backup tree with one restorable file
+    /// and a matching `checksums.sha256`, then let a caller break one piece.
+    fn complete_backup(root: &Path, files: &[(&str, &[u8])]) {
+        std::fs::create_dir_all(root).unwrap();
+        let mut inventory = Vec::new();
+        let mut lines = Vec::new();
+        for (relative, content) in files {
+            let path = root.join(relative);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).unwrap();
+            }
+            std::fs::write(&path, content).unwrap();
+            let digest = sha256_file(&path).unwrap();
+            inventory.push(serde_json::json!({
+                "path": relative,
+                "size": content.len(),
+                "sha256": digest,
+            }));
+            lines.push(format!("{digest}  {relative}"));
+        }
+        let manifest = serde_json::json!({
+            "schemaVersion": BACKUP_SCHEMA,
+            "purpose": PACKAGE_PURPOSE,
+            "files": inventory,
+        });
+        let manifest_path = root.join("manifest.json");
+        std::fs::write(&manifest_path, manifest.to_string()).unwrap();
+        let manifest_digest = sha256_file(&manifest_path).unwrap();
+        lines.push(format!("{manifest_digest}  manifest.json"));
+        std::fs::write(root.join("checksums.sha256"), lines.join("\n")).unwrap();
+    }
+
+    #[test]
+    fn manifest_tree_accepts_a_complete_backup() {
+        let root = pack_root("manifest-ok");
+        complete_backup(
+            &root,
+            &[("data/one.txt", b"hello"), ("data/two.txt", b"world")],
+        );
+        let manifest = verify_manifest_tree(&root).unwrap();
+        assert_eq!(manifest["schemaVersion"], BACKUP_SCHEMA);
+        assert_eq!(manifest["files"].as_array().unwrap().len(), 2);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn manifest_tree_refuses_every_broken_shape() {
+        let cases: Vec<(&str, fn(&Path), &str)> = vec![
+            (
+                "missing manifest",
+                |root| {
+                    let _ = std::fs::remove_file(root.join("manifest.json"));
+                },
+                "Backup manifest is invalid",
+            ),
+            (
+                "wrong schema",
+                |root| {
+                    let manifest = serde_json::json!({
+                        "schemaVersion": "other", "purpose": PACKAGE_PURPOSE, "files": []
+                    });
+                    std::fs::write(root.join("manifest.json"), manifest.to_string()).unwrap();
+                },
+                "Package is not a supported restorable backup",
+            ),
+            (
+                "wrong purpose",
+                |root| {
+                    let manifest = serde_json::json!({
+                        "schemaVersion": BACKUP_SCHEMA, "purpose": "other", "files": []
+                    });
+                    std::fs::write(root.join("manifest.json"), manifest.to_string()).unwrap();
+                },
+                "Package is not a supported restorable backup",
+            ),
+            (
+                "files not an array",
+                |root| {
+                    let manifest = serde_json::json!({
+                        "schemaVersion": BACKUP_SCHEMA, "purpose": PACKAGE_PURPOSE, "files": {}
+                    });
+                    std::fs::write(root.join("manifest.json"), manifest.to_string()).unwrap();
+                },
+                "Backup file inventory is invalid",
+            ),
+            (
+                "file entry not an object",
+                |root| {
+                    let manifest = serde_json::json!({
+                        "schemaVersion": BACKUP_SCHEMA, "purpose": PACKAGE_PURPOSE, "files": [1]
+                    });
+                    std::fs::write(root.join("manifest.json"), manifest.to_string()).unwrap();
+                },
+                "Backup file inventory is invalid",
+            ),
+            (
+                "duplicate entry",
+                |root| {
+                    let manifest = serde_json::json!({
+                        "schemaVersion": BACKUP_SCHEMA,
+                        "purpose": PACKAGE_PURPOSE,
+                        "files": [
+                            {"path": "data/one.txt", "size": 5, "sha256": "a".repeat(64)},
+                            {"path": "data/one.txt", "size": 5, "sha256": "a".repeat(64)}
+                        ]
+                    });
+                    std::fs::write(root.join("manifest.json"), manifest.to_string()).unwrap();
+                },
+                "Backup manifest contains duplicate entries",
+            ),
+            (
+                "entry names the manifest itself",
+                |root| {
+                    let manifest = serde_json::json!({
+                        "schemaVersion": BACKUP_SCHEMA, "purpose": PACKAGE_PURPOSE,
+                        "files": [{"path": "manifest.json", "size": 0, "sha256": "a".repeat(64)}]
+                    });
+                    std::fs::write(root.join("manifest.json"), manifest.to_string()).unwrap();
+                },
+                "Backup manifest contains duplicate entries",
+            ),
+            (
+                "checksum mismatch",
+                |root| {
+                    std::fs::write(root.join("data/one.txt"), b"changed").unwrap();
+                },
+                "Backup checksum mismatch: data/one.txt",
+            ),
+            (
+                "undeclared file present",
+                |root| {
+                    std::fs::write(root.join("data/extra.txt"), b"extra").unwrap();
+                },
+                "Backup contains undeclared or missing restorable files",
+            ),
+            (
+                "missing checksums",
+                |root| {
+                    let _ = std::fs::remove_file(root.join("checksums.sha256"));
+                },
+                "Backup checksums are invalid",
+            ),
+            (
+                "manifest line absent from checksums",
+                |root| {
+                    std::fs::write(root.join("checksums.sha256"), "").unwrap();
+                },
+                "Manifest digest is invalid",
+            ),
+        ];
+        for (label, mutate, expected) in cases {
+            let root = pack_root(&format!("bad-{}", label.replace(' ', "-")));
+            complete_backup(&root, &[("data/one.txt", b"hello")]);
+            mutate(&root);
+            let error = verify_manifest_tree(&root).expect_err(&format!("{label} was accepted"));
+            assert_eq!(error.message, expected, "{label}");
+            let _ = std::fs::remove_dir_all(&root);
+        }
+    }
+
     /// Write a `payload/packs/index.json` under `root` and parse it back.
     fn pack_index(root: &Path, document: serde_json::Value) -> Result<ParsedPackIndex, AppError> {
         let dir = root.join("payload").join("packs");
