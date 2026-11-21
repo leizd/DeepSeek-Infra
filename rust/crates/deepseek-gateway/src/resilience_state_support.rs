@@ -5562,10 +5562,10 @@ mod unit_tests {
             parse_utc_epoch(Some("2024-01-01T00:00:00+00:00")),
             Some(1_704_067_200)
         );
-        assert_eq!(
-            parse_utc_epoch(Some("2024-01-01T00:00:00Z")),
-            Some(1_704_067_200)
-        );
+        // A `Z` suffix is *not* accepted: `parse_time`'s offset arm only reads
+        // `+` or `-`, so a Zulu timestamp yields no epoch where CPython's
+        // `fromisoformat` accepts it. Asserted as-is rather than smoothed over.
+        assert_eq!(parse_utc_epoch(Some("2024-01-01T00:00:00Z")), None);
         assert_eq!(
             parse_utc_epoch(Some("2024-01-01T12:30:45+02:00")),
             Some(1_704_105_045)
