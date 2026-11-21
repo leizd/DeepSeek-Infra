@@ -1493,4 +1493,83 @@ mod tests {
         let data = office_zip(&[("META-INF/container.xml", &container_opf())]);
         assert_eq!(extract_epub_text(&data).unwrap(), "");
     }
+
+    /// Chapters are ordered by name and each is prefixed with its entry path;
+    /// `nav.xhtml` and `toc.xhtml` are not chapters. The oracle returns
+    /// `'[EPUB: OEBPS/ch1.xhtml]\nChapter one\n\n[EPUB: OEBPS/ch2.xhtml]\nChapter two'`.
+    #[test]
+    fn epub_chapters_are_ordered_and_navigation_is_skipped() {
+        let data = office_zip(&[
+            (
+                "OEBPS/ch2.xhtml",
+                b"<html><body><p>Chapter two</p></body></html>",
+            ),
+            (
+                "OEBPS/ch1.xhtml",
+                b"<html><body><p>Chapter one</p></body></html>",
+            ),
+            (
+                "OEBPS/nav.xhtml",
+                b"<html><body><p>Navigation</p></body></html>",
+            ),
+            ("META-INF/container.xml", &container_opf()),
+        ]);
+        assert_eq!(
+            extract_epub_text(&data).unwrap(),
+            "[EPUB: OEBPS/ch1.xhtml]\nChapter one\n\n[EPUB: OEBPS/ch2.xhtml]\nChapter two"
+        );
+    }
+
+    /// `toc.xhtml` is excluded the same way `nav.xhtml` is.
+    #[test]
+    fn epub_skips_toc_entries() {
+        let data = office_zip(&[
+            (
+                "OEBPS/toc.xhtml",
+                b"<html><body><p>Contents</p></body></html>",
+            ),
+            (
+                "OEBPS/ch1.htm",
+                b"<html><body><p>Only chapter</p></body></html>",
+            ),
+        ]);
+        assert_eq!(
+            extract_epub_text(&data).unwrap(),
+            "[EPUB: OEBPS/ch1.htm]\nOnly chapter"
+        );
+    }
+
+    /// A chapter whose markup carries no text is omitted rather than emitted
+    /// with an empty body.
+    #[test]
+    fn epub_omits_chapters_without_text() {
+        let data = office_zip(&[
+            ("OEBPS/empty.xhtml", b"<html><body></body></html>"),
+            ("OEBPS/ch1.xhtml", b"<html><body><p>Text</p></body></html>"),
+        ]);
+        assert_eq!(
+            extract_epub_text(&data).unwrap(),
+            "[EPUB: OEBPS/ch1.xhtml]\nText"
+        );
+    }
+
+    /// A nested table inside a DOCX cell joins its paragraphs with ` / `.
+    #[test]
+    fn docx_multi_paragraph_cells_join_with_a_slash() {
+        let body = "<w:tbl><w:tr><w:tc>\
+                    <w:p><w:r><w:t>first</w:t></w:r></w:p>\
+                    <w:p><w:r><w:t>second</w:t></w:r></w:p>\
+                    </w:tc><w:tc><w:p><w:r><w:t>right</w:t></w:r></w:p></w:tc></w:tr></w:tbl>";
+        let data = office_zip(&[("word/document.xml", &document_xml(body))]);
+        assert_eq!(extract_docx_text(&data).unwrap(), "first / second\tright");
+    }
+
+    /// An empty table row is dropped instead of leaving a blank line.
+    #[test]
+    fn docx_drops_rows_without_text() {
+        let body = "<w:tbl><w:tr><w:tc><w:p/></w:tc></w:tr>\
+                    <w:tr><w:tc><w:p><w:r><w:t>kept</w:t></w:r></w:p></w:tc></w:tr></w:tbl>";
+        let data = office_zip(&[("word/document.xml", &document_xml(body))]);
+        assert_eq!(extract_docx_text(&data).unwrap(), "kept");
+    }
 }
