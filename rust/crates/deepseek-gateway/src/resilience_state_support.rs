@@ -5666,6 +5666,140 @@ mod unit_tests {
         assert_eq!(get_control_policy(None, "p1").unwrap(), None);
     }
 
+    /// `infer_absent_closure_reason` decides why a previously open subject is no
+    /// longer in the authoritative snapshot. Every expected pair below was read
+    /// from `deepseek_infra.infra.workspace.resilience_risk_observations`.
+    #[test]
+    fn absent_closure_reason_covers_every_oracle_branch() {
+        let unknown = ("UNKNOWN_COVERAGE", "UNKNOWN_COVERAGE");
+        let retired_scope = ("RETIRED", "SCOPE_RETIRED");
+        let cleared = ("CLEARED", "HEALTHY");
+        let subject = json!({"type": "capacity"});
+        let complete = json!({"CAPACITY": {"complete": true}});
+
+        // No coverage at all, coverage for another type, and coverage that is
+        // present but not marked complete are all "unknown", not "retired".
+        assert_eq!(infer_absent_closure_reason(&subject, None), unknown);
+        assert_eq!(
+            infer_absent_closure_reason(&subject, Some(&json!({"replica": {"complete": true}}))),
+            unknown
+        );
+        assert_eq!(
+            infer_absent_closure_reason(&subject, Some(&json!({"CAPACITY": {"complete": false}}))),
+            unknown
+        );
+        assert_eq!(
+            infer_absent_closure_reason(&subject, Some(&json!({"CAPACITY": {}}))),
+            unknown
+        );
+
+        // A complete entry that lists nothing means the whole scope is gone.
+        assert_eq!(
+            infer_absent_closure_reason(&subject, Some(&complete)),
+            retired_scope
+        );
+        // The risk type is uppercased before the lookup, so casing is irrelevant.
+        assert_eq!(
+            infer_absent_closure_reason(&json!({"type": "Capacity"}), Some(&complete)),
+            retired_scope
+        );
+        assert_eq!(
+            infer_absent_closure_reason(&json!({}), Some(&json!({"": {"complete": true}}))),
+            retired_scope
+        );
+
+        // A policy that is no longer listed retires the subject.
+        assert_eq!(
+            infer_absent_closure_reason(
+                &json!({"type": "capacity", "policyId": "p9"}),
+                Some(&json!({"CAPACITY": {"complete": true, "policies": ["p1"]}}))
+            ),
+            ("RETIRED", "POLICY_DISABLED")
+        );
+        // A target that is no longer listed retires the subject.
+        assert_eq!(
+            infer_absent_closure_reason(
+                &json!({"type": "capacity", "targetId": "t9"}),
+                Some(&json!({"CAPACITY": {"complete": true, "targets": ["t1"]}}))
+            ),
+            ("RETIRED", "TARGET_REMOVED")
+        );
+        // A backup that is no longer listed is superseded rather than retired.
+        assert_eq!(
+            infer_absent_closure_reason(
+                &json!({"type": "capacity", "backupId": "b9"}),
+                Some(&json!({"CAPACITY": {"complete": true, "backups": ["b1"]}}))
+            ),
+            ("SUPERSEDED", "SUPERSEDED_BACKUP")
+        );
+        // The same holds when the policy survives but the backup does not.
+        assert_eq!(
+            infer_absent_closure_reason(
+                &json!({"type": "capacity", "backupId": "b9", "policyId": "p1"}),
+                Some(&json!({"CAPACITY": {"complete": true, "policies": ["p1"]}}))
+            ),
+            ("SUPERSEDED", "SUPERSEDED_BACKUP")
+        );
+
+        // Still listed, so nothing is wrong: the risk simply cleared.
+        assert_eq!(
+            infer_absent_closure_reason(
+                &json!({"type": "capacity", "targetId": "t1"}),
+                Some(&json!({"CAPACITY": {"complete": true, "targets": ["t1"]}}))
+            ),
+            cleared
+        );
+        // A policy with targets present but no policy list is not retired here;
+        // the `POLICY_DISABLED` fallback needs every list to be empty.
+        assert_eq!(
+            infer_absent_closure_reason(
+                &json!({"type": "capacity", "policyId": "p1"}),
+                Some(&json!({"CAPACITY": {"complete": true, "targets": ["t1"]}}))
+            ),
+            cleared
+        );
+    }
+
+    /// The grade boundaries are inclusive at the lower edge of each band.
+    #[test]
+    fn resilience_grade_bands_are_inclusive() {
+        assert_eq!(calculate_grade(100), "A");
+        assert_eq!(calculate_grade(90), "A");
+        assert_eq!(calculate_grade(89), "B");
+        assert_eq!(calculate_grade(80), "B");
+        assert_eq!(calculate_grade(79), "C");
+        assert_eq!(calculate_grade(70), "C");
+        assert_eq!(calculate_grade(69), "D");
+        assert_eq!(calculate_grade(60), "D");
+        assert_eq!(calculate_grade(59), "F");
+        assert_eq!(calculate_grade(0), "F");
+    }
+
+    /// An empty workspace has no drill history, no policies, no capacity
+    /// history, no restore samples and no authority replicas, so every factor
+    /// lands on its worst rung and the weaknesses list names each one.
+    #[test]
+    fn resilience_score_of_an_empty_workspace_is_bottom_of_every_factor() {
+        let scratch = Scratch::new("score-empty");
+        let score = calculate_resilience_score_readonly(
+            &scratch.root,
+            1_700_000_000,
+            "2024-01-01T00:00:00Z",
+        )
+        .unwrap();
+        assert_eq!(score["factorBreakdown"]["drDrill"]["score"], 0);
+        assert_eq!(score["factorBreakdown"]["drDrill"]["status"], "critical");
+        let weaknesses = score["weaknesses"].as_array().unwrap();
+        assert!(
+            weaknesses.iter().any(|w| w == "no-successful-dr-drills"),
+            "expected the missing-drill weakness, got {weaknesses:?}"
+        );
+        // The total is the clamp of the summed factors, so it can never leave 0..=100.
+        let total = score["score"].as_i64().unwrap();
+        assert!((0..=100).contains(&total), "score out of range: {total}");
+        assert_eq!(score["generatedAt"], "2024-01-01T00:00:00Z");
+    }
+
     #[test]
     fn control_targets_are_returned_in_target_id_order() {
         let conn = Connection::open_in_memory().unwrap();
