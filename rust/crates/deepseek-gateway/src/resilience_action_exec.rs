@@ -3856,15 +3856,18 @@ mod unit_tests {
     fn an_expired_lease_does_not_block() {
         let conn = conn();
         let keys = vec!["target:expired".to_string()];
-        acquire_action_locks(
-            &conn,
-            "old",
-            &keys,
-            "owner",
-            "2020-01-01T00:00:00Z",
-            "2019-01-01T00:00:00Z",
-        )
-        .unwrap();
+        assert_eq!(
+            acquire_action_locks(
+                &conn,
+                "old",
+                &keys,
+                "owner",
+                "2020-01-01T00:00:00Z",
+                "2019-01-01T00:00:00Z",
+            )
+            .unwrap(),
+            Ok(())
+        );
         assert_eq!(
             acquire_action_locks(
                 &conn,
