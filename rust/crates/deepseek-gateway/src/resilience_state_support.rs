@@ -5507,68 +5507,6 @@ mod unit_tests {
     use serde_json::json;
     use std::path::PathBuf;
 
-    /// The environment-variable readers use `set_var`, which is `unsafe` in
-    /// edition 2024 because a concurrent `getenv` on another thread is a data
-    /// race. This spin flag keeps the guarded sections apart, matching
-    /// `EnvLock` in `lib.rs`.
-    static ENV_BUSY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-    struct EnvLock;
-
-    impl EnvLock {
-        fn acquire() -> Self {
-            use std::sync::atomic::Ordering;
-            while ENV_BUSY
-                .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
-                .is_err()
-            {
-                std::hint::spin_loop();
-            }
-            Self
-        }
-    }
-
-    impl Drop for EnvLock {
-        fn drop(&mut self) {
-            ENV_BUSY.store(false, std::sync::atomic::Ordering::Release);
-        }
-    }
-
-    struct EnvGuard {
-        saved: Vec<(&'static str, Option<std::ffi::OsString>)>,
-        _lock: EnvLock,
-    }
-
-    impl EnvGuard {
-        fn set(pairs: &[(&'static str, Option<&str>)]) -> Self {
-            let lock = EnvLock::acquire();
-            let mut saved = Vec::new();
-            for (name, value) in pairs {
-                saved.push((*name, std::env::var_os(name)));
-                unsafe {
-                    match value {
-                        Some(value) => std::env::set_var(name, value),
-                        None => std::env::remove_var(name),
-                    }
-                }
-            }
-            Self { saved, _lock: lock }
-        }
-    }
-
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            for (name, value) in &self.saved {
-                unsafe {
-                    match value {
-                        Some(value) => std::env::set_var(name, value),
-                        None => std::env::remove_var(name),
-                    }
-                }
-            }
-        }
-    }
-
     struct Scratch {
         root: PathBuf,
     }
