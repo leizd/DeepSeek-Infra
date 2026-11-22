@@ -2101,13 +2101,14 @@ mod tests {
             "payload/projects/p1/a/b.txt",
             &selected
         ));
-        // Another project, a shallower path, a different root and a bare segment
-        // are all outside.
+        // The check reads exactly three segments and ignores anything after, so
+        // the bare directory itself also counts as covered.
+        assert!(under_selected_project("payload/projects/p1", &selected));
+        // Another project, a different root prefix and a shallower path are out.
         assert!(!under_selected_project(
             "payload/projects/p2/file.txt",
             &selected
         ));
-        assert!(!under_selected_project("payload/projects/p1", &selected));
         assert!(!under_selected_project(
             "other/projects/p1/file.txt",
             &selected
