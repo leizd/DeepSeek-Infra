@@ -1341,7 +1341,7 @@ mod tests {
     use zip::write::FileOptions;
     use zip::{CompressionMethod, ZipWriter};
 
-    use super::{extract_docx_text, extract_epub_text, extract_pptx_text};
+    use super::{extract_docx_text, extract_epub_text, extract_pptx_text, extract_xlsx_text};
 
     const W_NS: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 
