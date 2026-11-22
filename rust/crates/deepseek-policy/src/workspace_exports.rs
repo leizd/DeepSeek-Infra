@@ -1596,6 +1596,44 @@ mod tests {
 #[cfg(test)]
 mod export_helper_tests {
     use super::*;
+
+    /// `conversation_markdown` renders the front matter, an optional `Source`
+    /// block and one `## Role` section per message. Every expected string below
+    /// was produced by `deepseek_infra.infra.workspace.exports.conversation_markdown`.
+    #[test]
+    fn conversation_markdown_matches_the_oracle() {
+        assert_eq!(
+            conversation_markdown(&json!({})),
+            "# Conversation\n\n- Conversation ID: ``\n"
+        );
+        assert_eq!(
+            conversation_markdown(&json!({"title": "T", "conversationId": "c1", "messages": []})),
+            "# T\n\n- Conversation ID: `c1`\n"
+        );
+        // `id` is the fallback when `conversationId` is absent, and each message
+        // becomes a `## Role` heading with the role title-cased.
+        assert_eq!(
+            conversation_markdown(&json!({
+                "title": "T",
+                "id": "c2",
+                "messages": [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "yo"}]
+            })),
+            "# T\n\n- Conversation ID: `c2`\n\n## User\n\nhi\n\n## Assistant\n\nyo\n"
+        );
+        assert_eq!(
+            conversation_markdown(&json!({"messages": [{"role": "system", "content": "s"}]})),
+            "# Conversation\n\n- Conversation ID: ``\n\n## System\n\ns\n"
+        );
+        // A non-empty `sourceRef` is pretty-printed as JSON.
+        assert_eq!(
+            conversation_markdown(&json!({
+                "title": "T",
+                "sourceRef": {"kind": "doc", "name": "n"},
+                "messages": []
+            })),
+            "# T\n\n- Conversation ID: ``\n\n## Source\n\n```json\n{\n  \"kind\": \"doc\",\n  \"name\": \"n\"\n}\n```\n"
+        );
+    }
     use serde_json::json;
 
     fn html(markdown: &str) -> String {
