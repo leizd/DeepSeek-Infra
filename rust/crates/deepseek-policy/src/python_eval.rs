@@ -1608,6 +1608,138 @@ mod oracle_parity_tests {
         expect("e", "2.718281828459045");
     }
 
+    /// `call_math`'s domain and argument-count refusals, with the oracle's
+    /// exact wording.
+    #[test]
+    fn math_refusals_match_the_oracle() {
+        let cases = [
+            (
+                "factorial(-1)",
+                "factorial() not defined for negative values",
+            ),
+            (
+                "math.factorial(-1)",
+                "factorial() not defined for negative values",
+            ),
+            ("log(1, 2, 3)", "log expected 1 or 2 arguments"),
+            ("abs('x')", "bad operand type for abs()"),
+            ("len(1)", "object of type 'int' has no len()"),
+            ("sum(1)", "sum() can't sum non-iterable"),
+            ("min()", "expected at least 1 argument, got 0"),
+            ("max()", "expected at least 1 argument, got 0"),
+            ("round(1,2,3)", "round expected at most 2 arguments"),
+            ("pow(2)", "pow expected 2 arguments"),
+            ("pow(2,3,4,5)", "pow expected 2 arguments"),
+        ];
+        for (expression, expected) in cases {
+            let error = python_eval(expression).expect_err(expression);
+            assert_eq!(error.message, expected, "{expression}");
+        }
+    }
+
+    /// A negative power with a modulus has no integer answer and is refused.
+    #[test]
+    fn negative_exponent_with_modulus_is_refused() {
+        let error = python_eval("pow(2,-1,7)").expect_err("accepted");
+        assert_eq!(error.message, "negative exponent with modulus");
+    }
+
+    /// Division and modulo by zero are distinct refusals, matching the oracle.
+    #[test]
+    fn zero_division_refusals_match_the_oracle() {
+        assert_eq!(
+            python_eval("1/0").expect_err("accepted").message,
+            "division by zero"
+        );
+        assert_eq!(
+            python_eval("1//0").expect_err("accepted").message,
+            "integer division or modulo by zero"
+        );
+        assert_eq!(
+            python_eval("1%0").expect_err("accepted").message,
+            "integer modulo by zero"
+        );
+    }
+
+    /// Out-of-range subscripts are refused per container kind.
+    #[test]
+    fn subscript_bounds_are_enforced() {
+        assert_eq!(
+            python_eval("[1,2][5]").expect_err("accepted").message,
+            "list index out of range"
+        );
+        assert_eq!(
+            python_eval("[1,2][-5]").expect_err("accepted").message,
+            "list index out of range"
+        );
+        // A positive in-range index and a negative one both work.
+        assert_eq!(python_eval("[1,2,3][1]").unwrap()["result"], "2");
+        assert_eq!(python_eval("[1,2,3][-2]").unwrap()["result"], "2");
+    }
+
+    /// A domain error is *not* refused here: `sqrt(-1)` and `log(0)` return a
+    /// NaN float, where CPython raises `ValueError: math domain error`. The port
+    /// has no domain check, so this records the divergence rather than hiding it.
+    #[test]
+    fn math_domain_errors_yield_nan_instead_of_being_refused() {
+        for expression in ["sqrt(-1)", "log(0)", "log(-1)"] {
+            let result = python_eval(expression)
+                .unwrap_or_else(|error| panic!("{expression} was refused: {}", error.message));
+            assert_eq!(result["result"], "nan", "{expression}");
+        }
+    }
+
+    /// The extended `math` surface is reachable through both the bare name and
+    /// the attribute form, with the oracle's values.
+    #[test]
+    fn extended_math_functions_match_the_oracle() {
+        for (expression, expected) in [
+            ("math.log10(100)", "2.0"),
+            ("math.log2(8)", "3.0"),
+            ("math.exp(0)", "1.0"),
+            ("math.floor(-2.5)", "-3"),
+            ("math.ceil(-2.5)", "-2"),
+            ("math.fabs(-3.5)", "3.5"),
+            ("math.atan2(1,1)", "0.7853981633974483"),
+            ("math.degrees(0)", "0.0"),
+            ("math.radians(0)", "0.0"),
+            ("math.asin(1)", "1.5707963267948966"),
+            ("math.acos(1)", "0.0"),
+            ("math.atan(0)", "0.0"),
+            ("math.hypot(3,4)", "5.0"),
+            ("math.isfinite(1)", "True"),
+            ("math.isinf(1)", "False"),
+            ("math.isnan(1)", "False"),
+            ("math.pow(2,3)", "8.0"),
+            ("math.tau", "6.283185307179586"),
+            ("lcm(4,6)", "12"),
+            ("gcd(12,18)", "6"),
+        ] {
+            expect(expression, expected);
+        }
+    }
+
+    /// `gcd` and `lcm` normalise signs and treat zero the way the oracle does.
+    #[test]
+    fn gcd_and_lcm_normalise_signs() {
+        expect("gcd(-12,18)", "6");
+        expect("gcd(12,-18)", "6");
+        expect("gcd(0,0)", "0");
+        expect("gcd(0,5)", "5");
+        expect("lcm(4,6)", "12");
+        expect("lcm(0,0)", "0");
+        expect("lcm(-4,6)", "12");
+    }
+
+    /// `comb`/`perm` return zero when `k > n` instead of failing.
+    #[test]
+    fn comb_and_perm_return_zero_when_k_exceeds_n() {
+        expect("comb(2,5)", "0");
+        expect("perm(2,5)", "0");
+        expect("comb(5,5)", "1");
+        expect("perm(3,0)", "1");
+    }
+
     #[test]
     fn math_attribute_form_matches_the_oracle() {
         expect("math.sqrt(16)", "4.0");

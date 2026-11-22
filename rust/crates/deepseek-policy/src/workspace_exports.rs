@@ -1847,6 +1847,95 @@ mod export_helper_tests {
         );
     }
 
+    /// `export_evidence` accepts every format and writes the same payload each
+    /// way: traces and evals echoed, a normalised `sourceRef`, and a fresh
+    /// `exportedAt` from the injected clock.
+    #[test]
+    fn export_evidence_covers_every_format() {
+        let root = tempfile::tempdir().unwrap();
+        let entropy = FixedEntropy::new();
+        let payload = json!({
+            "kind": "evidence",
+            "traces": [{"id": "t1"}],
+            "evals": [{"id": "e1"}],
+            "sourceRef": {"kind": "run", "id": "r1"},
+        });
+        for (format, extension) in [
+            ("json", ".json"),
+            ("markdown", ".md"),
+            ("html", ".html"),
+            ("zip", ".zip"),
+        ] {
+            let out = export_evidence(root.path(), &payload, "", format, &entropy).unwrap();
+            let export = &out["export"];
+            assert_eq!(export["kind"], "evidence");
+            assert!(
+                export["filename"].as_str().unwrap().ends_with(extension),
+                "format {format} gave {}",
+                export["filename"]
+            );
+            assert!(Path::new(export["path"].as_str().unwrap()).is_file());
+        }
+        // The JSON body carries both collections and the source reference.
+        let json_out = export_evidence(root.path(), &payload, "", "json", &entropy).unwrap();
+        let body = std::fs::read_to_string(json_out["export"]["path"].as_str().unwrap()).unwrap();
+        assert!(body.contains("\"traces\""));
+        assert!(body.contains("\"evals\""));
+        assert!(body.contains("\"sourceRef\""));
+        assert!(body.contains("\"exportedAt\""));
+        // An empty payload exports empty collections rather than failing.
+        let empty = export_evidence(root.path(), &json!({}), "", "json", &entropy).unwrap();
+        let body = std::fs::read_to_string(empty["export"]["path"].as_str().unwrap()).unwrap();
+        assert!(body.contains("\"traces\": []"));
+    }
+
+    /// `export_evidence` with a project id validates it first, so a bad id is a
+    /// 400 rather than a new export.
+    #[test]
+    fn export_evidence_refuses_an_invalid_project_id() {
+        let root = tempfile::tempdir().unwrap();
+        let entropy = FixedEntropy::new();
+        let error = export_evidence(root.path(), &json!({}), "no", "json", &entropy).unwrap_err();
+        assert_eq!(error.status, 400);
+    }
+
+    /// `list_media_for_project` reads the library, keeps only rows for the
+    /// project, and orders them newest first.
+    #[test]
+    fn list_media_for_project_filters_and_sorts() {
+        let root = tempfile::tempdir().unwrap();
+        // An absent library is empty, not an error.
+        assert!(
+            list_media_for_project(root.path(), "proj1")
+                .unwrap()
+                .is_empty()
+        );
+        let dir = media_dir(root.path());
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("library.json"),
+            json!({"media": [
+                {"mediaId": "m-old", "projectId": "proj1", "path": "a.bin", "updatedAt": "2024-01-01T00:00:00Z"},
+                {"mediaId": "m-new", "projectId": "proj1", "path": "b.bin", "updatedAt": "2024-06-01T00:00:00Z"},
+                {"mediaId": "m-other", "projectId": "proj2", "path": "c.bin", "updatedAt": "2024-09-01T00:00:00Z"}
+            ]})
+            .to_string(),
+        )
+        .unwrap();
+        let items = list_media_for_project(root.path(), "proj1").unwrap();
+        assert_eq!(items.len(), 2);
+        // Newest first.
+        assert_eq!(items[0]["mediaId"], "m-new");
+        assert_eq!(items[1]["mediaId"], "m-old");
+        // A library whose `media` key is not an array is empty.
+        std::fs::write(dir.join("library.json"), json!({"media": 1}).to_string()).unwrap();
+        assert!(
+            list_media_for_project(root.path(), "proj1")
+                .unwrap()
+                .is_empty()
+        );
+    }
+
     /// A trailing slash leaves an empty stem here, so the name falls back to
     /// `artifact` while `type` still supplies the extension.
     ///

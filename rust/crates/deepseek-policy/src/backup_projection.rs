@@ -2048,6 +2048,286 @@ mod tests {
         }
     }
 
+    /// `apply_delta_ops` replaces a record on a `(contributor, path)` match,
+    /// appends unseen ones, and deletes only exact keys.
+    #[test]
+    fn apply_delta_ops_puts_appends_and_deletes() {
+        let base = vec![
+            record("c1", "a.txt", &sha256_bytes(b"1")),
+            record("c1", "b.txt", &sha256_bytes(b"2")),
+        ];
+        // A put on an existing key replaces in place.
+        let replaced = apply_delta_ops(
+            &base,
+            &json!({"put": [{"contributorId": "c1", "path": "a.txt", "size": 9, "sha256": sha256_bytes(b"9")}]}),
+        );
+        assert_eq!(replaced.len(), 2);
+        assert_eq!(replaced[0].sha256, sha256_bytes(b"9"));
+        assert_eq!(replaced[0].size, 9);
+        // A put on a new key appends.
+        let appended = apply_delta_ops(
+            &base,
+            &json!({"put": [{"contributorId": "c2", "path": "c.txt", "size": 3, "sha256": sha256_bytes(b"3")}]}),
+        );
+        assert_eq!(appended.len(), 3);
+        assert_eq!(appended[2].logical_path, "c.txt");
+        // A put without a path is skipped.
+        assert_eq!(
+            apply_delta_ops(&base, &json!({"put": [{"contributorId": "c1"}]})).len(),
+            2
+        );
+        // A put missing size and digest defaults both.
+        let defaults = apply_delta_ops(&base, &json!({"put": [{"path": "d.txt"}]}));
+        assert_eq!(defaults.last().unwrap().size, 0);
+        assert_eq!(defaults.last().unwrap().sha256, "");
+        // A delete removes the exact key only.
+        let deleted = apply_delta_ops(
+            &base,
+            &json!({"delete": [{"contributorId": "c1", "path": "a.txt"}]}),
+        );
+        assert_eq!(deleted.len(), 1);
+        assert_eq!(deleted[0].logical_path, "b.txt");
+        // A delete naming another contributor keeps the row.
+        let kept = apply_delta_ops(
+            &base,
+            &json!({"delete": [{"contributorId": "c2", "path": "a.txt"}]}),
+        );
+        assert_eq!(kept.len(), 2);
+        // An empty delta is the identity.
+        assert_eq!(apply_delta_ops(&base, &json!({})).len(), 2);
+    }
+
+    /// `put_parent_dependencies` reads `parentPath` for a parent-file put and
+    /// each chunk's source for a cdc put.
+    #[test]
+    fn put_parent_dependencies_follow_the_storage_kind() {
+        // A whole-file put has no parents.
+        assert!(put_parent_dependencies(&json!({"storage": "whole"})).is_empty());
+        assert!(put_parent_dependencies(&json!({})).is_empty());
+        // parent-file contributes its `parentPath`, but not when empty.
+        assert_eq!(
+            put_parent_dependencies(&json!({"storage": "parent-file", "parentPath": "p/a.bin"})),
+            ["p/a.bin".to_string()].into_iter().collect()
+        );
+        assert!(
+            put_parent_dependencies(&json!({"storage": "parent-file", "parentPath": ""}))
+                .is_empty()
+        );
+        // cdc: a `parent` chunk depends on the file's own path, a
+        // `parent-range` chunk on its `parentPath`, and `payload` on nothing.
+        assert_eq!(
+            put_parent_dependencies(&json!({
+                "storage": "cdc",
+                "path": "p/self.bin",
+                "chunks": [{"source": "parent"}]
+            })),
+            ["p/self.bin".to_string()].into_iter().collect()
+        );
+        assert_eq!(
+            put_parent_dependencies(&json!({
+                "storage": "cdc",
+                "path": "p/self.bin",
+                "chunks": [{"source": "parent-range", "parentPath": "p/other.bin"}]
+            })),
+            ["p/other.bin".to_string()].into_iter().collect()
+        );
+        assert!(
+            put_parent_dependencies(&json!({
+                "storage": "cdc",
+                "path": "p/self.bin",
+                "chunks": [{"source": "payload"}]
+            }))
+            .is_empty()
+        );
+        // A `parent` chunk without a path contributes nothing.
+        assert!(
+            put_parent_dependencies(&json!({
+                "storage": "cdc",
+                "chunks": [{"source": "parent"}]
+            }))
+            .is_empty()
+        );
+    }
+
+    /// `pack_for_blob_from_json` resolves schema 1 by blob id and schema 2 by
+    /// positional ordinal, and refuses anything else.
+    #[test]
+    fn pack_for_blob_resolves_both_schemas() {
+        // Schema 1 keys by blob id.
+        let v1 = json!({
+            "schemaVersion": 1,
+            "entries": {"blob-a": {"pack": "payload/packs/one.pack"}}
+        });
+        assert_eq!(
+            pack_for_blob_from_json(Some(&v1), "blob-a").as_deref(),
+            Some("payload/packs/one.pack")
+        );
+        assert_eq!(pack_for_blob_from_json(Some(&v1), "absent"), None);
+        // Schema 2 reads the pack ordinal from the entry triple.
+        let v2 = json!({
+            "schemaVersion": 2,
+            "packs": [{"path": "payload/packs/zero.pack"}, {"path": "payload/packs/one.pack"}],
+            "entries": [[1, 0, 8]]
+        });
+        assert_eq!(
+            pack_for_blob_from_json(Some(&v2), "blob_000000").as_deref(),
+            Some("payload/packs/one.pack")
+        );
+        // An ordinal past the entry list, a malformed id and an unknown schema
+        // all resolve to nothing.
+        assert_eq!(pack_for_blob_from_json(Some(&v2), "blob_000009"), None);
+        assert_eq!(pack_for_blob_from_json(Some(&v2), "not-a-blob"), None);
+        assert_eq!(
+            pack_for_blob_from_json(Some(&json!({"schemaVersion": 3})), "b"),
+            None
+        );
+        assert_eq!(pack_for_blob_from_json(None, "b"), None);
+    }
+
+    /// `chain_roots` refuses an empty chain, a baseline whose stored root does
+    /// not match, an incremental member without operations, and a parent or
+    /// root digest mismatch - and accepts a consistent chain.
+    #[test]
+    fn chain_roots_validates_each_link() {
+        assert_eq!(
+            chain_roots(&[]).unwrap_err().message,
+            "Restore projection requires a non-empty chain"
+        );
+        let files = vec![record("c1", "a.txt", &sha256_bytes(b"1"))];
+        let root = snapshot_root(&files);
+        // A stored baseline root that disagrees is refused.
+        let bad_baseline = vec![ChainPackage {
+            snapshot_kind: "full".to_string(),
+            files: files.clone(),
+            root_digest: sha256_bytes(b"wrong"),
+            operations: None,
+            pack_index: None,
+            frontend: false,
+            contributor_ids: BTreeSet::new(),
+            external_mcp: false,
+            manifest: json!({}),
+        }];
+        assert_eq!(
+            chain_roots(&bad_baseline).unwrap_err().message,
+            "Full baseline Merkle root mismatch"
+        );
+        // A matching baseline yields one state and no error.
+        let baseline = vec![ChainPackage {
+            snapshot_kind: "full".to_string(),
+            files: files.clone(),
+            root_digest: root.clone(),
+            operations: None,
+            pack_index: None,
+            frontend: false,
+            contributor_ids: BTreeSet::new(),
+            external_mcp: false,
+            manifest: json!({}),
+        }];
+        assert_eq!(chain_roots(&baseline).unwrap().len(), 1);
+        // An incremental member without operations is refused.
+        let no_ops = vec![
+            baseline[0].clone(),
+            ChainPackage {
+                snapshot_kind: "incremental".to_string(),
+                files: vec![],
+                root_digest: String::new(),
+                operations: None,
+                pack_index: None,
+                frontend: false,
+                contributor_ids: BTreeSet::new(),
+                external_mcp: false,
+                manifest: json!({}),
+            },
+        ];
+        assert_eq!(
+            chain_roots(&no_ops).unwrap_err().message,
+            "Incremental chain member 1 has no operations"
+        );
+        // A parent digest that disagrees with the running root is refused.
+        let bad_parent = vec![
+            baseline[0].clone(),
+            ChainPackage {
+                snapshot_kind: "incremental".to_string(),
+                files: vec![],
+                root_digest: String::new(),
+                operations: Some(json!({"parentRootDigest": sha256_bytes(b"nope")})),
+                pack_index: None,
+                frontend: false,
+                contributor_ids: BTreeSet::new(),
+                external_mcp: false,
+                manifest: json!({}),
+            },
+        ];
+        assert_eq!(
+            chain_roots(&bad_parent).unwrap_err().message,
+            "Incremental chain parent root mismatch at 1"
+        );
+        // A consistent incremental link is accepted and carries two states.
+        let good = vec![
+            baseline[0].clone(),
+            ChainPackage {
+                snapshot_kind: "incremental".to_string(),
+                files: vec![],
+                root_digest: String::new(),
+                operations: Some(json!({"parentRootDigest": root.clone()})),
+                pack_index: None,
+                frontend: false,
+                contributor_ids: BTreeSet::new(),
+                external_mcp: false,
+                manifest: json!({}),
+            },
+        ];
+        assert_eq!(chain_roots(&good).unwrap().len(), 2);
+    }
+
+    /// `backward_closure` walks the chain backwards: a path produced by a later
+    /// layer pulls in its parent dependencies from the layer that created it.
+    #[test]
+    fn backward_closure_tracks_needed_and_produced_paths() {
+        let files = vec![record("c1", "a.txt", &sha256_bytes(b"1"))];
+        let root = snapshot_root(&files);
+        let chain = vec![
+            ChainPackage {
+                snapshot_kind: "full".to_string(),
+                files: files.clone(),
+                root_digest: root.clone(),
+                operations: None,
+                pack_index: None,
+                frontend: false,
+                contributor_ids: BTreeSet::new(),
+                external_mcp: false,
+                manifest: json!({}),
+            },
+            ChainPackage {
+                snapshot_kind: "incremental".to_string(),
+                files: vec![],
+                root_digest: String::new(),
+                operations: Some(json!({
+                    "parentRootDigest": root,
+                    "put": [{
+                        "path": "b.txt",
+                        "storage": "parent-file",
+                        "parentPath": "a.txt"
+                    }]
+                })),
+                pack_index: None,
+                frontend: false,
+                contributor_ids: BTreeSet::new(),
+                external_mcp: false,
+                manifest: json!({}),
+            },
+        ];
+        let outputs: BTreeSet<String> = ["b.txt".to_string()].into_iter().collect();
+        let (needed_after, produced_by_layer) = backward_closure(&chain, &outputs).unwrap();
+        // The output is needed at the tip and produced by the incremental layer.
+        assert!(needed_after[1].contains("b.txt"));
+        assert!(produced_by_layer[1].contains("b.txt"));
+        // The parent it depends on becomes needed one layer earlier and is
+        // produced by the baseline.
+        assert!(needed_after[0].contains("a.txt"));
+        assert!(produced_by_layer[0].contains("a.txt"));
+    }
+
     /// An empty leaf set hashes a fixed sentinel, one leaf is its own root, and
     /// order does not matter because leaves are sorted first.
     #[test]
