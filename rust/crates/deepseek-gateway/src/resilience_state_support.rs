@@ -5760,6 +5760,38 @@ mod unit_tests {
         );
     }
 
+    /// With no actions to coordinate, the wave is trivially satisfied and the
+    /// result names the two id lists it was given.
+    #[test]
+    fn coordination_wave_without_actions_passes() {
+        let wave = simulate_coordination_wave(None, None, &[], &[]).unwrap();
+        assert_eq!(wave["passed"], true);
+        assert_eq!(wave["reason"], "blast-radius-invariants-satisfied");
+        assert_eq!(wave["proposedActionIds"].as_array().unwrap().len(), 0);
+        assert_eq!(wave["runningActionIds"].as_array().unwrap().len(), 0);
+        assert!(wave["evaluations"].as_object().unwrap().is_empty());
+    }
+
+    /// Ids are echoed back for both lists, and an action without an id is
+    /// dropped from the reported ids rather than invented.
+    #[test]
+    fn coordination_wave_reports_the_action_ids_it_was_given() {
+        let proposed = json!([
+            {"actionId": "a1", "type": "CREATE_REPAIR_JOB"},
+            {"type": "CREATE_REPAIR_JOB"}
+        ]);
+        let running = json!([{"actionId": "r1"}]);
+        let wave = simulate_coordination_wave(
+            None,
+            None,
+            proposed.as_array().unwrap(),
+            running.as_array().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(wave["proposedActionIds"], json!(["a1"]));
+        assert_eq!(wave["runningActionIds"], json!(["r1"]));
+    }
+
     /// The grade boundaries are inclusive at the lower edge of each band.
     #[test]
     fn resilience_grade_bands_are_inclusive() {
