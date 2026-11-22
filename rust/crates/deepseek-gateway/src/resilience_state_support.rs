@@ -5622,6 +5622,138 @@ mod unit_tests {
         assert_eq!(policies[0]["policyId"], "p1");
     }
 
+    /// Observing a snapshot annotates every risk with its canonical subject, the
+    /// subject digest and the stored observation row - and creates the ledger.
+    #[test]
+    fn observing_a_snapshot_annotates_every_risk() {
+        let scratch = Scratch::new("observe");
+        let mut snapshot = json!({
+            "riskDigest": HEAD_DIGEST,
+            "generatedAt": "2024-01-01T00:00:00Z",
+            "overallRisk": "critical",
+            "risks": [{
+                "type": "CAPACITY_EXHAUSTION",
+                "policyId": "p1",
+                "target": "t1",
+                "severity": "critical"
+            }]
+        });
+        observe_risk_snapshot_and_slo(
+            &scratch.root,
+            &mut snapshot,
+            1_700_000_000,
+            "2024-01-01T00:00:00Z",
+        )
+        .unwrap();
+        let risk = &snapshot["risks"][0];
+        // The subject is the canonical identity, and its digest is 64 hex.
+        assert_eq!(risk["riskSubject"]["type"], "CAPACITY_EXHAUSTION");
+        assert_eq!(risk["riskSubject"]["policyId"], "p1");
+        assert_eq!(risk["riskSubject"]["targetId"], "t1");
+        assert_eq!(risk["riskSubjectDigest"].as_str().unwrap().len(), 64);
+        // The observation row was written and attached.
+        let observation = risk["riskObservation"]
+            .as_object()
+            .expect("observation attached");
+        assert!(!observation.is_empty());
+        // The ledger directory now exists.
+        assert!(scratch.root.join(".resilience-risk").is_dir());
+    }
+
+    /// A repeated observation of the same snapshot returns the stored row rather
+    /// than incrementing the count, which is the oracle's dedup rule.
+    #[test]
+    fn observing_the_same_snapshot_twice_does_not_increment() {
+        let scratch = Scratch::new("observe-dedup");
+        let make = || {
+            json!({
+                "riskDigest": HEAD_DIGEST,
+                "generatedAt": "2024-01-01T00:00:00Z",
+                "overallRisk": "critical",
+                "risks": [{
+                    "type": "CAPACITY_EXHAUSTION",
+                    "policyId": "p1",
+                    "target": "t1",
+                    "severity": "critical"
+                }]
+            })
+        };
+        let mut first = make();
+        observe_risk_snapshot_and_slo(
+            &scratch.root,
+            &mut first,
+            1_700_000_000,
+            "2024-01-01T00:00:00Z",
+        )
+        .unwrap();
+        // The attached row is whatever `upsert_risk_observation_row` returns; it
+        // carries the subject digest and a count.
+        let observation = first["risks"][0]["riskObservation"]
+            .as_object()
+            .expect("observation attached");
+        assert!(
+            observation.contains_key("observationCount"),
+            "no count in {observation:?}"
+        );
+        let after_first = observation["observationCount"]
+            .as_i64()
+            .expect("count is an integer");
+        assert_eq!(after_first, 1, "the first observation counts once");
+
+        // Same `generatedAt` and digest, so the snapshot key matches and the row
+        // must be returned as-is rather than counted again.
+        let mut second = make();
+        observe_risk_snapshot_and_slo(
+            &scratch.root,
+            &mut second,
+            1_700_000_100,
+            "2024-01-01T00:01:40Z",
+        )
+        .unwrap();
+        let after_second = second["risks"][0]["riskObservation"]["observationCount"]
+            .as_i64()
+            .expect("count is an integer");
+        assert_eq!(
+            after_second, after_first,
+            "a repeated snapshot must not increment the count"
+        );
+
+        // A snapshot with a different generatedAt is a new observation.
+        let mut third = make();
+        third["generatedAt"] = json!("2024-01-02T00:00:00Z");
+        observe_risk_snapshot_and_slo(
+            &scratch.root,
+            &mut third,
+            1_700_100_000,
+            "2024-01-02T00:00:00Z",
+        )
+        .unwrap();
+        let after_third = third["risks"][0]["riskObservation"]["observationCount"]
+            .as_i64()
+            .expect("count is an integer");
+        assert!(
+            after_third > after_second,
+            "a new snapshot should count again, got {after_third} after {after_second}"
+        );
+    }
+
+    /// A snapshot with no risks still succeeds and writes no observations.
+    #[test]
+    fn observing_an_empty_snapshot_is_a_no_op() {
+        let scratch = Scratch::new("observe-empty");
+        let mut snapshot = json!({"overallRisk": "healthy", "risks": []});
+        observe_risk_snapshot_and_slo(
+            &scratch.root,
+            &mut snapshot,
+            1_700_000_000,
+            "2024-01-01T00:00:00Z",
+        )
+        .unwrap();
+        assert!(snapshot["risks"].as_array().unwrap().is_empty());
+        // The ledger is still created, because the call opens it first.
+        assert!(scratch.root.join(".resilience-risk").is_dir());
+    }
+
     /// An empty risk snapshot produces a PROPOSED plan with no actions, echoing
     /// the digest and overall risk it was given.
     #[test]
