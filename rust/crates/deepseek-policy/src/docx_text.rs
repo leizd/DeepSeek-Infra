@@ -1478,6 +1478,143 @@ mod tests {
         assert_eq!(error.message, "Invalid pptx file");
     }
 
+    /// `from_excel` converts a serial date the way openpyxl does: the 1899-12-30
+    /// epoch, a value below 1 is a bare time, and serials between 1 and 60 are
+    /// shifted by one day to absorb Excel's 1900 leap-year bug.
+    #[test]
+    fn from_excel_matches_the_workbook_semantics() {
+        assert_eq!(from_excel(0.0, false, false).unwrap(), "00:00:00");
+        assert_eq!(from_excel(0.5, false, false).unwrap(), "12:00:00");
+        // Below 60 the day is shifted, so 1 lands on 1900-01-01, not 12-31.
+        assert_eq!(
+            from_excel(1.0, false, false).unwrap(),
+            "1900-01-01T00:00:00"
+        );
+        assert_eq!(
+            from_excel(1.5, false, false).unwrap(),
+            "1900-01-01T12:00:00"
+        );
+        assert_eq!(
+            from_excel(59.0, false, false).unwrap(),
+            "1900-02-28T00:00:00"
+        );
+        // 60 and 61 are not shifted, so both map onto 02-28 and 03-01.
+        assert_eq!(
+            from_excel(60.0, false, false).unwrap(),
+            "1900-02-28T00:00:00"
+        );
+        assert_eq!(
+            from_excel(61.0, false, false).unwrap(),
+            "1900-03-01T00:00:00"
+        );
+        assert_eq!(
+            from_excel(45000.0, false, false).unwrap(),
+            "2023-03-15T00:00:00"
+        );
+        assert_eq!(
+            from_excel(45000.25, false, false).unwrap(),
+            "2023-03-15T06:00:00"
+        );
+        // The 1904 epoch has no leap-year bug to absorb.
+        assert_eq!(from_excel(1.0, true, false).unwrap(), "1904-01-02T00:00:00");
+        // A non-finite serial cannot be a date.
+        assert!(from_excel(f64::NAN, false, false).is_err());
+        assert!(from_excel(f64::INFINITY, false, false).is_err());
+    }
+
+    /// `format_excel_timedelta` renders `[h]:mm:ss` with an optional day prefix
+    /// and a six-digit fraction, matching `str(datetime.timedelta(...))` shape.
+    #[test]
+    fn excel_timedelta_matches_the_delta_shape() {
+        assert_eq!(format_excel_timedelta(0.5).unwrap(), "12:00:00");
+        assert_eq!(format_excel_timedelta(1.0).unwrap(), "1 day, 0:00:00");
+        assert_eq!(format_excel_timedelta(1.5).unwrap(), "1 day, 12:00:00");
+        assert_eq!(format_excel_timedelta(2.0).unwrap(), "2 days, 0:00:00");
+        // A negative delta keeps the sign in front.
+        assert_eq!(format_excel_timedelta(-0.5).unwrap(), "-12:00:00");
+        // A sub-second delta carries the fraction.
+        assert_eq!(
+            format_excel_timedelta(0.5 / 86_400.0).unwrap(),
+            "00:00:00.500000"
+        );
+    }
+
+    /// `parse_hms` accepts `H:M`, `H:M:S` and a fractional second, refuses a
+    /// fourth field, an out-of-range component and non-digits.
+    #[test]
+    fn parse_hms_accepts_and_refuses() {
+        assert_eq!(parse_hms("12:34").unwrap(), (12, 34, 0, 0));
+        assert_eq!(parse_hms("12:34:56").unwrap(), (12, 34, 56, 0));
+        assert_eq!(parse_hms("12:34:56.5").unwrap(), (12, 34, 56, 500_000));
+        assert_eq!(parse_hms("00:00:00.000001").unwrap(), (0, 0, 0, 1));
+        // 24 o'clock and 60 minutes are out of range; 60 seconds is allowed.
+        assert!(parse_hms("24:00").is_err());
+        assert!(parse_hms("12:60").is_err());
+        assert_eq!(parse_hms("12:34:60").unwrap(), (12, 34, 60, 0));
+        assert!(parse_hms("12:34:56:78").is_err());
+        assert!(parse_hms("not-a-time").is_err());
+        assert!(parse_hms("").is_err());
+    }
+
+    /// `python_float_str` always shows a decimal part and normalises the
+    /// exponent sign, matching `str(float)`.
+    #[test]
+    fn python_float_str_matches_str_float() {
+        assert_eq!(python_float_str(1.0), "1.0");
+        assert_eq!(python_float_str(1.5), "1.5");
+        assert_eq!(python_float_str(123456789.0), "123456789.0");
+        // An exponent keeps its sign and gains one when `format!` omits it.
+        assert_eq!(python_float_str(1e16), "1e+16");
+        assert_eq!(python_float_str(1e-5), "0.00001");
+    }
+
+    /// `is_date_format` looks only at the first section, ignores text inside
+    /// quotes, and honours `\` and `_` escapes.
+    #[test]
+    fn is_date_format_detects_date_tokens() {
+        assert!(is_date_format("mm-dd-yy"));
+        assert!(is_date_format("h:mm:ss"));
+        assert!(is_date_format("yyyy"));
+        // A numeric format has no date token.
+        assert!(!is_date_format("0.00"));
+        assert!(!is_date_format("General"));
+        assert!(!is_date_format("#,##0"));
+        // Tokens inside a quoted literal do not count.
+        assert!(!is_date_format("\"day\"0"));
+        // Only the first section before `;` is inspected.
+        assert!(!is_date_format("0.00;mmm"));
+        // An escaped token is skipped, so this is not a date format.
+        assert!(!is_date_format("\\d"));
+    }
+
+    /// `strip_format_literals` drops quoted text and bracket groups, except the
+    /// `[h]`/`[m]`/`[s]` elapsed-time groups which are kept.
+    #[test]
+    fn strip_format_literals_keeps_only_elapsed_groups() {
+        assert_eq!(strip_format_literals("\"text\"0.00"), "0.00");
+        assert_eq!(strip_format_literals("[Red]0.00"), "0.00");
+        assert_eq!(strip_format_literals("[h]:mm:ss"), "[h]:mm:ss");
+        assert_eq!(strip_format_literals("[mm]:ss"), "[mm]:ss");
+        // An unterminated quote is dropped to the end.
+        assert_eq!(strip_format_literals("0.00\"open"), "0.00");
+        assert_eq!(strip_format_literals(""), "");
+    }
+
+    /// `builtin_format` maps the fixed ids and refuses the rest.
+    #[test]
+    fn builtin_format_covers_the_fixed_ids() {
+        assert_eq!(builtin_format(0), Some("General"));
+        assert_eq!(builtin_format(1), Some("0"));
+        assert_eq!(builtin_format(2), Some("0.00"));
+        assert_eq!(builtin_format(9), Some("0%"));
+        assert_eq!(builtin_format(14), Some("mm-dd-yy"));
+        assert_eq!(builtin_format(22), Some("m/d/yy h:mm"));
+        assert_eq!(builtin_format(49), Some("@"));
+        // Ids outside the table are custom or unknown.
+        assert_eq!(builtin_format(200), None);
+        assert_eq!(builtin_format(999), None);
+    }
+
     const XLSX_CT: &str = concat!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>",
         "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">",
