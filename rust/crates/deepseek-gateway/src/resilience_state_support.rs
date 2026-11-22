@@ -5836,6 +5836,188 @@ mod unit_tests {
         );
     }
 
+    /// The default policy allows the three routine actions and never allows the
+    /// four that change custody or topology.
+    #[test]
+    fn default_autonomous_policy_allows_only_routine_actions() {
+        let scratch = Scratch::new("auto-default");
+        let policy = read_autonomous_action_policy(&scratch.root);
+        assert_eq!(policy["automationPolicyVersion"], 1);
+        assert_eq!(policy["enabled"], true);
+        for allowed in DEFAULT_ALLOWED_ACTIONS {
+            assert!(
+                is_action_autonomous(allowed, &policy),
+                "{allowed} should be autonomous"
+            );
+        }
+        for refused in NEVER_AUTONOMOUS {
+            assert!(
+                !is_action_autonomous(refused, &policy),
+                "{refused} must never be autonomous"
+            );
+        }
+        assert!(!is_action_autonomous("SOMETHING_ELSE", &policy));
+        // The type is uppercased before every check.
+        assert!(is_action_autonomous("create_repair_job", &policy));
+        assert!(!is_action_autonomous("primary_promotion", &policy));
+    }
+
+    /// A policy file merges over the defaults key by key, and a disabled policy
+    /// refuses everything.
+    #[test]
+    fn a_policy_file_overrides_the_defaults() {
+        let scratch = Scratch::new("auto-file");
+        let dir = scratch.root.join(".resilience-policy");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("autonomous_policy.json"),
+            json!({"allowedActions": ["CREATE_REPAIR_JOB"], "enabled": true}).to_string(),
+        )
+        .unwrap();
+        let policy = read_autonomous_action_policy(&scratch.root);
+        assert_eq!(policy["allowedActions"], json!(["CREATE_REPAIR_JOB"]));
+        assert!(is_action_autonomous("CREATE_REPAIR_JOB", &policy));
+        // START_DR_DRILL was allowed by the defaults but not by this file.
+        assert!(!is_action_autonomous("START_DR_DRILL", &policy));
+
+        std::fs::write(
+            dir.join("autonomous_policy.json"),
+            json!({"enabled": false}).to_string(),
+        )
+        .unwrap();
+        let disabled = read_autonomous_action_policy(&scratch.root);
+        assert_eq!(disabled["enabled"], false);
+        for allowed in DEFAULT_ALLOWED_ACTIONS {
+            assert!(
+                !is_action_autonomous(allowed, &disabled),
+                "{allowed} while disabled"
+            );
+        }
+    }
+
+    /// An explicit `approvalRequired` entry vetoes a default-allowed action, and
+    /// a missing `allowedActions` key falls back to the defaults.
+    #[test]
+    fn approval_required_vetoes_and_missing_allow_list_falls_back() {
+        let scratch = Scratch::new("auto-approval");
+        let dir = scratch.root.join(".resilience-policy");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("autonomous_policy.json"),
+            json!({"approvalRequired": ["CREATE_REPAIR_JOB"]}).to_string(),
+        )
+        .unwrap();
+        let policy = read_autonomous_action_policy(&scratch.root);
+        assert!(!is_action_autonomous("CREATE_REPAIR_JOB", &policy));
+        // The other defaults still apply because `allowedActions` was not set.
+        assert!(is_action_autonomous("START_DR_DRILL", &policy));
+        // An empty allow list replaces the defaults with nothing.
+        std::fs::write(
+            dir.join("autonomous_policy.json"),
+            json!({"allowedActions": []}).to_string(),
+        )
+        .unwrap();
+        let empty = read_autonomous_action_policy(&scratch.root);
+        assert!(!is_action_autonomous("CREATE_REPAIR_JOB", &empty));
+        // A malformed file is ignored and the defaults survive.
+        std::fs::write(dir.join("autonomous_policy.json"), "{not json").unwrap();
+        let fallback = read_autonomous_action_policy(&scratch.root);
+        assert!(is_action_autonomous("CREATE_REPAIR_JOB", &fallback));
+    }
+
+    /// Rate limits start from the documented defaults; a policy file may raise
+    /// individual numbers, and a non-positive or non-integer value is ignored.
+    #[test]
+    fn rate_limits_merge_positive_integers_only() {
+        let scratch = Scratch::new("rates-default");
+        let base = read_action_rate_limits(&scratch.root);
+        assert_eq!(base["maxConcurrentActions"], 3);
+        assert_eq!(base["maxActionsPerHour"], 20);
+        assert_eq!(base["maxConcurrentPerTarget"], 2);
+        assert_eq!(base["maxConcurrentPerPolicy"], 2);
+        assert_eq!(base["maxSimultaneousFailureDomainsTouched"], 1);
+        assert_eq!(base["maxRebalancesPerTargetPerHour"], 5);
+        assert_eq!(base["maxDrillsPerPolicyPerDay"], 2);
+
+        let dir = scratch.root.join(".resilience-policy");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("autonomous_policy.json"),
+            json!({"rateLimits": {
+                "maxConcurrentActions": 7,
+                "maxActionsPerHour": 0,
+                "maxConcurrentPerTarget": -3,
+                "maxConcurrentPerPolicy": "5",
+                "brandNewLimit": 4
+            }})
+            .to_string(),
+        )
+        .unwrap();
+        let merged = read_action_rate_limits(&scratch.root);
+        // A positive integer overrides; zero, negative and non-integers do not.
+        assert_eq!(merged["maxConcurrentActions"], 7);
+        assert_eq!(merged["maxActionsPerHour"], 20);
+        assert_eq!(merged["maxConcurrentPerTarget"], 2);
+        assert_eq!(merged["maxConcurrentPerPolicy"], 2);
+        // A new key is added as-is.
+        assert_eq!(merged["brandNewLimit"], 4);
+    }
+
+    /// The canonical subject keeps only the five identity fields, normalises a
+    /// missing `targetId` from `target`, and uppercases the type.
+    #[test]
+    fn canonical_risk_subject_normalises_identity() {
+        // A non-object yields the empty subject rather than an error.
+        assert_eq!(
+            canonical_risk_subject(&json!("not an object")),
+            json!({"type": "", "policyId": null, "backupId": null, "targetId": null, "failureDomain": null})
+        );
+        assert_eq!(
+            canonical_risk_subject(&json!({
+                "type": "capacity_exhaustion",
+                "policyId": "p1",
+                "backupId": "",
+                "target": "t1",
+                "ignored": "x"
+            })),
+            json!({"type": "CAPACITY_EXHAUSTION", "policyId": "p1", "backupId": null, "targetId": "t1", "failureDomain": null})
+        );
+        // `targetId` wins over `target`.
+        assert_eq!(
+            canonical_risk_subject(&json!({"type": "x", "targetId": "t1", "target": "t2"}))["targetId"],
+            "t1"
+        );
+    }
+
+    /// The subject digest is stable for the same identity and changes with it,
+    /// and a value that is already a subject is hashed as-is.
+    #[test]
+    fn risk_subject_digest_is_stable_and_identity_sensitive() {
+        let a = risk_subject_digest(&json!({"type": "x", "policyId": "p1"}));
+        assert_eq!(a.len(), 64);
+        assert_eq!(
+            a,
+            risk_subject_digest(&json!({"type": "x", "policyId": "p1"}))
+        );
+        assert_ne!(
+            a,
+            risk_subject_digest(&json!({"type": "x", "policyId": "p2"}))
+        );
+        // A subject-shaped object is hashed directly.
+        let subject = json!({"type": "X", "policyId": "p1", "backupId": null, "targetId": null, "failureDomain": null});
+        assert_eq!(risk_subject_digest(&subject), sha256_compact(&subject));
+    }
+
+    /// `new_hex_id` is 64 hex characters and distinct across calls.
+    #[test]
+    fn new_hex_id_is_unique_hex() {
+        let first = new_hex_id();
+        let second = new_hex_id();
+        assert_eq!(first.len(), 64);
+        assert!(first.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_ne!(first, second);
+    }
+
     /// The grade boundaries are inclusive at the lower edge of each band.
     #[test]
     fn resilience_grade_bands_are_inclusive() {
