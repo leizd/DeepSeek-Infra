@@ -1596,6 +1596,66 @@ mod tests {
 #[cfg(test)]
 mod export_helper_tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// A deterministic entropy source: sequential ids and a fixed clock.
+    struct FixedEntropy {
+        seq: AtomicU64,
+    }
+
+    impl FixedEntropy {
+        fn new() -> Self {
+            Self {
+                seq: AtomicU64::new(1),
+            }
+        }
+    }
+
+    impl Entropy for FixedEntropy {
+        fn new_id(&self) -> Result<String, AppError> {
+            Ok(format!("{:016x}", self.seq.fetch_add(1, Ordering::Relaxed)))
+        }
+
+        fn now_millis(&self) -> i64 {
+            1_700_000_000_000
+        }
+    }
+
+    /// `media_markdown` renders one bullet per item and nothing when the list is
+    /// empty; a segment citation is appended when the media has one.
+    #[test]
+    fn media_markdown_renders_bullets_and_citations() {
+        let root = tempfile::tempdir().unwrap();
+        let entropy = FixedEntropy::new();
+        assert_eq!(media_markdown(&[], root.path(), &entropy), "");
+        let items = vec![
+            json!({"mediaId": "m1", "title": "Clip", "type": "video", "status": "ready"}),
+            json!({"mediaId": "m2", "type": "audio", "status": "pending"}),
+            json!({}),
+        ];
+        assert_eq!(
+            media_markdown(&items, root.path(), &entropy),
+            "- Clip `video` id=`m1` status=`ready`\n- Media `audio` id=`m2` status=`pending`\n- Media `` id=`` status=``\n"
+        );
+    }
+
+    /// A media id that fails validation, an absent segments file and a file with
+    /// the wrong shape all yield no segments instead of an error.
+    #[test]
+    fn list_segments_for_media_is_empty_without_a_readable_store() {
+        let root = tempfile::tempdir().unwrap();
+        let entropy = FixedEntropy::new();
+        assert!(list_segments_for_media(root.path(), "", &entropy).is_empty());
+        assert!(list_segments_for_media(root.path(), "absent", &entropy).is_empty());
+        // A store whose `segments` key is not an array is treated as empty.
+        let dir = media_dir(root.path()).join("segments");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("m1.json"), json!({"segments": 1}).to_string()).unwrap();
+        assert!(list_segments_for_media(root.path(), "m1", &entropy).is_empty());
+        // Non-object rows are skipped rather than failing the whole read.
+        std::fs::write(dir.join("m1.json"), json!({"segments": [1, 2]}).to_string()).unwrap();
+        assert!(list_segments_for_media(root.path(), "m1", &entropy).is_empty());
+    }
 
     /// `conversation_markdown` renders the front matter, an optional `Source`
     /// block and one `## Role` section per message. Every expected string below
