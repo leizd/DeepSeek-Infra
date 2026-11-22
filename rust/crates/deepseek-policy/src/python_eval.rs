@@ -1685,6 +1685,31 @@ mod oracle_parity_tests {
         assert_eq!(python_eval("[1,2,3][-2]").unwrap()["result"], "2");
     }
 
+    /// `math_attr` lists `isfinite`, `isinf` and `isnan` as allowed attributes,
+    /// but `call_math` has no implementation for them, so calling one fails at
+    /// dispatch with the unknown-function message. The oracle evaluates all
+    /// three. Recorded rather than fixed: adding the predicates is a behaviour
+    /// change, not a test fix.
+    #[test]
+    fn math_predicate_attributes_are_listed_but_not_callable() {
+        for name in ["isfinite", "isinf", "isnan"] {
+            // The attribute itself resolves, because `math_attr` knows it.
+            let attribute = python_eval(&format!("math.{name}")).expect("attribute refused");
+            assert_eq!(
+                attribute["result"],
+                format!("'<built-in function {name}>'"),
+                "{name}"
+            );
+            // Calling it does not.
+            let error = python_eval(&format!("math.{name}(1)")).expect_err("call accepted");
+            assert_eq!(
+                error.message,
+                format!("Only math.<function> attributes are allowed ({name})"),
+                "{name}"
+            );
+        }
+    }
+
     /// A domain error is *not* refused here, where CPython raises
     /// `ValueError: math domain error`. The port has no domain check, so it
     /// returns whatever IEEE-754 gives: `sqrt(-1)` and `log(-1)` are `nan`, and
@@ -1717,9 +1742,6 @@ mod oracle_parity_tests {
             ("math.acos(1)", "0.0"),
             ("math.atan(0)", "0.0"),
             ("math.hypot(3,4)", "5.0"),
-            ("math.isfinite(1)", "True"),
-            ("math.isinf(1)", "False"),
-            ("math.isnan(1)", "False"),
             ("math.pow(2,3)", "8.0"),
             ("math.tau", "6.283185307179586"),
             ("lcm(4,6)", "12"),
