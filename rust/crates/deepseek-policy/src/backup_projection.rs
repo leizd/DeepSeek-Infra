@@ -2055,13 +2055,16 @@ mod tests {
         assert_eq!(merkle_root(&[]), sha256_bytes(b"\x00"));
         let a = sha256_bytes(b"a");
         let b = sha256_bytes(b"b");
-        assert_eq!(merkle_root(std::slice::from_ref(&a)), a);
-        assert_eq!(merkle_root(&[a.clone(), b.clone()]), merkle_root(&[b, a]));
+        assert_eq!(merkle_root(std::slice::from_ref(&a)), a.clone());
+        assert_eq!(
+            merkle_root(&[a.clone(), b.clone()]),
+            merkle_root(&[b, a.clone()])
+        );
         // An odd level pairs the last leaf with itself rather than dropping it.
         let c = sha256_bytes(b"c");
         assert_eq!(
-            merkle_root(&[a.clone(), sha256_bytes(b"b"), c]),
-            merkle_root(&[sha256_bytes(b"b"), a, sha256_bytes(b"c")])
+            merkle_root(&[a.clone(), sha256_bytes(b"b"), c.clone()]),
+            merkle_root(&[sha256_bytes(b"b"), a, c])
         );
     }
 
