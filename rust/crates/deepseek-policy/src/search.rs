@@ -1578,6 +1578,232 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// `search_cache_key` is the first 32 hex characters of the SHA-256 over the
+    /// whitespace-collapsed lowercase query, so case and spacing do not matter.
+    #[test]
+    fn search_cache_key_normalises_before_hashing() {
+        assert_eq!(
+            search_cache_key("Hello World"),
+            "b94d27b9934d3e08a52e52d7da7dabfa"
+        );
+        assert_eq!(
+            search_cache_key("hello world"),
+            search_cache_key("HELLO   WORLD")
+        );
+        assert_eq!(
+            search_cache_key("  spaced   out  "),
+            "b0399288d6f3a476b26b3e014f6aa85a"
+        );
+        assert_eq!(search_cache_key("CASE"), "bbfcd4160a1e8674dac62292ae48be47");
+        // The empty query still hashes, to the empty-input digest prefix.
+        assert_eq!(search_cache_key(""), "e3b0c44298fc1c149afbf4c8996fb924");
+        assert_eq!(search_cache_key("   "), search_cache_key(""));
+    }
+
+    /// `domain_from_url` takes the whole authority, lowercases it and strips a
+    /// leading `www.`; a URL without a scheme yields nothing.
+    #[test]
+    fn domain_from_url_takes_the_authority() {
+        assert_eq!(domain_from_url("https://WWW.Example.com/p"), "example.com");
+        assert_eq!(domain_from_url("https://a.b"), "a.b");
+        assert_eq!(domain_from_url("https://example.com"), "example.com");
+        // No scheme means no authority.
+        assert_eq!(domain_from_url("no-scheme"), "");
+        assert_eq!(domain_from_url("user:pw@host.com:8443/x"), "");
+        // A port and userinfo stay part of the authority.
+        assert_eq!(
+            domain_from_url("https://user:pw@host.com:8443/x"),
+            "user:pw@host.com:8443"
+        );
+    }
+
+    /// `format_upstream_error` prefers `error.message`, falls through to
+    /// `error.type` when the message is empty, and otherwise returns the raw text
+    /// capped at 500 characters - or a fixed message when that is empty.
+    #[test]
+    fn format_upstream_error_picks_the_message_then_type() {
+        assert_eq!(
+            format_upstream_error("{\"error\":{\"message\":\"boom\"}}"),
+            "boom"
+        );
+        assert_eq!(format_upstream_error("{\"error\":{\"type\":\"t\"}}"), "t");
+        // An empty message must fall through to `type`, not to the raw text.
+        assert_eq!(
+            format_upstream_error("{\"error\":{\"message\":\"\",\"type\":\"x\"}}"),
+            "x"
+        );
+        assert_eq!(format_upstream_error("plain text"), "plain text");
+        assert_eq!(format_upstream_error(""), "DeepSeek API error");
+        // Invalid JSON is passed through as text.
+        assert_eq!(format_upstream_error("{broken"), "{broken");
+        // Long text is truncated at 500 characters.
+        let long = "a".repeat(600);
+        assert_eq!(format_upstream_error(&long).chars().count(), 500);
+    }
+
+    /// `search_domain_filters` adds include-domains for policy and official-docs
+    /// queries only, and is empty otherwise.
+    #[test]
+    fn search_domain_filters_match_the_oracle_lists() {
+        assert_eq!(
+            search_domain_filters("最新政策"),
+            json!({"include_domains": ["gov.cn", "mfa.gov.cn", "ica.gov.sg", "mom.gov.sg", "gov.sg"]})
+        );
+        assert_eq!(
+            search_domain_filters("official docs"),
+            json!({"include_domains": [
+                "docs.python.org", "developer.mozilla.org", "react.dev", "nodejs.org",
+                "docs.tavily.com", "api-docs.deepseek.com", "github.com"
+            ]})
+        );
+        assert_eq!(search_domain_filters("random query"), json!({}));
+        // The match is case-insensitive.
+        assert_eq!(
+            search_domain_filters("OFFICIAL DOCS"),
+            search_domain_filters("official docs")
+        );
+    }
+
+    /// `normalize_search_url` lowercases scheme and host, drops a trailing slash
+    /// from the path but never to empty, and keeps the query.
+    #[test]
+    fn normalize_search_url_normalises_scheme_host_and_path() {
+        assert_eq!(
+            normalize_search_url("HTTPS://Example.COM/Path/?x=1"),
+            "https://example.com/Path?x=1"
+        );
+        assert_eq!(
+            normalize_search_url("https://example.com/"),
+            "https://example.com/"
+        );
+        assert_eq!(
+            normalize_search_url("https://example.com"),
+            "https://example.com/"
+        );
+        // A value without a scheme is only trimmed and lowercased.
+        assert_eq!(normalize_search_url("not a url"), "not a url");
+        assert_eq!(normalize_search_url("  NOT A URL  "), "not a url");
+    }
+
+    /// `normalize_search_response` drops a result without a URL, defaults the
+    /// title to `Untitled`, fills the query from the argument and echoes the
+    /// provider fields.
+    #[test]
+    fn normalize_search_response_keeps_only_addressable_results() {
+        let normalized = normalize_search_response(
+            "fallback",
+            &json!({
+                "answer": "  a  ",
+                "results": [
+                    {"title": "T", "url": "u", "content": "c", "score": 1},
+                    {"title": "no url", "content": "dropped"},
+                    {"title": "   ", "url": "v"}
+                ]
+            }),
+        );
+        // The query comes from the argument when the payload has none.
+        assert_eq!(normalized["query"], "fallback");
+        assert_eq!(normalized["answer"], "a");
+        let results = normalized["results"].as_array().unwrap();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0]["title"], "T");
+        assert_eq!(results[0]["score"], 1);
+        // A blank title becomes `Untitled`.
+        assert_eq!(results[1]["title"], "Untitled");
+        assert_eq!(results[1]["url"], "v");
+        // A payload query wins over the argument.
+        let own = normalize_search_response("fallback", &json!({"query": "own"}));
+        assert_eq!(own["query"], "own");
+        assert!(own["results"].as_array().unwrap().is_empty());
+    }
+
+    /// `should_retry_tavily_error` never retries a missing key or a bad payload,
+    /// and retries a timeout or a retryable upstream status.
+    #[test]
+    fn should_retry_covers_the_policy() {
+        let error = |code: &'static str, status: u16| crate::app_error::AppError {
+            message: "x".to_string(),
+            code,
+            status,
+        };
+        assert!(!should_retry_tavily_error(&error(
+            codes::MISSING_API_KEY,
+            503
+        )));
+        assert!(!should_retry_tavily_error(&error(
+            codes::INVALID_PAYLOAD,
+            400
+        )));
+        assert!(should_retry_tavily_error(&error(
+            codes::UPSTREAM_TIMEOUT,
+            504
+        )));
+        for status in [408, 429, 500, 502, 503, 504] {
+            assert!(
+                should_retry_tavily_error(&error(codes::UPSTREAM_FAILURE, status)),
+                "status {status} should retry"
+            );
+        }
+        for status in [400, 401, 404, 422] {
+            assert!(
+                !should_retry_tavily_error(&error(codes::UPSTREAM_FAILURE, status)),
+                "status {status} should not retry"
+            );
+        }
+    }
+
+    /// `search_result_score` scales the provider score by 20, adds 8 per title
+    /// token and 3 per body token, 10 for a trusted domain, 6 for an
+    /// official-docs hint, and subtracts 8 for an empty snippet.
+    #[test]
+    fn search_result_score_accumulates_the_weights() {
+        // No score, no tokens, a neutral domain and a non-empty snippet.
+        let base = search_result_score(
+            &json!({"title": "t", "url": "https://neutral.test/x", "content": "c"}),
+            "zzz",
+        );
+        assert!((base - 0.0).abs() < f64::EPSILON, "base was {base}");
+        // An empty snippet subtracts 8.
+        assert_eq!(
+            search_result_score(
+                &json!({"title": "t", "url": "https://neutral.test/x", "content": ""}),
+                "zzz"
+            ),
+            -8.0
+        );
+        // The provider score is multiplied by 20.
+        assert_eq!(
+            search_result_score(
+                &json!({"title": "t", "url": "https://neutral.test/x", "content": "c", "score": 0.5}),
+                "zzz"
+            ),
+            10.0
+        );
+        // A title token adds 8 and a body token 3.
+        assert_eq!(
+            search_result_score(
+                &json!({"title": "hello", "url": "https://neutral.test/x", "content": "c"}),
+                "hello"
+            ),
+            8.0 + 3.0
+        );
+        // A trusted domain adds 10.
+        let trusted = search_result_score(
+            &json!({"title": "t", "url": "https://github.com/x", "content": "c"}),
+            "zzz",
+        );
+        assert!(
+            (trusted - 10.0).abs() < f64::EPSILON,
+            "trusted was {trusted}"
+        );
+        // An official-docs hint in the title or URL adds 6.
+        let docs = search_result_score(
+            &json!({"title": "official docs", "url": "https://neutral.test/x", "content": "c"}),
+            "zzz",
+        );
+        assert!((docs - 6.0).abs() < f64::EPSILON, "docs was {docs}");
+    }
+
     #[test]
     fn a_falsy_mode_spelling_is_auto_not_the_rendered_text() {
         // `str(payload.get("searchMode") or "auto")` reads the raw value's

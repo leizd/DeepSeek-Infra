@@ -898,6 +898,106 @@ mod tests {
     use super::*;
     use std::cell::RefCell;
 
+    /// `join_url` resolves an absolute URL, a scheme-relative one, a rooted path
+    /// and a relative path against the base, and preserves the query.
+    #[test]
+    fn join_url_resolves_each_reference_form() {
+        let base = "https://example.com/a/b/page.html?x=1";
+        // An absolute URL replaces everything.
+        assert_eq!(
+            join_url(base, "https://other.test/z"),
+            "https://other.test/z"
+        );
+        assert_eq!(join_url(base, "http://other.test/z"), "http://other.test/z");
+        // A scheme-relative URL keeps the base scheme.
+        assert_eq!(
+            join_url(base, "//cdn.test/lib.js"),
+            "https://cdn.test/lib.js"
+        );
+        // A rooted path replaces the path only.
+        assert_eq!(join_url(base, "/root"), "https://example.com/root");
+        // An empty reference is the base itself, normalised.
+        assert_eq!(join_url(base, "  "), base);
+        // A bare fragment keeps the base path but drops its query, because the
+        // relative branch rebuilds from the directory plus an empty path.
+        assert_eq!(join_url(base, "#frag"), "https://example.com/a/b/page.html");
+    }
+
+    /// `collapse_dot_segments` drops `.` and empty segments, pops on `..`, keeps
+    /// the leading slash and a trailing slash, and never returns an empty path.
+    #[test]
+    fn collapse_dot_segments_normalises() {
+        assert_eq!(collapse_dot_segments("/a/b/c"), "/a/b/c");
+        assert_eq!(collapse_dot_segments("/a/./b"), "/a/b");
+        assert_eq!(collapse_dot_segments("/a/../b"), "/b");
+        assert_eq!(collapse_dot_segments("/a//b"), "/a/b");
+        // A trailing slash survives.
+        assert_eq!(collapse_dot_segments("/a/b/"), "/a/b/");
+        // Relative paths keep no leading slash.
+        assert_eq!(collapse_dot_segments("a/./b"), "a/b");
+        // Popping past the root has nothing to pop.
+        assert_eq!(collapse_dot_segments("/../a"), "/a");
+        // Everything collapsed is still the root.
+        assert_eq!(collapse_dot_segments("/."), "/");
+        assert_eq!(collapse_dot_segments("."), "/");
+    }
+
+    /// `split_host` separates userinfo, host and port, lowercases the host, and
+    /// handles bracketed IPv6 - refusing a malformed bracket and a stray `]`.
+    #[test]
+    fn split_host_parses_authority_forms() {
+        let plain = split_host("Example.COM:8080").unwrap();
+        assert_eq!(plain.hostname, "example.com");
+        assert_eq!(plain.port.unwrap(), Some(8080));
+        assert_eq!(plain.username, "");
+        assert_eq!(plain.password, None);
+
+        // No port at all.
+        let bare = split_host("example.com").unwrap();
+        assert_eq!(bare.hostname, "example.com");
+        assert_eq!(bare.port.unwrap(), None);
+
+        // Userinfo splits at the last `@`, and the password at the first `:`.
+        let creds = split_host("user:secret@example.com").unwrap();
+        assert_eq!(creds.username, "user");
+        assert_eq!(creds.password.as_deref(), Some("secret"));
+        assert_eq!(creds.hostname, "example.com");
+
+        // Bracketed IPv6 with a port.
+        let v6 = split_host("[::1]:443").unwrap();
+        assert_eq!(v6.hostname, "::1");
+        assert_eq!(v6.port.unwrap(), Some(443));
+
+        // A malformed bracket, a non-IPv6 inner value and a stray `]` refuse.
+        assert!(split_host("[::1:443").is_err());
+        assert!(split_host("[not-ipv6]").is_err());
+        assert!(split_host("example.com]").is_err());
+        // A non-numeric port is refused through the inner `Result`.
+        assert!(split_host("example.com:notaport").unwrap().port.is_err());
+    }
+
+    /// `decode_entity` handles named, decimal and hex forms, and refuses an
+    /// unknown name or a code point that is not a `char`.
+    #[test]
+    fn decode_entity_covers_named_decimal_and_hex() {
+        assert_eq!(decode_entity("amp").as_deref(), Some("&"));
+        assert_eq!(decode_entity("lt").as_deref(), Some("<"));
+        assert_eq!(decode_entity("gt").as_deref(), Some(">"));
+        assert_eq!(decode_entity("quot").as_deref(), Some("\""));
+        assert_eq!(decode_entity("apos").as_deref(), Some("'"));
+        assert_eq!(decode_entity("nbsp").as_deref(), Some("\u{a0}"));
+        // Decimal and hex code points, in both cases of the hex marker.
+        assert_eq!(decode_entity("#65").as_deref(), Some("A"));
+        assert_eq!(decode_entity("#x41").as_deref(), Some("A"));
+        assert_eq!(decode_entity("#X41").as_deref(), Some("A"));
+        // Unknown names, bad digits and a surrogate code point all refuse.
+        assert_eq!(decode_entity("bogus"), None);
+        assert_eq!(decode_entity("#notdigits"), None);
+        assert_eq!(decode_entity("#xzz"), None);
+        assert_eq!(decode_entity("#xD800"), None);
+        assert_eq!(decode_entity(""), None);
+    }
+
     fn public_dns(_host: &str, _port: Option<u16>) -> Result<Vec<String>, AppError> {
         Ok(vec!["93.184.216.34".to_string()])
     }
