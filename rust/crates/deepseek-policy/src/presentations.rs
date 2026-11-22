@@ -871,6 +871,132 @@ fn render_pptx(title: &str, subtitle: &str, slides: &[SlideModel], theme: &DeckT
 mod tests {
     use super::*;
     use crate::entropy::SystemEntropy;
+
+    /// The theme is chosen by an MD5 of the title modulo the table length.
+    /// Expected palettes were read from
+    /// `deepseek_infra.infra.tool_runtime.presentations._deck_theme_for`.
+    #[test]
+    fn deck_theme_matches_the_oracle_palettes() {
+        let theme = deck_theme_for("");
+        assert_eq!(theme.cover_bg, "1E3A8A");
+        assert_eq!(theme.accent, "2563EB");
+        assert_eq!(theme.band, "BFDBFE");
+        let theme = deck_theme_for("Quarterly Review");
+        assert_eq!(theme.cover_bg, "0F172A");
+        assert_eq!(theme.accent, "0EA5E9");
+        assert_eq!(theme.band, "BAE6FD");
+        let theme = deck_theme_for("Alpha");
+        assert_eq!(theme.cover_bg, "0F766E");
+        assert_eq!(theme.accent, "0D9488");
+        assert_eq!(theme.band, "99F6E4");
+        // The same title always lands on the same palette.
+        assert_eq!(
+            deck_theme_for("Alpha").cover_bg,
+            deck_theme_for("Alpha").cover_bg
+        );
+        // Every palette is one of the six declared rows.
+        for title in ["", "a", "b", "c", "d", "e", "longer title here"] {
+            let picked = deck_theme_for(title);
+            assert!(
+                DECK_THEMES.iter().any(|row| row[0] == picked.cover_bg
+                    && row[1] == picked.accent
+                    && row[2] == picked.band),
+                "unknown palette for {title:?}"
+            );
+        }
+    }
+
+    /// `normalize_bullets` prefers an explicit `bullets` array, else splits
+    /// `content` into non-empty trimmed lines.
+    #[test]
+    fn normalize_bullets_matches_the_oracle() {
+        assert!(normalize_bullets(&json!({})).is_empty());
+        assert_eq!(
+            normalize_bullets(&json!({"bullets": [" a ", "", "b"]})),
+            vec!["a".to_string(), "b".to_string()]
+        );
+        assert_eq!(
+            normalize_bullets(&json!({"content": "line1\n\n line2 "})),
+            vec!["line1".to_string(), "line2".to_string()]
+        );
+        // A non-array `bullets` falls through to `content`.
+        assert_eq!(
+            normalize_bullets(&json!({"bullets": "notalist", "content": "x"})),
+            vec!["x".to_string()]
+        );
+        // An empty or whitespace-only content yields nothing.
+        assert!(normalize_bullets(&json!({"content": "   "})).is_empty());
+        // A non-object item is empty rather than an error, where the oracle raises.
+        assert!(normalize_bullets(&json!("nope")).is_empty());
+    }
+
+    /// `split_lead_detail` splits on the first delimiter that leaves text on
+    /// both sides, and otherwise returns the whole string as the lead.
+    #[test]
+    fn split_lead_detail_matches_the_oracle() {
+        assert_eq!(
+            split_lead_detail("Lead: Detail"),
+            ("Lead".to_string(), "Detail".to_string())
+        );
+        assert_eq!(
+            split_lead_detail("Lead：详细"),
+            ("Lead".to_string(), "详细".to_string())
+        );
+        assert_eq!(
+            split_lead_detail("Lead - Detail"),
+            ("Lead".to_string(), "Detail".to_string())
+        );
+        assert_eq!(
+            split_lead_detail("No delimiter"),
+            ("No delimiter".to_string(), String::new())
+        );
+        // Surrounding whitespace is trimmed on both halves.
+        assert_eq!(
+            split_lead_detail("  spaced  :  both  "),
+            ("spaced".to_string(), "both".to_string())
+        );
+        // A delimiter with an empty side does not split.
+        assert_eq!(
+            split_lead_detail(": only right"),
+            (": only right".to_string(), String::new())
+        );
+        assert_eq!(
+            split_lead_detail("only left:"),
+            ("only left:".to_string(), String::new())
+        );
+    }
+
+    /// Font fitting steps down once above 58 characters and hard to `small`
+    /// above 90.
+    #[test]
+    fn fit_font_size_steps_down_at_the_oracle_thresholds() {
+        assert_eq!(fit_font_size(&"a".repeat(30), 24, 14), 24);
+        assert_eq!(fit_font_size(&"a".repeat(58), 24, 14), 24);
+        assert_eq!(fit_font_size(&"a".repeat(59), 24, 14), 21);
+        assert_eq!(fit_font_size(&"a".repeat(90), 24, 14), 21);
+        assert_eq!(fit_font_size(&"a".repeat(91), 24, 14), 14);
+        // A `small` that is not 3 below `base` wins at the middle step.
+        assert_eq!(fit_font_size(&"a".repeat(60), 24, 23), 23);
+    }
+
+    /// XML escaping covers exactly the four markup characters.
+    #[test]
+    fn xml_escape_covers_four_characters() {
+        assert_eq!(xml_escape("a&b<c>d\"e"), "a&amp;b&lt;c&gt;d&quot;e");
+        assert_eq!(xml_escape("plain"), "plain");
+        assert_eq!(xml_escape(""), "");
+        // A single quote is left alone; only the double quote is escaped.
+        assert_eq!(xml_escape("it's"), "it's");
+    }
+
+    /// `emu` converts inches at 914400 EMU per inch, rounding half away.
+    #[test]
+    fn emu_converts_inches() {
+        assert_eq!(emu(0.0), 0);
+        assert_eq!(emu(1.0), 914_400);
+        assert_eq!(emu(0.5), 457_200);
+        assert_eq!(emu(-1.0), -914_400);
+    }
     use crate::generated_files::{self, resolve_generated_file};
 
     #[test]
