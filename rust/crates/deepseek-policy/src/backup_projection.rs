@@ -2039,6 +2039,127 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
+    fn record(contributor: &str, path: &str, digest: &str) -> FileRecord {
+        FileRecord {
+            contributor_id: contributor.to_string(),
+            logical_path: path.to_string(),
+            size: 1,
+            sha256: digest.to_string(),
+        }
+    }
+
+    /// An empty leaf set hashes a fixed sentinel, one leaf is its own root, and
+    /// order does not matter because leaves are sorted first.
+    #[test]
+    fn merkle_root_is_order_independent_and_handles_empty() {
+        assert_eq!(merkle_root(&[]), sha256_bytes(b"\x00"));
+        let a = sha256_bytes(b"a");
+        let b = sha256_bytes(b"b");
+        assert_eq!(merkle_root(std::slice::from_ref(&a)), a);
+        assert_eq!(merkle_root(&[a.clone(), b.clone()]), merkle_root(&[b, a]));
+        // An odd level pairs the last leaf with itself rather than dropping it.
+        let c = sha256_bytes(b"c");
+        assert_eq!(
+            merkle_root(&[a.clone(), sha256_bytes(b"b"), c]),
+            merkle_root(&[sha256_bytes(b"b"), a, sha256_bytes(b"c")])
+        );
+    }
+
+    /// The snapshot root is the Merkle root of the per-file leaf digests.
+    #[test]
+    fn snapshot_root_follows_the_leaf_digests() {
+        let files = vec![
+            record("proj-a", "payload/projects/a/one.txt", &sha256_bytes(b"1")),
+            record("proj-b", "payload/projects/b/two.txt", &sha256_bytes(b"2")),
+        ];
+        let expected = merkle_root(
+            &files
+                .iter()
+                .map(FileRecord::leaf_digest)
+                .collect::<Vec<_>>(),
+        );
+        assert_eq!(snapshot_root(&files), expected);
+        assert_eq!(snapshot_root(&[]), merkle_root(&[]));
+        // Changing a digest changes the root.
+        let mut changed = files.clone();
+        changed[0].sha256 = sha256_bytes(b"x");
+        assert_ne!(snapshot_root(&changed), snapshot_root(&files));
+    }
+
+    /// Only paths three segments deep under `payload/projects/<selected>` count.
+    #[test]
+    fn only_selected_project_paths_are_covered() {
+        let selected: HashSet<String> = ["p1".to_string()].into_iter().collect();
+        assert!(under_selected_project(
+            "payload/projects/p1/file.txt",
+            &selected
+        ));
+        assert!(under_selected_project(
+            "payload/projects/p1/a/b.txt",
+            &selected
+        ));
+        // Another project, a shallower path, a different root and a bare segment
+        // are all outside.
+        assert!(!under_selected_project(
+            "payload/projects/p2/file.txt",
+            &selected
+        ));
+        assert!(!under_selected_project("payload/projects/p1", &selected));
+        assert!(!under_selected_project(
+            "other/projects/p1/file.txt",
+            &selected
+        ));
+        assert!(!under_selected_project("payload/p1/file.txt", &selected));
+        assert!(!under_selected_project("", &selected));
+    }
+
+    /// A manifest without a `files` array is empty; a malformed entry is refused.
+    #[test]
+    fn manifest_files_parses_and_refuses() {
+        assert!(manifest_files(&json!({})).unwrap().is_empty());
+        assert!(manifest_files(&json!({"files": []})).unwrap().is_empty());
+        let parsed = manifest_files(&json!({"files": [{
+            "contributorId": "c1", "path": "p/a.txt", "size": 3, "sha256": "abc"
+        }]}))
+        .unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].logical_path, "p/a.txt");
+        // A non-object entry and a missing path are both invalid inventories.
+        for bad in [json!({"files": [1]}), json!({"files": [{"size": 1}]})] {
+            let error = manifest_files(&bad).unwrap_err();
+            assert_eq!(error.message, "Chain package file inventory is invalid");
+        }
+    }
+
+    /// Contributors come from the final files plus the chain tip, which adds the
+    /// frontend and stateless-MCP markers when it carries them.
+    #[test]
+    fn known_contributors_include_the_chain_tip_markers() {
+        let files = vec![record(
+            "proj-a",
+            "payload/projects/a/one.txt",
+            &sha256_bytes(b"1"),
+        )];
+        let chain = vec![ChainPackage {
+            snapshot_kind: "full".to_string(),
+            files: files.clone(),
+            root_digest: String::new(),
+            operations: None,
+            pack_index: None,
+            frontend: true,
+            contributor_ids: ["proj-tip".to_string()].into_iter().collect(),
+            external_mcp: true,
+            manifest: json!({}),
+        }];
+        let known = known_contributors(&chain, &files);
+        assert!(known.contains("proj-a"));
+        assert!(known.contains("proj-tip"));
+        assert!(known.contains(FRONTEND_CONTRIBUTOR));
+        assert!(known.contains(STATELESS_MCP_CONTRIBUTOR));
+        // Without a chain tip only the file contributors are known.
+        assert_eq!(known_contributors(&[], &files).len(), 1);
+    }
+
     #[test]
     fn selection_normalization_and_digest_match_oracle() {
         assert!(normalize_selection(None).unwrap().is_none());
