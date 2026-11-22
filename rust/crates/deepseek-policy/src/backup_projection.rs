@@ -2322,10 +2322,12 @@ mod tests {
         // The output is needed at the tip and produced by the incremental layer.
         assert!(needed_after[1].contains("b.txt"));
         assert!(produced_by_layer[1].contains("b.txt"));
-        // The parent it depends on becomes needed one layer earlier and is
-        // produced by the baseline.
+        // The parent it depends on becomes needed one layer earlier. The walk
+        // runs `k` from the tip down to 1 and never visits layer 0, so the
+        // baseline produces nothing here - its files are already on disk and are
+        // not "produced" by any delta.
         assert!(needed_after[0].contains("a.txt"));
-        assert!(produced_by_layer[0].contains("a.txt"));
+        assert!(produced_by_layer[0].is_empty());
     }
 
     /// An empty leaf set hashes a fixed sentinel, one leaf is its own root, and

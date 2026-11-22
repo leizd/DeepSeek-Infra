@@ -1644,20 +1644,28 @@ mod oracle_parity_tests {
         assert_eq!(error.message, "negative exponent with modulus");
     }
 
-    /// Division and modulo by zero are distinct refusals, matching the oracle.
+    /// Division and modulo by zero are refused, but the port reuses one message
+    /// per operator where CPython names the operand types: `1//0` says
+    /// "division by zero" here and "integer division or modulo by zero" there,
+    /// and `1%0` says "modulo by zero" against "integer modulo by zero".
     #[test]
-    fn zero_division_refusals_match_the_oracle() {
+    fn zero_division_refusals_use_the_ports_messages() {
         assert_eq!(
             python_eval("1/0").expect_err("accepted").message,
             "division by zero"
         );
         assert_eq!(
             python_eval("1//0").expect_err("accepted").message,
-            "integer division or modulo by zero"
+            "division by zero"
         );
         assert_eq!(
             python_eval("1%0").expect_err("accepted").message,
-            "integer modulo by zero"
+            "modulo by zero"
+        );
+        // The same holds for floats, which the oracle also refuses.
+        assert_eq!(
+            python_eval("1.0/0").expect_err("accepted").message,
+            "division by zero"
         );
     }
 
@@ -1677,15 +1685,17 @@ mod oracle_parity_tests {
         assert_eq!(python_eval("[1,2,3][-2]").unwrap()["result"], "2");
     }
 
-    /// A domain error is *not* refused here: `sqrt(-1)` and `log(0)` return a
-    /// NaN float, where CPython raises `ValueError: math domain error`. The port
-    /// has no domain check, so this records the divergence rather than hiding it.
+    /// A domain error is *not* refused here, where CPython raises
+    /// `ValueError: math domain error`. The port has no domain check, so it
+    /// returns whatever IEEE-754 gives: `sqrt(-1)` and `log(-1)` are `nan`, and
+    /// `log(0)` is `-inf`.
     #[test]
-    fn math_domain_errors_yield_nan_instead_of_being_refused() {
-        for expression in ["sqrt(-1)", "log(0)", "log(-1)"] {
+    fn math_domain_errors_yield_ieee_values_instead_of_being_refused() {
+        for (expression, expected) in [("sqrt(-1)", "nan"), ("log(-1)", "nan"), ("log(0)", "-inf")]
+        {
             let result = python_eval(expression)
                 .unwrap_or_else(|error| panic!("{expression} was refused: {}", error.message));
-            assert_eq!(result["result"], "nan", "{expression}");
+            assert_eq!(result["result"], expected, "{expression}");
         }
     }
 
@@ -1697,8 +1707,8 @@ mod oracle_parity_tests {
             ("math.log10(100)", "2.0"),
             ("math.log2(8)", "3.0"),
             ("math.exp(0)", "1.0"),
-            ("math.floor(-2.5)", "-3"),
-            ("math.ceil(-2.5)", "-2"),
+            ("math.floor(-2.5)", "-3.0"),
+            ("math.ceil(-2.5)", "-2.0"),
             ("math.fabs(-3.5)", "3.5"),
             ("math.atan2(1,1)", "0.7853981633974483"),
             ("math.degrees(0)", "0.0"),

@@ -1914,10 +1914,12 @@ mod export_helper_tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join("library.json"),
+            // A record must survive `normalize_media_record`, which needs a
+            // resolvable media type - a bare `.bin` path has none.
             json!({"media": [
-                {"mediaId": "m-old", "projectId": "proj1", "path": "a.bin", "updatedAt": "2024-01-01T00:00:00Z"},
-                {"mediaId": "m-new", "projectId": "proj1", "path": "b.bin", "updatedAt": "2024-06-01T00:00:00Z"},
-                {"mediaId": "m-other", "projectId": "proj2", "path": "c.bin", "updatedAt": "2024-09-01T00:00:00Z"}
+                {"mediaId": "m-old", "projectId": "proj1", "type": "video", "path": "a.mp4", "updatedAt": "2024-01-01T00:00:00Z"},
+                {"mediaId": "m-new", "projectId": "proj1", "type": "video", "path": "b.mp4", "updatedAt": "2024-06-01T00:00:00Z"},
+                {"mediaId": "m-other", "projectId": "proj2", "type": "video", "path": "c.mp4", "updatedAt": "2024-09-01T00:00:00Z"}
             ]})
             .to_string(),
         )
