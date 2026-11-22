@@ -1478,6 +1478,110 @@ mod tests {
         assert_eq!(error.message, "Invalid pptx file");
     }
 
+    const XLSX_CT: &str = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>",
+        "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">",
+        "<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>",
+        "<Default Extension=\"xml\" ContentType=\"application/xml\"/>",
+        "<Override PartName=\"/xl/workbook.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml\"/>",
+        "<Override PartName=\"/xl/worksheets/sheet1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/>",
+        "<Override PartName=\"/xl/sharedStrings.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml\"/>",
+        "</Types>"
+    );
+
+    const XLSX_WB: &str = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>",
+        "<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" ",
+        "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">",
+        "<sheets><sheet name=\"Data\" sheetId=\"1\" r:id=\"rId1\"/></sheets></workbook>"
+    );
+
+    const XLSX_RELS: &str = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>",
+        "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">",
+        "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet1.xml\"/>",
+        "<Relationship Id=\"rId2\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings\" Target=\"sharedStrings.xml\"/>",
+        "</Relationships>"
+    );
+
+    const XLSX_SS: &str = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>",
+        "<sst xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" count=\"1\" uniqueCount=\"1\">",
+        "<si><t>Hello</t></si></sst>"
+    );
+
+    const XLSX_SHEET: &str = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>",
+        "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheetData>",
+        "<row r=\"1\"><c r=\"A1\" t=\"s\"><v>0</v></c><c r=\"B1\"><v>42</v></c></row>",
+        "<row r=\"2\"><c r=\"A2\" t=\"str\"><v>text</v></c></row>",
+        "</sheetData></worksheet>"
+    );
+
+    fn xlsx_parts(content: &str, workbook: &str, rels: &str, shared: &str, sheet: &str) -> Vec<u8> {
+        office_zip(&[
+            ("[Content_Types].xml", content.as_bytes()),
+            ("xl/workbook.xml", workbook.as_bytes()),
+            ("xl/_rels/workbook.xml.rels", rels.as_bytes()),
+            ("xl/sharedStrings.xml", shared.as_bytes()),
+            ("xl/worksheets/sheet1.xml", sheet.as_bytes()),
+        ])
+    }
+
+    /// Measured against `deepseek_infra.infra.rag.files.extract_xlsx_text`, which
+    /// returns `'Sheet: Data\n行 1\tA1=Hello\tB1=42\n行 2\tA2=text'`.
+    #[test]
+    fn xlsx_sheet_rows_match_the_oracle() {
+        let data = xlsx_parts(XLSX_CT, XLSX_WB, XLSX_RELS, XLSX_SS, XLSX_SHEET);
+        assert_eq!(
+            extract_xlsx_text(&data).unwrap(),
+            "Sheet: Data\n行 1\tA1=Hello\tB1=42\n行 2\tA2=text"
+        );
+    }
+
+    /// A sheet whose rows are all empty contributes nothing.
+    #[test]
+    fn xlsx_without_cell_data_yields_empty_text() {
+        let empty_sheet = concat!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>",
+            "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheetData/></worksheet>"
+        );
+        let data = xlsx_parts(XLSX_CT, XLSX_WB, XLSX_RELS, XLSX_SS, empty_sheet);
+        assert_eq!(extract_xlsx_text(&data).unwrap(), "");
+    }
+
+    /// Every required part is checked: a package missing any of them is an
+    /// invalid workbook rather than an empty one.
+    #[test]
+    fn xlsx_refuses_incomplete_packages() {
+        // Not a ZIP at all.
+        assert_eq!(
+            extract_xlsx_text(b"not a zip").unwrap_err().message,
+            "Invalid xlsx file"
+        );
+        // Missing `[Content_Types].xml`.
+        let no_types = office_zip(&[("xl/workbook.xml", XLSX_WB.as_bytes())]);
+        assert_eq!(
+            extract_xlsx_text(&no_types).unwrap_err().message,
+            "Invalid xlsx file"
+        );
+        // Content types without a workbook override.
+        let no_workbook_part = office_zip(&[
+            ("[Content_Types].xml", br#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>"# as &[u8]),
+            ("xl/workbook.xml", XLSX_WB.as_bytes()),
+        ]);
+        assert_eq!(
+            extract_xlsx_text(&no_workbook_part).unwrap_err().message,
+            "Invalid xlsx file"
+        );
+        // The declared workbook is not present in the archive.
+        let missing_workbook = office_zip(&[("[Content_Types].xml", XLSX_CT.as_bytes())]);
+        assert_eq!(
+            extract_xlsx_text(&missing_workbook).unwrap_err().message,
+            "Invalid xlsx file"
+        );
+    }
+
     fn container_opf() -> Vec<u8> {
         b"<?xml version=\"1.0\"?><package/>".to_vec()
     }
