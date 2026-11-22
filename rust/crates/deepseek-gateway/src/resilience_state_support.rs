@@ -6018,6 +6018,35 @@ mod unit_tests {
         assert_ne!(first, second);
     }
 
+    /// With no registered targets there is nothing to inventory, so the capture
+    /// either succeeds with empty parts or reports the named reason - it never
+    /// panics, and a success always carries the five component digests.
+    #[test]
+    fn mutation_state_capture_is_total_on_an_empty_workspace() {
+        let scratch = Scratch::new("mutation-empty");
+        match capture_mutation_state(&scratch.root) {
+            Ok(state) => {
+                assert_eq!(state["targetIds"].as_array().unwrap().len(), 0);
+                assert_eq!(state["storageInventory"].as_array().unwrap().len(), 0);
+                assert_eq!(state["stateDigest"].as_str().unwrap().len(), 64);
+                for part in ["storage", "authority", "actionJournal", "policy", "target"] {
+                    assert_eq!(
+                        state["digests"][part].as_str().unwrap().len(),
+                        64,
+                        "{part} digest"
+                    );
+                }
+            }
+            Err(reason) => {
+                // The only acceptable failure is the named unavailability path.
+                assert!(
+                    reason.starts_with("mutation state unavailable:"),
+                    "unexpected error: {reason}"
+                );
+            }
+        }
+    }
+
     /// The grade boundaries are inclusive at the lower edge of each band.
     #[test]
     fn resilience_grade_bands_are_inclusive() {
