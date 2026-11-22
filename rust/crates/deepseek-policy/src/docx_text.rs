@@ -1341,7 +1341,11 @@ mod tests {
     use zip::write::FileOptions;
     use zip::{CompressionMethod, ZipWriter};
 
-    use super::{extract_docx_text, extract_epub_text, extract_pptx_text, extract_xlsx_text};
+    use super::{
+        builtin_format, extract_docx_text, extract_epub_text, extract_pptx_text, extract_xlsx_text,
+        format_excel_timedelta, from_excel, is_date_format, parse_hms, python_float_str,
+        strip_format_literals,
+    };
 
     const W_NS: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 
