@@ -5622,6 +5622,167 @@ mod unit_tests {
         assert_eq!(policies[0]["policyId"], "p1");
     }
 
+    /// An empty risk snapshot produces a PROPOSED plan with no actions, echoing
+    /// the digest and overall risk it was given.
+    #[test]
+    fn an_empty_risk_snapshot_plans_nothing() {
+        let scratch = Scratch::new("plan-empty");
+        seed_control(&scratch.root, &[]);
+        let plan = plan_resilience_actions_logic(
+            &scratch.root,
+            &json!({"riskDigest": HEAD_DIGEST, "overallRisk": "healthy", "risks": []}),
+            false,
+            "2024-01-01T00:00:00Z",
+        )
+        .unwrap();
+        assert_eq!(plan["planVersion"], 1);
+        assert_eq!(plan["status"], "PROPOSED");
+        assert_eq!(plan["inputRiskDigest"], HEAD_DIGEST);
+        assert_eq!(plan["overallRisk"], "healthy");
+        assert_eq!(plan["generatedAt"], "2024-01-01T00:00:00Z");
+        assert!(plan["actions"].as_array().unwrap().is_empty());
+        // The plan id is a 16-hex-character suffix and the digest is 64 hex.
+        let plan_id = plan["planId"].as_str().unwrap();
+        assert!(plan_id.starts_with("plan_"), "{plan_id}");
+        assert_eq!(plan_id.len(), "plan_".len() + 16);
+        assert_eq!(plan["planDigest"].as_str().unwrap().len(), 64);
+    }
+
+    /// A risk whose severity is `healthy` or `low` never produces an action,
+    /// because there is nothing to remediate.
+    #[test]
+    fn healthy_and_low_risks_are_skipped() {
+        let scratch = Scratch::new("plan-skip");
+        seed_control(&scratch.root, &[]);
+        for severity in ["healthy", "low", "LOW", "Healthy"] {
+            let plan = plan_resilience_actions_logic(
+                &scratch.root,
+                &json!({
+                    "overallRisk": severity,
+                    "risks": [{"type": "CAPACITY_EXHAUSTION", "target": "t1", "severity": severity}]
+                }),
+                false,
+                "2024-01-01T00:00:00Z",
+            )
+            .unwrap();
+            assert!(
+                plan["actions"].as_array().unwrap().is_empty(),
+                "severity {severity} produced an action"
+            );
+        }
+    }
+
+    /// The overall risk falls back to `healthy` and the digest to empty when the
+    /// snapshot omits them.
+    #[test]
+    fn plan_defaults_the_snapshot_fields() {
+        let scratch = Scratch::new("plan-defaults");
+        seed_control(&scratch.root, &[]);
+        let plan =
+            plan_resilience_actions_logic(&scratch.root, &json!({}), false, "2024-01-01T00:00:00Z")
+                .unwrap();
+        assert_eq!(plan["overallRisk"], "healthy");
+        assert_eq!(plan["inputRiskDigest"], "");
+        assert!(plan["actions"].as_array().unwrap().is_empty());
+        // Two plans never share an id.
+        let other =
+            plan_resilience_actions_logic(&scratch.root, &json!({}), false, "2024-01-01T00:00:00Z")
+                .unwrap();
+        assert_ne!(plan["planId"], other["planId"]);
+    }
+
+    /// A repair-type risk becomes an action carrying the risk subject, the
+    /// A critical authority risk becomes a `PRIMARY_PROMOTION` action that always
+    /// needs approval. This branch reads no DR database, so the plan is decided
+    /// entirely by the risk snapshot.
+    #[test]
+    fn a_critical_authority_risk_becomes_a_promotion_action() {
+        let scratch = Scratch::new("plan-authority");
+        seed_control(&scratch.root, &[]);
+        let snapshot = json!({
+            "riskDigest": HEAD_DIGEST,
+            "overallRisk": "critical",
+            "risks": [{
+                "type": "AUTHORITY_DEGRADATION",
+                "severity": "critical",
+                "confidence": "verified",
+                "evidence": ["authority-degraded"]
+            }]
+        });
+        let plan =
+            plan_resilience_actions_logic(&scratch.root, &snapshot, false, "2024-01-01T00:00:00Z")
+                .unwrap();
+        let actions = plan["actions"].as_array().unwrap();
+        assert_eq!(actions.len(), 1, "expected one action: {plan}");
+        let action = &actions[0];
+        assert_eq!(action["type"], "PRIMARY_PROMOTION");
+        assert_eq!(
+            action["reason"],
+            "authority-fail-closed-intervention-required"
+        );
+        // Promotion is never autonomous, so the plan always demands approval.
+        assert_eq!(action["requiresApproval"], true);
+        assert_eq!(action["severityBefore"], "critical");
+        assert_eq!(action["expectedEffect"], "severity-decrease");
+        assert!(action["actionId"].as_str().unwrap().starts_with("act_"));
+        // A plan with an action digests differently from an empty one.
+        let empty = plan_resilience_actions_logic(
+            &scratch.root,
+            &json!({"riskDigest": HEAD_DIGEST, "overallRisk": "healthy", "risks": []}),
+            false,
+            "2024-01-01T00:00:00Z",
+        )
+        .unwrap();
+        assert_ne!(plan["planDigest"], empty["planDigest"]);
+        // `blocked` is the other severity this branch accepts.
+        let blocked = plan_resilience_actions_logic(
+            &scratch.root,
+            &json!({
+                "overallRisk": "blocked",
+                "risks": [{"type": "AUTHORITY_DEGRADATION", "severity": "blocked"}]
+            }),
+            false,
+            "2024-01-01T00:00:00Z",
+        )
+        .unwrap();
+        assert_eq!(blocked["actions"].as_array().unwrap().len(), 1);
+        // A `warning` authority risk is below the threshold and plans nothing.
+        let warning = plan_resilience_actions_logic(
+            &scratch.root,
+            &json!({
+                "overallRisk": "warning",
+                "risks": [{"type": "AUTHORITY_DEGRADATION", "severity": "warning"}]
+            }),
+            false,
+            "2024-01-01T00:00:00Z",
+        )
+        .unwrap();
+        assert!(
+            warning["actions"].as_array().unwrap().is_empty(),
+            "{warning}"
+        );
+    }
+
+    /// A risk type the planner has no recipe for contributes nothing rather than
+    /// failing the whole plan.
+    #[test]
+    fn an_unknown_risk_type_is_ignored() {
+        let scratch = Scratch::new("plan-unknown");
+        seed_control(&scratch.root, &[]);
+        let plan = plan_resilience_actions_logic(
+            &scratch.root,
+            &json!({
+                "overallRisk": "warning",
+                "risks": [{"type": "NOT_A_REAL_RISK", "severity": "critical"}]
+            }),
+            false,
+            "2024-01-01T00:00:00Z",
+        )
+        .unwrap();
+        assert!(plan["actions"].as_array().unwrap().is_empty(), "{plan}");
+        assert_eq!(plan["status"], "PROPOSED");
+    }
+
     /// A target row is visible through `list_control_targets`, which is what the
     /// capacity and risk walks enumerate.
     #[test]
