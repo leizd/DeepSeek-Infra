@@ -5792,6 +5792,50 @@ mod unit_tests {
         assert_eq!(wave["runningActionIds"], json!(["r1"]));
     }
 
+    /// An empty workspace has one implicit `managed-local` target with no
+    /// capacity sample, which drives the whole capacity/horizon walk without any
+    /// seeded state.
+    #[test]
+    fn risk_snapshot_of_an_empty_workspace_reports_full_coverage() {
+        let scratch = Scratch::new("risk-empty");
+        let snapshot = evaluate_risk_snapshot_readonly(
+            &scratch.root,
+            false,
+            1_700_000_000,
+            "2024-01-01T00:00:00Z",
+        )
+        .unwrap();
+        // The version and the risk list are always present.
+        assert_eq!(snapshot["riskSnapshotVersion"], 1);
+        let risks = snapshot["risks"].as_array().expect("risks array");
+        // The verdict is one of the five rungs. The exact value is not
+        // asserted because it depends on which inputs the walk could read.
+        let overall = snapshot["overallRisk"].as_str().expect("overall risk");
+        assert!(
+            ["healthy", "warning", "degraded", "critical", "blocked"].contains(&overall),
+            "unexpected overall risk: {overall}"
+        );
+        assert!(risks.iter().all(|r| r.is_object()));
+        // Every risk kind reports its coverage, and the digest is 64 hex chars.
+        let coverage = snapshot["coverage"].as_object().expect("coverage map");
+        for kind in [
+            "CAPACITY_EXHAUSTION",
+            "REPLICA_LAG",
+            "FAILURE_DOMAIN_VIOLATION",
+            "DR_STALENESS",
+            "RESTORE_LATENCY_BREACH",
+            "REPAIR_BACKLOG",
+            "AUTHORITY_DEGRADATION",
+        ] {
+            assert_eq!(coverage[kind]["complete"], true, "{kind} coverage");
+        }
+        assert_eq!(snapshot["riskDigest"].as_str().expect("digest").len(), 64);
+        assert_eq!(
+            compute_risk_digest(&snapshot),
+            snapshot["riskDigest"].as_str().unwrap()
+        );
+    }
+
     /// The grade boundaries are inclusive at the lower edge of each band.
     #[test]
     fn resilience_grade_bands_are_inclusive() {
