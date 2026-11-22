@@ -1621,6 +1621,62 @@ mod export_helper_tests {
         }
     }
 
+    /// `project_markdown` is a pure renderer once `exportedAt` is supplied, so
+    /// the clock never enters these assertions. Every expected string was
+    /// produced by `deepseek_infra.infra.workspace.exports.project_markdown`.
+    #[test]
+    fn project_markdown_matches_the_oracle() {
+        let root = tempfile::tempdir().unwrap();
+        let entropy = FixedEntropy::new();
+        // Empty metadata falls back to the `Project` title and an empty id.
+        assert_eq!(
+            project_markdown(
+                &json!({"metadata": {}, "exportedAt": "2024-01-01T00:00:00Z"}),
+                root.path(),
+                &entropy
+            ),
+            "# Project\n\n- Project ID: ``\n- Exported: `2024-01-01T00:00:00Z`\n"
+        );
+        // A description is trimmed and emitted as its own section.
+        assert_eq!(
+            project_markdown(
+                &json!({
+                    "metadata": {"name": "Proj", "projectId": "p1", "description": "  Desc  "},
+                    "exportedAt": "2024-01-01T00:00:00Z"
+                }),
+                root.path(),
+                &entropy
+            ),
+            "# Proj\n\n- Project ID: `p1`\n- Exported: `2024-01-01T00:00:00Z`\n\n## Description\n\nDesc\n"
+        );
+        // `id` is the fallback, and each conversation becomes a relative link.
+        assert_eq!(
+            project_markdown(
+                &json!({
+                    "metadata": {"id": "p2"},
+                    "exportedAt": "2024-01-01T00:00:00Z",
+                    "conversations": [{"title": "C1", "conversationId": "c1"}]
+                }),
+                root.path(),
+                &entropy
+            ),
+            "# Project\n\n- Project ID: `p2`\n- Exported: `2024-01-01T00:00:00Z`\n\n## Conversations\n\n- [C1](conversations/conversation-c1.md)\n"
+        );
+        // Saved items render through `saved_items_markdown`.
+        assert_eq!(
+            project_markdown(
+                &json!({
+                    "metadata": {},
+                    "exportedAt": "2024-01-01T00:00:00Z",
+                    "savedItems": [{"title": "S", "type": "note"}]
+                }),
+                root.path(),
+                &entropy
+            ),
+            "# Project\n\n- Project ID: ``\n- Exported: `2024-01-01T00:00:00Z`\n\n## Saved Items\n\n### S\n\n- Type: `note`\n- Saved ID: ``\n"
+        );
+    }
+
     /// `media_markdown` renders one bullet per item and nothing when the list is
     /// empty; a segment citation is appended when the media has one.
     #[test]

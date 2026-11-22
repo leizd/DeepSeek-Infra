@@ -3890,6 +3890,76 @@ mod unit_tests {
         assert_eq!(holder, "new");
     }
 
+    /// `check_action_freshness` is the TOCTOU gate. The two branches that need
+    /// no target registry are covered here; the rebalance branch is left to the
+    /// route tests because it reads the registered-target store.
+    #[test]
+    fn action_freshness_matches_the_oracle_gate() {
+        // A repair job needs an open replica risk for its own policy.
+        let cleared = check_action_freshness(
+            &json!({"type": "CREATE_REPAIR_JOB", "parameters": {"policyId": "p1"}}),
+            &json!({"risks": []}),
+        )
+        .unwrap_err();
+        assert_eq!(cleared, (true, "replica-risk-already-cleared".to_string()));
+        // Any other policy's risk does not count.
+        let other_policy = check_action_freshness(
+            &json!({"type": "CREATE_REPAIR_JOB", "parameters": {"policyId": "p1"}}),
+            &json!({"risks": [{"policyId": "p2", "type": "REPLICA_LAG", "severity": "critical"}]}),
+        )
+        .unwrap_err();
+        assert_eq!(
+            other_policy,
+            (true, "replica-risk-already-cleared".to_string())
+        );
+        // A healthy or low severity is not an open risk either.
+        for severity in ["healthy", "low", "LOW"] {
+            let err = check_action_freshness(
+                &json!({"type": "CREATE_REPAIR_JOB", "parameters": {"policyId": "p1"}}),
+                &json!({"risks": [{"policyId": "p1", "type": "REPLICA_LAG", "severity": severity}]}),
+            )
+            .unwrap_err();
+            assert_eq!(
+                err,
+                (true, "replica-risk-already-cleared".to_string()),
+                "{severity}"
+            );
+        }
+        // An open risk of either accepted type passes the gate.
+        for risk_type in ["REPLICA_LAG", "FAILURE_DOMAIN_VIOLATION"] {
+            assert!(check_action_freshness(
+                &json!({"type": "CREATE_REPAIR_JOB", "parameters": {"policyId": "p1"}}),
+                &json!({"risks": [{"policyId": "p1", "type": risk_type, "severity": "critical"}]}),
+            )
+            .is_ok());
+        }
+        // A DR drill needs an open DR_STALENESS risk.
+        let no_dr =
+            check_action_freshness(&json!({"type": "START_DR_DRILL"}), &json!({"risks": []}))
+                .unwrap_err();
+        assert_eq!(no_dr, (true, "dr-staleness-already-cleared".to_string()));
+        let healthy_dr = check_action_freshness(
+            &json!({"type": "START_DR_DRILL"}),
+            &json!({"risks": [{"type": "DR_STALENESS", "severity": "low"}]}),
+        )
+        .unwrap_err();
+        assert_eq!(
+            healthy_dr,
+            (true, "dr-staleness-already-cleared".to_string())
+        );
+        assert!(
+            check_action_freshness(
+                &json!({"type": "START_DR_DRILL"}),
+                &json!({"risks": [{"type": "DR_STALENESS", "severity": "warning"}]}),
+            )
+            .is_ok()
+        );
+        // Any other action type has no gate.
+        assert!(check_action_freshness(&json!({"type": "OTHER"}), &json!({"risks": []})).is_ok());
+        // A missing `risks` key is an empty list, not an error.
+        assert!(check_action_freshness(&json!({"type": "OTHER"}), &json!({})).is_ok());
+    }
+
     /// `ensure_locks_schema` is idempotent, so repeated calls are safe.
     #[test]
     fn locks_schema_is_idempotent() {
