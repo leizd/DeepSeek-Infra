@@ -1695,9 +1695,12 @@ mod oracle_parity_tests {
         for name in ["isfinite", "isinf", "isnan"] {
             // The attribute itself resolves, because `math_attr` knows it.
             let attribute = python_eval(&format!("math.{name}")).expect("attribute refused");
+            // The attribute renders without quotes because `py_repr` has an
+            // explicit arm for text that starts with "<built-in function ",
+            // which returns it verbatim instead of quoting it like a string.
             assert_eq!(
                 attribute["result"],
-                format!("'<built-in function {name}>'"),
+                format!("<built-in function {name}>"),
                 "{name}"
             );
             // Calling it does not.
