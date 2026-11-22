@@ -2419,3 +2419,80 @@ pub(crate) fn run_next_wave_db(
         "actions": action_results,
     }))
 }
+
+#[cfg(test)]
+mod unit_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// The schedule digest drops any previous `scheduleDigest`, folds in the
+    /// authority head when one is supplied, and is otherwise stable.
+    #[test]
+    fn schedule_digest_is_stable_and_excludes_itself() {
+        let schedule = json!({"scheduleId": "s1", "planDigest": "p1"});
+        let base = compute_schedule_digest(&schedule, None);
+        assert_eq!(base.len(), 64);
+        assert_eq!(base, compute_schedule_digest(&schedule, None));
+        // A stored digest does not feed back into the next computation.
+        let with_self = json!({"scheduleId": "s1", "planDigest": "p1", "scheduleDigest": base});
+        assert_eq!(compute_schedule_digest(&with_self, None), base);
+        // The authority head is part of the identity.
+        let bound = compute_schedule_digest(&schedule, Some("head-1"));
+        assert_ne!(bound, base);
+        assert_eq!(bound, compute_schedule_digest(&schedule, Some("head-1")));
+        assert_ne!(bound, compute_schedule_digest(&schedule, Some("head-2")));
+        // Key order does not matter.
+        let reordered = json!({"planDigest": "p1", "scheduleId": "s1"});
+        assert_eq!(compute_schedule_digest(&reordered, None), base);
+        // A non-object schedule digests as the empty object.
+        assert_eq!(
+            compute_schedule_digest(&json!("not an object"), None),
+            compute_schedule_digest(&json!({}), None)
+        );
+    }
+
+    /// Traffic classes map one-to-one onto the fixed priorities and refuse
+    /// anything else.
+    #[test]
+    fn traffic_class_names_cover_every_priority() {
+        for (raw, name) in [
+            (0, "P0_DISASTER_RECOVERY"),
+            (1, "P1_BACKUP_PUBLISH"),
+            (2, "P2_REQUIRED_REPAIR"),
+            (3, "P3_REQUIRED_REPLICATION"),
+            (4, "P4_SCRUB_DRILL"),
+            (5, "P5_REBALANCE_DRAIN"),
+        ] {
+            assert_eq!(traffic_class_name(raw).unwrap(), name, "class {raw}");
+        }
+        for out_of_range in [-1, 6, 99] {
+            assert_eq!(
+                traffic_class_name(out_of_range).unwrap_err(),
+                "traffic class unavailable"
+            );
+        }
+    }
+
+    /// A journal row counts as verified only when it both succeeded and carries
+    /// a verification object.
+    #[test]
+    fn journal_success_requires_a_verification_object() {
+        assert!(journal_success_is_verified(&json!({
+            "state": "SUCCEEDED",
+            "verificationResult": {"ok": true}
+        })));
+        // Succeeded but unverified.
+        assert!(!journal_success_is_verified(&json!({"state": "SUCCEEDED"})));
+        // Verified but not a success.
+        assert!(!journal_success_is_verified(&json!({
+            "state": "FAILED",
+            "verificationResult": {"ok": true}
+        })));
+        // A verification value that is not an object does not count.
+        assert!(!journal_success_is_verified(&json!({
+            "state": "SUCCEEDED",
+            "verificationResult": "yes"
+        })));
+        assert!(!journal_success_is_verified(&json!({})));
+    }
+}

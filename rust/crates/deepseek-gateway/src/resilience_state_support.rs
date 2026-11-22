@@ -6047,6 +6047,26 @@ mod unit_tests {
         }
     }
 
+    /// On an empty workspace the fresh-state bundle fails closed with one of its
+    /// named reasons rather than returning a partial bundle - a bundle missing an
+    /// authority or risk digest could not be reconciled against Python.
+    #[test]
+    fn fresh_state_bundle_fails_closed_without_authority() {
+        let scratch = Scratch::new("fresh-empty");
+        let error = build_fresh_state_bundle_readonly(
+            &scratch.root,
+            &[],
+            1_700_000_000,
+            "2024-01-01T00:00:00Z",
+        )
+        .expect_err("an empty workspace cannot produce a fresh bundle");
+        assert!(
+            error.starts_with("AUTHORITY_OBSERVATION_UNAVAILABLE")
+                || error.starts_with("RISK_SNAPSHOT_UNAVAILABLE"),
+            "unexpected refusal: {error}"
+        );
+    }
+
     /// The grade boundaries are inclusive at the lower edge of each band.
     #[test]
     fn resilience_grade_bands_are_inclusive() {
