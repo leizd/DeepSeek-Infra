@@ -918,9 +918,10 @@ mod tests {
         assert_eq!(join_url(base, "/root"), "https://example.com/root");
         // An empty reference is the base itself, normalised.
         assert_eq!(join_url(base, "  "), base);
-        // A bare fragment keeps the base path but drops its query, because the
-        // relative branch rebuilds from the directory plus an empty path.
-        assert_eq!(join_url(base, "#frag"), "https://example.com/a/b/page.html");
+        // A bare fragment resolves to the base *directory*, not the page: the
+        // relative branch joins the directory with an empty path, and the base
+        // query is dropped with it.
+        assert_eq!(join_url(base, "#frag"), "https://example.com/a/b/");
     }
 
     /// `collapse_dot_segments` drops `.` and empty segments, pops on `..`, keeps
