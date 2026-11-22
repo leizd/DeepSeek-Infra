@@ -5530,6 +5530,114 @@ mod unit_tests {
         }
     }
 
+    /// A seeded control database with the tables the authority and policy
+    /// readers actually query. Without `control_authority_head` the snapshot
+    /// reports a null `canonicalDigest`, and every caller that needs a verified
+    /// head refuses with `AUTHORITY_OBSERVATION_UNAVAILABLE` - so the head row is
+    /// the load-bearing part of this fixture.
+    const HEAD_DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    fn seed_control(root: &Path, targets: &[(&str, &str)]) {
+        let dir = root.join(".backup-control");
+        std::fs::create_dir_all(&dir).unwrap();
+        let conn = Connection::open(dir.join("control.sqlite3")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE control_boot_state (
+                 id INTEGER PRIMARY KEY,
+                 boot_epoch INTEGER NOT NULL,
+                 recovery_state TEXT NOT NULL,
+                 reason TEXT
+             );
+             INSERT INTO control_boot_state VALUES (1, 1, 'active', NULL);
+             CREATE TABLE control_authority_head (
+                 id INTEGER PRIMARY KEY,
+                 authority_generation INTEGER NOT NULL,
+                 authority_digest TEXT
+             );
+             CREATE TABLE control_targets (
+                 target_id TEXT PRIMARY KEY,
+                 payload_json TEXT NOT NULL
+             );
+             CREATE TABLE control_policies (
+                 policy_id TEXT PRIMARY KEY,
+                 payload_json TEXT NOT NULL
+             );",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO control_authority_head VALUES (1, 1, ?)",
+            [HEAD_DIGEST],
+        )
+        .unwrap();
+        for (id, payload) in targets {
+            conn.execute("INSERT INTO control_targets VALUES (?, ?)", [id, payload])
+                .unwrap();
+        }
+    }
+
+    fn seed_policy(root: &Path, policy_id: &str, payload: &str) {
+        let conn = Connection::open(root.join(".backup-control").join("control.sqlite3")).unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO control_policies VALUES (?, ?)",
+            [policy_id, payload],
+        )
+        .unwrap();
+    }
+
+    /// An empty workspace has no control database, so the health snapshot must
+    /// report a null head rather than inventing one.
+    #[test]
+    fn an_unseeded_control_database_reports_no_head() {
+        let scratch = Scratch::new("head-absent");
+        let error = build_fresh_state_bundle_readonly(
+            &scratch.root,
+            &[],
+            1_700_000_000,
+            "2024-01-01T00:00:00Z",
+        )
+        .expect_err("a bundle without an authority head must refuse");
+        assert_eq!(error, "AUTHORITY_OBSERVATION_UNAVAILABLE");
+    }
+
+    /// The seeded fixture supplies a usable head, which is what lets the
+    /// authority snapshot return a real digest instead of null.
+    #[test]
+    fn the_seeded_fixture_supplies_a_usable_authority_head() {
+        let scratch = Scratch::new("head-present");
+        seed_control(&scratch.root, &[]);
+        let conn =
+            Connection::open(scratch.root.join(".backup-control").join("control.sqlite3")).unwrap();
+        let (health, roots) = authority_health_snapshot_with_conn(Some(&conn)).unwrap();
+        assert_eq!(health["canonicalDigest"], HEAD_DIGEST);
+        assert_eq!(health["canonicalGeneration"], 1);
+        assert_eq!(health["recoveryState"], "active");
+        assert_eq!(health["controlBootEpoch"], 1);
+        // No replica locators are configured in a bare test process.
+        assert_eq!(health["configuredReplicaCount"], 0);
+        assert!(roots.is_empty());
+        // The readers see the target rows the fixture inserted.
+        seed_policy(&scratch.root, "p1", "{\"policyId\":\"p1\"}");
+        let policies = list_control_policies(Some(&conn)).unwrap();
+        assert_eq!(policies.len(), 1);
+        assert_eq!(policies[0]["policyId"], "p1");
+    }
+
+    /// A target row is visible through `list_control_targets`, which is what the
+    /// capacity and risk walks enumerate.
+    #[test]
+    fn the_seeded_fixture_exposes_targets() {
+        let scratch = Scratch::new("targets");
+        seed_control(
+            &scratch.root,
+            &[("t1", "{\"targetId\":\"t1\",\"kind\":\"filesystem\"}")],
+        );
+        let conn =
+            Connection::open(scratch.root.join(".backup-control").join("control.sqlite3")).unwrap();
+        let targets = list_control_targets(Some(&conn)).unwrap();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0]["targetId"], "t1");
+    }
+
     #[test]
     fn severity_rank_follows_the_oracle_ladder() {
         assert_eq!(severity_rank("healthy"), 1);
