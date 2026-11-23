@@ -3764,6 +3764,79 @@ mod unit_tests {
         .unwrap();
     }
 
+    /// `record_action_intent_db` mints an id when the action has none, and the
+    /// initial state depends on whether the action is autonomous: an approval
+    /// requirement or a never-autonomous type lands in `APPROVAL_REQUIRED`.
+    #[test]
+    fn recording_an_intent_chooses_the_initial_state() {
+        let journal = Journal::new("intent");
+        let iso = "2023-11-14T22:13:20Z";
+        // A syntactically valid 64-hex digest; the recorder does not verify it.
+        let digest = "a".repeat(64);
+
+        // A routine action with no approval flag is PENDING.
+        let pending = record_action_intent_db(
+            &journal.root,
+            &json!({"actionId": "a1", "type": "START_DR_DRILL", "parameters": {}}),
+            "operator",
+            Some("plan-1"),
+            &digest,
+            &digest,
+            iso,
+        )
+        .unwrap();
+        assert_eq!(pending["actionId"], "a1");
+        assert_eq!(pending["state"], "PENDING");
+        assert_eq!(pending["actionType"], "START_DR_DRILL");
+        assert_eq!(pending["planId"], "plan-1");
+
+        // `requiresApproval` forces APPROVAL_REQUIRED.
+        let approval = record_action_intent_db(
+            &journal.root,
+            &json!({
+                "actionId": "a2",
+                "type": "START_DR_DRILL",
+                "requiresApproval": true,
+                "parameters": {}
+            }),
+            "operator",
+            None,
+            &digest,
+            &digest,
+            iso,
+        )
+        .unwrap();
+        assert_eq!(approval["state"], "APPROVAL_REQUIRED");
+
+        // A never-autonomous type is APPROVAL_REQUIRED even without the flag.
+        let promotion = record_action_intent_db(
+            &journal.root,
+            &json!({"actionId": "a3", "type": "PRIMARY_PROMOTION", "parameters": {}}),
+            "operator",
+            None,
+            &digest,
+            &digest,
+            iso,
+        )
+        .unwrap();
+        assert_eq!(promotion["state"], "APPROVAL_REQUIRED");
+
+        // An action with no id gets a minted one.
+        let minted = record_action_intent_db(
+            &journal.root,
+            &json!({"type": "START_DR_DRILL", "parameters": {}}),
+            "operator",
+            None,
+            &digest,
+            &digest,
+            iso,
+        )
+        .unwrap();
+        let minted_id = minted["actionId"].as_str().expect("minted id");
+        assert!(minted_id.starts_with("act_"), "{minted_id}");
+        assert_eq!(minted_id.len(), "act_".len() + 12);
+    }
+
     /// `admit_and_claim_action_db` claims a PENDING action, refuses a live lease,
     /// takes over an expired one, and reports an unknown id without an error.
     #[test]
