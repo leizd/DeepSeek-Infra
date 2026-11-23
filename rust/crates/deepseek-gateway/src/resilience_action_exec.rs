@@ -4214,6 +4214,56 @@ mod unit_tests {
         assert_eq!(minted_id.len(), "act_".len() + 12);
     }
 
+    /// A repair simulation refuses missing parameters and an unknown policy
+    /// before it ever opens the DR database.
+    #[test]
+    fn repair_simulation_refuses_missing_inputs() {
+        let journal = Journal::new("simulate-repair");
+
+        // No policy at all.
+        assert_eq!(
+            simulate_action_db(&journal.root, &json!({"type": "CREATE_REPAIR_JOB"})),
+            Err("repair-policy-or-backup-missing".to_string())
+        );
+        // A policy without a backup is the same refusal.
+        assert_eq!(
+            simulate_action_db(
+                &journal.root,
+                &json!({"type": "CREATE_REPAIR_JOB", "parameters": {"policyId": "p1"}})
+            ),
+            Err("repair-policy-or-backup-missing".to_string())
+        );
+        // Both present but the policy is not registered.
+        assert_eq!(
+            simulate_action_db(
+                &journal.root,
+                &json!({
+                    "type": "CREATE_REPAIR_JOB",
+                    "parameters": {"policyId": "p1", "backupId": "b1"}
+                })
+            ),
+            Err("policy-not-found:p1".to_string())
+        );
+        // With the policy registered, the next gate is the recovery point, which
+        // this workspace has none of.
+        std::fs::create_dir_all(journal.root.join(".backup-policies")).unwrap();
+        std::fs::write(
+            journal.root.join(".backup-policies").join("p1.json"),
+            json!({"policyId": "p1", "name": "P"}).to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            simulate_action_db(
+                &journal.root,
+                &json!({
+                    "type": "CREATE_REPAIR_JOB",
+                    "parameters": {"policyId": "p1", "backupId": "b1"}
+                })
+            ),
+            Err("recovery-point-not-found:p1:b1".to_string())
+        );
+    }
+
     /// `find_matching_risk` matches on every identity field, but only for the
     /// fields the subject actually carries - an absent field matches anything.
     #[test]
