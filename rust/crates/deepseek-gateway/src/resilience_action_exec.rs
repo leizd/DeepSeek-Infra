@@ -3764,6 +3764,163 @@ mod unit_tests {
         .unwrap();
     }
 
+    /// `reconcile_action_effect_db` decides what to do with an action whose
+    /// effect was interrupted. `CLAIMED` means the simulation never finished, and
+    /// the repair branch keys off the job's own phase.
+    #[test]
+    fn reconciliation_directs_each_interrupted_state() {
+        let journal = Journal::new("reconcile");
+
+        // A CLAIMED action has not started its effect yet.
+        assert!(matches!(
+            reconcile_action_effect_db(
+                &journal.root,
+                &json!({"actionId": "a1", "type": "CREATE_REPAIR_JOB", "state": "CLAIMED"})
+            ),
+            ReconcileDirective::ResumeSimulating
+        ));
+
+        // No handle and no effect class means the effect was never created.
+        assert!(matches!(
+            reconcile_action_effect_db(
+                &journal.root,
+                &json!({"actionId": "a2", "type": "CREATE_REPAIR_JOB", "state": "EXECUTING"})
+            ),
+            ReconcileDirective::RecreateEffect
+        ));
+
+        // A handle that names no job is uncertain, not recreated.
+        assert!(matches!(
+            reconcile_action_effect_db(
+                &journal.root,
+                &json!({
+                    "actionId": "a3",
+                    "type": "CREATE_REPAIR_JOB",
+                    "state": "EXECUTING",
+                    "effectHandle": {"kind": "repair", "repairId": "missing"}
+                })
+            ),
+            ReconcileDirective::EffectUnknown(_)
+        ));
+
+        // A job in a terminal-good phase advances to verification.
+        let repairs = journal.root.join(".backup-replication").join("repairs");
+        std::fs::create_dir_all(&repairs).unwrap();
+        std::fs::write(
+            repairs.join("r1.json"),
+            json!({"repairId": "r1", "phase": "complete"}).to_string(),
+        )
+        .unwrap();
+        assert!(matches!(
+            reconcile_action_effect_db(
+                &journal.root,
+                &json!({
+                    "actionId": "a4",
+                    "type": "CREATE_REPAIR_JOB",
+                    "state": "EXECUTING",
+                    "effectHandle": {"kind": "repair", "repairId": "r1"}
+                })
+            ),
+            ReconcileDirective::AdvanceToVerifying(_)
+        ));
+
+        // A failed job triggers compensation.
+        std::fs::write(
+            repairs.join("r2.json"),
+            json!({"repairId": "r2", "phase": "failed", "error": "disk-gone"}).to_string(),
+        )
+        .unwrap();
+        assert!(matches!(
+            reconcile_action_effect_db(
+                &journal.root,
+                &json!({
+                    "actionId": "a5",
+                    "type": "CREATE_REPAIR_JOB",
+                    "state": "EXECUTING",
+                    "effectHandle": {"kind": "repair", "repairId": "r2"}
+                })
+            ),
+            ReconcileDirective::TriggerCompensation(_)
+        ));
+
+        // A job still running resumes execution.
+        std::fs::write(
+            repairs.join("r3.json"),
+            json!({"repairId": "r3", "phase": "copying"}).to_string(),
+        )
+        .unwrap();
+        assert!(matches!(
+            reconcile_action_effect_db(
+                &journal.root,
+                &json!({
+                    "actionId": "a6",
+                    "type": "CREATE_REPAIR_JOB",
+                    "state": "EXECUTING",
+                    "effectHandle": {"kind": "repair", "repairId": "r3"}
+                })
+            ),
+            ReconcileDirective::ResumeExecution(_)
+        ));
+    }
+
+    /// A rebalance reconciles through the same phases on its own directory.
+    #[test]
+    fn reconciliation_handles_rebalance_jobs() {
+        let journal = Journal::new("reconcile-rebalance");
+        let dir = journal.root.join(".backup-rebalance");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // No job at all, with an effect class that says one should exist.
+        assert!(matches!(
+            reconcile_action_effect_db(
+                &journal.root,
+                &json!({
+                    "actionId": "j0",
+                    "type": "CREATE_REBALANCE_JOB",
+                    "state": "EXECUTING",
+                    "effectClass": "COMPENSATABLE"
+                })
+            ),
+            ReconcileDirective::EffectUnknown(_)
+        ));
+
+        std::fs::write(
+            dir.join("jb1.json"),
+            json!({"jobId": "jb1", "phase": "complete"}).to_string(),
+        )
+        .unwrap();
+        assert!(matches!(
+            reconcile_action_effect_db(
+                &journal.root,
+                &json!({
+                    "actionId": "j1",
+                    "type": "CREATE_REBALANCE_JOB",
+                    "state": "EXECUTING",
+                    "effectHandle": {"kind": "rebalance", "jobId": "jb1"}
+                })
+            ),
+            ReconcileDirective::AdvanceToVerifying(_)
+        ));
+
+        std::fs::write(
+            dir.join("jb2.json"),
+            json!({"jobId": "jb2", "phase": "failed"}).to_string(),
+        )
+        .unwrap();
+        assert!(matches!(
+            reconcile_action_effect_db(
+                &journal.root,
+                &json!({
+                    "actionId": "j2",
+                    "type": "CREATE_REBALANCE_JOB",
+                    "state": "EXECUTING",
+                    "effectHandle": {"kind": "rebalance", "jobId": "jb2"}
+                })
+            ),
+            ReconcileDirective::TriggerCompensation(_)
+        ));
+    }
+
     /// `compensate_action_db` maps each effect class onto a target state and a
     /// compensation state, and fences the write when an epoch and token are
     /// supplied.
