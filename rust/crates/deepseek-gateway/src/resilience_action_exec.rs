@@ -3776,10 +3776,13 @@ mod unit_tests {
             validate_action_admission(&journal.root, &json!({})),
             Err("missing-action-type".to_string())
         );
-        // A blank type is the same as none.
+        // A whitespace-only type is *not* treated as missing: the check only
+        // asks whether the uppercased value is empty, and `"  "` is not. It
+        // therefore falls through to the autonomy rules and is refused as an
+        // unknown, non-autonomous type - recorded here rather than assumed.
         assert_eq!(
             validate_action_admission(&journal.root, &json!({"type": "  "})),
-            Err("missing-action-type".to_string())
+            Err("action-  -not-autonomous-approval-required".to_string())
         );
         // A never-autonomous type is forbidden without an approval flag.
         for refused in [
