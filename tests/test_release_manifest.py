@@ -70,7 +70,7 @@ def test_build_manifest_has_required_fields(tmp_path: Path) -> None:
     assert manifest["sha256"] == "deadbeef"
     assert manifest["bytes"] == len(b"zip-bytes")
     assert manifest["pythonCoverage"] == {"percent": 95.25, "gate": "80%"}
-    assert manifest["rustCoverage"] == {"linePercent": 80.27, "minimumPercent": 81.0}
+    assert manifest["rustCoverage"] == {"linePercent": 80.27, "minimumPercent": 82.0}
     assert manifest["rustTestCount"] == 172
     assert manifest["parityCounts"] == {"gateway": 68, "mcp": 105}
     assert manifest["architectureDecisionSha256"] == "aa" * 32
