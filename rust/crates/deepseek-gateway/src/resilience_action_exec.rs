@@ -3764,6 +3764,118 @@ mod unit_tests {
         .unwrap();
     }
 
+    /// `read_json_dir_records` keeps object documents, sorts newest-first by
+    /// name, skips dotfiles and non-JSON, and tolerates a missing directory.
+    #[test]
+    fn read_json_dir_records_filters_and_orders() {
+        let journal = Journal::new("dir-records");
+        let dir = journal.root.join("records");
+        // A missing directory is empty rather than an error.
+        assert!(read_json_dir_records(&dir).is_empty());
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.json"), r#"{"id":"a"}"#).unwrap();
+        std::fs::write(dir.join("b.json"), r#"{"id":"b"}"#).unwrap();
+        // A non-object document is dropped.
+        std::fs::write(dir.join("c.json"), r#"[1,2]"#).unwrap();
+        // Malformed JSON is dropped.
+        std::fs::write(dir.join("d.json"), "{broken").unwrap();
+        // Non-JSON and dotfiles are ignored outright.
+        std::fs::write(dir.join("e.txt"), r#"{"id":"e"}"#).unwrap();
+        std::fs::write(dir.join(".hidden.json"), r#"{"id":"h"}"#).unwrap();
+        // A subdirectory is not a file and is skipped.
+        std::fs::create_dir_all(dir.join("nested.json")).unwrap();
+
+        let records = read_json_dir_records(&dir);
+        // Only `a` and `b` survive, and the order is reversed-name.
+        assert_eq!(records.len(), 2, "got {records:?}");
+        assert_eq!(records[0]["id"], "b");
+        assert_eq!(records[1]["id"], "a");
+    }
+
+    /// The repair and rebalance job readers return `None` for an absent file,
+    /// a malformed one and a non-object, and the stored object otherwise.
+    #[test]
+    fn job_readers_require_a_readable_object() {
+        let journal = Journal::new("job-readers");
+        let repairs = journal.root.join(".backup-replication").join("repairs");
+        std::fs::create_dir_all(&repairs).unwrap();
+        let rebalance = journal.root.join(".backup-rebalance");
+        std::fs::create_dir_all(&rebalance).unwrap();
+
+        // Absent.
+        assert!(read_repair_job_fs(&journal.root, "r1").is_none());
+        assert!(read_rebalance_job_fs(&journal.root, "j1").is_none());
+
+        // Present and well formed.
+        std::fs::write(
+            repairs.join("r1.json"),
+            r#"{"repairId":"r1","state":"PENDING"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            rebalance.join("j1.json"),
+            r#"{"jobId":"j1","state":"RUNNING"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            read_repair_job_fs(&journal.root, "r1").unwrap()["state"],
+            "PENDING"
+        );
+        assert_eq!(
+            read_rebalance_job_fs(&journal.root, "j1").unwrap()["state"],
+            "RUNNING"
+        );
+
+        // Malformed JSON and a non-object document are both `None`.
+        std::fs::write(repairs.join("r2.json"), "{broken").unwrap();
+        std::fs::write(repairs.join("r3.json"), "[]").unwrap();
+        assert!(read_repair_job_fs(&journal.root, "r2").is_none());
+        assert!(read_repair_job_fs(&journal.root, "r3").is_none());
+    }
+
+    /// A DR drill needs no simulation at all, an unknown type is refused by
+    /// name, and a rebalance with identical endpoints is refused before any
+    /// store is opened.
+    #[test]
+    fn simulate_action_covers_the_store_free_paths() {
+        let journal = Journal::new("simulate");
+        // A DR drill is always simulable.
+        assert_eq!(
+            simulate_action_db(&journal.root, &json!({"type": "START_DR_DRILL"})),
+            Ok(())
+        );
+        // An unknown type names itself in the refusal.
+        assert_eq!(
+            simulate_action_db(&journal.root, &json!({"type": "NOT_A_TYPE"})),
+            Err("unsupported-simulation-type:NOT_A_TYPE".to_string())
+        );
+        // An action with no type at all reports the empty name.
+        assert_eq!(
+            simulate_action_db(&journal.root, &json!({})),
+            Err("unsupported-simulation-type:".to_string())
+        );
+        // A rebalance whose endpoints match is refused before the target store
+        // is consulted, so this needs no registered target.
+        assert_eq!(
+            simulate_action_db(
+                &journal.root,
+                &json!({
+                    "type": "CREATE_REBALANCE_JOB",
+                    "parameters": {"sourceTargetId": "t1", "destTargetId": "t1"}
+                })
+            ),
+            Err("source-destination-identical-or-empty".to_string())
+        );
+        // Missing endpoints are refused the same way.
+        assert_eq!(
+            simulate_action_db(
+                &journal.root,
+                &json!({"type": "CREATE_REBALANCE_JOB", "parameters": {"sourceTargetId": "t1"}})
+            ),
+            Err("source-destination-identical-or-empty".to_string())
+        );
+    }
+
     /// An empty journal admits: no concurrent action and no recent one.
     #[test]
     fn rate_limits_admit_an_empty_journal() {
