@@ -3764,6 +3764,152 @@ mod unit_tests {
         .unwrap();
     }
 
+    /// `compensate_action_db` maps each effect class onto a target state and a
+    /// compensation state, and fences the write when an epoch and token are
+    /// supplied.
+    #[test]
+    fn compensation_maps_every_effect_class() {
+        let journal = Journal::new("compensate");
+        let iso = "2023-11-14T22:13:20Z";
+
+        // Each case seeds its own row, because compensation rewrites the state.
+        for (index, (effect_class, want_state, want_comp)) in [
+            ("NO_EFFECT", "FAILED_BEFORE_EFFECT", "NONE"),
+            (
+                "COMPENSATABLE",
+                "COMPENSATION_REQUIRED",
+                "COMPENSATOR_NOT_IMPLEMENTED",
+            ),
+            (
+                "EFFECT_UNKNOWN",
+                "EFFECT_UNKNOWN",
+                "REMOTE_EFFECT_UNCERTAIN",
+            ),
+            (
+                "SOMETHING_ELSE",
+                "NEEDS_OPERATOR",
+                "MANUAL_INTERVENTION_REQUIRED",
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let id = format!("a{index}");
+            {
+                let conn = journal.open();
+                insert_action(
+                    &conn,
+                    &id,
+                    "CREATE_REPAIR_JOB",
+                    "EXECUTING",
+                    None,
+                    None,
+                    iso,
+                );
+            }
+            let out =
+                compensate_action_db(&journal.root, &id, "boom", effect_class, None, None).unwrap();
+            assert_eq!(out["state"], want_state, "{effect_class}");
+            assert_eq!(out["compensationState"], want_comp, "{effect_class}");
+            // The row projection exposes `effectClass`, which is what the caller
+            // passed in; the error text is stored but not projected here.
+            assert_eq!(out["effectClass"], effect_class, "{effect_class}");
+        }
+
+        // A `CANCELABLE` effect with no usable handle is uncertain, not cancelled.
+        {
+            let conn = journal.open();
+            insert_action(
+                &conn,
+                "c-cancel",
+                "CREATE_REPAIR_JOB",
+                "EXECUTING",
+                None,
+                None,
+                iso,
+            );
+        }
+        let out = compensate_action_db(&journal.root, "c-cancel", "boom", "CANCELABLE", None, None)
+            .unwrap();
+        assert_eq!(out["state"], "EFFECT_UNKNOWN");
+        assert_eq!(out["compensationState"], "REMOTE_EFFECT_UNCERTAIN");
+    }
+
+    /// An unknown action is a 404, and half a fence is a 400.
+    #[test]
+    fn compensation_refuses_missing_rows_and_partial_fences() {
+        let journal = Journal::new("compensate-refuse");
+        let iso = "2023-11-14T22:13:20Z";
+
+        // No such row.
+        let error = compensate_action_db(&journal.root, "absent", "boom", "NO_EFFECT", None, None)
+            .unwrap_err();
+        assert_eq!(error.status, 404, "{}", error.message);
+
+        {
+            let conn = journal.open();
+            insert_action(
+                &conn,
+                "a1",
+                "CREATE_REPAIR_JOB",
+                "EXECUTING",
+                None,
+                None,
+                iso,
+            );
+        }
+        // An epoch without a token is refused before any write.
+        let error = compensate_action_db(&journal.root, "a1", "boom", "NO_EFFECT", Some(1), None)
+            .unwrap_err();
+        assert_eq!(error.status, 400);
+        assert!(
+            error.message.contains("execution_epoch and claim_token"),
+            "{}",
+            error.message
+        );
+        // A token without an epoch is refused the same way.
+        let error =
+            compensate_action_db(&journal.root, "a1", "boom", "NO_EFFECT", None, Some("tok"))
+                .unwrap_err();
+        assert_eq!(error.status, 400);
+    }
+
+    /// A full fence whose epoch or token does not match the stored row is a 409.
+    #[test]
+    fn compensation_rejects_a_stale_fence() {
+        let journal = Journal::new("compensate-fence");
+        let iso = "2023-11-14T22:13:20Z";
+        {
+            let conn = journal.open();
+            insert_action(
+                &conn,
+                "a1",
+                "CREATE_REPAIR_JOB",
+                "EXECUTING",
+                None,
+                None,
+                iso,
+            );
+        }
+        // The stored row has epoch 0 and no claim token, so a non-zero epoch with
+        // any token cannot match.
+        let error = compensate_action_db(
+            &journal.root,
+            "a1",
+            "boom",
+            "NO_EFFECT",
+            Some(99),
+            Some("tok"),
+        )
+        .unwrap_err();
+        assert_eq!(error.status, 409, "{}", error.message);
+        assert!(
+            error.message.contains("lease lost before compensation"),
+            "{}",
+            error.message
+        );
+    }
+
     /// `validate_action_admission` enforces the safety floor before an action is
     /// written: a type is required, a `NEVER_AUTONOMOUS` type needs an explicit
     /// approval, and a non-autonomous action does too.
