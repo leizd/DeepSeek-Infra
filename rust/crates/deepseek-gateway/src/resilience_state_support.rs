@@ -5530,6 +5530,67 @@ mod unit_tests {
         }
     }
 
+    /// `list_registered_targets` resolves its database through
+    /// `data_routes::workspace_root`, which reads `DEEPSEEK_INFRA_ROOT` from the
+    /// process environment rather than taking the `root` argument every other
+    /// reader takes. Testing anything that walks registered targets therefore
+    /// means binding that variable for the duration of the case.
+    ///
+    /// `set_var` is `unsafe` in edition 2024, so the guard also serialises the
+    /// cases that use it: the same hand-rolled spin flag `lib.rs` uses, because a
+    /// `MutexGuard` cannot express "this thread owns the environment".
+    static ROOT_ENV_BUSY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+    struct RootEnvLock;
+
+    impl RootEnvLock {
+        fn acquire() -> Self {
+            use std::sync::atomic::Ordering;
+            while ROOT_ENV_BUSY
+                .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+                .is_err()
+            {
+                std::thread::yield_now();
+            }
+            Self
+        }
+    }
+
+    impl Drop for RootEnvLock {
+        fn drop(&mut self) {
+            ROOT_ENV_BUSY.store(false, std::sync::atomic::Ordering::Release);
+        }
+    }
+
+    /// Binds `DEEPSEEK_INFRA_ROOT` to `root` for the guard's lifetime.
+    struct RootEnvGuard {
+        saved: Option<std::ffi::OsString>,
+        _lock: RootEnvLock,
+    }
+
+    impl RootEnvGuard {
+        fn bind(root: &Path) -> Self {
+            let lock = RootEnvLock::acquire();
+            let saved = std::env::var_os("DEEPSEEK_INFRA_ROOT");
+            // SAFETY: `RootEnvLock` keeps every environment mutation in this
+            // module's tests on one thread at a time.
+            unsafe { std::env::set_var("DEEPSEEK_INFRA_ROOT", root) };
+            Self { saved, _lock: lock }
+        }
+    }
+
+    impl Drop for RootEnvGuard {
+        fn drop(&mut self) {
+            // SAFETY: as above; the lock is still held here.
+            unsafe {
+                match &self.saved {
+                    Some(value) => std::env::set_var("DEEPSEEK_INFRA_ROOT", value),
+                    None => std::env::remove_var("DEEPSEEK_INFRA_ROOT"),
+                }
+            }
+        }
+    }
+
     /// A seeded control database with the tables the authority and policy
     /// readers actually query. Without `control_authority_head` the snapshot
     /// reports a null `canonicalDigest`, and every caller that needs a verified
@@ -5620,6 +5681,85 @@ mod unit_tests {
         let policies = list_control_policies(Some(&conn)).unwrap();
         assert_eq!(policies.len(), 1);
         assert_eq!(policies[0]["policyId"], "p1");
+    }
+
+    /// A risk snapshot over an unseeded workspace still reports all seven risk
+    /// kinds with their coverage, and the digest covers the whole document.
+    #[test]
+    fn a_risk_snapshot_over_an_empty_workspace_is_complete() {
+        let scratch = Scratch::new("risk-unseeded");
+        let guard = RootEnvGuard::bind(&scratch.root);
+        let snapshot = evaluate_risk_snapshot_readonly(
+            &scratch.root,
+            false,
+            1_700_000_000,
+            "2024-01-01T00:00:00Z",
+        )
+        .unwrap();
+        drop(guard);
+
+        assert_eq!(snapshot["riskSnapshotVersion"], 1);
+        assert_eq!(snapshot["generatedAt"], "2024-01-01T00:00:00Z");
+        let risks = snapshot["risks"].as_array().expect("risks");
+        // Every kind is reported, whether or not it found anything.
+        let kinds: Vec<&str> = risks
+            .iter()
+            .filter_map(|r| r.get("type").and_then(Value::as_str))
+            .collect();
+        for expected in [
+            "CAPACITY_EXHAUSTION",
+            "REPLICA_LAG",
+            "FAILURE_DOMAIN_VIOLATION",
+            "DR_STALENESS",
+            "RESTORE_LATENCY_BREACH",
+            "REPAIR_BACKLOG",
+            "AUTHORITY_DEGRADATION",
+        ] {
+            assert!(kinds.contains(&expected), "missing {expected} in {kinds:?}");
+        }
+        // All seven coverage entries are present and marked complete.
+        let coverage = snapshot["coverage"].as_object().expect("coverage");
+        assert_eq!(coverage.len(), 7);
+        for (kind, entry) in coverage {
+            assert_eq!(entry["complete"], true, "{kind}");
+        }
+        // The digest is 64 hex and covers the document it was computed from.
+        let digest = snapshot["riskDigest"].as_str().expect("digest");
+        assert_eq!(digest.len(), 64);
+        assert_eq!(compute_risk_digest(&snapshot), digest);
+    }
+
+    /// A registered target widens the capacity coverage: the walk enumerates it
+    /// and lists it under CAPACITY_EXHAUSTION.
+    #[test]
+    fn a_registered_target_appears_in_capacity_coverage() {
+        let scratch = Scratch::new("risk-target");
+        seed_control(
+            &scratch.root,
+            &[("t1", "{\"targetId\":\"t1\",\"kind\":\"filesystem\"}")],
+        );
+        let guard = RootEnvGuard::bind(&scratch.root);
+        let snapshot = evaluate_risk_snapshot_readonly(
+            &scratch.root,
+            false,
+            1_700_000_000,
+            "2024-01-01T00:00:00Z",
+        )
+        .unwrap();
+        drop(guard);
+
+        let targets = snapshot["coverage"]["CAPACITY_EXHAUSTION"]["targets"]
+            .as_array()
+            .expect("capacity targets");
+        let listed: Vec<&str> = targets.iter().filter_map(Value::as_str).collect();
+        // `t1` is the registered one; `managed-local` is always implicit.
+        assert!(listed.contains(&"t1"), "t1 missing from {listed:?}");
+        assert!(listed.contains(&"managed-local"), "implicit target missing");
+        // The digest still matches.
+        assert_eq!(
+            compute_risk_digest(&snapshot),
+            snapshot["riskDigest"].as_str().unwrap()
+        );
     }
 
     /// Observing a snapshot annotates every risk with its canonical subject, the
