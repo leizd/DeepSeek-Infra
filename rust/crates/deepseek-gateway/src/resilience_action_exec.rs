@@ -4214,6 +4214,58 @@ mod unit_tests {
         assert_eq!(minted_id.len(), "act_".len() + 12);
     }
 
+    /// `find_matching_risk` matches on every identity field, but only for the
+    /// fields the subject actually carries - an absent field matches anything.
+    #[test]
+    fn risk_matching_honours_only_the_fields_present() {
+        let snapshot = json!({"risks": [
+            {"type": "REPLICA_LAG", "policyId": "p1", "backupId": "b1", "targetId": "t1", "failureDomain": "fd1", "severity": "critical"},
+            {"type": "CAPACITY_EXHAUSTION", "targetId": "t2", "severity": "warning"}
+        ]});
+
+        // A full subject matches the first entry exactly.
+        let full = json!({"type": "REPLICA_LAG", "policyId": "p1", "backupId": "b1", "targetId": "t1", "failureDomain": "fd1"});
+        assert_eq!(
+            find_matching_risk(&full, &snapshot).unwrap()["severity"],
+            "critical"
+        );
+
+        // A subject carrying only the type still matches, on the first entry with
+        // that type.
+        let type_only = json!({"type": "REPLICA_LAG"});
+        assert_eq!(
+            find_matching_risk(&type_only, &snapshot).unwrap()["policyId"],
+            "p1"
+        );
+
+        // A `target` field is read as `targetId` on both sides.
+        let by_target = json!({"type": "CAPACITY_EXHAUSTION", "target": "t2"});
+        assert_eq!(
+            find_matching_risk(&by_target, &snapshot).unwrap()["severity"],
+            "warning"
+        );
+
+        // One mismatched field is enough to miss.
+        assert!(
+            find_matching_risk(&json!({"type": "REPLICA_LAG", "policyId": "p9"}), &snapshot)
+                .is_none()
+        );
+        assert!(
+            find_matching_risk(
+                &json!({"type": "REPLICA_LAG", "failureDomain": "fd9"}),
+                &snapshot
+            )
+            .is_none()
+        );
+        // An unknown type never matches.
+        assert!(find_matching_risk(&json!({"type": "NOT_A_RISK"}), &snapshot).is_none());
+        // The type comparison is case-insensitive on both sides.
+        assert!(find_matching_risk(&json!({"type": "replica_lag"}), &snapshot).is_some());
+        // A non-object subject and a snapshot without `risks` are both `None`.
+        assert!(find_matching_risk(&json!("nope"), &snapshot).is_none());
+        assert!(find_matching_risk(&type_only, &json!({})).is_none());
+    }
+
     /// `verify_scoped_risk_reduction_db` is pure: it locates the action's risk
     /// subject in the before and after snapshots and decides whether the effect
     /// was observed. All five outcomes are exercised here.
