@@ -4214,6 +4214,156 @@ mod unit_tests {
         assert_eq!(minted_id.len(), "act_".len() + 12);
     }
 
+    /// The per-target, per-policy and failure-domain limits each refuse with
+    /// their own message once their active count reaches the configured limit.
+    #[test]
+    fn rate_limits_refuse_per_target_policy_and_domain() {
+        let journal = Journal::new("rl-scoped");
+        let iso = "2023-11-14T22:13:20Z";
+        let now = 1_700_000_000;
+
+        // Two active rows on the same target and policy exhaust both defaults
+        // (`maxConcurrentPerTarget` and `maxConcurrentPerPolicy` are 2).
+        {
+            let conn = journal.open();
+            for index in 0..2 {
+                conn.execute(
+                    "INSERT INTO resilience_actions
+                        (action_id, action_type, created_by, state, parameters_json,
+                         risk_subject_json, created_at, updated_at)
+                     VALUES (?, 'CREATE_REPAIR_JOB', 'test', 'EXECUTING', ?, ?, ?, ?)",
+                    rusqlite::params![
+                        format!("busy{index}"),
+                        json!({"sourceTargetId": "t1", "policyId": "p1"}).to_string(),
+                        json!({"policyId": "p1", "failureDomain": "fd1"}).to_string(),
+                        iso,
+                        iso
+                    ],
+                )
+                .unwrap();
+            }
+        }
+
+        // A new action on the same target is refused by the target rule.
+        let (admitted, reason) = check_rate_limits_in_tx(
+            &journal.root,
+            &json!({"type": "CREATE_REPAIR_JOB", "parameters": {"sourceTargetId": "t1"}}),
+            "newcomer",
+            now,
+            iso,
+        )
+        .unwrap();
+        assert!(!admitted, "the target limit did not fire");
+        assert_eq!(
+            reason, "max-per-target-concurrent-actions-exceeded:t1:2>=2",
+            "{reason}"
+        );
+
+        // A new action on a different target but the same policy is refused by
+        // the policy rule.
+        let (admitted, reason) = check_rate_limits_in_tx(
+            &journal.root,
+            &json!({"type": "CREATE_REPAIR_JOB", "parameters": {"sourceTargetId": "t9", "policyId": "p1"}}),
+            "newcomer",
+            now,
+            iso,
+        )
+        .unwrap();
+        assert!(!admitted, "the policy limit did not fire");
+        assert_eq!(
+            reason, "max-per-policy-concurrent-actions-exceeded:p1:2>=2",
+            "{reason}"
+        );
+
+        // A new action in a different failure domain is refused by the domain
+        // rule, because `maxSimultaneousFailureDomainsTouched` is 1.
+        let (admitted, reason) = check_rate_limits_in_tx(
+            &journal.root,
+            &json!({
+                "type": "CREATE_REPAIR_JOB",
+                "parameters": {"sourceTargetId": "t9", "failureDomain": "fd2"}
+            }),
+            "newcomer",
+            now,
+            iso,
+        )
+        .unwrap();
+        assert!(!admitted, "the domain limit did not fire");
+        assert_eq!(
+            reason, "max-failure-domains-touched-exceeded:fd2:1>=1",
+            "{reason}"
+        );
+
+        // The same failure domain is allowed to grow.
+        let (admitted, reason) = check_rate_limits_in_tx(
+            &journal.root,
+            &json!({
+                "type": "CREATE_REPAIR_JOB",
+                "parameters": {"sourceTargetId": "t9", "failureDomain": "fd1"}
+            }),
+            "newcomer",
+            now,
+            iso,
+        )
+        .unwrap();
+        assert!(admitted, "an existing domain was refused: {reason}");
+    }
+
+    /// The hourly ceiling counts every recent non-terminal action and refuses at
+    /// the configured maximum.
+    #[test]
+    fn the_hourly_ceiling_refuses_at_the_limit() {
+        let journal = Journal::new("rl-hourly");
+        let iso = "2023-11-14T22:13:20Z";
+        let now = 1_700_000_000;
+        // A policy file lowers the hourly ceiling to 2 so the test does not have
+        // to insert twenty rows.
+        let dir = journal.root.join(".resilience-policy");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("autonomous_policy.json"),
+            json!({"rateLimits": {"maxActionsPerHour": 2}}).to_string(),
+        )
+        .unwrap();
+
+        // Two recent rows that are not excluded states.
+        {
+            let conn = journal.open();
+            for index in 0..2 {
+                insert_action(
+                    &conn,
+                    &format!("h{index}"),
+                    "START_DR_DRILL",
+                    "SUCCEEDED",
+                    None,
+                    None,
+                    iso,
+                );
+            }
+        }
+        let (admitted, reason) = check_rate_limits_in_tx(
+            &journal.root,
+            &json!({"type": "START_DR_DRILL"}),
+            "newcomer",
+            now,
+            iso,
+        )
+        .unwrap();
+        assert!(!admitted, "the hourly limit did not fire");
+        assert_eq!(reason, "max-actions-per-hour-exceeded:2>=2", "{reason}");
+
+        // Excluding one of them leaves room.
+        let (admitted, reason) = check_rate_limits_in_tx(
+            &journal.root,
+            &json!({"type": "START_DR_DRILL"}),
+            "h0",
+            now,
+            iso,
+        )
+        .unwrap();
+        assert!(admitted, "refused after exclusion: {reason}");
+    }
+
     /// `admit_and_claim_action_db` claims a PENDING action, refuses a live lease,
     /// takes over an expired one, and reports an unknown id without an error.
     #[test]
