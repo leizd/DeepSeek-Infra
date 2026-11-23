@@ -3764,6 +3764,77 @@ mod unit_tests {
         .unwrap();
     }
 
+    /// `validate_action_admission` enforces the safety floor before an action is
+    /// written: a type is required, a `NEVER_AUTONOMOUS` type needs an explicit
+    /// approval, and a non-autonomous action does too.
+    #[test]
+    fn admission_validation_covers_the_safety_floor() {
+        let journal = Journal::new("validate");
+
+        // No type at all.
+        assert_eq!(
+            validate_action_admission(&journal.root, &json!({})),
+            Err("missing-action-type".to_string())
+        );
+        // A blank type is the same as none.
+        assert_eq!(
+            validate_action_admission(&journal.root, &json!({"type": "  "})),
+            Err("missing-action-type".to_string())
+        );
+        // A never-autonomous type is forbidden without an approval flag.
+        for refused in [
+            "PRIMARY_PROMOTION",
+            "POLICY_CHANGE",
+            "COPY_DELETION",
+            "TOPOLOGY_MUTATION",
+        ] {
+            assert_eq!(
+                validate_action_admission(&journal.root, &json!({"type": refused})),
+                Err(format!("action-{refused}-forbidden-by-safety-floor")),
+                "{refused}"
+            );
+            // With `approved` it passes, because the floor is satisfied.
+            assert_eq!(
+                validate_action_admission(
+                    &journal.root,
+                    &json!({"type": refused, "approved": true})
+                ),
+                Ok(()),
+                "{refused} with approval"
+            );
+        }
+        // A routine action is admitted with no flags at all.
+        assert_eq!(
+            validate_action_admission(&journal.root, &json!({"type": "START_DR_DRILL"})),
+            Ok(())
+        );
+        // Asking for approval on an autonomous action is contradictory.
+        assert_eq!(
+            validate_action_admission(
+                &journal.root,
+                &json!({"type": "START_DR_DRILL", "requiresApproval": true})
+            ),
+            Err("action-START_DR_DRILL-requires-explicit-approval".to_string())
+        );
+        // An unknown type is not autonomous, so it needs an approval.
+        assert_eq!(
+            validate_action_admission(&journal.root, &json!({"type": "SOMETHING_ELSE"})),
+            Err("action-SOMETHING_ELSE-not-autonomous-approval-required".to_string())
+        );
+        assert_eq!(
+            validate_action_admission(
+                &journal.root,
+                &json!({"type": "SOMETHING_ELSE", "approved": true})
+            ),
+            Ok(())
+        );
+        // The type is uppercased before every check.
+        assert_eq!(
+            validate_action_admission(&journal.root, &json!({"type": "start_dr_drill"})),
+            Ok(())
+        );
+    }
+
     /// `record_action_intent_db` mints an id when the action has none, and the
     /// initial state depends on whether the action is autonomous: an approval
     /// requirement or a never-autonomous type lands in `APPROVAL_REQUIRED`.
