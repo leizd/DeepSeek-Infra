@@ -3706,6 +3706,142 @@ mod unit_tests {
     use rusqlite::Connection;
     use serde_json::json;
 
+    /// A scratch workspace whose journal database `open_journal_rw` creates for
+    /// us - the production schema is applied by that call, so a fixture never
+    /// hand-writes a table definition that could drift from the real one.
+    struct Journal {
+        root: PathBuf,
+    }
+
+    impl Journal {
+        fn new(tag: &str) -> Self {
+            let root = std::env::temp_dir().join(format!(
+                "resilience-exec-{tag}-{}-{:?}",
+                std::process::id(),
+                std::thread::current().id()
+            ));
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(&root).unwrap();
+            Self { root }
+        }
+
+        fn open(&self) -> Connection {
+            open_journal_rw(&self.root).expect("journal opens")
+        }
+    }
+
+    impl Drop for Journal {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    /// Insert one action row with the columns the rate-limit query reads.
+    fn insert_action(
+        conn: &Connection,
+        action_id: &str,
+        action_type: &str,
+        state: &str,
+        severity_before: Option<&str>,
+        risk_subject: Option<&str>,
+        created_at: &str,
+    ) {
+        conn.execute(
+            "INSERT INTO resilience_actions
+                (action_id, action_type, created_by, state, severity_before,
+                 risk_subject_json, created_at, updated_at)
+             VALUES (?, ?, 'test', ?, ?, ?, ?, ?)",
+            rusqlite::params![
+                action_id,
+                action_type,
+                state,
+                severity_before,
+                risk_subject,
+                created_at,
+                created_at
+            ],
+        )
+        .unwrap();
+    }
+
+    /// An empty journal admits: no concurrent action and no recent one.
+    #[test]
+    fn rate_limits_admit_an_empty_journal() {
+        let journal = Journal::new("rl-empty");
+        let conn = journal.open();
+        let (admitted, reason) = check_rate_limits_in_tx(
+            &conn,
+            &journal.root,
+            &json!({"type": "CREATE_REPAIR_JOB", "severity": "warning"}),
+            "",
+            1_700_000_000,
+            "2023-11-14T22:13:20Z",
+        )
+        .unwrap();
+        assert!(admitted, "refused: {reason}");
+        assert_eq!(reason, "admitted");
+    }
+
+    /// The default `maxConcurrentActions` is 3, so a fourth concurrent action is
+    /// refused with the count in the message.
+    #[test]
+    fn the_concurrent_action_limit_admits_at_most_three() {
+        let journal = Journal::new("rl-concurrent");
+        let conn = journal.open();
+        let now = 1_700_000_000;
+        let iso = "2023-11-14T22:13:20Z";
+        for index in 0..3 {
+            insert_action(
+                &conn,
+                &format!("a{index}"),
+                "CREATE_REPAIR_JOB",
+                "EXECUTING",
+                Some("warning"),
+                None,
+                iso,
+            );
+        }
+        let action = json!({"type": "CREATE_REPAIR_JOB", "severity": "warning"});
+        // The fourth is refused.
+        let (admitted, reason) =
+            check_rate_limits_in_tx(&conn, &journal.root, &action, "", now, iso).unwrap();
+        assert!(!admitted, "a fourth concurrent action was admitted");
+        assert_eq!(reason, "max-concurrent-actions-exceeded:3>=3");
+        // Excluding one of the three makes room for it again.
+        let (admitted, reason) =
+            check_rate_limits_in_tx(&conn, &journal.root, &action, "a0", now, iso).unwrap();
+        assert!(admitted, "refused after exclusion: {reason}");
+    }
+
+    /// A terminal state does not count toward concurrency.
+    #[test]
+    fn terminal_actions_do_not_count_toward_concurrency() {
+        let journal = Journal::new("rl-terminal");
+        let conn = journal.open();
+        let iso = "2023-11-14T22:13:20Z";
+        for state in ["SUCCEEDED", "FAILED", "BLOCKED", "STALE", "PREEMPTED"] {
+            insert_action(
+                &conn,
+                &format!("a-{state}"),
+                "CREATE_REPAIR_JOB",
+                state,
+                Some("warning"),
+                None,
+                iso,
+            );
+        }
+        let (admitted, reason) = check_rate_limits_in_tx(
+            &conn,
+            &journal.root,
+            &json!({"type": "CREATE_REPAIR_JOB", "severity": "warning"}),
+            "",
+            1_700_000_000,
+            iso,
+        )
+        .unwrap();
+        assert!(admitted, "refused: {reason}");
+    }
+
     fn conn() -> Connection {
         Connection::open_in_memory().unwrap()
     }
