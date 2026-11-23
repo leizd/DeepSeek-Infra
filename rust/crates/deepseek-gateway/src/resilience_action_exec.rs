@@ -4214,6 +4214,120 @@ mod unit_tests {
         assert_eq!(minted_id.len(), "act_".len() + 12);
     }
 
+    /// `verify_scoped_risk_reduction_db` is pure: it locates the action's risk
+    /// subject in the before and after snapshots and decides whether the effect
+    /// was observed. All five outcomes are exercised here.
+    #[test]
+    fn scoped_risk_reduction_covers_every_outcome() {
+        // A repair action with no explicit subject falls back to REPLICA_LAG
+        // keyed by the policy/backup/target parameters.
+        let action = json!({
+            "type": "CREATE_REPAIR_JOB",
+            "parameters": {"policyId": "p1", "backupId": "b1", "destTargetId": "t1"}
+        });
+        let subject =
+            json!({"type": "REPLICA_LAG", "policyId": "p1", "backupId": "b1", "targetId": "t1"});
+
+        // 1. The risk was never present before, so no effect can be claimed.
+        let (ok, detail) =
+            verify_scoped_risk_reduction_db(&action, &json!({"risks": []}), &json!({"risks": []}));
+        assert!(!ok);
+        assert_eq!(detail["effectObserved"], false);
+        assert_eq!(detail["reason"], "target-risk-subject-not-observed-before");
+        assert_eq!(detail["riskSubject"], subject);
+
+        // 2. The risk vanished, which counts as cleared.
+        let (ok, detail) = verify_scoped_risk_reduction_db(
+            &action,
+            &json!({"risks": [{"type": "REPLICA_LAG", "policyId": "p1", "backupId": "b1", "target": "t1", "severity": "critical"}]}),
+            &json!({"risks": []}),
+        );
+        assert!(ok, "{detail}");
+        assert_eq!(detail["reason"], "target-risk-cleared-or-healthy");
+        assert_eq!(detail["severityBefore"], "critical");
+        assert_eq!(detail["severityAfter"], "healthy");
+
+        // 3. The risk is still listed but now healthy.
+        let (ok, detail) = verify_scoped_risk_reduction_db(
+            &action,
+            &json!({"risks": [{"type": "REPLICA_LAG", "policyId": "p1", "backupId": "b1", "target": "t1", "severity": "critical"}]}),
+            &json!({"risks": [{"type": "REPLICA_LAG", "policyId": "p1", "backupId": "b1", "target": "t1", "severity": "healthy"}]}),
+        );
+        assert!(ok, "{detail}");
+        assert_eq!(detail["reason"], "target-risk-cleared-or-healthy");
+
+        // 4. Severity dropped but is still open.
+        let (ok, detail) = verify_scoped_risk_reduction_db(
+            &action,
+            &json!({"risks": [{"type": "REPLICA_LAG", "policyId": "p1", "backupId": "b1", "target": "t1", "severity": "critical"}]}),
+            &json!({"risks": [{"type": "REPLICA_LAG", "policyId": "p1", "backupId": "b1", "target": "t1", "severity": "warning"}]}),
+        );
+        assert!(ok, "{detail}");
+        assert_eq!(
+            detail["reason"],
+            "target-risk-severity-decreased:critical->warning"
+        );
+        assert_eq!(detail["orderBefore"], 4);
+        assert_eq!(detail["orderAfter"], 2);
+
+        // 5. Severity unchanged or worse means the effect was not observed.
+        let (ok, detail) = verify_scoped_risk_reduction_db(
+            &action,
+            &json!({"risks": [{"type": "REPLICA_LAG", "policyId": "p1", "backupId": "b1", "target": "t1", "severity": "warning"}]}),
+            &json!({"risks": [{"type": "REPLICA_LAG", "policyId": "p1", "backupId": "b1", "target": "t1", "severity": "critical"}]}),
+        );
+        assert!(!ok);
+        assert_eq!(detail["effectObserved"], false);
+        assert_eq!(
+            detail["reason"],
+            "target-risk-not-improved:before=warning,after=critical"
+        );
+    }
+
+    /// An explicit `riskSubject` wins over the type-derived fallback, and the
+    /// rebalance and drill actions derive their own subjects.
+    #[test]
+    fn scoped_risk_reduction_derives_the_subject() {
+        // An explicit subject is used verbatim.
+        let explicit = json!({
+            "type": "CREATE_REPAIR_JOB",
+            "riskSubject": {"type": "CAPACITY_EXHAUSTION", "targetId": "t9"}
+        });
+        let (_, detail) = verify_scoped_risk_reduction_db(
+            &explicit,
+            &json!({"risks": []}),
+            &json!({"risks": []}),
+        );
+        assert_eq!(detail["riskSubject"]["type"], "CAPACITY_EXHAUSTION");
+        assert_eq!(detail["riskSubject"]["targetId"], "t9");
+
+        // A rebalance derives CAPACITY_EXHAUSTION from its source target.
+        let rebalance = json!({
+            "type": "CREATE_REBALANCE_JOB",
+            "parameters": {"sourceTargetId": "t1", "policyId": "p1"}
+        });
+        let (_, detail) = verify_scoped_risk_reduction_db(
+            &rebalance,
+            &json!({"risks": []}),
+            &json!({"risks": []}),
+        );
+        assert_eq!(detail["riskSubject"]["type"], "CAPACITY_EXHAUSTION");
+        assert_eq!(detail["riskSubject"]["targetId"], "t1");
+
+        // A drill derives DR_STALENESS from its policy.
+        let drill = json!({"type": "START_DR_DRILL", "parameters": {"policyId": "p1"}});
+        let (_, detail) =
+            verify_scoped_risk_reduction_db(&drill, &json!({"risks": []}), &json!({"risks": []}));
+        assert_eq!(detail["riskSubject"]["type"], "DR_STALENESS");
+        assert_eq!(detail["riskSubject"]["policyId"], "p1");
+
+        // Any other type becomes a bare subject carrying only the type.
+        let other = json!({"type": "SOMETHING_ELSE"});
+        let (_, detail) =
+            verify_scoped_risk_reduction_db(&other, &json!({"risks": []}), &json!({"risks": []}));
+        assert_eq!(detail["riskSubject"], json!({"type": "SOMETHING_ELSE"}));
+    }
+
     /// The per-target, per-policy and failure-domain limits each refuse with
     /// their own message once their active count reaches the configured limit.
     #[test]
