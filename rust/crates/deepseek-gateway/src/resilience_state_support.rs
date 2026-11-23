@@ -5701,21 +5701,27 @@ mod unit_tests {
         assert_eq!(snapshot["riskSnapshotVersion"], 1);
         assert_eq!(snapshot["generatedAt"], "2024-01-01T00:00:00Z");
         let risks = snapshot["risks"].as_array().expect("risks");
-        // Every kind is reported, whether or not it found anything.
+        // A repair risk is raised per policy, and an empty workspace has no
+        // policies - so only the five policy-independent kinds appear. The other
+        // two are still reported as covered through the `coverage` map below.
         let kinds: Vec<&str> = risks
             .iter()
             .filter_map(|r| r.get("type").and_then(Value::as_str))
             .collect();
         for expected in [
             "CAPACITY_EXHAUSTION",
-            "REPLICA_LAG",
-            "FAILURE_DOMAIN_VIOLATION",
             "DR_STALENESS",
             "RESTORE_LATENCY_BREACH",
             "REPAIR_BACKLOG",
             "AUTHORITY_DEGRADATION",
         ] {
             assert!(kinds.contains(&expected), "missing {expected} in {kinds:?}");
+        }
+        for absent in ["REPLICA_LAG", "FAILURE_DOMAIN_VIOLATION"] {
+            assert!(
+                !kinds.contains(&absent),
+                "{absent} needs a policy, so it cannot appear here: {kinds:?}"
+            );
         }
         // All seven coverage entries are present and marked complete.
         let coverage = snapshot["coverage"].as_object().expect("coverage");
