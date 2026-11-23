@@ -4221,11 +4221,11 @@ mod unit_tests {
         let journal = Journal::new("rl-scoped");
         let iso = "2023-11-14T22:13:20Z";
         let now = 1_700_000_000;
+        let conn = journal.open();
 
         // Two active rows on the same target and policy exhaust both defaults
         // (`maxConcurrentPerTarget` and `maxConcurrentPerPolicy` are 2).
         {
-            let conn = journal.open();
             for index in 0..2 {
                 conn.execute(
                     "INSERT INTO resilience_actions
@@ -4246,6 +4246,7 @@ mod unit_tests {
 
         // A new action on the same target is refused by the target rule.
         let (admitted, reason) = check_rate_limits_in_tx(
+            &conn,
             &journal.root,
             &json!({"type": "CREATE_REPAIR_JOB", "parameters": {"sourceTargetId": "t1"}}),
             "newcomer",
@@ -4262,6 +4263,7 @@ mod unit_tests {
         // A new action on a different target but the same policy is refused by
         // the policy rule.
         let (admitted, reason) = check_rate_limits_in_tx(
+            &conn,
             &journal.root,
             &json!({"type": "CREATE_REPAIR_JOB", "parameters": {"sourceTargetId": "t9", "policyId": "p1"}}),
             "newcomer",
@@ -4278,6 +4280,7 @@ mod unit_tests {
         // A new action in a different failure domain is refused by the domain
         // rule, because `maxSimultaneousFailureDomainsTouched` is 1.
         let (admitted, reason) = check_rate_limits_in_tx(
+            &conn,
             &journal.root,
             &json!({
                 "type": "CREATE_REPAIR_JOB",
@@ -4296,6 +4299,7 @@ mod unit_tests {
 
         // The same failure domain is allowed to grow.
         let (admitted, reason) = check_rate_limits_in_tx(
+            &conn,
             &journal.root,
             &json!({
                 "type": "CREATE_REPAIR_JOB",
@@ -4327,8 +4331,8 @@ mod unit_tests {
         .unwrap();
 
         // Two recent rows that are not excluded states.
+        let conn = journal.open();
         {
-            let conn = journal.open();
             for index in 0..2 {
                 insert_action(
                     &conn,
@@ -4342,6 +4346,7 @@ mod unit_tests {
             }
         }
         let (admitted, reason) = check_rate_limits_in_tx(
+            &conn,
             &journal.root,
             &json!({"type": "START_DR_DRILL"}),
             "newcomer",
@@ -4354,6 +4359,7 @@ mod unit_tests {
 
         // Excluding one of them leaves room.
         let (admitted, reason) = check_rate_limits_in_tx(
+            &conn,
             &journal.root,
             &json!({"type": "START_DR_DRILL"}),
             "h0",
