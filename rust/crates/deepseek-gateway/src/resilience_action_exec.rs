@@ -3764,6 +3764,83 @@ mod unit_tests {
         .unwrap();
     }
 
+    /// `admit_and_claim_action_db` claims a PENDING action, refuses a live lease,
+    /// takes over an expired one, and reports an unknown id without an error.
+    #[test]
+    fn admission_claims_pending_and_respects_live_leases() {
+        let journal = Journal::new("admit");
+        let conn = journal.open();
+        let iso = "2023-11-14T22:13:20Z";
+        insert_action(
+            &conn,
+            "a-pending",
+            "START_DR_DRILL",
+            "PENDING",
+            None,
+            None,
+            iso,
+        );
+        drop(conn);
+
+        // A PENDING row is claimed and comes back refreshed.
+        let (admitted, action, reason) =
+            admit_and_claim_action_db(&journal.root, "a-pending", "owner-1", 60).unwrap();
+        assert!(admitted, "refused: {reason}");
+        assert_eq!(reason, "admitted-and-claimed");
+        let claimed = action.expect("the claimed action is returned");
+        assert_eq!(claimed["state"], "CLAIMED");
+        assert_eq!(claimed["ownerInstanceId"], "owner-1");
+        assert_eq!(claimed["executionEpoch"], 1);
+
+        // The same row now holds a live lease, so a second claim is refused.
+        let (admitted, action, reason) =
+            admit_and_claim_action_db(&journal.root, "a-pending", "owner-2", 60).unwrap();
+        assert!(!admitted, "a live lease was taken over");
+        assert!(action.is_none(), "no action should be returned on refusal");
+        assert_eq!(reason, "claim-rejected-not-pending-or-active-lease");
+
+        // An unknown id is reported as a refusal, not an error.
+        let (admitted, action, reason) =
+            admit_and_claim_action_db(&journal.root, "missing", "owner-1", 60).unwrap();
+        assert!(!admitted);
+        assert!(action.is_none());
+        assert_eq!(reason, "action-not-found");
+    }
+
+    /// A terminal state cannot be claimed at all.
+    #[test]
+    fn terminal_actions_are_not_claimable() {
+        let journal = Journal::new("admit-terminal");
+        let iso = "2023-11-14T22:13:20Z";
+        // Seed every terminal row first, then probe each one. `admit_and_claim`
+        // opens its own connection, so the seeding handle can be dropped here.
+        {
+            let conn = journal.open();
+            for state in ["SUCCEEDED", "FAILED", "BLOCKED", "STALE", "PREEMPTED"] {
+                insert_action(
+                    &conn,
+                    &format!("a-{state}"),
+                    "START_DR_DRILL",
+                    state,
+                    None,
+                    None,
+                    iso,
+                );
+            }
+        }
+        for state in ["SUCCEEDED", "FAILED", "BLOCKED", "STALE", "PREEMPTED"] {
+            let (admitted, action, reason) =
+                admit_and_claim_action_db(&journal.root, &format!("a-{state}"), "owner", 60)
+                    .unwrap();
+            assert!(!admitted, "{state} was claimed");
+            assert!(action.is_none(), "{state} returned an action");
+            assert_eq!(
+                reason, "claim-rejected-not-pending-or-active-lease",
+                "{state}"
+            );
+        }
+    }
+
     /// `read_json_dir_records` keeps object documents, sorts newest-first by
     /// name, skips dotfiles and non-JSON, and tolerates a missing directory.
     #[test]
