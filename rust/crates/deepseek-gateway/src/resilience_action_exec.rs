@@ -3787,7 +3787,7 @@ mod unit_tests {
         .unwrap();
         assert_eq!(pending["actionId"], "a1");
         assert_eq!(pending["state"], "PENDING");
-        assert_eq!(pending["actionType"], "START_DR_DRILL");
+        assert_eq!(pending["type"], "START_DR_DRILL");
         assert_eq!(pending["planId"], "plan-1");
 
         // `requiresApproval` forces APPROVAL_REQUIRED.
@@ -3869,14 +3869,18 @@ mod unit_tests {
         let (admitted, action, reason) =
             admit_and_claim_action_db(&journal.root, "a-pending", "owner-2", 60).unwrap();
         assert!(!admitted, "a live lease was taken over");
-        assert!(action.is_none(), "no action should be returned on refusal");
+        // A refusal still returns the current row, so the caller can report it.
+        let current = action.expect("the current row is returned on refusal");
+        assert_eq!(current["state"], "CLAIMED");
+        assert_eq!(current["ownerInstanceId"], "owner-1");
         assert_eq!(reason, "claim-rejected-not-pending-or-active-lease");
 
         // An unknown id is reported as a refusal, not an error.
         let (admitted, action, reason) =
             admit_and_claim_action_db(&journal.root, "missing", "owner-1", 60).unwrap();
         assert!(!admitted);
-        assert!(action.is_none());
+        // No row exists, so this refusal really does return nothing.
+        assert!(action.is_none(), "an unknown id returned a row");
         assert_eq!(reason, "action-not-found");
     }
 
@@ -3906,7 +3910,9 @@ mod unit_tests {
                 admit_and_claim_action_db(&journal.root, &format!("a-{state}"), "owner", 60)
                     .unwrap();
             assert!(!admitted, "{state} was claimed");
-            assert!(action.is_none(), "{state} returned an action");
+            // The refusal carries the row back, whose state is still terminal.
+            let current = action.unwrap_or_else(|| panic!("{state} returned no row"));
+            assert_eq!(current["state"], state, "{state}");
             assert_eq!(
                 reason, "claim-rejected-not-pending-or-active-lease",
                 "{state}"
