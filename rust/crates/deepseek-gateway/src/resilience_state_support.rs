@@ -6669,4 +6669,139 @@ mod unit_tests {
             vec![json!({"targetId": "t1"}), json!({"targetId": "t2"})]
         );
     }
+
+    /// `evaluate_maintenance_window_action` decides whether an action may run
+    /// now. Precedence: no window allows it; a critical durability or DR
+    /// staleness action overrides; otherwise the local clock is compared with the
+    /// window, where equal bounds mean always-open and wrapping bounds span
+    /// midnight.
+    #[test]
+    fn maintenance_windows_gate_and_override() {
+        // No window anywhere means nothing to wait for.
+        let result = evaluate_maintenance_window_action(
+            None,
+            &json!({"actionId": "a1", "type": "START_DR_DRILL"}),
+            1_700_000_000,
+        )
+        .unwrap();
+        assert_eq!(result["allowed"], true);
+        assert_eq!(result["reason"], "NO_MAINTENANCE_WINDOW");
+
+        // 1_700_000_000 is 2023-11-14T22:13:20Z, so 22:13 UTC.
+        let inside = json!({
+            "actionId": "a2",
+            "type": "CREATE_REBALANCE_JOB",
+            "maintenanceWindow": {"timezone": "UTC", "start": "22:00", "end": "23:00"}
+        });
+        let result = evaluate_maintenance_window_action(None, &inside, 1_700_000_000).unwrap();
+        assert_eq!(result["allowed"], true);
+        assert_eq!(result["inWindow"], true);
+        assert_eq!(result["reason"], "WITHIN_MAINTENANCE_WINDOW");
+        assert_eq!(result["timezone"], "UTC");
+        assert_eq!(result["start"], "22:00");
+        assert_eq!(result["end"], "23:00");
+        // `localTime` renders the resolved zone, so it carries the offset the
+        // clock was compared in. Only `UTC` is asserted: a named zone loads from
+        // the host's zoneinfo database, and a CI image without tzdata would fail
+        // such an assertion for reasons unrelated to this function.
+        assert_eq!(result["localTime"], "2023-11-14T22:13+00:00");
+
+        // Outside it.
+        let outside = json!({
+            "actionId": "a3",
+            "type": "CREATE_REBALANCE_JOB",
+            "maintenanceWindow": {"timezone": "UTC", "start": "01:00", "end": "02:00"}
+        });
+        let result = evaluate_maintenance_window_action(None, &outside, 1_700_000_000).unwrap();
+        assert_eq!(result["allowed"], false);
+        assert_eq!(result["reason"], "OUTSIDE_MAINTENANCE_WINDOW");
+    }
+
+    /// Equal bounds mean the window is always open, and a window whose end is
+    /// earlier than its start spans midnight.
+    #[test]
+    fn maintenance_windows_handle_equal_and_wrapping_bounds() {
+        let always = json!({
+            "actionId": "a1",
+            "type": "CREATE_REBALANCE_JOB",
+            "maintenanceWindow": {"timezone": "UTC", "start": "22:13", "end": "22:13"}
+        });
+        let result = evaluate_maintenance_window_action(None, &always, 1_700_000_000).unwrap();
+        assert_eq!(result["allowed"], true);
+        assert_eq!(result["reason"], "WITHIN_MAINTENANCE_WINDOW");
+
+        let wrapping = json!({
+            "actionId": "a2",
+            "type": "CREATE_REBALANCE_JOB",
+            "maintenanceWindow": {"timezone": "UTC", "start": "22:00", "end": "02:00"}
+        });
+        let result = evaluate_maintenance_window_action(None, &wrapping, 1_700_000_000).unwrap();
+        assert_eq!(result["allowed"], true, "{}", result);
+    }
+
+    /// A critical durability or DR-staleness action runs even outside the window,
+    /// and a malformed window refuses rather than guessing.
+    #[test]
+    fn maintenance_windows_override_and_reject_malformed_input() {
+        let closed = json!({"timezone": "UTC", "start": "01:00", "end": "02:00"});
+
+        let critical_repair = json!({
+            "actionId": "a1",
+            "type": "CREATE_REPAIR_JOB",
+            "severity": "critical",
+            "maintenanceWindow": closed
+        });
+        let result =
+            evaluate_maintenance_window_action(None, &critical_repair, 1_700_000_000).unwrap();
+        assert_eq!(result["allowed"], true);
+        assert_eq!(result["inWindow"], false);
+        assert_eq!(result["override"], true);
+        assert_eq!(result["reason"], "CRITICAL_DURABILITY_OVERRIDE");
+
+        let blocked_drill = json!({
+            "actionId": "a2",
+            "type": "START_DR_DRILL",
+            "severity": "blocked",
+            "maintenanceWindow": closed
+        });
+        let result =
+            evaluate_maintenance_window_action(None, &blocked_drill, 1_700_000_000).unwrap();
+        assert_eq!(result["reason"], "CRITICAL_DR_STALENESS_OVERRIDE");
+
+        // A drill flagged as staleness-critical overrides while only `warning`.
+        let stale_drill = json!({
+            "actionId": "a3",
+            "type": "START_DR_DRILL",
+            "severity": "warning",
+            "parameters": {"drStalenessCritical": true},
+            "maintenanceWindow": closed
+        });
+        let result = evaluate_maintenance_window_action(None, &stale_drill, 1_700_000_000).unwrap();
+        assert_eq!(result["reason"], "CRITICAL_DR_STALENESS_OVERRIDE");
+
+        // An unknown timezone is invalid rather than assumed to be UTC.
+        let bad_tz = json!({
+            "actionId": "a4",
+            "type": "CREATE_REBALANCE_JOB",
+            "maintenanceWindow": {"timezone": "Not/AZone", "start": "01:00", "end": "02:00"}
+        });
+        let result = evaluate_maintenance_window_action(None, &bad_tz, 1_700_000_000).unwrap();
+        assert_eq!(result["allowed"], false);
+        assert_eq!(result["reason"], "INVALID_MAINTENANCE_WINDOW");
+        assert_eq!(result["timezone"], "Not/AZone");
+
+        // A malformed clock is invalid as well.
+        for (start, end) in [("25:00", "26:00"), ("1", "2"), ("aa:bb", "cc:dd")] {
+            let bad = json!({
+                "actionId": "a5",
+                "type": "CREATE_REBALANCE_JOB",
+                "maintenanceWindow": {"timezone": "UTC", "start": start, "end": end}
+            });
+            let result = evaluate_maintenance_window_action(None, &bad, 1_700_000_000).unwrap();
+            assert_eq!(
+                result["reason"], "INVALID_MAINTENANCE_WINDOW",
+                "{start}-{end}"
+            );
+        }
+    }
 }
