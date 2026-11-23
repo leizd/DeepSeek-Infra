@@ -32,7 +32,7 @@ _CHUNK = 1024 * 1024
 # `scripts/run_rust_coverage.py`; that ladder raises the floor in stages toward
 # 95% and `tests/test_release_manifest_floor.py` pins the two together so a
 # stage advance cannot leave this one behind.
-RUST_COVERAGE_FLOOR = 82.0
+RUST_COVERAGE_FLOOR = 83.0
 
 
 def sha256_of(path: Path) -> str:
