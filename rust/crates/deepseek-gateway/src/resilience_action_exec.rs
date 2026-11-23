@@ -4214,6 +4214,67 @@ mod unit_tests {
         assert_eq!(minted_id.len(), "act_".len() + 12);
     }
 
+    /// `sha256_file_streaming` returns the digest and the byte count, and an
+    /// unreadable path is an error rather than an empty digest.
+    #[test]
+    fn streaming_digest_matches_the_bytes() {
+        let journal = Journal::new("stream-hash");
+        let path = journal.root.join("payload.bin");
+        let payload = b"hello world";
+        std::fs::write(&path, payload).unwrap();
+
+        let (digest, size) = sha256_file_streaming(&path).unwrap();
+        assert_eq!(size, payload.len() as u64);
+        assert_eq!(digest, sha256_bytes(payload));
+        assert_eq!(digest.len(), 64);
+
+        // An empty file still hashes, to the empty-input digest.
+        let empty = journal.root.join("empty.bin");
+        std::fs::write(&empty, b"").unwrap();
+        let (digest, size) = sha256_file_streaming(&empty).unwrap();
+        assert_eq!(size, 0);
+        assert_eq!(digest, sha256_bytes(b""));
+
+        // A missing file is an error.
+        assert!(sha256_file_streaming(&journal.root.join("absent.bin")).is_err());
+    }
+
+    /// The job writers create their directory and round-trip through the readers,
+    /// and an action id without a `jobId`/`repairId` still lands somewhere.
+    #[test]
+    fn job_writers_round_trip() {
+        let journal = Journal::new("job-writers");
+
+        write_repair_job_fs(
+            &journal.root,
+            &json!({"repairId": "r1", "phase": "copying"}),
+        )
+        .unwrap();
+        assert_eq!(
+            read_repair_job_fs(&journal.root, "r1").unwrap()["phase"],
+            "copying"
+        );
+
+        write_rebalance_job_fs(&journal.root, &json!({"jobId": "j1", "phase": "running"})).unwrap();
+        assert_eq!(
+            read_rebalance_job_fs(&journal.root, "j1").unwrap()["phase"],
+            "running"
+        );
+
+        // Without an id the job is written under `unknown`, which the reader can
+        // still find - the writer never fails for a missing key.
+        write_repair_job_fs(&journal.root, &json!({"phase": "x"})).unwrap();
+        assert_eq!(
+            read_repair_job_fs(&journal.root, "unknown").unwrap()["phase"],
+            "x"
+        );
+        write_rebalance_job_fs(&journal.root, &json!({"phase": "y"})).unwrap();
+        assert_eq!(
+            read_rebalance_job_fs(&journal.root, "unknown").unwrap()["phase"],
+            "y"
+        );
+    }
+
     /// A repair simulation refuses missing parameters and an unknown policy
     /// before it ever opens the DR database.
     #[test]
