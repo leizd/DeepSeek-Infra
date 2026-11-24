@@ -6838,10 +6838,16 @@ mod unit_tests {
     /// lowercases the kind, defaults the replica id and refuses a non-list.
     #[test]
     fn replica_locators_parse_every_supported_kind() {
-        // A non-list is a 400, not an empty list.
-        let error = parse_replica_locators(&json!({"kind": "fs"})).unwrap_err();
-        assert_eq!(error.status, 400);
-        assert_eq!(error.message, "control-authority-bootstrap-must-be-list");
+        // A non-list is a 400, not an empty list. `unwrap_err` would need
+        // `AuthorityLocator: Debug`, which the production type does not derive, so
+        // the error is pulled out by match instead of changing the type for a test.
+        match parse_replica_locators(&json!({"kind": "fs"})) {
+            Err(error) => {
+                assert_eq!(error.status, 400);
+                assert_eq!(error.message, "control-authority-bootstrap-must-be-list");
+            }
+            Ok(_) => panic!("a non-list must be refused"),
+        }
 
         let parsed = parse_replica_locators(&json!([
             // Nested `target`, the canonical shape.
