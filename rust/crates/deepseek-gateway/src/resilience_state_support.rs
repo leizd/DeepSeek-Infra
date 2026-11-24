@@ -5585,10 +5585,14 @@ mod unit_tests {
             // pairs, which win if they name the same key.
             let cleared = ("DEEPSEEK_CONTROL_AUTHORITY_BOOTSTRAP", String::new());
             for (key, value) in std::iter::once(&cleared).chain(pairs.iter()) {
-                saved.push((key.to_string(), std::env::var_os(key.as_str())));
+                // The iterator yields `&&str`; re-tying it to `&str` is the
+                // coercion `var_os` and `set_var` accept. `key.as_str()` would
+                // resolve to the unstable `str_as_str` feature on this edition.
+                let key: &str = key;
+                saved.push((key.to_string(), std::env::var_os(key)));
                 // SAFETY: `RootEnvLock` keeps every environment mutation in this
                 // module's tests on one thread at a time.
-                unsafe { std::env::set_var(key.as_str(), value) };
+                unsafe { std::env::set_var(key, value) };
             }
             Self { saved, _lock: lock }
         }
