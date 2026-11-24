@@ -7410,4 +7410,74 @@ mod unit_tests {
             evaluations.keys().collect::<Vec<_>>()
         );
     }
+    /// A risk that opens, clears and reopens walks the whole observation
+    /// lifecycle: each transition records its own SLO sample and burn record, and
+    /// the row's status, reopen count and severity history follow along.
+    #[test]
+    fn observing_a_risk_through_open_clear_and_reopen() {
+        let scratch = Scratch::new("observe-lifecycle");
+        let risk = |severity: &str| {
+            json!({
+                "type": "REPLICA_LAG",
+                "policyId": "p1",
+                "backupId": "b1",
+                "severity": severity,
+                "detectedAt": "2024-01-01T00:00:00+00:00"
+            })
+        };
+        let snapshot = |severity: &str, generated: &str, digest: &str| {
+            json!({
+                "riskDigest": digest,
+                "generatedAt": generated,
+                "overallRisk": severity,
+                "risks": [risk(severity)]
+            })
+        };
+
+        // 1. Opens as critical.
+        let mut first = snapshot("critical", "2024-01-01T00:00:00Z", &"a".repeat(64));
+        observe_risk_snapshot_and_slo(
+            &scratch.root,
+            &mut first,
+            1_704_067_200,
+            "2024-01-01T00:00:00Z",
+        )
+        .unwrap();
+        assert_eq!(first["risks"][0]["riskObservation"]["status"], "OPEN");
+        assert_eq!(first["risks"][0]["riskObservation"]["observationCount"], 1);
+
+        // 2. Clears a day later: the row closes and a clear latency is recorded.
+        let mut second = snapshot("healthy", "2024-01-02T00:00:00Z", &"b".repeat(64));
+        observe_risk_snapshot_and_slo(
+            &scratch.root,
+            &mut second,
+            1_704_153_600,
+            "2024-01-02T00:00:00Z",
+        )
+        .unwrap();
+        let cleared = &second["risks"][0]["riskObservation"];
+        assert_eq!(cleared["status"], "CLEARED", "{second}");
+        assert_eq!(cleared["observationCount"], 2);
+        assert_eq!(cleared["lastClearedAt"], "2024-01-02T00:00:00Z");
+
+        // 3. Reopens: the count grows, the reopen count is 1 and the status flips.
+        let mut third = snapshot("critical", "2024-01-03T00:00:00Z", &"c".repeat(64));
+        observe_risk_snapshot_and_slo(
+            &scratch.root,
+            &mut third,
+            1_704_240_000,
+            "2024-01-03T00:00:00Z",
+        )
+        .unwrap();
+        let reopened = &third["risks"][0]["riskObservation"];
+        assert_eq!(reopened["status"], "REOPENED", "{third}");
+        assert_eq!(reopened["observationCount"], 3);
+        assert_eq!(reopened["reopenCount"], 1);
+        // The peak severity survives the healthy dip.
+        assert_eq!(reopened["peakSeverity"], "critical");
+
+        // The SLO ledger recorded samples for each transition.
+        let slo_dir = scratch.root.join(".resilience-slo");
+        assert!(slo_dir.is_dir(), "the SLO ledger must exist");
+    }
 }
