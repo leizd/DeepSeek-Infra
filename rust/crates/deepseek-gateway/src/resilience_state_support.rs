@@ -7340,4 +7340,74 @@ mod unit_tests {
         // Nothing is selected when the replicas disagree.
         assert_eq!(report["canonicalDigest"], Value::Null);
     }
+    /// `simulate_coordination_wave` evaluates the blast radius of a proposed wave.
+    /// With no actions there is nothing to evaluate, and the ids come back empty.
+    #[test]
+    fn a_wave_with_no_actions_passes_trivially() {
+        let scratch = Scratch::new("wave-empty");
+        let guard = RootEnvGuard::bind(&scratch.root);
+        let sim = simulate_coordination_wave(None, None, &[], &[]).unwrap();
+        drop(guard);
+
+        assert_eq!(sim["passed"], true);
+        assert_eq!(sim["reason"], "blast-radius-invariants-satisfied");
+        assert!(sim["proposedActionIds"].as_array().unwrap().is_empty());
+        assert!(sim["runningActionIds"].as_array().unwrap().is_empty());
+        assert!(sim["evaluations"].as_object().unwrap().is_empty());
+    }
+
+    /// The proposed and running ids are reported as given, and an action with no
+    /// id is simply absent from them.
+    #[test]
+    fn a_wave_reports_the_action_ids_it_was_given() {
+        let scratch = Scratch::new("wave-ids");
+        let guard = RootEnvGuard::bind(&scratch.root);
+        let proposed = vec![
+            json!({"actionId": "p1", "type": "START_DR_DRILL"}),
+            // No id: it cannot be reported.
+            json!({"type": "START_DR_DRILL"}),
+        ];
+        let running = vec![json!({"actionId": "r1", "type": "CREATE_REPAIR_JOB"})];
+        let sim = simulate_coordination_wave(None, None, &proposed, &running).unwrap();
+        drop(guard);
+
+        assert_eq!(sim["proposedActionIds"], json!(["p1"]));
+        assert_eq!(sim["runningActionIds"], json!(["r1"]));
+        // Neither action names a `policyId`, so no policy is evaluated at all and
+        // the wave passes with an empty evaluation map. Both id lists still report
+        // exactly what they were given.
+        assert_eq!(sim["passed"], true, "{sim}");
+        assert_eq!(sim["reason"], "blast-radius-invariants-satisfied");
+        assert!(sim["evaluations"].as_object().unwrap().is_empty(), "{sim}");
+    }
+
+    /// An action naming a policy is evaluated under that policy's key, and one
+    /// duplicated across the running and proposed lists is counted once.
+    #[test]
+    fn a_wave_groups_actions_by_policy_and_deduplicates() {
+        let scratch = Scratch::new("wave-policy");
+        let guard = RootEnvGuard::bind(&scratch.root);
+        let once = json!({
+            "actionId": "a1",
+            "type": "CREATE_REPAIR_JOB",
+            "parameters": {"policyId": "p1", "backupId": "b1"}
+        });
+        // The same action id in both lists is one entry, not two. Both slices are
+        // built from the same value so the identity matches while ownership stays
+        // unambiguous.
+        let proposed = vec![once.clone()];
+        let running = vec![once];
+        let sim = simulate_coordination_wave(None, None, &proposed, &running).unwrap();
+        drop(guard);
+
+        assert_eq!(sim["proposedActionIds"], json!(["a1"]));
+        assert_eq!(sim["runningActionIds"], json!(["a1"]));
+        // The evaluation is keyed by `policy:backup`.
+        let evaluations = sim["evaluations"].as_object().expect("evaluations");
+        assert!(
+            evaluations.contains_key("p1:b1"),
+            "expected a p1:b1 evaluation, got {:?}",
+            evaluations.keys().collect::<Vec<_>>()
+        );
+    }
 }
