@@ -6804,4 +6804,196 @@ mod unit_tests {
             );
         }
     }
+    /// A checkpoint whose digests actually verify, built with the same
+    /// `sha256_compact` the verifier uses so the fixture cannot drift from the
+    /// check it is meant to satisfy.
+    fn authority_checkpoint(generation: i64, previous: Option<&str>) -> Value {
+        let previous_value = previous.map(|p| json!(p)).unwrap_or(Value::Null);
+        // `verify_checkpoint_integrity` builds the payload object from every key
+        // except `digest`, `previousDigest` and `payloadDigest` - it drops
+        // `previousDigest` rather than folding it back in, and covers it through
+        // the envelope digest instead. The fixture mirrors that exactly.
+        let payload = json!({
+            "schema": AUTHORITY_SCHEMA,
+            "authorityGeneration": generation,
+            "updatedAt": "2024-01-01T00:00:00Z",
+        });
+        let payload_digest = sha256_compact(&payload);
+        // Clone into the envelope so both values are still owned for the
+        // checkpoint body written below.
+        let envelope = json!({
+            "authorityGeneration": generation,
+            "previousDigest": previous_value.clone(),
+            "payloadDigest": payload_digest.clone(),
+            "schema": AUTHORITY_SCHEMA,
+        });
+        let mut full = payload.as_object().unwrap().clone();
+        full.insert("previousDigest".to_string(), previous_value);
+        full.insert("payloadDigest".to_string(), json!(payload_digest));
+        full.insert("digest".to_string(), json!(sha256_compact(&envelope)));
+        Value::Object(full)
+    }
+
+    /// `parse_replica_locators` accepts filesystem and object-store entries,
+    /// lowercases the kind, defaults the replica id and refuses a non-list.
+    #[test]
+    fn replica_locators_parse_every_supported_kind() {
+        // A non-list is a 400, not an empty list.
+        let error = parse_replica_locators(&json!({"kind": "fs"})).unwrap_err();
+        assert_eq!(error.status, 400);
+        assert_eq!(error.message, "control-authority-bootstrap-must-be-list");
+
+        let parsed = parse_replica_locators(&json!([
+            // Nested `target`, the canonical shape.
+            {"replicaId": "r1", "target": {"kind": "FileSystem", "root": "/srv/a"}},
+            // Flat shape with `path` instead of `root`.
+            {"id": "r2", "kind": "path", "path": "/srv/b"},
+            // Object store: recognised, but carries no root.
+            {"replicaId": "r3", "target": {"kind": "S3"}},
+            // A filesystem entry with no root is dropped.
+            {"replicaId": "r4", "kind": "fs"},
+            // An unknown kind is dropped.
+            {"replicaId": "r5", "kind": "tape"},
+            // A non-object entry is skipped, and the index still drives the
+            // default replica id.
+            "not-an-object",
+            {"kind": "object-store"}
+        ]))
+        .unwrap();
+
+        let ids: Vec<&str> = parsed.iter().map(|l| l.replica_id.as_str()).collect();
+        assert_eq!(ids, vec!["r1", "r2", "r3", "replica-6"]);
+        assert_eq!(parsed[0].kind, "filesystem");
+        assert_eq!(parsed[0].root.as_deref(), Some("/srv/a"));
+        assert_eq!(parsed[1].kind, "filesystem");
+        assert_eq!(parsed[1].root.as_deref(), Some("/srv/b"));
+        assert_eq!(parsed[2].kind, "s3");
+        assert_eq!(parsed[2].root, None);
+        assert_eq!(parsed[3].kind, "s3");
+        assert_eq!(parsed[3].root, None);
+
+        // An empty list is valid and empty.
+        assert!(parse_replica_locators(&json!([])).unwrap().is_empty());
+    }
+
+    /// The authority chain verifier walks generations in order and refuses every
+    /// way a chain can be malformed.
+    #[test]
+    fn authority_chain_verifies_a_contiguous_chain() {
+        // An empty history is refused.
+        assert_eq!(
+            verify_authority_chain_entries(&[]).unwrap_err(),
+            "control-authority-empty-history"
+        );
+
+        // A non-object entry is a schema mismatch.
+        assert_eq!(
+            verify_authority_chain_entries(&[json!("nope")]).unwrap_err(),
+            "control-authority-schema-mismatch"
+        );
+
+        // A schema mismatch on the checkpoint itself.
+        let mut bad_schema = authority_checkpoint(1, None);
+        bad_schema["schema"] = json!("control-authority-v0");
+        assert_eq!(
+            verify_authority_chain_entries(&[bad_schema]).unwrap_err(),
+            "control-authority-schema-mismatch"
+        );
+
+        // Generation zero is invalid.
+        let zero = authority_checkpoint(0, None);
+        assert_eq!(
+            verify_authority_chain_entries(&[zero]).unwrap_err(),
+            "control-authority-invalid-generation"
+        );
+
+        // A tampered payload digest is caught.
+        let mut bad_payload = authority_checkpoint(1, None);
+        bad_payload["updatedAt"] = json!("2024-06-01T00:00:00Z");
+        assert!(
+            verify_authority_chain_entries(&[bad_payload])
+                .unwrap_err()
+                .starts_with("control-authority-payload-digest-mismatch:1")
+        );
+
+        // A two-link chain verifies and reports both generations.
+        let first = authority_checkpoint(1, None);
+        let first_digest = first["digest"].as_str().unwrap().to_string();
+        let second = authority_checkpoint(2, Some(&first_digest));
+        // Order in the input must not matter: the verifier sorts by generation.
+        let seen = verify_authority_chain_entries(&[second.clone(), first.clone()]).unwrap();
+        assert_eq!(seen.len(), 2);
+        assert_eq!(
+            seen.get(&1).map(String::as_str),
+            Some(first_digest.as_str())
+        );
+        assert_eq!(seen.get(&2).map(String::as_str), second["digest"].as_str());
+    }
+
+    /// Every structural break in the chain has its own refusal message.
+    #[test]
+    fn authority_chain_refuses_each_structural_break() {
+        let first = authority_checkpoint(1, None);
+        let first_digest = first["digest"].as_str().unwrap().to_string();
+
+        // A genesis with a previous digest.
+        let mut genesis_with_prev = authority_checkpoint(1, None);
+        genesis_with_prev["previousDigest"] = json!(first_digest);
+        // Re-seal so the digest check passes and the genesis rule is what fires.
+        let resealed = reseal_checkpoint(genesis_with_prev);
+        assert_eq!(
+            verify_authority_chain_entries(&[resealed]).unwrap_err(),
+            "control-authority-genesis-previous-must-be-null"
+        );
+
+        // A chain that starts at generation 2.
+        let mut starts_high = authority_checkpoint(2, None);
+        starts_high = reseal_checkpoint(starts_high);
+        assert_eq!(
+            verify_authority_chain_entries(&[starts_high]).unwrap_err(),
+            "control-authority-gap:expected-genesis-1-got-2"
+        );
+
+        // A skipped generation.
+        let third = reseal_checkpoint(authority_checkpoint(3, Some(&first_digest)));
+        assert_eq!(
+            verify_authority_chain_entries(&[first.clone(), third]).unwrap_err(),
+            "control-authority-gap:expected-2-got-3"
+        );
+
+        // A second link whose previousDigest does not name the first.
+        let broken = reseal_checkpoint(authority_checkpoint(2, Some("not-the-first-digest")));
+        assert_eq!(
+            verify_authority_chain_entries(&[first, broken]).unwrap_err(),
+            "control-authority-divergent:broken-chain-at-2"
+        );
+    }
+
+    /// Recompute both digests after a fixture edit, so a test can target a later
+    /// rule instead of failing the integrity check.
+    fn reseal_checkpoint(mut checkpoint: Value) -> Value {
+        let generation = checkpoint["authorityGeneration"].as_i64().unwrap_or(0);
+        let previous = checkpoint["previousDigest"].clone();
+        // Same exclusion set as `verify_checkpoint_integrity`: `previousDigest`
+        // is not part of the payload object.
+        let mut payload = Map::new();
+        for (k, v) in checkpoint.as_object().unwrap() {
+            if !matches!(k.as_str(), "digest" | "previousDigest" | "payloadDigest") {
+                payload.insert(k.clone(), v.clone());
+            }
+        }
+        let payload_digest = sha256_compact(&Value::Object(payload));
+        // Clone into the envelope so `payload_digest` is still owned when it is
+        // written into the checkpoint below.
+        let envelope = json!({
+            "authorityGeneration": generation,
+            "previousDigest": previous,
+            "payloadDigest": payload_digest.clone(),
+            "schema": AUTHORITY_SCHEMA,
+        });
+        let obj = checkpoint.as_object_mut().unwrap();
+        obj.insert("payloadDigest".to_string(), json!(payload_digest));
+        obj.insert("digest".to_string(), json!(sha256_compact(&envelope)));
+        checkpoint
+    }
 }
