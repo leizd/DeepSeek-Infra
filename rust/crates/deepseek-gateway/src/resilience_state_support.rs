@@ -5564,17 +5564,29 @@ mod unit_tests {
 
     /// Binds `DEEPSEEK_INFRA_ROOT` to `root` for the guard's lifetime.
     struct RootEnvGuard {
-        saved: Option<std::ffi::OsString>,
+        saved: Vec<(&'static str, Option<std::ffi::OsString>)>,
         _lock: RootEnvLock,
     }
 
     impl RootEnvGuard {
         fn bind(root: &Path) -> Self {
+            Self::with(&[("DEEPSEEK_INFRA_ROOT", root.to_string_lossy().into_owned())])
+        }
+
+        /// Bind several variables at once. The bootstrap-file variable is cleared
+        /// so a developer's shell cannot shadow the locators a case sets.
+        fn with(pairs: &[(&str, String)]) -> Self {
             let lock = RootEnvLock::acquire();
-            let saved = std::env::var_os("DEEPSEEK_INFRA_ROOT");
-            // SAFETY: `RootEnvLock` keeps every environment mutation in this
-            // module's tests on one thread at a time.
-            unsafe { std::env::set_var("DEEPSEEK_INFRA_ROOT", root) };
+            let mut saved = Vec::new();
+            for (key, value) in [("DEEPSEEK_CONTROL_AUTHORITY_BOOTSTRAP", String::new())]
+                .iter()
+                .chain(pairs.iter())
+            {
+                saved.push((*key, std::env::var_os(key)));
+                // SAFETY: `RootEnvLock` keeps every environment mutation in this
+                // module's tests on one thread at a time.
+                unsafe { std::env::set_var(key, value) };
+            }
             Self { saved, _lock: lock }
         }
     }
@@ -5583,9 +5595,11 @@ mod unit_tests {
         fn drop(&mut self) {
             // SAFETY: as above; the lock is still held here.
             unsafe {
-                match &self.saved {
-                    Some(value) => std::env::set_var("DEEPSEEK_INFRA_ROOT", value),
-                    None => std::env::remove_var("DEEPSEEK_INFRA_ROOT"),
+                for (key, saved) in self.saved.drain(..) {
+                    match saved {
+                        Some(value) => std::env::set_var(key, value),
+                        None => std::env::remove_var(key),
+                    }
                 }
             }
         }
@@ -7057,7 +7071,9 @@ mod unit_tests {
         assert_eq!(budget["drReserve"], 1);
         // The blast-radius simulation always returns its own document, and with
         // no proposed actions there is nothing for it to reject.
-        let wave = plan["blastRadiusSimulation"].as_object().expect("wave simulation");
+        let wave = plan["blastRadiusSimulation"]
+            .as_object()
+            .expect("wave simulation");
         assert_eq!(wave["passed"], true);
         assert!(wave["proposedActionIds"].as_array().unwrap().is_empty());
         assert!(wave["runningActionIds"].as_array().unwrap().is_empty());
@@ -7154,5 +7170,167 @@ mod unit_tests {
             healthy["coordinationPlanId"],
             critical["coordinationPlanId"]
         );
+    }
+    /// Lay out one filesystem replica under `root` with a head file and a
+    /// checkpoint history, so `load_filesystem_replica` accepts it.
+    fn seed_replica(root: &Path, checkpoints: &[Value]) {
+        let dir = root.join("control").join("authority");
+        std::fs::create_dir_all(dir.join("checkpoints")).unwrap();
+        for (index, checkpoint) in checkpoints.iter().enumerate() {
+            std::fs::write(
+                dir.join("checkpoints")
+                    .join(format!("{:04}.json", index + 1)),
+                checkpoint.to_string(),
+            )
+            .unwrap();
+        }
+        let tip = checkpoints.last().expect("a tip checkpoint");
+        std::fs::write(dir.join("head.json"), tip.to_string()).unwrap();
+    }
+
+    /// Point the bootstrap locators at one filesystem replica per path.
+    fn seed_locators(roots: &[&Path]) -> String {
+        let replicas: Vec<Value> = roots
+            .iter()
+            .enumerate()
+            .map(|(index, root)| {
+                json!({
+                    "replicaId": format!("rep{index}"),
+                    "target": {"kind": "filesystem", "root": root.to_string_lossy()}
+                })
+            })
+            .collect();
+        json!(replicas).to_string()
+    }
+
+    /// With no replica configured the verifier reports `UNAVAILABLE` but still
+    /// answers with the control database's own head.
+    #[test]
+    fn authority_verification_reports_no_replicas() {
+        let scratch = Scratch::new("verify-none");
+        seed_control(&scratch.root, &[]);
+        let conn =
+            Connection::open(scratch.root.join(".backup-control").join("control.sqlite3")).unwrap();
+        let guard = RootEnvGuard::with(&[
+            (
+                "DEEPSEEK_INFRA_ROOT",
+                scratch.root.to_string_lossy().into_owned(),
+            ),
+            ("DEEPSEEK_CONTROL_AUTHORITY_REPLICAS", "[]".to_string()),
+        ]);
+        let report = authority_verify_readonly(Some(&conn)).unwrap();
+        drop(guard);
+
+        assert_eq!(report["readOnly"], true);
+        // Nothing is configured, so resolved and configured are both zero and
+        // nothing is divergent.
+        assert_eq!(report["health"]["configuredReplicaCount"], 0);
+        assert_eq!(report["health"]["resolvedReplicaCount"], 0);
+        assert!(report["replicas"].as_array().unwrap().is_empty());
+        assert_eq!(report["status"], "ok");
+        assert_eq!(report["overall"], "HEALTHY");
+        assert!(report["issues"].as_array().unwrap().is_empty(), "{report}");
+        // The control database head is still reported.
+        assert_eq!(report["canonicalDigest"], Value::Null);
+    }
+
+    /// One healthy replica with a two-link chain is selected as canonical.
+    #[test]
+    fn authority_verification_selects_a_healthy_replica() {
+        let scratch = Scratch::new("verify-one");
+        seed_control(&scratch.root, &[]);
+        let replica = scratch.root.join("replica-a");
+        std::fs::create_dir_all(&replica).unwrap();
+        let first = authority_checkpoint(1, None);
+        let first_digest = first["digest"].as_str().unwrap().to_string();
+        let second = authority_checkpoint(2, Some(&first_digest));
+        seed_replica(&replica, &[first, second.clone()]);
+
+        let conn =
+            Connection::open(scratch.root.join(".backup-control").join("control.sqlite3")).unwrap();
+        let guard = RootEnvGuard::with(&[
+            (
+                "DEEPSEEK_INFRA_ROOT",
+                scratch.root.to_string_lossy().into_owned(),
+            ),
+            (
+                "DEEPSEEK_CONTROL_AUTHORITY_REPLICAS",
+                seed_locators(&[&replica]),
+            ),
+        ]);
+        let report = authority_verify_readonly(Some(&conn)).unwrap();
+        drop(guard);
+
+        assert_eq!(report["health"]["configuredReplicaCount"], 1);
+        assert_eq!(report["health"]["resolvedReplicaCount"], 1);
+        let replicas = report["replicas"].as_array().expect("replicas");
+        assert_eq!(replicas.len(), 1, "{report}");
+        assert_eq!(replicas[0]["reachable"], true);
+        assert_eq!(replicas[0]["historyValid"], true);
+        // The report names the field `tipGeneration`, not `generation`.
+        assert_eq!(replicas[0]["tipGeneration"], 2);
+        // The canonical head is the replica's tip.
+        assert_eq!(report["canonicalGeneration"], 2);
+        assert_eq!(
+            report["canonicalDigest"].as_str().unwrap(),
+            second["digest"].as_str().unwrap()
+        );
+        assert_eq!(report["overall"], "HEALTHY", "{report}");
+        assert!(report["issues"].as_array().unwrap().is_empty(), "{report}");
+    }
+
+    /// Two replicas with different tips at the same generation are divergent.
+    #[test]
+    fn authority_verification_detects_divergent_replicas() {
+        let scratch = Scratch::new("verify-divergent");
+        seed_control(&scratch.root, &[]);
+        let left = scratch.root.join("replica-left");
+        let right = scratch.root.join("replica-right");
+        for dir in [&left, &right] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        // Same generation, different content => different digest.
+        let mut left_tip = authority_checkpoint(1, None);
+        left_tip["updatedAt"] = json!("2024-01-01T00:00:00Z");
+        let left_tip = reseal_checkpoint(left_tip);
+        let mut right_tip = authority_checkpoint(1, None);
+        right_tip["updatedAt"] = json!("2024-06-01T00:00:00Z");
+        let right_tip = reseal_checkpoint(right_tip);
+        assert_ne!(left_tip["digest"], right_tip["digest"]);
+        seed_replica(&left, &[left_tip]);
+        seed_replica(&right, &[right_tip]);
+
+        let conn =
+            Connection::open(scratch.root.join(".backup-control").join("control.sqlite3")).unwrap();
+        let guard = RootEnvGuard::with(&[
+            (
+                "DEEPSEEK_INFRA_ROOT",
+                scratch.root.to_string_lossy().into_owned(),
+            ),
+            (
+                "DEEPSEEK_CONTROL_AUTHORITY_REPLICAS",
+                seed_locators(&[&left, &right]),
+            ),
+        ]);
+        let report = authority_verify_readonly(Some(&conn)).unwrap();
+        drop(guard);
+
+        assert_eq!(report["overall"], "DIVERGENT", "{report}");
+        assert_eq!(report["status"], "degraded");
+        let issues: Vec<&str> = report["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.starts_with("divergent-or-invalid:")),
+            "{issues:?}"
+        );
+        assert!(issues.contains(&"cross-replica-divergent"), "{issues:?}");
+        // Nothing is selected when the replicas disagree.
+        assert_eq!(report["canonicalDigest"], Value::Null);
     }
 }
