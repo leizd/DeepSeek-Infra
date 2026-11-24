@@ -7564,4 +7564,79 @@ mod unit_tests {
             "{weaknesses:?}"
         );
     }
+    /// `has_open_required_jobs` scans `.backup-replication` for a job that is both
+    /// `required` and not yet in a terminal phase. It gates policy deletion, so a
+    /// miss here would let a deleting policy race a live replication job.
+    #[test]
+    fn required_replication_jobs_block_while_unfinished() {
+        let scratch = Scratch::new("open-jobs");
+        let dir = scratch.root.join(".backup-replication");
+        std::fs::create_dir_all(&dir).unwrap();
+        let write = |name: &str, payload: Value| {
+            std::fs::write(dir.join(name), payload.to_string()).unwrap();
+        };
+
+        // No directory at all, and an empty one, are both "nothing open".
+        let empty = Scratch::new("open-jobs-empty");
+        assert!(!has_open_required_jobs(&empty.root, "p1", "b1"));
+        std::fs::create_dir_all(empty.root.join(".backup-replication")).unwrap();
+        assert!(!has_open_required_jobs(&empty.root, "p1", "b1"));
+
+        // A required job still copying blocks.
+        write(
+            "live.json",
+            json!({"jobId": "j1", "policyId": "p1", "backupId": "b1", "mode": "required", "phase": "copying"}),
+        );
+        assert!(has_open_required_jobs(&scratch.root, "p1", "b1"));
+        // A different backup is not affected when one is named.
+        assert!(!has_open_required_jobs(&scratch.root, "p1", "b2"));
+        // With no backup id, any backup under the policy matches.
+        assert!(has_open_required_jobs(&scratch.root, "p1", ""));
+        // A different policy never matches.
+        assert!(!has_open_required_jobs(&scratch.root, "p2", "b1"));
+
+        // Every terminal phase stops blocking.
+        for phase in ["committed", "failed", "failed-terminal", "superseded"] {
+            write(
+                "live.json",
+                json!({"jobId": "j1", "policyId": "p1", "backupId": "b1", "mode": "required", "phase": phase}),
+            );
+            assert!(
+                !has_open_required_jobs(&scratch.root, "p1", "b1"),
+                "phase {phase} still blocks"
+            );
+        }
+
+        // A non-required mode never blocks, whatever its phase.
+        write(
+            "live.json",
+            json!({"jobId": "j1", "policyId": "p1", "backupId": "b1", "mode": "best-effort", "phase": "copying"}),
+        );
+        assert!(!has_open_required_jobs(&scratch.root, "p1", "b1"));
+
+        // Junk is skipped rather than treated as a live job: no jobId, malformed
+        // JSON, a dot file and a non-JSON extension.
+        write(
+            "live.json",
+            json!({"policyId": "p1", "mode": "required", "phase": "copying"}),
+        );
+        assert!(!has_open_required_jobs(&scratch.root, "p1", "b1"));
+        std::fs::write(dir.join("live.json"), "{broken").unwrap();
+        write(
+            ".hidden.json",
+            json!({"jobId": "j9", "policyId": "p1", "mode": "required", "phase": "copying"}),
+        );
+        write(
+            "notes.txt",
+            json!({"jobId": "j8", "policyId": "p1", "mode": "required", "phase": "copying"}),
+        );
+        assert!(!has_open_required_jobs(&scratch.root, "p1", "b1"));
+
+        // One blocking job among many skipped files is still found.
+        write(
+            "zzz-live.json",
+            json!({"jobId": "j7", "policyId": "p1", "backupId": "b1", "mode": "required", "phase": "verifying"}),
+        );
+        assert!(has_open_required_jobs(&scratch.root, "p1", "b1"));
+    }
 }
