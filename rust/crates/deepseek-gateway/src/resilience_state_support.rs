@@ -7639,4 +7639,127 @@ mod unit_tests {
         );
         assert!(has_open_required_jobs(&scratch.root, "p1", "b1"));
     }
+    /// Build the `.backup-dr/evidence.sqlite3` tables the capacity and replica
+    /// readers query, so a recovery point and its copies can be seeded.
+    fn seed_dr(
+        root: &Path,
+        recovery_points: &[(&str, &str, &str, &str)],
+        copies: &[(&str, &str, &str)],
+    ) {
+        let dir = root.join(".backup-dr");
+        std::fs::create_dir_all(&dir).unwrap();
+        let conn = Connection::open(dir.join("evidence.sqlite3")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS recovery_points (
+                 target_id TEXT NOT NULL,
+                 policy_id TEXT NOT NULL,
+                 backup_id TEXT NOT NULL,
+                 committed_at TEXT NOT NULL,
+                 snapshot_kind TEXT,
+                 parent_backup_id TEXT,
+                 chain_digest TEXT,
+                 chain_length INTEGER,
+                 ciphertext_bytes INTEGER,
+                 logical_bytes INTEGER,
+                 recoverable INTEGER,
+                 verified_at TEXT,
+                 storage_protocol TEXT,
+                 metadata_json TEXT
+             );
+             CREATE TABLE IF NOT EXISTS recovery_point_copies (
+                 target_id TEXT NOT NULL,
+                 policy_id TEXT NOT NULL,
+                 backup_id TEXT NOT NULL,
+                 committed_at TEXT NOT NULL,
+                 recoverable INTEGER,
+                 state TEXT
+             );",
+        )
+        .unwrap();
+        for (target, policy, backup, committed) in recovery_points {
+            // `verified_at` is read as a non-null TEXT, so it cannot be NULL here.
+            conn.execute(
+                "INSERT INTO recovery_points VALUES (?, ?, ?, ?, 'full', NULL, NULL, 1, 0, 0, 1, ?, NULL, '{}')",
+                rusqlite::params![target, policy, backup, committed, committed],
+            )
+            .unwrap();
+        }
+        for (target, policy, backup) in copies {
+            conn.execute(
+                "INSERT INTO recovery_point_copies VALUES (?, ?, ?, '2024-01-01T00:00:00Z', 1, 'healthy')",
+                rusqlite::params![target, policy, backup],
+            )
+            .unwrap();
+        }
+    }
+
+    /// A capacity-exhaustion risk becomes a rebalance action only when a
+    /// destination target with headroom AND a candidate copy for a policy exist.
+    #[test]
+    fn a_capacity_risk_plans_a_rebalance_when_a_destination_exists() {
+        let scratch = Scratch::new("plan-capacity");
+        // `src` is the exhausted target and `dst` has plenty of quota; the
+        // registered list is what `select_rebalance_destination_readonly` ranks.
+        seed_control(
+            &scratch.root,
+            &[
+                (
+                    "src",
+                    "{\"targetId\":\"src\",\"kind\":\"filesystem\",\"quotaBytes\":1000000}",
+                ),
+                (
+                    "dst",
+                    "{\"targetId\":\"dst\",\"kind\":\"filesystem\",\"quotaBytes\":1000000000}",
+                ),
+            ],
+        );
+        seed_dr(
+            &scratch.root,
+            &[("src", "p1", "b1", "2024-01-01T00:00:00Z")],
+            &[("src", "p1", "b1")],
+        );
+        std::fs::create_dir_all(scratch.root.join(".backup-policies")).unwrap();
+        std::fs::write(
+            scratch.root.join(".backup-policies").join("p1.json"),
+            json!({"policyId": "p1", "name": "P"}).to_string(),
+        )
+        .unwrap();
+
+        let guard = RootEnvGuard::bind(&scratch.root);
+        let plan = plan_resilience_actions_logic(
+            &scratch.root,
+            &json!({
+                "riskDigest": HEAD_DIGEST,
+                "overallRisk": "critical",
+                "risks": [{
+                    "type": "CAPACITY_EXHAUSTION",
+                    "target": "src",
+                    "severity": "critical",
+                    "confidence": "verified"
+                }]
+            }),
+            false,
+            "2024-01-01T00:00:00Z",
+        )
+        .unwrap();
+        drop(guard);
+
+        let actions = plan["actions"].as_array().expect("actions");
+        let rebalance = actions
+            .iter()
+            .find(|a| a["type"] == "CREATE_REBALANCE_JOB")
+            .unwrap_or_else(|| panic!("expected a rebalance action in {plan}"));
+        assert_eq!(rebalance["source"], "src");
+        assert_eq!(rebalance["destination"], "dst");
+        assert_eq!(rebalance["policyId"], "p1");
+        assert_eq!(rebalance["backupId"], "b1");
+        assert_eq!(rebalance["reason"], "capacity-risk");
+        assert_eq!(
+            rebalance["parameters"]["reason"],
+            "proactive-capacity-rebalance"
+        );
+        assert_eq!(rebalance["parameters"]["sourceTargetId"], "src");
+        assert_eq!(rebalance["parameters"]["destTargetId"], "dst");
+        assert_eq!(rebalance["expectedEffect"], "severity-decrease");
+    }
 }
