@@ -210,7 +210,7 @@ fn v5_migration_preserves_original_rows_and_rolls_back_uncommitted_changes() {
     let store = reopened.authority_store.as_ref().unwrap();
     assert_eq!(
         super::super::super::validate_schema(&store.connection, false).unwrap(),
-        6
+        7
     );
     let after: (i64, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>) = store
         .connection

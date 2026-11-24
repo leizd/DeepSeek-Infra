@@ -109,6 +109,13 @@ func (run RunMetadata) RuntimeVersion() uint64 {
 	return run.RuntimeRevision
 }
 
+func (run RunMetadata) AdmittedRevision() uint64 {
+	if run.RuntimeRevision == 0 {
+		return 1
+	}
+	return run.RuntimeRevision
+}
+
 // A new durable generation does not erase an observed cancellation. Its own
 // separately admitted scope determines whether that cancellation is still active.
 func (run RunMetadata) CancellationActive() bool {

@@ -1,0 +1,196 @@
+"""Native gateway automation-run schedule gate.
+
+On the owner process (``DEEPSEEK_RUNTIME_MODE=python_disabled``) the
+2026-10-04 12:34 schedule trigger for ``auto_keep`` saves one item titled
+``Kept note``. A second post to the same process with cron ``0 0 * * *`` at
+15:00 is not due: it returns ``skipped`` with ``schedule_not_due`` and saves
+nothing more. The saved-item file and ``project.json`` keep the bytes from the
+successful run, and the seeded automation file is never rewritten. Python's
+automation runner is not the owner of those HTTP responses.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import socket
+import subprocess
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from deepseek_infra.infra.automation import actions as automation_actions
+from deepseek_infra.infra.automation import runner as automation_runner
+from deepseek_infra.web.routes import automation as automation_routes
+
+ROOT = Path(__file__).resolve().parents[1]
+NATIVE_GATEWAY = Path(
+    r"D:\CodexNativeVerification\native-20261006\desktop-platform-next\bin\deepseek-gateway.exe"
+)
+TOKEN = "automation-run-owner-token"
+RUN_PATH = "/api/automation/auto_keep/run"
+SEEDED_AUTOMATION = (
+    '{"automations":[{"automationId":"auto_keep","name":"Keep notes","enabled":true,'
+    '"projectId":"proj_ok","condition":{"type":"always"},'
+    '"action":{"type":"save_item","title":"Kept note","content":"hello from automation"}}]}'
+)
+SEEDED_PROJECT = '{"id":"proj_ok","name":"Demo","createdAt":10,"updatedAt":10}\n'
+DUE_BODY = b'{"trigger":{"type":"schedule","cron":"34 12 4 10 *"},"now":"2026-10-04T12:34:00+00:00"}'
+NOT_DUE_BODY = b'{"trigger":{"type":"schedule","cron":"0 0 * * *"},"now":"2026-10-04T15:00:00+00:00"}'
+CLEARED = (
+    "AUTH_TOKEN",
+    "AUTH_DISABLED",
+    "DEEPSEEK_RUNTIME_MODE",
+    "AUTOMATION_ENABLED",
+    "AUTOMATION_MAX_RUNS_PER_DAY",
+    "AUTOMATION_MIN_INTERVAL_SECONDS",
+    "AUTOMATION_ALLOW_BROWSER",
+    "AUTOMATION_REQUIRE_CONFIRM_FOR_BROWSER_WRITE",
+    "AUTOMATION_RUN_TIMEOUT_SECONDS",
+)
+AUTOMATION_ENV = {
+    "AUTOMATION_ENABLED": "1",
+    "AUTOMATION_MAX_RUNS_PER_DAY": "50",
+    "AUTOMATION_MIN_INTERVAL_SECONDS": "300",
+    "AUTOMATION_ALLOW_BROWSER": "0",
+    "AUTOMATION_REQUIRE_CONFIRM_FOR_BROWSER_WRITE": "1",
+    "AUTOMATION_RUN_TIMEOUT_SECONDS": "1800",
+}
+
+
+def _free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def _post(port: int, body: bytes) -> tuple[int, dict[str, Any]]:
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}{RUN_PATH}",
+        data=body,
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {TOKEN}"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            status = response.status
+            payload = response.read()
+    except urllib.error.HTTPError as exc:
+        status = exc.code
+        payload = exc.read()
+    parsed = json.loads(payload.decode("utf-8"))
+    assert isinstance(parsed, dict)
+    return status, parsed
+
+
+def _child_env(tmp_settings: Path, port: int) -> dict[str, str]:
+    env = os.environ.copy()
+    for name in CLEARED:
+        env.pop(name, None)
+    env.update(AUTOMATION_ENV)
+    env["DEEPSEEK_INFRA_ROOT"] = str(tmp_settings)
+    env["DEEPSEEK_INFRA_STATIC_DIR"] = str(ROOT / "static")
+    env["GATEWAY_BIND_ADDR"] = f"127.0.0.1:{port}"
+    env["AUTH_TOKEN"] = TOKEN
+    env["DEEPSEEK_RUNTIME_MODE"] = "python_disabled"
+    return env
+
+
+def _serve(tmp_settings: Path, env: dict[str, str], port: int) -> tuple[subprocess.Popen[bytes], Any]:
+    log_path = tmp_settings / "gateway-automation-run-not-due.log"
+    log_handle = log_path.open("wb")
+    process = subprocess.Popen(
+        [str(NATIVE_GATEWAY)],
+        cwd=str(NATIVE_GATEWAY.parent),
+        env=env,
+        stdout=log_handle,
+        stderr=subprocess.STDOUT,
+    )
+    deadline = time.time() + 20
+    listening = False
+    while time.time() < deadline:
+        if process.poll() is not None:
+            break
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+                listening = True
+                break
+        except OSError:
+            time.sleep(0.1)
+    if not listening:
+        process.kill()
+        process.wait(timeout=10)
+        log_handle.close()
+        raise AssertionError(log_path.read_text(encoding="utf-8", errors="replace"))
+    return process, log_handle
+
+
+def _stop(served: tuple[subprocess.Popen[bytes], Any]) -> None:
+    served[0].kill()
+    served[0].wait(timeout=10)
+    served[1].close()
+
+
+def test_second_automation_run_is_skipped_when_schedule_is_not_due(
+    tmp_settings: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _refuse_python_run(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("python run_once entered")
+
+    def _refuse_python_save(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("python save_item_action entered")
+
+    def _refuse_python_router(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("python create_automation_router entered")
+
+    assert NATIVE_GATEWAY.is_file()
+    monkeypatch.setattr(automation_runner, "run_once", _refuse_python_run)
+    monkeypatch.setattr(automation_actions, "save_item_action", _refuse_python_save)
+    monkeypatch.setattr(automation_routes, "create_automation_router", _refuse_python_router)
+
+    store = tmp_settings / ".automation" / "automations.json"
+    store.parent.mkdir(parents=True, exist_ok=True)
+    store.write_bytes(SEEDED_AUTOMATION.encode("utf-8"))
+    project = tmp_settings / ".projects" / "proj_ok" / "project.json"
+    project.parent.mkdir(parents=True, exist_ok=True)
+    project.write_bytes(SEEDED_PROJECT.encode("utf-8"))
+    saved = project.parent / "saved-items.json"
+    seeded_store = store.read_bytes()
+
+    port = _free_port()
+    owner = _serve(tmp_settings, _child_env(tmp_settings, port), port)
+    try:
+        status, payload = _post(port, DUE_BODY)
+        assert status == 200
+        assert payload["ok"] is True
+        run = payload["run"]
+        assert run["status"] == "success"
+        assert run["logs"] == ["saveItem"]
+        items = json.loads(saved.read_text(encoding="utf-8"))["items"]
+        assert len(items) == 1
+        assert items[0]["title"] == "Kept note"
+        saved_after_run = saved.read_bytes()
+        project_after_run = project.read_bytes()
+        assert store.read_bytes() == seeded_store
+
+        status, payload = _post(port, NOT_DUE_BODY)
+        assert status == 200
+        assert payload["ok"] is True
+        skipped = payload["run"]
+        assert skipped["status"] == "skipped"
+        assert skipped["skippedReason"] == "schedule_not_due"
+        assert skipped["logs"] == ["schedule_not_due"]
+        assert skipped["error"] == ""
+        assert skipped["automationId"] == "auto_keep"
+        assert skipped["runId"] != run["runId"]
+        assert saved.read_bytes() == saved_after_run
+        assert len(json.loads(saved.read_text(encoding="utf-8"))["items"]) == 1
+        assert project.read_bytes() == project_after_run
+        assert store.read_bytes() == seeded_store
+    finally:
+        _stop(owner)

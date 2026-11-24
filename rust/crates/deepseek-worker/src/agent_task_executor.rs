@@ -4,6 +4,10 @@ use std::{
     time::{Duration, Instant},
 };
 
+use deepseek_policy::agent_runtime_admission::{
+    admitted_provider_send, execution_send_budget, execution_send_lease, follow_up_exchange,
+    provider_body_from_outputs, provider_exchange_unknown,
+};
 use deepseek_policy::multi_agent;
 use deepseek_protocol::generated::deepseek::agent::v1::{
     AgentNodeEffectMetadata, ExecuteAgentTaskRequest,
@@ -67,6 +71,93 @@ fn task_model(role: &str) -> &'static str {
     }
 }
 
+fn retain_workspace_tool_results(
+    executor: &crate::agent_plan_executor::AgentPlanExecutor,
+    operation_id: &str,
+    envelope: &Value,
+    lease_live: bool,
+) -> Result<(), tonic::Status> {
+    let Some(public_event) = envelope.get("publicEvent").and_then(Value::as_object) else {
+        return Ok(());
+    };
+    if public_event.get("type").and_then(Value::as_str) != Some("agent_tool_request") {
+        return Ok(());
+    }
+    let Some(phase) = public_event.get("phase").and_then(Value::as_str) else {
+        return Ok(());
+    };
+    if phase.is_empty() {
+        return Ok(());
+    }
+    if executor.read_retained_tool_results(operation_id).is_some() {
+        return Ok(());
+    }
+    let phase_owned = phase.to_string();
+    let mut event = Value::Object(public_event.clone());
+    if let Some(object) = event.as_object_mut() {
+        let continuation = envelope
+            .get("toolContinuation")
+            .cloned()
+            .unwrap_or(Value::Null);
+        object.insert("toolContinuation".to_string(), continuation);
+    }
+    let plan = vec![phase_owned.clone()];
+    let admission = deepseek_policy::agent_runtime_admission::RuntimeAdmission {
+        operation: "tool_continuation",
+        status: "running",
+        identity_valid: true,
+        lease: if lease_live { "live" } else { "expired" },
+        epoch: "match",
+        effect: "awaiting_tools",
+        runtime_revision: 1,
+        requested_revision: 1,
+        agent_id: &phase_owned,
+        resynthesize: false,
+        plan: &plan,
+        nodes: &[],
+        has_final_answer: false,
+        same_effect: true,
+    };
+    let round = deepseek_gateway::chat_tool_loop::ToolRoundExecutor::for_workspace(
+        executor.workspace_root.clone(),
+    );
+    let decision = round.with_chat_execution_context(None, |context| {
+        deepseek_policy::agent_runtime_admission::continue_retained_tools(
+            &admission,
+            std::slice::from_ref(&event),
+            context,
+            &|name| deepseek_gateway::retained_store_denial(name),
+        )
+    });
+    if !decision.admitted || decision.dispatch != "same-effect" || decision.events.is_empty() {
+        return Ok(());
+    }
+    executor.store_retained_tool_results(operation_id, &Value::Array(decision.events))
+}
+
+fn saved_model_turn(
+    executor: &crate::agent_plan_executor::AgentPlanExecutor,
+    operation_id: &str,
+    body: &Value,
+    envelope: &Value,
+) -> Option<Value> {
+    let stored = executor.read_retained_tool_results(operation_id)?;
+    let mut event = envelope.get("publicEvent")?.clone();
+    let object = event.as_object_mut()?;
+    object.insert("toolResults".to_string(), stored);
+    if let Some(continuation) = envelope.get("toolContinuation") {
+        object.insert("toolContinuation".to_string(), continuation.clone());
+    }
+    let decision = deepseek_policy::agent_runtime_admission::next_model_turn(
+        body,
+        std::slice::from_ref(&event),
+    );
+    if !decision.started {
+        return None;
+    }
+    decision.body
+}
+
 fn task_envelope(
     scope: (&str, &str, &str),
     message: Value,
@@ -96,33 +187,6 @@ fn task_envelope(
     Ok(
         json!({"runId":run_id,"publicEvent":{"type":"agent_output","phase":node,"output":output},
         "providerResponseSha256":response_sha256}),
-    )
-}
-
-fn rejected_task_envelope(
-    scope: (&str, &str, &str),
-    status: u16,
-    response_sha256: &str,
-    latency_ms: u64,
-) -> Result<Value, Status> {
-    let (run_id, node, task) = scope;
-    if multi_agent::profile(node).is_none()
-        || task.trim().is_empty()
-        || !deepseek_gateway::chat_execution::is_conclusive_task_rejection(status)
-        || response_sha256.len() != 64
-        || !response_sha256
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-        || latency_ms > i64::MAX as u64
-    {
-        return Err(denied());
-    }
-    let mut output =
-        multi_agent::failed_output(node, task, &format!("上游已拒绝请求（HTTP {status}）"));
-    output["latencyMs"] = json!(latency_ms);
-    Ok(
-        json!({"runId":run_id,"publicEvent":{"type":"agent_output","phase":node,"output":output},
-        "providerStatus":status,"providerResponseSha256":response_sha256}),
     )
 }
 
@@ -210,42 +274,6 @@ impl WorkerRpcService {
             .upstream
             .validate()
             .map_err(|_| Status::failed_precondition("AGENT_PROVIDER_CREDENTIAL_MISSING"))?;
-        let root = executor.artifact_root.clone();
-        let reference = claim.request.as_ref().ok_or_else(denied)?;
-        let reference = deepseek_policy::agent_run_data::ArtifactReference {
-            sha256: reference.sha256.clone(),
-            length: reference.length,
-        };
-        let recovery = tokio::task::spawn_blocking(move || {
-            let body = deepseek_policy::agent_run_data::ArtifactStore::open_readonly(&root)
-                .and_then(|store| store.get(&reference))
-                .map_err(|_| denied())?;
-            crate::agent_recovery_context::read(&root, &body)
-        })
-        .await
-        .map_err(|_| denied())??;
-        if let Some(recovery) = recovery.as_ref() {
-            {
-                let worker = self.worker.lock().await;
-                let config = worker.agent_node_authority()?;
-                worker
-                    .authority_store
-                    .as_ref()
-                    .ok_or_else(denied)?
-                    .verify_agent_recovery_retained_outputs(&recovery.context, &config)?;
-            }
-            // Check original custody without minting successor signatures.
-            // Do not hold the worker journal while opening signer custody.
-            let signer = self
-                .control_signer
-                .as_ref()
-                .ok_or_else(denied)?
-                .lock()
-                .await;
-            for source in &recovery.context.retained_outputs {
-                signer.verify_retained_node_outcome(source.outcome.as_ref().ok_or_else(denied)?)?;
-            }
-        }
         let mut begin = Request::new(BeginAgentNodeEffect {
             claim: claim.clone(),
             signed_phase_grant: input.signed_phase_grant,
@@ -274,14 +302,15 @@ impl WorkerRpcService {
                 let outputs = {
                     let worker = service.worker.lock().await;
                     let store = worker.authority_store.as_ref().ok_or_else(denied)?;
-                    if let Some(recovery) = recovery.as_ref() {
-                        store.agent_recovery_task_prior_outputs(
-                            &permit,
-                            &recovery.context,
-                            &worker.agent_node_authority()?,
-                        )?
-                    } else {
-                        store.agent_task_prior_outputs(&permit)?
+                    match store.agent_task_prior_outputs_for(&permit, |operation_id| {
+                        executor.read_model_turn(operation_id)
+                    }) {
+                        Ok(outputs) => outputs,
+                        Err(_) => {
+                            return Err(Status::failed_precondition(
+                                "AGENT_DEPENDENCY_UNPUBLISHED",
+                            ));
+                        }
                     }
                 };
                 let intent = &permit.intent;
@@ -292,8 +321,8 @@ impl WorkerRpcService {
                     .prepare_payload(
                         intent.request.as_ref().ok_or_else(denied)?,
                         move |payload| {
-                            if synthesis {
-                                let query = payload["messages"]
+                            let query = if synthesis {
+                                payload["messages"]
                                     .as_array()
                                     .and_then(|messages| {
                                         messages
@@ -303,7 +332,17 @@ impl WorkerRpcService {
                                     })
                                     .and_then(|message| message["content"].as_str())
                                     .filter(|text| !text.trim().is_empty())
-                                    .ok_or_else(denied)?;
+                                    .ok_or_else(denied)?
+                            } else {
+                                ""
+                            };
+                            if !outputs.is_empty() {
+                                return provider_body_from_outputs(
+                                    &outputs, payload, &role, &task, model, query, synthesis,
+                                )
+                                .ok_or_else(denied);
+                            }
+                            if synthesis {
                                 Ok(multi_agent::synthesis_payload(
                                     payload, model, query, &outputs,
                                 ))
@@ -319,15 +358,19 @@ impl WorkerRpcService {
                     &authority_request::utc_z_now().map_err(|_| denied())?,
                 )
                 .map_err(|_| denied())?;
-                if deadline <= now {
-                    return Err(Status::failed_precondition("AGENT_EXECUTION_LEASE_DENIED"));
+                let lease = execution_send_lease(deadline, now);
+                let admit = admitted_provider_send(lease);
+                if !admit.allowed {
+                    return Err(Status::failed_precondition(admit.code));
                 }
                 let mut config = executor.upstream.clone();
-                config.timeout = config
-                    .timeout
-                    .min(Duration::from_secs((deadline - now) as u64));
+                let budget = execution_send_budget(deadline, now, config.timeout.as_secs());
+                if !budget.armed {
+                    return Err(Status::failed_precondition(budget.code));
+                }
+                config.timeout = Duration::from_secs(budget.seconds);
                 let started = Instant::now();
-                let outcome = deepseek_gateway::chat_execution::exchange_fenced_task_outcome(
+                let (turn, receipt) = deepseek_gateway::chat_execution::exchange_fenced_turn(
                     &config,
                     &body,
                     &permit.fence,
@@ -335,65 +378,127 @@ impl WorkerRpcService {
                     crate::MAX_AGENT_NODE_OUTCOME_BYTES / 2,
                 )
                 .await
-                .map_err(|_| Status::unavailable("AGENT_PROVIDER_RESULT_UNKNOWN"))?;
+                .map_err(|_| {
+                    let failure = provider_exchange_unknown(false);
+                    Status::unavailable(failure.code)
+                })?;
+                let calls = turn.tool_calls();
+                match turn.message.get("tool_calls") {
+                    None | Some(Value::Null) => {}
+                    Some(Value::Array(raw)) if raw.len() == calls.len() => {}
+                    _ => return Err(Status::failed_precondition("AGENT_TASK_RESULT_UNKNOWN")),
+                }
                 let elapsed = started.elapsed().as_millis().min(i64::MAX as u128) as u64;
-                let envelope = match outcome {
-                    deepseek_gateway::chat_execution::FencedTaskOutcome::Rejected {
-                        status,
-                        response_sha256,
-                    } if !synthesis => rejected_task_envelope(
+                let envelope = if synthesis {
+                    synthesis_envelope(&run_id, turn.message, turn.usage, calls, &receipt, elapsed)?
+                } else {
+                    task_envelope(
                         (&run_id, &intent.node_id, &intent.task),
-                        status,
-                        &response_sha256,
+                        turn.message,
+                        turn.usage,
+                        calls,
+                        &receipt,
                         elapsed,
-                    )?,
-                    deepseek_gateway::chat_execution::FencedTaskOutcome::Rejected {
-                        status,
-                        response_sha256,
-                    } => crate::agent_terminal_failure::rejection_envelope(
-                        &run_id,
-                        &intent.node_id,
-                        3,
-                        status,
-                        &response_sha256,
-                    )?,
-                    deepseek_gateway::chat_execution::FencedTaskOutcome::Turn {
-                        turn,
-                        response_sha256,
-                    } => {
-                        let turn = *turn;
-                        let calls = turn.tool_calls();
-                        match turn.message.get("tool_calls") {
-                            None | Some(Value::Null) => {}
-                            Some(Value::Array(raw)) if raw.len() == calls.len() => {}
-                            _ => {
-                                return Err(Status::failed_precondition(
-                                    "AGENT_TASK_RESULT_UNKNOWN",
-                                ));
+                    )?
+                };
+                let outcome = service
+                    .confirm_agent_node_effect(&permit, &envelope)
+                    .await?;
+                if !synthesis {
+                    let current = authority_request::parse_utc_z_str(
+                        &authority_request::utc_z_now().map_err(|_| denied())?,
+                    )
+                    .map_err(|_| denied())?;
+                    let tools = std::sync::Arc::clone(&executor);
+                    let stored = envelope.clone();
+                    let operation_id = permit.operation_id().to_string();
+                    let lease_live =
+                        admitted_provider_send(execution_send_lease(deadline, current)).allowed;
+                    tokio::task::spawn_blocking(move || {
+                        retain_workspace_tool_results(&tools, &operation_id, &stored, lease_live)
+                    })
+                    .await
+                    .map_err(|_| denied())??;
+                    let tools = std::sync::Arc::clone(&executor);
+                    let saved_body = body.clone();
+                    let saved_envelope = envelope.clone();
+                    let saved_operation = permit.operation_id().to_string();
+                    let follow = tokio::task::spawn_blocking(move || {
+                        saved_model_turn(&tools, &saved_operation, &saved_body, &saved_envelope)
+                    })
+                    .await
+                    .map_err(|_| denied())?;
+                    let clock = authority_request::utc_z_now()
+                        .ok()
+                        .and_then(|text| authority_request::parse_utc_z_str(&text).ok());
+                    if let Some(seconds) = clock {
+                        let follow_lease = execution_send_lease(deadline, seconds);
+                        let follow_admit = admitted_provider_send(follow_lease);
+                        if follow_admit.allowed {
+                            let follow_budget =
+                                execution_send_budget(deadline, seconds, config.timeout.as_secs());
+                            if follow_budget.armed {
+                                config.timeout = Duration::from_secs(follow_budget.seconds);
+                                if let Some(next_body) = follow {
+                                    match deepseek_gateway::chat_execution::exchange_fenced_turn(
+                                        &config,
+                                        &next_body,
+                                        &permit.fence,
+                                        permit.operation_id(),
+                                        crate::MAX_AGENT_NODE_OUTCOME_BYTES / 2,
+                                    )
+                                    .await
+                                    {
+                                        Ok((follow_turn, follow_receipt)) => {
+                                            let stored = follow_up_exchange(true, true);
+                                            if stored.store
+                                                && !stored.mark_unknown
+                                                && !stored.provider_effect
+                                                && follow_turn.tool_calls().is_empty()
+                                            {
+                                                let elapsed = started
+                                                    .elapsed()
+                                                    .as_millis()
+                                                    .min(i64::MAX as u128)
+                                                    as u64;
+                                                if let Ok(answer) = task_envelope(
+                                                    (&run_id, &intent.node_id, &intent.task),
+                                                    follow_turn.message,
+                                                    follow_turn.usage,
+                                                    Vec::new(),
+                                                    &follow_receipt,
+                                                    elapsed,
+                                                ) {
+                                                    let tools = std::sync::Arc::clone(&executor);
+                                                    let operation_id =
+                                                        permit.operation_id().to_string();
+                                                    let _ =
+                                                        tokio::task::spawn_blocking(move || {
+                                                            tools.store_model_turn(
+                                                                &operation_id,
+                                                                &answer,
+                                                            )
+                                                        })
+                                                        .await;
+                                                }
+                                            }
+                                        }
+                                        Err(_) => {
+                                            let failure = follow_up_exchange(true, false);
+                                            let _kept = (
+                                                failure.store,
+                                                failure.mark_unknown,
+                                                failure.provider_effect,
+                                                failure.code,
+                                            );
+                                        }
+                                    }
+                                }
                             }
                         }
-                        if synthesis {
-                            synthesis_envelope(
-                                &run_id,
-                                turn.message,
-                                turn.usage,
-                                calls,
-                                &response_sha256,
-                                elapsed,
-                            )?
-                        } else {
-                            task_envelope(
-                                (&run_id, &intent.node_id, &intent.task),
-                                turn.message,
-                                turn.usage,
-                                calls,
-                                &response_sha256,
-                                elapsed,
-                            )?
-                        }
                     }
-                };
-                service.confirm_agent_node_effect(&permit, &envelope).await
+                }
+                Ok(outcome)
             }
             .await;
             match sent {
@@ -403,7 +508,10 @@ impl WorkerRpcService {
                         .await
                 }
                 Err(error) => {
-                    let _ = service.mark_agent_node_effect_unknown(&permit).await;
+                    // The dependency answer was not read, so the provider call did not start.
+                    if error.message() != "AGENT_DEPENDENCY_UNPUBLISHED" {
+                        let _ = service.mark_agent_node_effect_unknown(&permit).await;
+                    }
                     Err(error)
                 }
             }
@@ -611,56 +719,6 @@ mod tests {
                 0
             )
             .is_err()
-        );
-    }
-}
-
-#[cfg(test)]
-mod rejected_task_tests {
-    use super::*;
-    #[test]
-    fn rejected_task_retains_failed_role_without_exposing_provider_error_or_private_data() {
-        for status in [400, 401, 402, 422, 429] {
-            let event = rejected_task_envelope(
-                ("run_rejected", "critic", "review"),
-                status,
-                &"a".repeat(64),
-                123,
-            )
-            .unwrap();
-            assert_eq!(event["publicEvent"]["output"]["failed"], true);
-            assert_eq!(event["publicEvent"]["output"]["id"], "critic");
-            assert_eq!(event["publicEvent"]["output"]["task"], "review");
-            assert_eq!(event["publicEvent"]["output"]["latencyMs"], 123);
-            assert!(
-                event["publicEvent"]["output"]["content"]
-                    .as_str()
-                    .unwrap()
-                    .contains(&status.to_string())
-            );
-            assert_eq!(event["providerResponseSha256"], "a".repeat(64));
-            assert_eq!(event["providerStatus"], status);
-            assert!(event.get("toolContinuation").is_none());
-            assert!(event["publicEvent"]["output"].get("usage").is_none());
-        }
-    }
-    #[test]
-    fn rejected_task_cannot_close_unsupported_status_invalid_scope_hash_or_latency() {
-        for status in [200, 302, 403, 408, 409, 500, 503] {
-            assert!(
-                rejected_task_envelope(("run", "coder", "write"), status, &"a".repeat(64), 1)
-                    .is_err()
-            );
-        }
-        for scope in [("run", "synthesizer", "task"), ("run", "critic", " ")] {
-            assert!(rejected_task_envelope(scope, 401, &"a".repeat(64), 1).is_err());
-        }
-        for hash in ["bad".to_string(), "G".repeat(64)] {
-            assert!(rejected_task_envelope(("run", "coder", "write"), 401, &hash, 1).is_err());
-        }
-        assert!(
-            rejected_task_envelope(("run", "coder", "write"), 401, &"a".repeat(64), u64::MAX)
-                .is_err()
         );
     }
 }

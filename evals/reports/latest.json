@@ -1,20 +1,20 @@
 {
   "schemaVersion": "offline-eval-suite.v1",
-  "version": "4.7.6",
-  "commit": "68ac387a7739c4c8d589868d85485a2441762145",
-  "testedRevision": "68ac387a7739c4c8d589868d85485a2441762145",
-  "sourceRevision": "68ac387a7739c4c8d589868d85485a2441762145",
-  "sourceTreeDirty": false,
+  "version": "4.8.0",
+  "commit": "b0316d09811d66ae3e47fbc4bbea3b4ddc43d4ca",
+  "testedRevision": "b0316d09811d66ae3e47fbc4bbea3b4ddc43d4ca",
+  "sourceRevision": "b0316d09811d66ae3e47fbc4bbea3b4ddc43d4ca",
+  "sourceTreeDirty": true,
   "releaseRevision": null,
   "ciRevision": null,
-  "generatedAt": "2026-08-31T04:18:19Z",
+  "generatedAt": "2026-11-23T10:43:18Z",
   "environment": {
     "os": "Windows",
     "python": "3.13.5",
     "ci": false
   },
-  "gitSha": "68ac387a7739c4c8d589868d85485a2441762145",
-  "gitDirty": false,
+  "gitSha": "b0316d09811d66ae3e47fbc4bbea3b4ddc43d4ca",
+  "gitDirty": true,
   "status": "PASS",
   "paths": {
     "ragGolden": "evals/golden/rag_questions.jsonl",
@@ -33,8 +33,8 @@
     "citationAccuracy": 0.8333,
     "keywordCoverage": 1.0,
     "latency": {
-      "avgMs": 35.49,
-      "p95Ms": 37.47
+      "avgMs": 44.5,
+      "p95Ms": 46.27
     }
   },
   "toolPolicy": {
@@ -43,8 +43,8 @@
     "passRate": 1.0,
     "injectionDefensePassRate": 1.0,
     "latency": {
-      "avgMs": 0.02,
-      "p95Ms": 0.06
+      "avgMs": 0.03,
+      "p95Ms": 0.07
     }
   },
   "injection": {
@@ -76,8 +76,8 @@
       }
     },
     "latency": {
-      "avgMs": 0.02,
-      "p95Ms": 0.04
+      "avgMs": 0.03,
+      "p95Ms": 0.05
     }
   },
   "agent": {

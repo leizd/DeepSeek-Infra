@@ -12,340 +12,13 @@ def complete_evidence():
         "productionRuntimeProcesses": ["Go", "Rust"], "publicCreationAndDAGDriverQualified": True,
         "publicPlanConfirmationQualified": True, "noTasksBeforePublicConfirmation": True,
         "productionProviderQualified": False, "fullMigrationQualified": False}
-    exchanges = [{"actionId": action, "operationId": f"node-{index}", "executionEpoch": "1", "stream": False}
+    exchanges = [{"actionId": action, "operationId": f"node-{index}", "executionEpoch": "1", "stream": False,
+        "requestCredentialUsed": True}
         for index, action in enumerate(["plan-action", "task-action", "task-action", "synthesis-action"])]
     exchanges[1]["selectedTaskInPrompt"] = True
     exchanges[2].update(dependentTaskInPrompt=True, predecessorSummaryInPrompt=True, privateReasoningInPrompt=False)
     exchanges[3].update(synthesisCoderInPrompt=True, synthesisCriticInPrompt=True)
     return result, exchanges
-
-
-def complete_recovery_evidence():
-    base, exchanges = complete_evidence()
-    base.update(runId="controlled-recovery", sourceCommit="f" * 40, requestSha256="a" * 64)
-    result = copy.deepcopy(base)
-    result.update(baseExecution=base, nextIndex=11, publicEventCount=11, requestSha256="b" * 64)
-    result["recoveryPreparation"] = {
-        "kind":"completed-resume", "generation":1, "originalRuntimeRevision":1, "runtimeRevision":2,
-        "priorEffectCount":4, "retainedOutputCount":2, "newProviderCalls":0, "newDurablePhases":0,
-        "goOpenedRustBody":False, "fullResumeRerunQualified":False, "originalRequestSha256":"a" * 64,
-        "contextSha256":"c" * 64, "contextArtifactSha256":"d" * 64, "contextArtifactLength":180,
-        **{key:True for key in ["preparedByRust", "readOnlyPreview", "preparationRetryIdempotent", "commitRetryIdempotent",
-            "forgedContextDenied", "unauthenticatedDenied", "stalePreparationDenied", "originalEffectsUnchanged",
-            "originalPublicEventsUnchanged", "publicReadQualified"]}}
-    return result, exchanges
-
-
-def complete_recovery_execution_evidence():
-    result, exchanges = complete_recovery_evidence()
-    result.update(nextIndex=13, publicEventCount=13, durablePhases=4, directSynthesisRecoveryQualified=True)
-    result["recoveryPreparation"].update(kind="direct-synthesis", newProviderCalls=1, newDurablePhases=1,
-        newTaskPhases=0, newSynthesisActionId="recovery-synthesis")
-    exchanges.append({"actionId":"recovery-synthesis", "operationId":"recovery-synthesis-node", "executionEpoch":"1", "stream":False,
-        "synthesisCoderInPrompt":True, "synthesisCriticInPrompt":True, "privateReasoningInPrompt":False})
-    return result, exchanges
-
-
-def complete_task_recovery_evidence(role, synthesize):
-    import base64
-    import hashlib
-
-    result, exchanges = complete_recovery_evidence()
-    added = 2 if synthesize else 1
-    receipt = b"offline-receipt-shape-only"
-    result.update(nextIndex=16 if synthesize else 14, publicEventCount=16 if synthesize else 14,
-                  durablePhases=3+added, taskRerunProgressQualified=True)
-    result["recoveryPreparation"].update(kind="task-rerun", role=role, synthesize=synthesize,
-        retainedOutputCount=1 if role=="critic" else 2, newProviderCalls=added, newDurablePhases=added,
-        newTaskActionId="rerun-task", newSynthesisActionId="rerun-synthesis" if synthesize else "",
-        oldFinalRetainedDuringTask=True, unfinishedProgressDenied=True, staleProgressDenied=True,
-        progressMetadataSchemaVersion=4, progressReceiptSha256=hashlib.sha256(receipt).hexdigest(),
-        progressReceiptBase64=base64.urlsafe_b64encode(receipt).decode().rstrip("="), noteBodySha256="e"*64, nextBodySha256="f"*64)
-    exchanges.append({"actionId":"rerun-task","operationId":"rerun-task-node","executionEpoch":"1","stream":False,
-        "predecessorSummaryInPrompt":True,"rerunSelectedRoleInPrompt":True,"requestCredentialUsed":True,"privateReasoningInPrompt":False})
-    if synthesize:
-        exchanges.append({"actionId":"rerun-synthesis","operationId":"rerun-synthesis-node","executionEpoch":"1","stream":False,
-            "synthesisCoderInPrompt":True,"synthesisCriticInPrompt":True,"recoveredTaskSummaryInPrompt":True,
-            "requestCredentialUsed":True,"privateReasoningInPrompt":False})
-    return result, exchanges, {"role":role,"synthesize":synthesize}
-
-
-@pytest.mark.parametrize("role",["critic","researcher"])
-@pytest.mark.parametrize("synthesize",[True,False])
-def test_task_recovery_requires_exact_selected_work_and_late_signed_progress(role,synthesize):
-    from scripts.verify_native_agent_public_driver import validate_task_recovery_result
-
-    validate_task_recovery_result(*complete_task_recovery_evidence(role,synthesize))
-
-
-def complete_public_task_recovery_evidence(role="critic", synthesize=True):
-    result,exchanges,case=complete_task_recovery_evidence(role,synthesize)
-    case["publicAdmission"]=True
-    result["recoveryPreparation"].update(publicAdmissionQualified=True,preparationRetryIdempotent=False,
-        actualPublicRecoveryHTTPRequests=8,
-        publicRefusals=[{"case":name,"path":"resume" if name=="resume-while-active" else "rerun",
-                         "status":status,"runUnchanged":True} for name,status in [
-            ("invalid-json",400),("missing-role",400),("unknown-role",400),("private-input",400),
-            ("duplicate-rerun-while-active",409),("resume-while-active",409),("missing-run",404)]])
-    return result,exchanges,case
-
-
-def complete_public_completion_evidence(alias=""):
-    result,exchanges=complete_recovery_evidence()
-    synthesize=bool(alias)
-    result.update(nextIndex=13 if synthesize else 11,publicEventCount=13 if synthesize else 11,
-                  durablePhases=4 if synthesize else 3,publicCompletionRecoveryQualified=True)
-    for exchange in exchanges:
-        exchange["requestCredentialUsed"]=True
-    result["recoveryPreparation"]={"kind":"public-completion","path":"rerun" if alias else "resume","agentId":alias,
-        "synthesize":synthesize,"generation":1,"originalRuntimeRevision":1,"runtimeRevision":2,
-        "originalRequestSha256":result["baseExecution"]["requestSha256"],"contextSha256":"c"*64,
-        "contextArtifactSha256":"d"*64,"contextArtifactLength":80,"priorEffectCount":4,"retainedOutputCount":2,
-        "goOpenedRustBody":False,"literalFalseSentForAlias":synthesize,"privatePreparationRetryQualified":False,
-        "newProviderCalls":int(synthesize),"newDurablePhases":int(synthesize),"newTaskPhases":0,
-        "newSynthesisActionId":"public-synthesis" if alias else "","actualRecoveryPostRequests":8 if alias else 1,
-        "fullResumeRerunQualified":False,
-        **{key:True for key in ["preparedByRust","admittedThroughRustHTTP","commitRetryIdempotent",
-            "originalEffectsUnchanged","originalPublicEventsUnchanged","originalTaskOutputsUnchanged","publicReadQualified"]}}
-    result["recoveryPreparation"]["publicRefusals"]=complete_public_task_recovery_evidence()[0]["recoveryPreparation"]["publicRefusals"] if alias else None
-    if alias:
-        exchanges.append({"actionId":"public-synthesis","operationId":"public-synthesis-node","executionEpoch":"1","stream":False,
-            "synthesisCoderInPrompt":True,"synthesisCriticInPrompt":True,"privateReasoningInPrompt":False,"requestCredentialUsed":True})
-    return result,exchanges,{"name":alias or "completed-resume","alias":alias,"synthesize":synthesize,"path":"rerun" if alias else "resume"}
-
-
-@pytest.mark.parametrize("alias",["","synth","leader","synthesizer"])
-def test_public_completion_requires_actual_http_no_extra_tasks_and_retained_sources(alias):
-    from scripts.verify_native_agent_public_driver import validate_public_completion_result
-
-    validate_public_completion_result(*complete_public_completion_evidence(alias))
-
-
-@pytest.mark.parametrize("change",["source","cursor","events","phases","request","scope","length","runtime","public-admission",
-    "private-retry","original-effects","history","outputs","provider-calls","task-phase","false-selection","http-count",
-    "missing-refusal","refusal-status","refusal-path","credential","old-action","old-operation","no-summary","private-reasoning","overclaim"])
-def test_public_completion_refuses_rebinding_duplicate_effects_and_unproved_http(change):
-    from scripts.verify_native_agent_public_driver import validate_public_completion_result
-
-    result,exchanges,case=complete_public_completion_evidence("leader")
-    recovery=result["recoveryPreparation"]
-    if change=="source":
-        result["sourceCommit"]="e"*40
-    elif change in {"cursor","events","phases"}:
-        key={"cursor":"nextIndex","events":"publicEventCount","phases":"durablePhases"}[change]
-        result[key]+=1
-    elif change=="request":
-        result["requestSha256"]=result["baseExecution"]["requestSha256"]
-    elif change=="scope":
-        recovery["contextSha256"]="bad"
-    elif change=="length":
-        recovery["contextArtifactLength"]=0
-    elif change=="runtime":
-        recovery["runtimeRevision"]=1
-    elif change in {"public-admission","original-effects","history","outputs"}:
-        key={"public-admission":"admittedThroughRustHTTP","original-effects":"originalEffectsUnchanged",
-             "history":"originalPublicEventsUnchanged","outputs":"originalTaskOutputsUnchanged"}[change]
-        recovery[key]=False
-    elif change=="private-retry":
-        recovery["privatePreparationRetryQualified"]=True
-    elif change=="provider-calls":
-        exchanges.append(copy.deepcopy(exchanges[-1]))
-    elif change=="task-phase":
-        recovery["newTaskPhases"]=1
-    elif change=="false-selection":
-        recovery["literalFalseSentForAlias"]=False
-    elif change=="http-count":
-        recovery["actualRecoveryPostRequests"]-=1
-    elif change=="missing-refusal":
-        recovery["publicRefusals"].pop()
-    elif change=="refusal-status":
-        recovery["publicRefusals"][0]["status"]=200
-    elif change=="refusal-path":
-        recovery["publicRefusals"][0]["path"]="resume"
-    elif change=="credential":
-        exchanges[-1]["requestCredentialUsed"]=False
-    elif change=="old-action":
-        exchanges[-1]["actionId"]=exchanges[0]["actionId"]
-    elif change=="old-operation":
-        exchanges[-1]["operationId"]=exchanges[0]["operationId"]
-    elif change=="no-summary":
-        exchanges[-1]["synthesisCriticInPrompt"]=False
-    elif change=="private-reasoning":
-        exchanges[-1]["privateReasoningInPrompt"]=True
-    else:
-        recovery["fullResumeRerunQualified"]=True
-    with pytest.raises(ValueError):
-        validate_public_completion_result(result,exchanges,case)
-
-
-@pytest.mark.parametrize("role",["critic","researcher"])
-@pytest.mark.parametrize("synthesize",[True,False])
-def test_public_task_recovery_requires_http_admission_refusals_and_original_progress_proof(role,synthesize):
-    from scripts.verify_native_agent_public_driver import validate_task_recovery_result
-
-    validate_task_recovery_result(*complete_public_task_recovery_evidence(role,synthesize))
-
-
-@pytest.mark.parametrize("change",["admission","private-retry-claim","missing","duplicate","status","mutated",
-                                  "path","absent","extra","non-object","count"])
-def test_public_task_recovery_rejects_private_rpc_substitution_or_unproved_http_refusals(change):
-    from scripts.verify_native_agent_public_driver import validate_task_recovery_result
-
-    result,exchanges,case=complete_public_task_recovery_evidence()
-    recovery=result["recoveryPreparation"]
-    refusals=recovery["publicRefusals"]
-    if change=="admission":
-        recovery["publicAdmissionQualified"]=False
-    elif change=="private-retry-claim":
-        recovery["preparationRetryIdempotent"]=True
-    elif change=="missing":
-        refusals.pop()
-    elif change=="duplicate":
-        refusals[-1]=copy.deepcopy(refusals[0])
-    elif change=="status":
-        refusals[-1]["status"]=200
-    elif change=="mutated":
-        refusals[0]["runUnchanged"]=False
-    elif change=="path":
-        refusals[-1]["path"]="resume"
-    elif change=="absent":
-        recovery.pop("publicRefusals")
-    elif change=="extra":
-        refusals.append(copy.deepcopy(refusals[-1]))
-    elif change=="non-object":
-        refusals[-1]=None
-    else:
-        recovery["actualPublicRecoveryHTTPRequests"]-=1
-    with pytest.raises(ValueError):
-        validate_task_recovery_result(result,exchanges,case)
-
-
-@pytest.mark.parametrize("change",["extra-call","no-task","extra-phase","cursor","source","role","synthesize","old-final","early-progress",
-    "stale-progress","schema","proof-bytes","proof-digest","reused-action","reused-operation","task-context","new-summary","credential","private-reasoning","no-synthesis-phase","overclaim"])
-def test_task_recovery_refuses_unproven_progress_or_replayed_provider_effects(change):
-    from scripts.verify_native_agent_public_driver import validate_task_recovery_result
-
-    result,exchanges,case=complete_task_recovery_evidence("critic",True)
-    recovery=result["recoveryPreparation"]
-    if change=="extra-call":
-        exchanges.append(copy.deepcopy(exchanges[-1]))
-    elif change=="no-task":
-        exchanges.pop(4)
-    elif change=="extra-phase":
-        result["durablePhases"]+=1
-    elif change=="cursor":
-        result["nextIndex"]-=1
-    elif change=="source":
-        result["sourceCommit"]="e"*40
-    elif change=="role":
-        recovery["role"]="researcher"
-    elif change=="synthesize":
-        recovery["synthesize"]=False
-    elif change=="old-final":
-        recovery["oldFinalRetainedDuringTask"]=False
-    elif change=="early-progress":
-        recovery["unfinishedProgressDenied"]=False
-    elif change=="stale-progress":
-        recovery["staleProgressDenied"]=False
-    elif change=="schema":
-        recovery["progressMetadataSchemaVersion"]=3
-    elif change=="proof-bytes":
-        recovery["progressReceiptBase64"]="***"
-    elif change=="proof-digest":
-        recovery["progressReceiptSha256"]="0"*64
-    elif change=="reused-action":
-        exchanges[4]["actionId"]=exchanges[1]["actionId"]
-    elif change=="reused-operation":
-        exchanges[4]["operationId"]=exchanges[1]["operationId"]
-    elif change=="task-context":
-        exchanges[4]["predecessorSummaryInPrompt"]=False
-    elif change=="new-summary":
-        exchanges[5]["recoveredTaskSummaryInPrompt"]=False
-    elif change=="credential":
-        exchanges[4]["requestCredentialUsed"]=False
-    elif change=="private-reasoning":
-        exchanges[5]["privateReasoningInPrompt"]=True
-    elif change=="no-synthesis-phase":
-        recovery["newSynthesisActionId"]=""
-    elif change=="overclaim":
-        recovery["fullResumeRerunQualified"]=True
-    with pytest.raises(ValueError):
-        validate_task_recovery_result(result,exchanges,case)
-
-
-def test_recovery_execution_requires_a_fresh_synthesis_and_original_public_summaries():
-    from scripts.verify_native_agent_public_driver import validate_recovery_execution_result
-
-    result, exchanges = complete_recovery_execution_evidence()
-    validate_recovery_execution_result(result, exchanges)
-
-
-@pytest.mark.parametrize("change", ["extra-call", "missing-call", "extra-phase", "task-phase", "missing-source", "missing-context",
-    "reused-request", "reused-action", "reused-operation", "stale-fence", "missing-summary", "private-reasoning", "unsettled", "overclaim"])
-def test_recovery_execution_rejects_extra_effects_rebinding_and_unverified_sources(change):
-    from scripts.verify_native_agent_public_driver import validate_recovery_execution_result
-
-    result, exchanges = complete_recovery_execution_evidence()
-    if change == "extra-call":
-        exchanges.append(copy.deepcopy(exchanges[-1]))
-    elif change == "missing-call":
-        exchanges.pop()
-    elif change == "extra-phase":
-        result["durablePhases"] = 5
-    elif change == "task-phase":
-        result["recoveryPreparation"]["newTaskPhases"] = 1
-    elif change == "missing-source":
-        result["recoveryPreparation"]["retainedOutputCount"] = 1
-    elif change == "missing-context":
-        result["recoveryPreparation"]["contextSha256"] = ""
-    elif change == "reused-request":
-        result["requestSha256"] = result["baseExecution"]["requestSha256"]
-    elif change == "reused-action":
-        exchanges[-1]["actionId"] = exchanges[3]["actionId"]
-    elif change == "reused-operation":
-        exchanges[-1]["operationId"] = exchanges[3]["operationId"]
-    elif change == "stale-fence":
-        exchanges[-1]["executionEpoch"] = "0"
-    elif change == "missing-summary":
-        exchanges[-1]["synthesisCoderInPrompt"] = False
-    elif change == "private-reasoning":
-        exchanges[-1]["privateReasoningInPrompt"] = True
-    elif change == "unsettled":
-        result["runStatus"] = "running"
-    else:
-        result["fullMigrationQualified"] = True
-    with pytest.raises(ValueError):
-        validate_recovery_execution_result(result, exchanges)
-
-
-def test_recovery_preparation_requires_original_success_and_new_exact_custody():
-    from scripts.verify_native_agent_public_driver import validate_recovery_preparation_result
-
-    result, exchanges = complete_recovery_evidence()
-    original = copy.deepcopy(result)
-    validate_recovery_preparation_result(result, exchanges)
-    assert result == original
-
-
-@pytest.mark.parametrize("section,key,value", [
-    ("recoveryPreparation", "priorEffectCount", 3), ("recoveryPreparation", "retainedOutputCount", 0),
-    ("recoveryPreparation", "newProviderCalls", 1), ("recoveryPreparation", "newDurablePhases", 1),
-    ("recoveryPreparation", "goOpenedRustBody", True), ("recoveryPreparation", "fullResumeRerunQualified", True),
-    ("recoveryPreparation", "generation", 2), ("recoveryPreparation", "runtimeRevision", 1),
-    ("recoveryPreparation", "contextSha256", "unbound"), ("recoveryPreparation", "originalRequestSha256", "e" * 64),
-    ("recoveryPreparation", "commitRetryIdempotent", False), ("recoveryPreparation", "stalePreparationDenied", False),
-    ("recoveryPreparation", "forgedContextDenied", False), ("recoveryPreparation", "contextArtifactLength", 0),
-    ("baseExecution", "durablePhases", 2), ("baseExecution", "sourceCommit", "e" * 40),
-    ("", "nextIndex", 9), ("", "publicEventCount", 9), ("", "requestSha256", "a" * 64),
-    ("", "productionProviderQualified", True), ("", "fullMigrationQualified", True),
-])
-def test_recovery_preparation_rejects_partial_or_rebound_evidence(section, key, value):
-    from scripts.verify_native_agent_public_driver import validate_recovery_preparation_result
-
-    result, exchanges = complete_recovery_evidence()
-    (result[section] if section else result)[key] = value
-    with pytest.raises(ValueError):
-        validate_recovery_preparation_result(result, exchanges)
 
 
 def test_public_driver_complete_controlled_evidence_retains_qualification_limits():
@@ -370,7 +43,7 @@ def test_public_driver_incomplete_or_overclaimed_evidence_is_refused(key, value)
 
 
 @pytest.mark.parametrize("change", ["missing-call", "duplicate-call", "missing-action", "duplicate-node", "different-task-phase",
-    "stale-epoch", "stream", "task", "dependency", "summary", "reasoning", "synthesis-coder", "synthesis-critic"])
+    "stale-epoch", "stream", "server-credential", "task", "dependency", "summary", "reasoning", "synthesis-coder", "synthesis-critic"])
 def test_public_driver_actual_dispatch_and_dependency_boundaries(change):
     result, exchanges = complete_evidence()
     if change == "missing-call":
@@ -387,6 +60,8 @@ def test_public_driver_actual_dispatch_and_dependency_boundaries(change):
         exchanges[2]["executionEpoch"] = "0"
     elif change == "stream":
         exchanges[1]["stream"] = True
+    elif change == "server-credential":
+        exchanges[3]["requestCredentialUsed"] = False
     else:
         index, field, value = {"task": (1, "selectedTaskInPrompt", False), "dependency": (2, "dependentTaskInPrompt", False),
             "summary": (2, "predecessorSummaryInPrompt", False), "reasoning": (2, "privateReasoningInPrompt", True),
@@ -431,24 +106,49 @@ def test_credential_transport_is_explicit_and_ambient_configuration_cannot_overr
     assert not any(key.startswith("DEEPSEEK_AGENT_CREDENTIAL_") for key in stripped)
 
 
-@pytest.mark.parametrize("target", ["127.0.0.1:1", "127.0.0.1:50052", "127.0.0.1:65535"])
-def test_worker_listen_target_becomes_a_tls_origin_for_public_credential_custody(tmp_path, target):
+def test_worker_listen_address_becomes_the_private_https_credential_origin(tmp_path):
+    """The cloud public driver passed start_worker's bare listen address as ORIGIN."""
     from scripts.verify_native_agent_public_driver import credential_worker_transport, public_edge_environment
 
+    ready = {"origin": "http://127.0.0.1:18090", "internalBearer": "isolated-control-" + "x" * 32}
     ca = tmp_path / "ca.pem"
     bearer = "isolated-worker-" + "y" * 32
-    transport = credential_worker_transport(target, ca, bearer)
-    ready = {"origin": "http://127.0.0.1:18090", "internalBearer": "isolated-control-" + "x" * 32}
-    environment = public_edge_environment({}, "127.0.0.1:18100", tmp_path / "static/ui", tmp_path / "artifacts", ready, transport)
+    transport = credential_worker_transport("127.0.0.1:18091", ca, "localhost", bearer)
+    assert transport == {"ORIGIN": "https://127.0.0.1:18091", "CA_FILE": ca.as_posix(),
+                         "SERVER_NAME": "localhost", "BEARER": bearer}
+    result = public_edge_environment({}, "127.0.0.1:18100", tmp_path / "static/ui", tmp_path / "artifacts", ready, transport)
+    assert result["DEEPSEEK_AGENT_CREDENTIAL_WORKER_ORIGIN"] == "https://127.0.0.1:18091"
+    assert result["DEEPSEEK_AGENT_CREDENTIAL_WORKER_CA_FILE"] == ca.as_posix()
+    assert result["DEEPSEEK_AGENT_CREDENTIAL_WORKER_BEARER"] == bearer
+    bare = dict(transport, ORIGIN="127.0.0.1:18091")
+    with pytest.raises(ValueError, match="credential custody transport"):
+        public_edge_environment({}, "127.0.0.1:18100", tmp_path / "static/ui", tmp_path / "artifacts", ready, bare)
 
-    assert transport == {"ORIGIN": "https://" + target, "CA_FILE": ca.as_posix(), "SERVER_NAME": "localhost", "BEARER": bearer}
-    assert environment["DEEPSEEK_AGENT_CREDENTIAL_WORKER_ORIGIN"] == "https://" + target
-    assert environment["DEEPSEEK_AGENT_CREDENTIAL_WORKER_CA_FILE"] == ca.as_posix()
-    assert environment["DEEPSEEK_AGENT_CREDENTIAL_WORKER_SERVER_NAME"] == "localhost"
-    assert not ca.exists()  # Assembling transport configuration creates no private material.
+
+@pytest.mark.parametrize("listen", ["127.0.0.1:0", "127.0.0.1:65536", "127.0.0.1:018091",
+    "0.0.0.0:18091", "https://127.0.0.1:18091", "[::1]:18091", "127.0.0.1", ""])
+def test_credential_transport_refuses_a_listen_address_that_is_not_loopback_https(tmp_path, listen):
+    from scripts.verify_native_agent_public_driver import credential_worker_transport
+
+    with pytest.raises(ValueError, match="credential custody transport"):
+        credential_worker_transport(listen, tmp_path / "ca.pem", "localhost", "isolated-worker-" + "y" * 32)
 
 
-@pytest.mark.parametrize("mutation", ["remote", "relative-ca", "missing-field", "short-bearer"])
+@pytest.mark.parametrize("server_name,bearer,relative", [
+    ("worker.internal", "isolated-worker-" + "y" * 32, False),
+    ("localhost", "short-fixture", False),
+    ("localhost", "isolated-worker-" + "y" * 32, True),
+])
+def test_credential_transport_refuses_unpinned_name_bearer_or_ca(tmp_path, server_name, bearer, relative):
+    from pathlib import Path
+    from scripts.verify_native_agent_public_driver import credential_worker_transport
+
+    ca = Path("relative.pem") if relative else tmp_path / "ca.pem"
+    with pytest.raises(ValueError, match="credential custody transport"):
+        credential_worker_transport("127.0.0.1:18091", ca, server_name, bearer)
+
+
+@pytest.mark.parametrize("mutation", ["remote", "relative-ca", "missing-field", "short-bearer", "bare-origin"])
 def test_invalid_credential_transport_is_rejected_before_starting_a_process(tmp_path, mutation):
     from scripts.verify_native_agent_public_driver import public_edge_environment
 
@@ -461,6 +161,8 @@ def test_invalid_credential_transport_is_rejected_before_starting_a_process(tmp_
         transport["CA_FILE"] = "relative.pem"
     elif mutation == "missing-field":
         transport.pop("SERVER_NAME")
+    elif mutation == "bare-origin":
+        transport["ORIGIN"] = "127.0.0.1:18091"
     else:
         transport["BEARER"] = "short-fixture"
     with pytest.raises(ValueError, match="credential custody transport"):
@@ -503,7 +205,7 @@ def test_preset_evidence_rejects_semantic_and_provider_dispatch_changes(mutation
         "resourcesReleased":True,"finalAnswerVisible":True,"inputBodySeededByOfflineOracle":False,"requestBodyStoredByRust":True,
         "productionRuntimeProcesses":["Go","Rust"],"productionProviderQualified":False,"fullMigrationQualified":False}
     exchanges = [{"actionId":"tasks" if i < 2 else "final","operationId":str(i),"executionEpoch":"1","stream":False,
-        "privateReasoningInPrompt":False,"predecessorSummaryInPrompt":i == 1} for i in range(3)]
+        "requestCredentialUsed":True,"privateReasoningInPrompt":False,"predecessorSummaryInPrompt":i == 1} for i in range(3)]
     validate_preset_result(report, exchanges, case)
     if mutation == "dependencies":
         report["actualPlan"][1]["depends_on"] = []
@@ -530,7 +232,7 @@ def cancellation_evidence():
               "confirmationAfterCancellationDenied":True,"planConfirmationRequired":True,"requestBodyStoredByRust":True,
               "publicCancellationWhileAwaitingPlanQualified":True,"inputBodySeededByOfflineOracle":False,
               "productionProviderQualified":False,"fullMigrationQualified":False,"activeTaskCancellationQualified":False,"productionRuntimeProcesses":["Go","Rust"]}
-    return result,[{"actionId":"planner-action","operationId":"leader","executionEpoch":"1"}],case
+    return result,[{"actionId":"planner-action","operationId":"leader","executionEpoch":"1","requestCredentialUsed":True}],case
 
 
 def test_cancellation_evidence_retains_actual_scope_and_is_not_mutated():
@@ -581,7 +283,8 @@ def active_cancellation_evidence():
             "cancelledDuringActualProviderRequest":True,"actualLateTaskCustodyConfirmed":True,"noDependentOrSynthesisAdmission":True,
             "repeatCancellationIdempotent":True,"activeCancellationSafetyQualified":True,"requestBodyStoredByRust":True,
             "resourcesReleased":True,"cancelledPhaseRecoveryQualified":True,"controllerRestartRecoveryQualified":True,"originalExecutionEpoch":1,"recoveryExecutionEpoch":2,"inputBodySeededByOfflineOracle":False,"productionProviderQualified":False,"fullMigrationQualified":False}
-    exchanges=[{"actionId":"plan","operationId":"leader","executionEpoch":"1"},{"actionId":"task","operationId":"coder","executionEpoch":"1"}]
+    exchanges=[{"actionId":"plan","operationId":"leader","executionEpoch":"1","requestCredentialUsed":True},
+               {"actionId":"task","operationId":"coder","executionEpoch":"1","requestCredentialUsed":True}]
     return result,exchanges,case
 
 

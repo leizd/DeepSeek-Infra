@@ -1524,6 +1524,8 @@ type controlRecordWrite struct {
 	agentPlanSettlement         bool
 	agentSynthesisSettlement    bool
 	agentFailureSettlement      bool
+	agentSuccessorBind          bool
+	agentSuccessorEpoch         bool
 	record                      Record
 	table                       string
 	intentJSON                  []byte
@@ -1726,6 +1728,18 @@ func (store *Control) putControlRecordTx(tx *sql.Tx, write controlRecordWrite, n
 	if write.agentFailureSettlement {
 		if !exists || !nativeAgentFailureSettlementEdge(existing, record) {
 			return ErrAgentRunExecutionRequired
+		}
+		legal = true
+	}
+	if write.agentSuccessorBind {
+		if !exists || !nativeAgentSuccessorBindEdge(existing, record) {
+			return ErrAgentNodeDispatchRequired
+		}
+		legal = true
+	}
+	if write.agentSuccessorEpoch {
+		if !exists || !nativeAgentSuccessorEpochEdge(existing, record) {
+			return ErrIllegalTransition
 		}
 		legal = true
 	}
@@ -2063,6 +2077,12 @@ func validateControlHistory(tx *sql.Tx, latest Record) error {
 			legal = true
 		}
 		if !legal && nativeAgentMetadataHistoryEdge(final, event) {
+			legal = true
+		}
+		if !legal && nativeAgentSuccessorBindEdge(final, event) {
+			legal = true
+		}
+		if !legal && nativeAgentSuccessorEpochEdge(final, event) {
 			legal = true
 		}
 		versionedEdge := (eventID > reconciliationBoundary && reconciliationTransition(previousState, event.State, previousEpoch, event.ExecutionEpoch)) ||

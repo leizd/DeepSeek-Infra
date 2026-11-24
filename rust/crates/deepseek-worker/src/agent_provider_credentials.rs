@@ -4,8 +4,8 @@ use std::sync::Arc;
 use deepseek_federation::{AgentCredentialObject, AgentCredentialScope, AgentProviderCredentials};
 use deepseek_policy::agent_run_data::{ArtifactReference, ArtifactStore};
 use deepseek_protocol::generated::deepseek::agent::v1::{
-    AgentCredentialObjectReference, AgentCredentialRuntimeUpdate, AgentRunExecutionClaim,
-    PrepareAgentCredentialsRequest, PrepareAgentCredentialsResponse,
+    AgentCredentialObjectReference, AgentRunExecutionClaim, PrepareAgentCredentialsRequest,
+    PrepareAgentCredentialsResponse,
 };
 use serde_json::Value;
 use tonic::{Request, Response, Status};
@@ -19,39 +19,6 @@ fn denied() -> Status {
     Status::failed_precondition("AGENT_CREDENTIAL_CUSTODY_DENIED")
 }
 
-fn merge_credentials(
-    inherited: Option<&AgentProviderCredentials>,
-    update: Option<&AgentCredentialRuntimeUpdate>,
-    api_key: &str,
-    tavily_api_key: &str,
-) -> Result<Option<AgentProviderCredentials>, Status> {
-    if update.is_some_and(|value| {
-        !value.replace_api_key && !api_key.is_empty()
-            || !value.replace_tavily_api_key && !tavily_api_key.is_empty()
-    }) {
-        return Err(denied());
-    }
-    let api = if update.is_some_and(|value| !value.replace_api_key) {
-        inherited.and_then(AgentProviderCredentials::api_key)
-    } else {
-        (!api_key.is_empty()).then_some(api_key)
-    };
-    let search = if update.is_some_and(|value| !value.replace_tavily_api_key) {
-        inherited.and_then(AgentProviderCredentials::tavily_api_key)
-    } else {
-        (!tavily_api_key.is_empty()).then_some(tavily_api_key)
-    };
-    if api.is_some() || search.is_some() {
-        AgentProviderCredentials::from_keys(api, search)
-            .map(Some)
-            .map_err(|_| denied())
-    } else if update.is_some() {
-        Ok(None)
-    } else {
-        Err(denied())
-    }
-}
-
 fn read_body(root: &std::path::Path, reference: &ArtifactReference) -> Result<Value, Status> {
     ArtifactStore::open_readonly(root)
         .and_then(|store| store.get(reference))
@@ -63,7 +30,6 @@ fn bound_reference(
     mut body: Value,
     run_id: &str,
     metadata_epoch: u64,
-    runtime_revision: u64,
     fleet_id: &str,
     environment: &str,
 ) -> Result<Option<(AgentCredentialScope, AgentCredentialObject)>, Status> {
@@ -86,7 +52,7 @@ fn bound_reference(
         || scope.environment != environment
         || scope.run_id != run_id
         || scope.metadata_epoch != metadata_epoch
-        || scope.runtime_revision != runtime_revision
+        || scope.runtime_revision == 0
     {
         return Err(denied());
     }
@@ -115,32 +81,14 @@ impl WorkerRpcService {
         let mut input = request.into_inner();
         let api_key = Zeroizing::new(std::mem::take(&mut input.api_key));
         let tavily_api_key = Zeroizing::new(std::mem::take(&mut input.tavily_api_key));
-        let update = input.runtime_update.take();
-        let recovery_context = input.recovery_context.take();
         let fence = input.fence.as_ref().ok_or_else(denied)?;
         let reference = input.request.as_ref().ok_or_else(denied)?;
         if input.schema_version != 1
-            || recovery_context.is_some() && update.is_none()
             || input.runtime_revision == 0
-            || input.runtime_revision > i64::MAX as u64
             || fence.action_id != input.run_id
             || fence.execution_epoch == 0
         {
             return Err(denied());
-        }
-        match update.as_ref() {
-            None if input.runtime_revision != 1 => return Err(denied()),
-            Some(previous)
-                if previous.previous_runtime_revision == 0
-                    || previous.previous_runtime_revision.checked_add(1)
-                        != Some(input.runtime_revision)
-                    || previous.previous_request.is_none()
-                    || (!previous.replace_api_key && !api_key.is_empty())
-                    || (!previous.replace_tavily_api_key && !tavily_api_key.is_empty()) =>
-            {
-                return Err(denied());
-            }
-            _ => {}
         }
         let live_epoch = self
             .agent_execution_control
@@ -151,39 +99,11 @@ impl WorkerRpcService {
         if fence.execution_epoch != live_epoch {
             return Err(Status::failed_precondition("STALE_EXECUTION_EPOCH"));
         }
-        let mut previous_binding = None;
-        if let Some(previous) = update.as_ref() {
-            let current = self
-                .agent_execution_control
-                .as_ref()
-                .ok_or_else(denied)?
-                .runtime_binding(&input.run_id, live_epoch)
-                .await?;
-            if current.runtime_revision != previous.previous_runtime_revision
-                || current.request.as_ref() != previous.previous_request.as_ref()
-            {
-                return Err(denied());
-            }
-            if let Some(context) = recovery_context.as_ref() {
-                if context.run_id != input.run_id
-                    || context.metadata_epoch != live_epoch
-                    || context.expected_index != current.next_index
-                    || context.expected_runtime_revision != current.runtime_revision
-                    || context.expected_request.as_ref() != current.request.as_ref()
-                    || context.previous_scope.as_ref() != current.recovery_scope.as_ref()
-                {
-                    return Err(crate::agent_recovery_context::denied());
-                }
-                self.agent_execution_control
-                    .as_ref()
-                    .ok_or_else(denied)?
-                    .validate_recovery_context(context)
-                    .await?;
-            } else if current.status != "awaiting_plan" || current.recovery_scope.is_some() {
-                return Err(denied());
-            }
-            previous_binding = Some(current);
-        }
+        let credentials = AgentProviderCredentials::from_keys(
+            (!api_key.is_empty()).then_some(api_key.as_str()),
+            (!tavily_api_key.is_empty()).then_some(tavily_api_key.as_str()),
+        )
+        .map_err(|_| denied())?;
         let root = self
             .agent_plan_executor
             .as_ref()
@@ -195,105 +115,24 @@ impl WorkerRpcService {
             length: reference.length,
         };
         let signer = Arc::clone(self.control_signer.as_ref().ok_or_else(denied)?);
-        let worker = Arc::clone(&self.worker);
         let response = tokio::task::spawn_blocking(move || {
-            let mut body = read_body(&root, &reference)?;
-            let original_request = recovery_context.as_ref().is_some_and(|context| {
-                context.expected_request.as_ref().is_some_and(|expected| {
-                    expected.sha256 == reference.sha256 && expected.length == reference.length
-                })
-            });
-            if original_request {
-                // Go supplies its current opaque request reference. Only Rust
-                // opens the body and removes the previous private bindings.
-                let previous = previous_binding.as_ref().ok_or_else(denied)?;
-                let retained = crate::agent_recovery_context::read(&root, &body)?;
-                crate::agent_recovery_context::validate_binding(retained.as_ref(), previous)?;
-                let object = body.as_object_mut().ok_or_else(denied)?;
-                object.remove(PRIVATE_FIELD);
-                object.remove(crate::agent_recovery_context::PRIVATE_FIELD);
-            } else if body.get(PRIVATE_FIELD).is_some() {
+            let body = read_body(&root, &reference)?;
+            if body.get(PRIVATE_FIELD).is_some() {
                 return Err(denied());
-            } else if body
-                .get(crate::agent_recovery_context::PRIVATE_FIELD)
-                .is_some()
-            {
-                return Err(crate::agent_recovery_context::denied());
             }
-            if let Some(context) = recovery_context.as_ref() {
-                let worker = worker.blocking_lock();
-                let authority = worker.agent_node_authority()?;
-                worker
-                    .authority_store
-                    .as_ref()
-                    .ok_or_else(denied)?
-                    .verify_agent_recovery_context(context, &authority)?;
-            }
-            // Never hold the effect-journal mutex while opening signer custody.
             let signer = signer.blocking_lock();
-            if let Some(context) = recovery_context.as_ref() {
-                for source in context
-                    .prior_effects
-                    .iter()
-                    .chain(&context.retained_outputs)
-                {
-                    signer.verify_retained_node_outcome(
-                        source.outcome.as_ref().ok_or_else(denied)?,
-                    )?;
-                }
-            }
             let (fleet_id, environment) = signer.agent_credential_binding()?;
-            let inherited = if let Some(previous) = update.as_ref() {
-                let previous_reference = previous.previous_request.as_ref().ok_or_else(denied)?;
-                let previous_body = read_body(
-                    &root,
-                    &ArtifactReference {
-                        sha256: previous_reference.sha256.clone(),
-                        length: previous_reference.length,
-                    },
-                )?;
-                // A new metadata epoch does not rewrite an old sealed credential
-                // object's original scope. Go's CAS pins this prior request hash.
-                let previous_epoch =
-                    if recovery_context.is_some() && previous_body.get(PRIVATE_FIELD).is_some() {
-                        previous_body[PRIVATE_FIELD]["scope"]["metadataEpoch"]
-                            .as_u64()
-                            .filter(|epoch| *epoch > 0 && *epoch <= live_epoch)
-                            .ok_or_else(denied)?
-                    } else {
-                        live_epoch
-                    };
-                bound_reference(
-                    &root,
-                    previous_body,
-                    &input.run_id,
-                    previous_epoch,
-                    previous.previous_runtime_revision,
-                    &fleet_id,
-                    &environment,
-                )?
-                .map(|(scope, object)| signer.open_agent_credentials(&root, &scope, &object))
-                .transpose()?
-            } else {
-                None
-            };
-            let credentials = merge_credentials(
-                inherited.as_ref(),
-                update.as_ref(),
-                api_key.as_str(),
-                tavily_api_key.as_str(),
-            )?;
-            let prepared = if let Some(context) = recovery_context.as_ref() {
-                Some(crate::agent_recovery_context::prepare(
-                    &root, &mut body, context,
-                )?)
-            } else {
-                None
-            };
-            let reference = prepared
-                .as_ref()
-                .map(|(_, reference)| reference.clone())
-                .unwrap_or(reference);
+            let sealed_max = deepseek_federation::AgentCredentialVault::open(&root)
+                .and_then(|vault| {
+                    vault.max_runtime_revision(&fleet_id, &environment, &input.run_id, live_epoch)
+                })
+                .map_err(|_| denied())?;
+            if !deepseek_policy::agent_runtime_admission::vault_revision_allowed(
+                sealed_max,
+                input.runtime_revision,
+            ) {
+                return Err(denied());
+            }
             let scope = AgentCredentialScope {
                 fleet_id,
                 environment,
@@ -303,42 +142,8 @@ impl WorkerRpcService {
                 request_sha256: reference.sha256,
                 request_length: reference.length,
             };
-            let object = credentials
-                .as_ref()
-                .map(|value| signer.prepare_agent_credentials(&root, &scope, value))
-                .transpose()?;
-            let (prepared_request, prepared_context, context_sha256, event_bodies) =
-                if let Some((prepared, _)) = prepared {
-                    if let Some(object) = object.as_ref() {
-                        body[PRIVATE_FIELD] = serde_json::json!({"scope":&scope,"object":object});
-                    }
-                    let mut artifacts = ArtifactStore::open_native(&root, "python_disabled")
-                        .map_err(|_| denied())?;
-                    let final_request = artifacts.put(&body).map_err(|_| denied())?;
-                    let events = crate::agent_recovery_context::initial_event_bodies(
-                        &mut artifacts,
-                        &prepared.context,
-                    )?;
-                    let protocol_ref = |r: ArtifactReference| {
-                        deepseek_protocol::generated::deepseek::agent::v1::AgentArtifactReference {
-                            sha256: r.sha256,
-                            length: r.length,
-                        }
-                    };
-                    (
-                        Some(protocol_ref(final_request)),
-                        Some(protocol_ref(prepared.reference)),
-                        prepared.digest,
-                        events,
-                    )
-                } else {
-                    (None, None, String::new(), vec![])
-                };
+            let object = signer.prepare_agent_credentials(&root, &scope, &credentials)?;
             Ok::<_, Status>(PrepareAgentCredentialsResponse {
-                prepared_request,
-                recovery_context: prepared_context,
-                recovery_context_sha256: context_sha256,
-                recovery_event_bodies: event_bodies,
                 scope: Some(
                     deepseek_protocol::generated::deepseek::agent::v1::AgentCredentialScope {
                         fleet_id: scope.fleet_id,
@@ -350,7 +155,7 @@ impl WorkerRpcService {
                         request_length: scope.request_length,
                     },
                 ),
-                object: object.map(|object| AgentCredentialObjectReference {
+                object: Some(AgentCredentialObjectReference {
                     id: object.id,
                     sha256: object.sha256,
                     length: object.length,
@@ -377,42 +182,9 @@ impl WorkerRpcService {
         };
         let run_id = claim.run_id.clone();
         let metadata_epoch = claim.metadata_epoch;
-        let body = tokio::task::spawn_blocking({
-            let root = root.clone();
-            move || read_body(&root, &reference)
-        })
-        .await
-        .map_err(|_| denied())??;
-        if !body.is_object() {
-            return Err(denied());
-        }
-        let binding = self
-            .agent_execution_control
-            .as_ref()
-            .ok_or_else(denied)?
-            .runtime_binding(&run_id, metadata_epoch)
-            .await?;
-        if binding.request.as_ref() != claim.request.as_ref() {
-            return Err(denied());
-        }
-        let prepared = crate::agent_recovery_context::read(&root, &body)?;
-        crate::agent_recovery_context::validate_binding(prepared.as_ref(), &binding)?;
-        if let Some(prepared) = prepared.as_ref() {
-            if prepared.context.metadata_epoch > metadata_epoch
-                || claim.metadata_index < prepared.context.expected_index
-            {
-                return Err(crate::agent_recovery_context::denied());
-            }
-        }
-        if body.get(PRIVATE_FIELD).is_none() {
-            return Ok(executor);
-        }
-        // The admitted signed request hash pins this envelope. Its revision is
-        // independently compared with Go's live metadata while its reservation
-        // prevents a runtime swap; the frozen grant document stays unchanged.
-        let runtime_revision = binding.runtime_revision.max(1);
         let signer = Arc::clone(self.control_signer.as_ref().ok_or_else(denied)?);
         tokio::task::spawn_blocking(move || {
+            let body = read_body(&root, &reference)?;
             let signer = signer.blocking_lock();
             let (fleet_id, environment) = signer.agent_credential_binding()?;
             let Some((scope, object)) = bound_reference(
@@ -420,7 +192,6 @@ impl WorkerRpcService {
                 body,
                 &run_id,
                 metadata_epoch,
-                runtime_revision,
                 &fleet_id,
                 &environment,
             )?
@@ -505,7 +276,7 @@ mod tests {
     fn immutable_request_binding_accepts_only_the_expected_run_and_base_body() {
         let root = tempfile::tempdir().unwrap();
         let body = bound_body(root.path());
-        let bound = bound_reference(root.path(), body.clone(), "run-a", 2, 1, "fleet-a", "test")
+        let bound = bound_reference(root.path(), body.clone(), "run-a", 2, "fleet-a", "test")
             .unwrap()
             .unwrap();
         assert_eq!(bound.0.run_id, "run-a");
@@ -513,7 +284,7 @@ mod tests {
         for (field, value) in [
             ("runId", json!("other")),
             ("metadataEpoch", json!(3)),
-            ("runtimeRevision", json!(2)),
+            ("runtimeRevision", json!(0)),
             ("fleetId", json!("other")),
             ("environment", json!("prod")),
             ("requestSha256", json!("c".repeat(64))),
@@ -522,90 +293,19 @@ mod tests {
             let mut changed = body.clone();
             changed[PRIVATE_FIELD]["scope"][field] = value;
             assert!(
-                bound_reference(root.path(), changed, "run-a", 2, 1, "fleet-a", "test").is_err(),
+                bound_reference(root.path(), changed, "run-a", 2, "fleet-a", "test").is_err(),
                 "{field}"
             );
         }
+        let mut next_revision = body.clone();
+        next_revision[PRIVATE_FIELD]["scope"]["runtimeRevision"] = json!(2);
+        let admitted = bound_reference(root.path(), next_revision, "run-a", 2, "fleet-a", "test")
+            .unwrap()
+            .unwrap();
+        assert_eq!(admitted.0.runtime_revision, 2);
         let mut changed = body;
         changed["payload"]["messages"][0]["content"] = json!("Different query");
-        assert!(bound_reference(root.path(), changed, "run-a", 2, 1, "fleet-a", "test").is_err());
-    }
-
-    #[test]
-    fn changed_runtime_revision_accepts_only_its_exact_go_binding() {
-        let root = tempfile::tempdir().unwrap();
-        let mut body = bound_body(root.path());
-        body[PRIVATE_FIELD]["scope"]["runtimeRevision"] = json!(2);
-        assert!(
-            bound_reference(root.path(), body.clone(), "run-a", 2, 2, "fleet-a", "test")
-                .unwrap()
-                .is_some()
-        );
-        assert!(bound_reference(root.path(), body, "run-a", 2, 1, "fleet-a", "test").is_err());
-    }
-
-    #[test]
-    fn credential_updates_distinguish_inheritance_replacement_and_clear() {
-        let old = AgentProviderCredentials::from_keys(
-            Some("old-api-fixture"),
-            Some("old-search-fixture"),
-        )
-        .unwrap();
-        for (replace_api, replace_search, api, search, expected_api, expected_search) in [
-            (
-                false,
-                false,
-                "",
-                "",
-                Some("old-api-fixture"),
-                Some("old-search-fixture"),
-            ),
-            (
-                true,
-                false,
-                "new-api-fixture",
-                "",
-                Some("new-api-fixture"),
-                Some("old-search-fixture"),
-            ),
-            (false, true, "", "", Some("old-api-fixture"), None),
-            (true, false, "", "", None, Some("old-search-fixture")),
-            (true, true, "", "", None, None),
-        ] {
-            let update = AgentCredentialRuntimeUpdate {
-                replace_api_key: replace_api,
-                replace_tavily_api_key: replace_search,
-                ..Default::default()
-            };
-            let selected = merge_credentials(Some(&old), Some(&update), api, search).unwrap();
-            assert_eq!(
-                selected
-                    .as_ref()
-                    .and_then(AgentProviderCredentials::api_key),
-                expected_api
-            );
-            assert_eq!(
-                selected
-                    .as_ref()
-                    .and_then(AgentProviderCredentials::tavily_api_key),
-                expected_search
-            );
-        }
-        assert_eq!(old.api_key(), Some("old-api-fixture"));
-        assert_eq!(old.tavily_api_key(), Some("old-search-fixture"));
-    }
-
-    #[test]
-    fn credential_updates_refuse_unmarked_replacements_and_invalid_values() {
-        let update = AgentCredentialRuntimeUpdate::default();
-        assert!(merge_credentials(None, Some(&update), "unexpected-api-fixture", "").is_err());
-        assert!(merge_credentials(None, Some(&update), "", "unexpected-search-fixture").is_err());
-        assert!(merge_credentials(None, None, "", "").is_err());
-        let update = AgentCredentialRuntimeUpdate {
-            replace_api_key: true,
-            ..Default::default()
-        };
-        assert!(merge_credentials(None, Some(&update), "invalid\nfixture", "").is_err());
+        assert!(bound_reference(root.path(), changed, "run-a", 2, "fleet-a", "test").is_err());
     }
 
     #[test]
@@ -617,7 +317,6 @@ mod tests {
                 json!({"payload":{}}),
                 "run-a",
                 2,
-                1,
                 "fleet-a",
                 "test"
             )
@@ -631,7 +330,7 @@ mod tests {
             json!({"scope":{},"object":{},"extra":true}),
         ] {
             let body = json!({PRIVATE_FIELD:value});
-            assert!(bound_reference(root.path(), body, "run-a", 2, 1, "fleet-a", "test").is_err());
+            assert!(bound_reference(root.path(), body, "run-a", 2, "fleet-a", "test").is_err());
         }
     }
 }

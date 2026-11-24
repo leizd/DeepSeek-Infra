@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import base64
 from datetime import datetime, timedelta, timezone
 import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -27,9 +26,20 @@ if str(ROOT / "scripts") not in sys.path:
 import verify_agent_signing_process as signing  # noqa: E402
 
 
-def credential_worker_transport(target: str, ca_file: Path, bearer: str) -> dict[str, str]:
-    """Adapt the worker's socket target to the gateway's HTTPS origin contract."""
-    return {"ORIGIN": "https://" + target, "CA_FILE": ca_file.as_posix(), "SERVER_NAME": "localhost", "BEARER": bearer}
+def credential_worker_transport(listen: str, ca_file: Path, server_name: str, bearer: str) -> dict[str, str]:
+    """Map the worker's loopback listen address to the edge's private HTTPS origin.
+
+    ``start_worker`` returns ``127.0.0.1:<port>`` for ``DEEPSEEK_WORKER_LISTEN``.
+    The gateway strips one ``https://`` prefix and parses the remainder as a
+    socket address, so the process probe must not pass the bare listen address.
+    """
+    host, separator, port = listen.rpartition(":")
+    if separator != ":" or host != "127.0.0.1" or not port.isdigit() or port != str(int(port)) or not 1 <= int(port) <= 65535:
+        raise ValueError("Explicit private Rust credential custody transport is invalid")
+    if server_name != "localhost" or not ca_file.is_absolute() or len(bearer) < 32:
+        raise ValueError("Explicit private Rust credential custody transport is invalid")
+    return {"ORIGIN": f"https://127.0.0.1:{port}", "CA_FILE": ca_file.as_posix(),
+            "SERVER_NAME": server_name, "BEARER": bearer}
 
 
 def public_edge_environment(source: dict[str, str], address: str, static: Path, artifacts: Path,
@@ -54,6 +64,12 @@ def public_edge_environment(source: dict[str, str], address: str, static: Path, 
     return environment
 
 
+def require_request_credential(exchanges: list[dict[str, Any]]) -> None:
+    """Every controlled provider call must present the sealed request key, not the server fallback."""
+    if any(row.get("requestCredentialUsed") is not True for row in exchanges):
+        raise ValueError("Actual provider did not use the request credential")
+
+
 def validate_driver_result(result: dict[str, Any], exchanges: list[dict[str, Any]]) -> None:
     if result.get("status") != "PASS" or result.get("runStatus") != "done" or result.get("nextIndex") != 9 or \
             result.get("durablePhases") != 3 or result.get("publicEventCount") != 9 or \
@@ -76,214 +92,7 @@ def validate_driver_result(result: dict[str, Any], exchanges: list[dict[str, Any
             exchanges[2].get("predecessorSummaryInPrompt") is not True or exchanges[2].get("privateReasoningInPrompt") is not False or \
             exchanges[3].get("synthesisCoderInPrompt") is not True or exchanges[3].get("synthesisCriticInPrompt") is not True:
         raise ValueError("Actual native DAG dependency/final request assembly is unqualified")
-
-
-def validate_recovery_preparation_result(result: dict[str, Any], exchanges: list[dict[str, Any]]) -> None:
-    base = result.get("baseExecution")
-    recovery = result.get("recoveryPreparation")
-    if not isinstance(base, dict) or not isinstance(recovery, dict):
-        raise ValueError("Actual recovery preparation evidence is missing")
-    validate_driver_result(base, exchanges)
-    if result.get("status") != "PASS" or result.get("runStatus") != "done" or result.get("nextIndex") != 11 or \
-            result.get("publicEventCount") != 11 or result.get("durablePhases") != 3 or \
-            result.get("productionRuntimeProcesses") != ["Go", "Rust"] or result.get("finalAnswerVisible") is not True or \
-            result.get("productionProviderQualified") is not False or result.get("fullMigrationQualified") is not False or \
-            result.get("sourceCommit") != base.get("sourceCommit") or result.get("runId") != base.get("runId"):
-        raise ValueError("Recovery preparation omitted actual public settlement or overclaims qualification")
-    if recovery.get("kind") != "completed-resume" or recovery.get("generation") != 1 or \
-            recovery.get("originalRuntimeRevision") != 1 or recovery.get("runtimeRevision") != 2 or \
-            recovery.get("priorEffectCount") != 4 or recovery.get("retainedOutputCount") != 2 or \
-            recovery.get("newProviderCalls") != 0 or recovery.get("newDurablePhases") != 0 or \
-            recovery.get("goOpenedRustBody") is not False or recovery.get("fullResumeRerunQualified") is not False:
-        raise ValueError("Recovery preparation lost original custody or admitted extra effects")
-    for key in ["preparedByRust", "readOnlyPreview", "preparationRetryIdempotent", "commitRetryIdempotent",
-                "forgedContextDenied", "unauthenticatedDenied", "stalePreparationDenied", "originalEffectsUnchanged",
-                "originalPublicEventsUnchanged", "publicReadQualified"]:
-        if recovery.get(key) is not True:
-            raise ValueError("Recovery preparation lacks actual custody/CAS denial evidence: " + key)
-    for value in [result.get("requestSha256"), recovery.get("originalRequestSha256"),
-                  recovery.get("contextSha256"), recovery.get("contextArtifactSha256")]:
-        if not isinstance(value, str) or len(value) != 64 or any(c not in "0123456789abcdef" for c in value):
-            raise ValueError("Recovery preparation omitted a precise immutable artifact binding")
-    if recovery["originalRequestSha256"] != base.get("requestSha256") or \
-            result["requestSha256"] == base.get("requestSha256") or \
-            type(recovery.get("contextArtifactLength")) is not int or recovery["contextArtifactLength"] <= 0:
-        raise ValueError("Recovery preparation reused or omitted the new context/request custody")
-
-
-def validate_recovery_execution_result(result: dict[str, Any], exchanges: list[dict[str, Any]]) -> None:
-    base, recovery = result.get("baseExecution"), result.get("recoveryPreparation")
-    if not isinstance(base, dict) or not isinstance(recovery, dict) or len(exchanges) != 5:
-        raise ValueError("Direct synthesis recovery omitted original execution or made extra provider calls")
-    validate_driver_result(base, exchanges[:4])
-    if result.get("status") != "PASS" or result.get("runStatus") != "done" or result.get("nextIndex") != 13 or \
-            result.get("publicEventCount") != 13 or result.get("durablePhases") != 4 or \
-            result.get("sourceCommit") != base.get("sourceCommit") or result.get("runId") != base.get("runId") or \
-            result.get("directSynthesisRecoveryQualified") is not True or result.get("productionProviderQualified") is not False or \
-            result.get("fullMigrationQualified") is not False or result.get("productionRuntimeProcesses") != ["Go", "Rust"]:
-        raise ValueError("Direct synthesis recovery omitted durable/public settlement or overclaims qualification")
-    if recovery.get("kind") != "direct-synthesis" or recovery.get("generation") != 1 or \
-            recovery.get("originalRuntimeRevision") != 1 or recovery.get("runtimeRevision") != 2 or \
-            recovery.get("priorEffectCount") != 4 or recovery.get("retainedOutputCount") != 2 or \
-            recovery.get("newProviderCalls") != 1 or recovery.get("newDurablePhases") != 1 or recovery.get("newTaskPhases") != 0 or \
-            recovery.get("goOpenedRustBody") is not False or recovery.get("fullResumeRerunQualified") is not False:
-        raise ValueError("Direct synthesis recovery reused false custody or invented task settlement")
-    for flag in ["preparedByRust", "preparationRetryIdempotent", "commitRetryIdempotent", "stalePreparationDenied",
-                 "originalEffectsUnchanged", "originalPublicEventsUnchanged", "publicReadQualified"]:
-        if recovery.get(flag) is not True:
-            raise ValueError("Direct synthesis recovery lacks actual proof: " + flag)
-    for value in [result.get("requestSha256"), recovery.get("contextSha256"), recovery.get("contextArtifactSha256")]:
-        if not isinstance(value, str) or len(value) != 64 or any(c not in "0123456789abcdef" for c in value):
-            raise ValueError("Direct synthesis recovery omitted exact immutable bindings")
-    if recovery.get("originalRequestSha256") != base.get("requestSha256") or result["requestSha256"] == base.get("requestSha256") or \
-            type(recovery.get("contextArtifactLength")) is not int or recovery["contextArtifactLength"] <= 0:
-        raise ValueError("Direct synthesis recovery rebound the original request")
-    last = exchanges[4]
-    if not last.get("actionId") or last.get("actionId") != recovery.get("newSynthesisActionId") or \
-            last["actionId"] in {row["actionId"] for row in exchanges[:4]} or not last.get("operationId") or \
-            last["operationId"] in {row["operationId"] for row in exchanges[:4]} or last.get("executionEpoch") != "1" or last.get("stream") is not False or \
-            last.get("synthesisCoderInPrompt") is not True or last.get("synthesisCriticInPrompt") is not True or \
-            last.get("privateReasoningInPrompt") is not False:
-        raise ValueError("Direct synthesis lacks a fresh fenced effect and both original public summaries")
-
-
-def public_completion_cases() -> list[dict[str, Any]]:
-    return [{"name":alias or "completed-resume","alias":alias,"synthesize":bool(alias),"path":"rerun" if alias else "resume"}
-            for alias in ["","synth","leader","synthesizer"]]
-
-
-def validate_public_completion_result(result: dict[str, Any], exchanges: list[dict[str, Any]], case: dict[str, Any]) -> None:
-    alias=case.get("alias")
-    if not isinstance(alias,str) or alias not in {"","synth","leader","synthesizer"}:
-        raise ValueError("Unrecognized public completion selection")
-    synthesize=bool(alias)
-    path="rerun" if alias else "resume"
-    if case.get("synthesize") is not synthesize or case.get("path")!=path:
-        raise ValueError("Public completion scenario changed its independently selected request")
-    base,recovery=result.get("baseExecution"),result.get("recoveryPreparation")
-    if not isinstance(base,dict) or not isinstance(recovery,dict):
-        raise ValueError("Public completion omitted the original durable execution")
-    validate_driver_result(base,exchanges[:4])
-    count=int(synthesize)
-    if result.get("status")!="PASS" or result.get("runStatus")!="done" or len(exchanges)!=4+count or \
-            result.get("nextIndex")!=11+2*count or result.get("publicEventCount")!=11+2*count or result.get("durablePhases")!=3+count or \
-            result.get("sourceCommit")!=base.get("sourceCommit") or result.get("runId")!=base.get("runId") or \
-            result.get("publicCompletionRecoveryQualified") is not True or result.get("productionProviderQualified") is not False or \
-            result.get("fullMigrationQualified") is not False or result.get("productionRuntimeProcesses")!=["Go","Rust"]:
-        raise ValueError("Public completion omitted exact durable/provider boundaries or overclaimed qualification")
-    if recovery.get("kind")!="public-completion" or recovery.get("path")!=path or recovery.get("agentId")!=alias or \
-            recovery.get("synthesize") is not synthesize or recovery.get("literalFalseSentForAlias") is not synthesize or \
-            recovery.get("generation")!=1 or recovery.get("originalRuntimeRevision")!=1 or recovery.get("runtimeRevision")!=2 or \
-            recovery.get("priorEffectCount")!=4 or recovery.get("retainedOutputCount")!=2 or \
-            recovery.get("newProviderCalls")!=count or recovery.get("newDurablePhases")!=count or recovery.get("newTaskPhases")!=0 or \
-            recovery.get("goOpenedRustBody") is not False or recovery.get("privatePreparationRetryQualified") is not False or \
-            recovery.get("fullResumeRerunQualified") is not False:
-        raise ValueError("Public completion rebound selection, source custody or retained phase semantics")
-    for flag in ["preparedByRust","admittedThroughRustHTTP","commitRetryIdempotent","originalEffectsUnchanged",
-                 "originalPublicEventsUnchanged","originalTaskOutputsUnchanged","publicReadQualified"]:
-        if recovery.get(flag) is not True:
-            raise ValueError("Public completion lacks actual proof: "+flag)
-    for value in [result.get("requestSha256"),recovery.get("contextSha256"),recovery.get("contextArtifactSha256")]:
-        if not isinstance(value,str) or len(value)!=64 or any(c not in "0123456789abcdef" for c in value):
-            raise ValueError("Public completion omitted exact immutable body bindings")
-    if recovery.get("originalRequestSha256")!=base.get("requestSha256") or result["requestSha256"]==base.get("requestSha256") or \
-            type(recovery.get("contextArtifactLength")) is not int or recovery["contextArtifactLength"]<=0 or \
-            any(row.get("requestCredentialUsed") is not True for row in exchanges):
-        raise ValueError("Public completion omitted actual inherited Rust credentials or a fresh runtime request")
-    refusals=recovery.get("publicRefusals")
-    if synthesize:
-        expected={"invalid-json":400,"missing-role":400,"unknown-role":400,"private-input":400,
-                  "duplicate-rerun-while-active":409,"resume-while-active":409,"missing-run":404}
-        if recovery.get("actualRecoveryPostRequests")!=8 or not isinstance(refusals,list) or len(refusals)!=7 or \
-                {r.get("case"):r.get("status") for r in refusals if isinstance(r,dict)}!=expected or \
-                any(not isinstance(r,dict) or r.get("runUnchanged") is not True or type(r.get("status")) is not int or
-                    r.get("path")!=("resume" if r.get("case")=="resume-while-active" else "rerun") for r in refusals):
-            raise ValueError("Public synthesis alias omitted actual POST refusal and no-mutation evidence")
-        last=exchanges[4]
-        if not last.get("actionId") or last.get("actionId")!=recovery.get("newSynthesisActionId") or \
-                last["actionId"] in {r["actionId"] for r in exchanges[:4]} or not last.get("operationId") or \
-                last["operationId"] in {r["operationId"] for r in exchanges[:4]} or last.get("executionEpoch")!="1" or last.get("stream") is not False or \
-                last.get("synthesisCoderInPrompt") is not True or last.get("synthesisCriticInPrompt") is not True or \
-                last.get("privateReasoningInPrompt") is not False:
-            raise ValueError("Public alias synthesis lacks a distinct effect and the original public task summaries")
-    elif recovery.get("actualRecoveryPostRequests")!=1 or refusals not in (None,[]) or recovery.get("newSynthesisActionId")!="":
-        raise ValueError("Completed public resume admitted a new provider/task effect")
-
-
-def task_rerun_cases() -> list[dict[str, Any]]:
-    return [{"name":role+("-synthesize" if synthesize else "-keep-final"),"role":role,"synthesize":synthesize}
-            for role in ["critic","researcher"] for synthesize in [True,False]]
-
-
-def validate_task_recovery_result(result: dict[str, Any], exchanges: list[dict[str, Any]], case: dict[str, Any]) -> None:
-    base,recovery=result.get("baseExecution"),result.get("recoveryPreparation")
-    role,synthesize=case.get("role"),case.get("synthesize")
-    if role not in {"critic","researcher"} or type(synthesize) is not bool or not isinstance(base,dict) or not isinstance(recovery,dict):
-        raise ValueError("Task rerun omitted its independently selected scenario")
-    validate_driver_result(base,exchanges[:4])
-    calls,events=1+int(synthesize),14+2*int(synthesize)
-    if len(exchanges)!=4+calls or result.get("status")!="PASS" or result.get("runStatus")!="done" or \
-            result.get("nextIndex")!=events or result.get("publicEventCount")!=events or result.get("durablePhases")!=3+calls or \
-            result.get("sourceCommit")!=base.get("sourceCommit") or result.get("runId")!=base.get("runId") or \
-            result.get("taskRerunProgressQualified") is not True or result.get("productionProviderQualified") is not False or \
-            result.get("fullMigrationQualified") is not False or result.get("productionRuntimeProcesses")!=["Go","Rust"]:
-        raise ValueError("Task rerun omitted public/terminal settlement or admitted extra effects")
-    if recovery.get("kind")!="task-rerun" or recovery.get("role")!=role or recovery.get("synthesize") is not synthesize or \
-            recovery.get("generation")!=1 or recovery.get("originalRuntimeRevision")!=1 or recovery.get("runtimeRevision")!=2 or \
-            recovery.get("priorEffectCount")!=4 or recovery.get("retainedOutputCount")!=(1 if role=="critic" else 2) or \
-            recovery.get("newProviderCalls")!=calls or recovery.get("newDurablePhases")!=calls or \
-            recovery.get("goOpenedRustBody") is not False or recovery.get("fullResumeRerunQualified") is not False or \
-            recovery.get("progressMetadataSchemaVersion")!=4 or recovery.get("originalRequestSha256")!=base.get("requestSha256") or \
-            result.get("requestSha256")==base.get("requestSha256"):
-        raise ValueError("Task rerun changed its source, selection, progress schema or original request")
-    for flag in ["preparedByRust","commitRetryIdempotent","originalEffectsUnchanged",
-                 "originalPublicEventsUnchanged","publicReadQualified","oldFinalRetainedDuringTask","unfinishedProgressDenied","staleProgressDenied"]:
-        if recovery.get(flag) is not True:
-            raise ValueError("Task rerun lacks actual proof: "+flag)
-    if case.get("publicAdmission") is True:
-        expected_refusals={"invalid-json":400,"missing-role":400,"unknown-role":400,"private-input":400,
-                           "duplicate-rerun-while-active":409,"resume-while-active":409,"missing-run":404}
-        refusals=recovery.get("publicRefusals")
-        if recovery.get("publicAdmissionQualified") is not True or recovery.get("preparationRetryIdempotent") is not False or \
-                recovery.get("actualPublicRecoveryHTTPRequests")!=8 or \
-                not isinstance(refusals,list) or len(refusals)!=len(expected_refusals):
-            raise ValueError("Task rerun lacks actual public HTTP admission and refusals")
-        if {r.get("case"):r.get("status") for r in refusals if isinstance(r,dict)}!=expected_refusals or \
-                any(not isinstance(r,dict) or r.get("runUnchanged") is not True or type(r.get("status")) is not int or
-                    r.get("path")!=("resume" if r.get("case")=="resume-while-active" else "rerun") for r in refusals):
-            raise ValueError("Public recovery refusal changed status or mutated the paused run")
-    elif recovery.get("preparationRetryIdempotent") is not True:
-        raise ValueError("Private recovery omitted its pre-commit immutable preparation retry")
-    for value in [result.get("requestSha256"),recovery.get("contextSha256"),recovery.get("contextArtifactSha256"),
-                  recovery.get("noteBodySha256"),recovery.get("nextBodySha256"),recovery.get("progressReceiptSha256")]:
-        if not isinstance(value,str) or len(value)!=64 or any(c not in "0123456789abcdef" for c in value):
-            raise ValueError("Task rerun omitted exact immutable artifact bindings")
-    encoded=recovery.get("progressReceiptBase64")
-    if not isinstance(encoded,str) or len(encoded)>2*1024**2:
-        raise ValueError("Task rerun omitted its bounded actual Rust receipt")
-    try:
-        receipt=base64.urlsafe_b64decode(encoded+"="*(-len(encoded)%4))
-    except ValueError as error:
-        raise ValueError("Malformed progress receipt encoding") from error
-    if not receipt or base64.urlsafe_b64encode(receipt).decode().rstrip("=")!=encoded or hashlib.sha256(receipt).hexdigest()!=recovery.get("progressReceiptSha256"):
-        raise ValueError("Task rerun receipt bytes differ from its actual stored signature")
-    old_actions={item.get("actionId") for item in exchanges[:4]}
-    old_operations={item.get("operationId") for item in exchanges[:4]}
-    task=exchanges[4]
-    if not task.get("actionId") or task["actionId"]!=recovery.get("newTaskActionId") or task["actionId"] in old_actions or \
-            not task.get("operationId") or task["operationId"] in old_operations or task.get("executionEpoch")!="1" or task.get("stream") is not False or \
-            task.get("predecessorSummaryInPrompt") is not True or task.get("rerunSelectedRoleInPrompt") is not True or \
-            task.get("requestCredentialUsed") is not True or task.get("privateReasoningInPrompt") is not False:
-        raise ValueError("Rerun task lacks original summaries, inherited Rust credentials or a fresh fenced effect")
-    if synthesize:
-        final=exchanges[5]
-        if not final.get("actionId") or final["actionId"]!=recovery.get("newSynthesisActionId") or final["actionId"] in old_actions|{task["actionId"]} or \
-                not final.get("operationId") or final["operationId"] in old_operations|{task["operationId"]} or final.get("executionEpoch")!="1" or \
-                final.get("stream") is not False or final.get("synthesisCoderInPrompt") is not True or final.get("synthesisCriticInPrompt") is not True or \
-                final.get("recoveredTaskSummaryInPrompt") is not True or final.get("requestCredentialUsed") is not True or final.get("privateReasoningInPrompt") is not False:
-            raise ValueError("Rerun synthesis lacks the latest selected output or its own admitted effect")
-    elif recovery.get("newSynthesisActionId")!="":
-        raise ValueError("Rerun without synthesis invented a synthesis action")
+    require_request_credential(exchanges)
 
 
 def wait_edge(origin: str, process: subprocess.Popen[bytes]) -> None:
@@ -343,6 +152,7 @@ def validate_preset_result(result: dict[str, Any], exchanges: list[dict[str, Any
         raise ValueError("Preset provider calls lack distinct nodes, shared task phase or privacy fences")
     if any(not exchanges[index + int(planner)].get("predecessorSummaryInPrompt") for index, node in enumerate(case["plan"]) if node.get("depends_on")):
         raise ValueError("Preset dependency summaries are absent from actual provider prompts")
+    require_request_credential(exchanges)
 
 
 def cancellation_cases() -> list[dict[str, Any]]:
@@ -368,6 +178,7 @@ def validate_cancellation_result(result: dict[str, Any], exchanges: list[dict[st
         raise ValueError("Public cancellation evidence is incomplete or overclaims qualification")
     if exchanges and any(not exchanges[0].get(key) for key in ["actionId","operationId","executionEpoch"]):
         raise ValueError("Actual planner HTTP exchange omitted its durable fence")
+    require_request_credential(exchanges)
 
 
 def active_cancellation_case() -> dict[str, Any]:
@@ -403,6 +214,7 @@ def validate_active_cancellation_result(result: dict[str, Any], exchanges: list[
     if (not planning and exchanges[0].get("actionId")==exchanges[1].get("actionId")) or \
             any(not item.get(k) for item in exchanges for k in ["actionId","operationId","executionEpoch"]):
         raise ValueError("Active planner/task HTTP effects lack distinct durable admission")
+    require_request_credential(exchanges)
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
@@ -411,19 +223,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     preset_case = getattr(args, "preset_case", None)
     cancel_after_plan = bool(getattr(args, "cancel_after_plan", False))
     cancel_active = bool(getattr(args, "cancel_active", False))
-    recovery_preparation = bool(getattr(args, "recovery_preparation", False))
-    recovery_driving = bool(getattr(args, "recovery_driving", False))
-    task_recovery_case = getattr(args, "task_recovery_case", None)
-    public_completion_case = getattr(args, "public_completion_case", None)
-    terminal_failure_case = getattr(args, "terminal_failure_case", None)
-    if terminal_failure_case is not None and terminal_failure_case not in {"plan", "synthesis", "plan-5xx", "plan-eof", "synthesis-5xx", "synthesis-eof"}:
-        raise ValueError("Unknown terminal failure case")
-    terminal_unknown = terminal_failure_case is not None and "-" in terminal_failure_case
-    terminal_phase = terminal_failure_case.split("-", 1)[0] if terminal_failure_case is not None else None
-    failed_task_case = getattr(args, "failed_task_case", None)
-    if failed_task_case is not None and failed_task_case not in {"resume", "rerun"}:
-        raise ValueError("Unknown failed-task recovery case")
-    public_recovery = bool(getattr(args, "public_recovery_rerun_matrix", False) or getattr(args, "public_recovery_completion_matrix", False))
     output = args.out.resolve()
     output.mkdir(parents=True, exist_ok=True)
     source_commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
@@ -439,22 +238,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         version = subprocess.check_output(["go", "version"], env=environment, text=True).strip()
         if not version.startswith(f"go version {signing.GO_VERSION} "):
             raise ValueError("Native Go toolchain pin differs")
-        fixtures = [ROOT / "tests/native/agent_signing_process.go.txt", ROOT / "tests/native/agent_public_driver_process.go.txt",
-                    ROOT / "tests/native/agent_recovery_preparation_process.go.txt",
-                    ROOT / "tests/native/agent_task_recovery_process.go.txt",
-                    ROOT / "tests/native/agent_public_recovery_process.go.txt",
-                    ROOT / "tests/native/agent_public_completion_process.go.txt",
-                    ROOT / "tests/native/agent_failed_task_process.go.txt", ROOT / "tests/native/agent_terminal_failure_process.go.txt"]
+        fixtures = [ROOT / "tests/native/agent_signing_process.go.txt", ROOT / "tests/native/agent_public_driver_process.go.txt"]
         overlay = scratch / "overlay.json"
         overlay.write_text(json.dumps({"Replace": {
             (ROOT / "go/internal/api/zz_native_agent_signing_process_test.go").as_posix(): fixtures[0].as_posix(),
-            (ROOT / "go/internal/api/zz_native_agent_public_driver_process_test.go").as_posix(): fixtures[1].as_posix(),
-            (ROOT / "go/internal/api/zz_native_agent_recovery_preparation_process_test.go").as_posix(): fixtures[2].as_posix(),
-            (ROOT / "go/internal/api/zz_native_agent_task_recovery_process_test.go").as_posix(): fixtures[3].as_posix(),
-            (ROOT / "go/internal/api/zz_native_agent_public_recovery_process_test.go").as_posix(): fixtures[4].as_posix(),
-            (ROOT / "go/internal/api/zz_native_agent_public_completion_process_test.go").as_posix(): fixtures[5].as_posix(),
-            (ROOT / "go/internal/api/zz_native_agent_failed_task_process_test.go").as_posix(): fixtures[6].as_posix(),
-            (ROOT / "go/internal/api/zz_native_agent_terminal_failure_process_test.go").as_posix(): fixtures[7].as_posix()}}), encoding="utf-8")
+            (ROOT / "go/internal/api/zz_native_agent_public_driver_process_test.go").as_posix(): fixtures[1].as_posix()}}), encoding="utf-8")
         binary = scratch / "native-public-agent-api-tests"
         signing.record_command(["go", "test", "-c", "-p=2", "-overlay", overlay.as_posix(), "-o", binary.as_posix(), "./internal/api"],
             ROOT / "go", environment, output, "go-public-driver-build", timeout=600)
@@ -480,7 +268,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         state = case / "rust-state"
         state.mkdir()
         exchanges: list[dict[str, Any]] = []
-        exchange_lock = threading.Lock()
         plan = {"summary": "Controlled provider plan", "tasks": [{"role": "coder", "task": "write", "dependsOn": []},
             {"role": "critic", "task": "review", "dependsOn": ["coder"]}]}
 
@@ -495,35 +282,17 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     return
                 body = json.loads(self.rfile.read(length))
                 prompt = json.dumps(body, ensure_ascii=False)
-                with exchange_lock:
-                    exchanges.append({"actionId": self.headers.get("X-DeepSeek-Action-Id"),
-                        "executionEpoch": self.headers.get("X-DeepSeek-Execution-Epoch"),
-                        "operationId": self.headers.get("X-DeepSeek-Node-Operation-Id"), "model": body.get("model"),
-                        "stream": body.get("stream"), "selectedTaskInPrompt": "Agent 子任务：write" in prompt,
-                        "dependentTaskInPrompt": "Agent 子任务：review" in prompt,
-                        "predecessorSummaryInPrompt": "Controlled public task summary" in prompt,
-                        "privateReasoningInPrompt": "private-task-reasoning" in prompt,
-                        "synthesisCoderInPrompt": "任务：write" in prompt, "synthesisCriticInPrompt": "任务：review" in prompt,
-                        "recoveredTaskSummaryInPrompt":"Controlled rerun task summary" in prompt,
-                        "requestCredentialUsed":self.headers.get("Authorization")=="Bearer request-only-credential",
-                        "rerunSelectedRoleInPrompt":task_recovery_case is not None and
-                            ("你负责挑错、找漏洞" if task_recovery_case["role"]=="critic" else "你负责事实、资料") in prompt})
-                    exchange = exchanges[-1]
-                    position = len(exchanges)
-                if public_completion_case is not None and public_completion_case["synthesize"] and position==5:
-                    signing.write_ready(case/"public-synthesis-arrived.json",{"position":position})
-                    deadline=time.monotonic()+60
-                    while not (case/"public-synthesis-release.json").exists():
-                        if time.monotonic()>deadline:
-                            raise RuntimeError("Public synthesis did not release the controlled provider")
-                        time.sleep(0.05)
-                if task_recovery_case is not None and position==5:
-                    signing.write_ready(case/"rerun-task-arrived.json",{"position":position})
-                    deadline=time.monotonic()+(60 if public_recovery else 30)
-                    while not (case/"rerun-task-release.json").exists():
-                        if time.monotonic()>deadline:
-                            raise RuntimeError("Task rerun did not release the controlled provider")
-                        time.sleep(0.05)
+                exchanges.append({"actionId": self.headers.get("X-DeepSeek-Action-Id"),
+                    "executionEpoch": self.headers.get("X-DeepSeek-Execution-Epoch"),
+                    "operationId": self.headers.get("X-DeepSeek-Node-Operation-Id"), "model": body.get("model"),
+                    "stream": body.get("stream"),
+                    "requestCredentialUsed": self.headers.get("Authorization") == "Bearer request-only-credential",
+                    "selectedTaskInPrompt": "Agent 子任务：write" in prompt,
+                    "dependentTaskInPrompt": "Agent 子任务：review" in prompt,
+                    "predecessorSummaryInPrompt": "Controlled public task summary" in prompt,
+                    "privateReasoningInPrompt": "private-task-reasoning" in prompt,
+                    "synthesisCoderInPrompt": "任务：write" in prompt, "synthesisCriticInPrompt": "任务：review" in prompt})
+                position = len(exchanges)
                 planning_cancel = cancel_active and preset_case is not None and preset_case.get("cancelPhase") == "plan"
                 if cancel_active and position == (1 if planning_cancel else 2):
                     signing.write_ready(case / "provider-task-arrived.json", {"nodeId":"leader" if planning_cancel else "coder"})
@@ -535,53 +304,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 upstream = preset_case is None or preset_case["upstreamPlanner"]
                 final_position = 4 if preset_case is None else len(preset_case["plan"]) + 1 + int(upstream)
                 content = json.dumps({"agents":plan["tasks"]}) if upstream and position == 1 else ("Controlled final answer" if position == final_position else "## 摘要\nControlled public task summary")
-                if recovery_driving and position == 5:
-                    content = "Controlled recovered final answer"
-                if task_recovery_case is not None and position>=5:
-                    content="## 摘要\nControlled rerun task summary" if position==5 else "Controlled recovered final answer"
                 reply = json.dumps({"id": f"public-agent-{position}", "model": "deepseek-v4-pro",
                     "choices": [{"message": {"role": "assistant", "content": content, "reasoning_content": "private-task-reasoning"}, "finish_reason": "stop"}],
                     "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4}}, separators=(",", ":")).encode()
-                http_status=200
-                eof_rejection = False
-                if failed_task_case is not None:
-                    if position==2 or failed_task_case=="rerun" and position==5:
-                        http_status=401 if position==2 else 429
-                        reply=json.dumps({"error":{"message":"private-provider-rejection","type":"invalid_request_error"}},separators=(",",":")).encode()
-                    elif position>=5:
-                        content="## 摘要\nControlled rerun task summary" if position==5 else "Controlled failed-task recovered final answer"
-                        reply=json.dumps({"id":f"failed-task-{position}","model":"deepseek-v4-pro",
-                            "choices":[{"message":{"role":"assistant","content":content,"reasoning_content":"private-task-reasoning"},"finish_reason":"stop"}],
-                            "usage":{"prompt_tokens":3,"completion_tokens":1,"total_tokens":4}},separators=(",",":")).encode()
-                    exchange.update(httpStatus=http_status,responseSha256=hashlib.sha256(reply).hexdigest(),
-                        failedPredecessorInPrompt="HTTP 401" in prompt,
-                        synthesisFailureNoticeInPrompt="以下 Agent 本轮执行失败" in prompt)
-                if terminal_failure_case is not None:
-                    rejected = position == (1 if terminal_phase == "plan" else 4)
-                    final = position == (6 if terminal_phase == "plan" else 5)
-                    if rejected:
-                        http_status = 503 if terminal_failure_case.endswith("-5xx") else 401
-                        eof_rejection = terminal_failure_case.endswith("-eof")
-                        reply = json.dumps({"error": {"message": "private-provider-rejection", "type": "invalid_request_error"}}, separators=(",", ":")).encode()
-                    elif final or terminal_phase == "plan":
-                        content = "Controlled terminal-failure recovered final answer" if final else "## 摘要\nControlled terminal task summary"
-                        reply = json.dumps({"id": f"terminal-{position}", "model": "deepseek-v4-pro",
-                            "choices": [{"message": {"role": "assistant", "content": content, "reasoning_content": "private-task-reasoning"}, "finish_reason": "stop"}],
-                            "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4}}, separators=(",", ":")).encode()
-                    sent_reply = reply[:-3] if eof_rejection else reply
-                    exchange.update(httpStatus=http_status, responseComplete=not eof_rejection, responseSha256=hashlib.sha256(sent_reply).hexdigest(),
-                        terminalDefaultDescriptionsInPrompt=all(text in prompt for text in ["核查事实、背景和可能需要搜索的信息", "分析代码、架构、实现路径和工程风险", "梳理推理链路、边界条件和可执行方案", "检查方案风险、遗漏和反例"]))
-                    if rejected:
-                        signing.write_ready(case / "terminal-rejection-arrived.json", {"mode": terminal_failure_case, "position": position})
-                self.send_response(http_status)
+                self.send_response(200)
                 self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(reply) + (16 if eof_rejection else 0)))
+                self.send_header("Content-Length", str(len(reply)))
                 self.end_headers()
-                self.wfile.write(reply[:-3] if eof_rejection else reply)
-                if eof_rejection:
-                    self.wfile.flush()
-                    self.close_connection = True
-                    self.connection.shutdown(socket.SHUT_WR)
+                self.wfile.write(reply)
 
         provider = ThreadingHTTPServer(("127.0.0.1", 0), ProviderFixture)
         thread = threading.Thread(target=provider.serve_forever, daemon=True)
@@ -593,24 +323,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             environment.update(DEEPSEEK_AGENT_PUBLIC_DRIVER_PROBE="1", DEEPSEEK_AGENT_SIGNING_PROBE_DIR=case.as_posix(),
                 DEEPSEEK_AGENT_SIGNING_WORKER_BEARER=bearer, DEEPSEEK_TEST_HEAD_SHA=source_commit,
                 DEEPSEEK_WORKER_AUTHORITY_SIGNER_PUBLIC_KEY=binding["signerPublicKey"])
-            if terminal_failure_case is not None:
-                environment["DEEPSEEK_TEST_AGENT_TERMINAL_FAILURE"] = terminal_failure_case
-            if failed_task_case is not None:
-                environment["DEEPSEEK_TEST_AGENT_FAILED_TASK_RECOVERY"]=failed_task_case
-            if recovery_preparation:
-                environment["DEEPSEEK_TEST_AGENT_RECOVERY_PREPARATION"] = "1"
-            if recovery_driving:
-                environment["DEEPSEEK_TEST_AGENT_RECOVERY_DRIVING"] = "1"
-            if task_recovery_case is not None:
-                environment["DEEPSEEK_TEST_AGENT_RECOVERY_ROLE"]=task_recovery_case["role"]
-                environment["DEEPSEEK_TEST_AGENT_RECOVERY_SYNTHESIZE"]=str(task_recovery_case["synthesize"]).lower()
-            if public_recovery:
-                environment["DEEPSEEK_TEST_AGENT_PUBLIC_RECOVERY"]="1"
-            if public_completion_case is not None:
-                if public_completion_case["synthesize"]:
-                    environment["DEEPSEEK_TEST_AGENT_PUBLIC_SYNTHESIS_ALIAS"]=public_completion_case["alias"]
-                else:
-                    environment["DEEPSEEK_TEST_AGENT_PUBLIC_COMPLETED_RESUME"]="1"
             if cancel_after_plan:
                 environment["DEEPSEEK_TEST_AGENT_CANCEL_AFTER_PLAN"] = "1"
             if cancel_active:
@@ -624,14 +336,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     DEEPSEEK_TEST_AGENT_PLAN=json.dumps(preset_case["plan"], ensure_ascii=False),
                     DEEPSEEK_TEST_AGENT_CONFIRMATION=str(preset_case["confirmation"]).lower(),
                     DEEPSEEK_TEST_AGENT_EXPLICIT_CONFIRMATION=str(preset_case["explicitConfirmation"]).lower())
-            if failed_task_case is not None:
-                signing.record_command(
-                    [binary.as_posix(), "-test.run=^TestNativeFailedTaskRecoveryObservation$", "-test.v", "-test.timeout=30s"],
-                    ROOT / "go/internal/api", environment, output, "failed-task-observation-regression", timeout=45,
-                )
-                observation_log = (output / "failed-task-observation-regression.log").read_bytes()
-                if b"--- PASS: TestNativeFailedTaskRecoveryObservation " not in observation_log or b"[no tests to run]" in observation_log:
-                    raise ValueError("Failed-task observation regression was not executed")
             with (output / "public-driver-go.log").open("wb") as log:
                 producer = subprocess.Popen([binary.as_posix(), "-test.run=^TestNativeAgentPublicDriverProcess$", "-test.v", "-test.timeout=4m"],
                     cwd=ROOT / "go/internal/api", env=environment, stdout=log, stderr=subprocess.STDOUT)
@@ -655,7 +359,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 port.bind(("127.0.0.1", 0))
                 address = f"127.0.0.1:{port.getsockname()[1]}"
             edge_environment = public_edge_environment(worker_environment, address, static, artifacts, ready,
-                credential_worker_transport(target, ca, bearer))
+                credential_worker_transport(target, ca, "localhost", bearer))
             with (output / "public-driver-edge.log").open("wb") as log:
                 edge = subprocess.Popen([args.edge.resolve().as_posix()], cwd=ROOT, env=edge_environment, stdout=log, stderr=subprocess.STDOUT)
             wait_edge("http://" + address, edge)
@@ -667,25 +371,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             result = signing.wait_json(case / "result.json", producer, timeout=360 if cancel_active else 180)
             if producer.wait(timeout=15) != 0:
                 raise RuntimeError("Actual native public driver process failed")
-            if terminal_failure_case is not None:
-                import verify_native_agent_terminal_failures as terminal_failures
-                if terminal_unknown:
-                    terminal_failures.validate_unknown_result(result, exchanges, terminal_failure_case)
-                else:
-                    terminal_failures.validate_terminal_result(result, exchanges, terminal_failure_case)
-            elif failed_task_case is not None:
-                import verify_native_agent_failed_tasks as failed_tasks
-                result["observationRegressionVerified"] = True
-                failed_tasks.validate_failed_task_result(result,exchanges,failed_task_case)
-            elif public_completion_case is not None:
-                validate_public_completion_result(result,exchanges,public_completion_case)
-            elif task_recovery_case is not None:
-                validate_task_recovery_result(result,exchanges,task_recovery_case)
-            elif recovery_driving:
-                validate_recovery_execution_result(result, exchanges)
-            elif recovery_preparation:
-                validate_recovery_preparation_result(result, exchanges)
-            elif preset_case is None:
+            if preset_case is None:
                 validate_driver_result(result, exchanges)
             if result.get("sourceCommit") != source_commit:
                 raise ValueError("Go process source revision differs")
@@ -696,70 +382,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 request = json.loads(row[1])
                 if request["payload"].get("apiKey") is not None or "request-only-credential" in row[1].decode():
                     raise ValueError("Actual public request persisted a credential")
-                if recovery_preparation or recovery_driving:
-                    recovery = result["recoveryPreparation"]
-                    context_row = db.execute("SELECT length,bytes FROM artifacts WHERE sha256=?",
-                                             (recovery["contextArtifactSha256"],)).fetchone()
-                    envelope = request.get("_nativeRecoveryContext")
-                    if not context_row or context_row[0] != recovery["contextArtifactLength"] or \
-                            hashlib.sha256(context_row[1]).hexdigest() != recovery["contextArtifactSha256"] or \
-                            json.loads(context_row[1]) != envelope or not isinstance(envelope, dict) or \
-                            set(envelope) != {"schema", "metadataProto"} or envelope["schema"] != "native-agent-recovery-context-v1":
-                        raise ValueError("Prepared recovery context lacks independently retained Rust custody")
-                    encoded = envelope["metadataProto"]
-                    context_proto = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
-                    if base64.urlsafe_b64encode(context_proto).decode().rstrip("=") != encoded or \
-                            hashlib.sha256(context_proto).hexdigest() != recovery["contextSha256"]:
-                        raise ValueError("Prepared recovery protobuf digest differs from live Go preview")
-                    result["recoveryContextArtifactVerified"] = True
             with sqlite3.connect((state / "rust-worker/authority.sqlite3").as_uri() + "?mode=ro", uri=True) as db:
                 rows = db.execute("SELECT operation_id,state,output,output_sha256 FROM agent_node_effects").fetchall()
                 expected_nodes = (1 if preset_case is not None and preset_case.get("cancelPhase") == "plan" else 2) if cancel_active else (1 if cancel_after_plan else (4 if preset_case is None else len(preset_case["plan"]) + 2))
-                if recovery_driving:
-                    expected_nodes = 5
-                if task_recovery_case is not None:
-                    expected_nodes=5+int(task_recovery_case["synthesize"])
-                if terminal_failure_case is not None:
-                    expected_nodes = (1 if terminal_phase == "plan" else 4) if terminal_unknown else (6 if terminal_phase == "plan" else 5)
-                if failed_task_case is not None:
-                    expected_nodes=6
-                if terminal_unknown:
-                    result["actualPlanningSource"] = "upstream-provider-unknown" if terminal_phase == "plan" else "upstream-provider"
-                else:
-                    if len(rows) != expected_nodes or any(row[1] != "CONFIRMED" or hashlib.sha256(row[2]).hexdigest() != row[3] for row in rows):
-                        raise ValueError("Rust actual four-node custody is missing or corrupt")
-                    leader = next((json.loads(row[2]) for row in rows if json.loads(row[2]).get("publicEvent", {}).get("type") == "agent_plan"), None)
-                    if leader is None and terminal_failure_case != "plan":
-                        raise ValueError("Rust retained planning outcome is missing")
-                    result["actualPlanningSource"] = "confirmed-provider-rejection" if leader is None else ("retained-preset-policy" if leader.get("planningSource") == "retained-preset-policy" else "upstream-provider")
-            if task_recovery_case is not None:
-                recovery=result["recoveryPreparation"]
-                encoded=recovery["progressReceiptBase64"]
-                receipt=base64.urlsafe_b64decode(encoded+"="*(-len(encoded)%4))
-                with sqlite3.connect((state/"rust-worker/control-signatures.sqlite3").as_uri()+"?mode=ro",uri=True) as signatures:
-                    if signatures.execute("PRAGMA integrity_check").fetchone()[0]!="ok" or signatures.execute("SELECT count(*) FROM signatures WHERE document=?",(receipt,)).fetchone()[0]!=1:
-                        raise ValueError("Go progress does not match a unique actual Rust signer journal receipt")
-                with sqlite3.connect((artifacts/"objects-v1.sqlite").as_uri()+"?mode=ro",uri=True) as objects:
-                    bodies=[]
-                    for name in ["noteBodySha256","nextBodySha256"]:
-                        row=objects.execute("SELECT length,bytes FROM artifacts WHERE sha256=?",(recovery[name],)).fetchone()
-                        if not row or row[0]!=len(row[1]) or hashlib.sha256(row[1]).hexdigest()!=recovery[name]:
-                            raise ValueError("Actual Rust progress body custody is missing or corrupt")
-                        bodies.append(json.loads(row[1]))
-                expected_note={"type":"agent_note","phase":task_recovery_case["role"],
-                    "name":"反驳审查 Agent" if task_recovery_case["role"]=="critic" else "资料检索 Agent",
-                    "text":"其他 Agent 未自动重跑；最终回答将基于最新该 Agent 与现有其他 Agent 输出重新综合。"}
-                expected_next={"type":"final_reset","scope":"final_answer","reason":"rerun_agent"} if task_recovery_case["synthesize"] else {"type":"run_status","status":"done"}
-                if bodies!=[expected_note,expected_next]:
-                    raise ValueError("Actual progress bodies changed retained public behavior")
-                result["progressArtifactAndSignerCustodyVerified"]=True
-            if terminal_failure_case is not None:
-                if terminal_unknown:
-                    terminal_failures.verify_unknown_custody(result, exchanges, state, artifacts)
-                else:
-                    terminal_failures.verify_terminal_custody(result, exchanges, state, artifacts)
-            if failed_task_case is not None:
-                failed_tasks.verify_failed_task_custody(result,exchanges,state,artifacts)
+                if len(rows) != expected_nodes or any(row[1] != "CONFIRMED" or hashlib.sha256(row[2]).hexdigest() != row[3] for row in rows):
+                    raise ValueError("Rust actual four-node custody is missing or corrupt")
+                leader = next((json.loads(row[2]) for row in rows if json.loads(row[2]).get("publicEvent", {}).get("type") == "agent_plan"), None)
+                if leader is None:
+                    raise ValueError("Rust retained planning outcome is missing")
+                result["actualPlanningSource"] = "retained-preset-policy" if leader.get("planningSource") == "retained-preset-policy" else "upstream-provider"
             result.update(actualHTTPRequests=len(exchanges), providerExchanges=exchanges,
                 requestBodyStoredByRust=True, bootstrapUIIsOfflineFixture=True, cloudOnlyNativeBuild=True,
                 privateCustodyVariablesExportedToGo=False, readiness="NOT_READY")
@@ -790,62 +421,8 @@ def main() -> int:
     mode.add_argument("--preset-matrix", action="store_true")
     mode.add_argument("--cancellation-matrix", action="store_true")
     mode.add_argument("--active-cancellation-matrix", action="store_true")
-    mode.add_argument("--recovery-preparation", action="store_true")
-    mode.add_argument("--recovery-driving", action="store_true")
-    mode.add_argument("--recovery-rerun-matrix", action="store_true")
-    mode.add_argument("--public-recovery-rerun-matrix", action="store_true")
-    mode.add_argument("--public-recovery-completion-matrix", action="store_true")
     args = parser.parse_args()
-    if args.public_recovery_completion_matrix:
-        output=args.out.resolve()
-        results=[]
-        for case in public_completion_cases():
-            child=argparse.Namespace(**vars(args))
-            child.out=output/case["name"]
-            child.public_completion_case=case
-            child.recovery_driving=case["synthesize"]
-            child.recovery_preparation=not case["synthesize"]
-            report=run(child)
-            if report.get("recoveryContextArtifactVerified") is not True:
-                raise ValueError("Public completion omitted actual Rust context custody")
-            results.append({"name":case["name"],"alias":case["alias"],"synthesize":case["synthesize"],"status":report["status"],
-                "sourceCommit":report["sourceCommit"],"actualProviderHTTPRequests":report["actualHTTPRequests"],
-                "actualRecoveryPostRequests":report["recoveryPreparation"]["actualRecoveryPostRequests"],"nextIndex":report["nextIndex"]})
-            print(json.dumps(results[-1]),flush=True)
-        result={"status":"PASS","sourceCommit":results[0]["sourceCommit"],"caseCount":len(results),"cases":results,
-            "allInputsCreatedThroughRustHTTP":True,"publicCompletionRecoveryQualified":True,
-            "actualRecoveryPostRequests":sum(r["actualRecoveryPostRequests"] for r in results),
-            "actualProviderHTTPRequests":sum(r["actualProviderHTTPRequests"] for r in results),
-            "runtimePython":False,"realProviderQualified":False,"fullMigrationQualified":False,"readiness":"NOT_READY"}
-        output.mkdir(parents=True,exist_ok=True)
-        (output/"result.json").write_text(json.dumps(result,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
-    elif args.recovery_rerun_matrix or args.public_recovery_rerun_matrix:
-        output=args.out.resolve()
-        results=[]
-        for case in task_rerun_cases():
-            if args.public_recovery_rerun_matrix:
-                case=dict(case,publicAdmission=True)
-            child=argparse.Namespace(**vars(args))
-            child.out=output/case["name"]
-            child.task_recovery_case=case
-            child.recovery_driving=True
-            report=run(child)
-            if report.get("progressArtifactAndSignerCustodyVerified") is not True:
-                raise ValueError("Task recovery lacks actual Rust custody")
-            results.append({"name":case["name"],"role":case["role"],"synthesize":case["synthesize"],"status":report["status"],"sourceCommit":report["sourceCommit"],
-                "actualHTTPRequests":report["actualHTTPRequests"],"nextIndex":report["nextIndex"],"progressArtifactAndSignerCustodyVerified":True,
-                "publicAdmissionQualified":report["recoveryPreparation"].get("publicAdmissionQualified",False),
-                "actualPublicRecoveryHTTPRequests":report["recoveryPreparation"].get("actualPublicRecoveryHTTPRequests",0)})
-            print(json.dumps(results[-1]),flush=True)
-        result={"status":"PASS","sourceCommit":results[0]["sourceCommit"],"caseCount":len(results),"cases":results,
-            "allInputsCreatedThroughRustHTTP":True,"taskRerunProgressQualified":True,
-            "publicRecoveryAdmissionQualified":args.public_recovery_rerun_matrix,
-            "actualPublicRecoveryHTTPRequests":sum(r["actualPublicRecoveryHTTPRequests"] for r in results),
-            "actualProviderHTTPRequests":sum(r["actualHTTPRequests"] for r in results),
-            "runtimePython":False,"realProviderQualified":False,"fullMigrationQualified":False,"readiness":"NOT_READY"}
-        output.mkdir(parents=True,exist_ok=True)
-        (output/"result.json").write_text(json.dumps(result,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
-    elif args.preset_matrix or args.cancellation_matrix or args.active_cancellation_matrix:
+    if args.preset_matrix or args.cancellation_matrix or args.active_cancellation_matrix:
         output = args.out.resolve()
         cases = [active_cancellation_case(), active_planning_cancellation_case()] if args.active_cancellation_matrix else (cancellation_cases() if args.cancellation_matrix else preset_cases())
         results = []

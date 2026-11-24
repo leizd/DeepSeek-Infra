@@ -1,0 +1,146 @@
+"""Native gateway document preparation.
+
+``POST /rag/documents/prepare`` chunks a CJK and emoji string by character
+and refuses an overlap that is not smaller than the chunk size. Python
+``prepare_document`` is not the owner of those responses.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import socket
+import subprocess
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from deepseek_infra.infra.rust_core import rag_client
+
+ROOT = Path(__file__).resolve().parents[1]
+NATIVE_GATEWAY = Path(
+    r"D:\CodexNativeVerification\native-20261006\desktop-platform-next\bin\deepseek-gateway.exe"
+)
+HASH = re.compile(r"[0-9a-f]{24}")
+OVERLAP = {
+    "ok": False,
+    "code": "chunk_overlap_too_large",
+    "message": "chunkOverlap must be smaller than chunkChars",
+}
+
+
+def _free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def _post(port: int, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}/rag/documents/prepare",
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            status = response.status
+            raw = response.read()
+    except urllib.error.HTTPError as exc:
+        status = exc.code
+        raw = exc.read()
+    parsed = json.loads(raw.decode("utf-8"))
+    assert isinstance(parsed, dict)
+    return status, parsed
+
+
+def test_rag_document_prepare_uses_the_native_gateway(
+    tmp_settings: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _refuse_python_prepare(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("python document prepare entered")
+
+    assert NATIVE_GATEWAY.is_file()
+    monkeypatch.setattr(rag_client, "prepare_document", _refuse_python_prepare)
+    port = _free_port()
+    log_path = tmp_settings / "gateway-rag-document.log"
+    log_handle = log_path.open("wb")
+    env = os.environ.copy()
+    env.pop("AUTH_DISABLED", None)
+    env["AUTH_TOKEN"] = "rag-document-token"
+    env["DEEPSEEK_INFRA_ROOT"] = str(tmp_settings)
+    env["DEEPSEEK_INFRA_STATIC_DIR"] = str(ROOT / "static")
+    env["GATEWAY_BIND_ADDR"] = f"127.0.0.1:{port}"
+    process = subprocess.Popen(
+        [str(NATIVE_GATEWAY)],
+        cwd=str(NATIVE_GATEWAY.parent),
+        env=env,
+        stdout=log_handle,
+        stderr=subprocess.STDOUT,
+    )
+    try:
+        deadline = time.time() + 20
+        listening = False
+        while time.time() < deadline:
+            if process.poll() is not None:
+                break
+            try:
+                with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+                    listening = True
+                    break
+            except OSError:
+                time.sleep(0.1)
+        assert listening, log_path.read_text(encoding="utf-8", errors="replace")
+        status, body = _post(
+            port,
+            {
+                "documentId": "doc-1",
+                "text": "中文🚀abc",
+                "metadata": {"displayName": "notes.txt", "sourceType": "text/plain"},
+                "chunking": {"chunkChars": 3, "chunkOverlap": 1},
+            },
+        )
+        assert status == 200
+        assert body["ok"] is True
+        document = body["document"]
+        assert document["documentId"] == "doc-1"
+        assert document["characterCount"] == 6
+        assert document["chunkCount"] == 3
+        assert document["metadata"] == {"displayName": "notes.txt", "sourceType": "text/plain"}
+        assert HASH.fullmatch(document["contentHash"])
+        assert body["chunking"] == {"chunkChars": 3, "chunkOverlap": 1}
+        assert body["diagnostics"] == {"normalized": False}
+        chunks = body["chunks"]
+        assert isinstance(chunks, list)
+        assert [item["text"] for item in chunks] == ["中文🚀", "🚀ab", "bc"]
+        assert [item["start"] for item in chunks] == [0, 2, 4]
+        assert [item["end"] for item in chunks] == [3, 5, 6]
+        for index, item in enumerate(chunks):
+            assert item["index"] == index
+            assert item["lineStart"] == 1
+            assert item["lineEnd"] == 1
+            content_hash = item["contentHash"]
+            assert isinstance(content_hash, str)
+            assert HASH.fullmatch(content_hash)
+            assert item["chunkId"] == f"doc-1:{index}:{content_hash}"
+        overlap_status, overlap = _post(
+            port,
+            {
+                "documentId": "doc-1",
+                "text": "hello",
+                "metadata": {"displayName": "notes.txt", "sourceType": "text/plain"},
+                "chunking": {"chunkChars": 4, "chunkOverlap": 4},
+            },
+        )
+        assert overlap_status == 200
+        assert overlap == OVERLAP
+    finally:
+        process.kill()
+        process.wait(timeout=10)
+        log_handle.close()

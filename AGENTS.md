@@ -10,13 +10,13 @@ Executable config (CI, `pyproject.toml`, requirements) is the source of truth; t
   - `launch.py` flags: `--gui` (Tk launcher), `--mobile` (mobile launcher), `--server` (headless), `--app` (desktop WebView, default)
 - All backend code is the single package `deepseek_infra/`. Supporting layers are `core/` (`config`, `errors`, `utils`), `web/` (`server.py:create_app` plus `routes/`), `launcher/`, and `desktop_app.py` / `android_entry.py` / `federation_app.py`. The **17** capability subpackages live under `deepseek_infra/infra/`: `gateway`, `agent_runtime`, `rag`, `tool_runtime`, `observability`, `mcp`, `evaluation`, `data`, `workspace`, `automation`, `browser`, `media`, `memory`, `skills`, `diagnostics`, `native_runtime`, `rust_core`.
 - **Python is the default and only production-authoritative runtime.** Three non-authoritative surfaces exist; do not assume any of them is wired in or owns production state:
-  - `rust/` — cargo workspace (edition 2024, rust 1.85, **14 crates**):
+  - `rust/` — cargo workspace (edition 2024, rust 1.85, **15 crates**):
     - *Production helpers* (built and active in production): `backup-crypto` (streaming age cryptography) and `deepseek-backup` (FastCDC v3 scan).
     - *Worker execution plane*: `deepseek-worker` (loopback gRPC service on `:50052`, enforces `actionId + executionEpoch` admission fencing).
     - *Storage & transfer plane*: `deepseek-storage` (direct S3/MinIO streaming, Receipt/Commit v4), `deepseek-transfer` (zero-copy pipelines, repair/rebalance).
     - *Federation & proof plane*: `deepseek-federation` (Ed25519 identity, private keys stay in Rust custody), `deepseek-proof` (cryptographic proof verification).
-    - *Edge, protocol & sidecar delegates*: `deepseek-gateway` (Axum HTTP/SSE gateway, reverse-proxies `/api/*` to Go), `deepseek-mcp` (JSON-RPC), `deepseek-policy` (path/SSRF/capability checks), `deepseek-rag` (BM25 + vector ranking & compact binary `f64le`), `deepseek-browser` (WebSocket CDP browser engine), `deepseek-protocol` (Protobuf codegen), `deepseek-core`.
-  - `go/` — module `github.com/leizd/DeepSeek-Infra/go` (Go 1.27, `CGO_ENABLED=0`). `cmd/deepseekd` is the control-plane runtime and currently runs in read-only **shadow** mode on `:8090`; `go/internal/shadow` reconciles `pythonDecisionDigest == goDecisionDigest`.
+    - *Edge, protocol & sidecar delegates*: `deepseek-gateway` (Axum HTTP/SSE gateway, reverse-proxies `/api/*` to Go), `deepseek-mcp` (JSON-RPC), `deepseek-stateless-mcp` (Redis Lua stateless MCP task plane), `deepseek-policy` (path/SSRF/capability checks & native store rules), `deepseek-rag` (BM25 + vector ranking & compact binary `f64le`), `deepseek-browser` (WebSocket CDP browser engine), `deepseek-protocol` (Protobuf codegen), `deepseek-core`.
+  - `go/` — module `github.com/leizd/DeepSeek-Infra/go` (Go 1.27, `CGO_ENABLED=0`). `cmd/deepseekd` is the control-plane runtime and runs in read-only **shadow** mode on `:8090` by default (until explicitly promoted via `DEEPSEEKD_CONTROL_AUTHORITY` + `DEEPSEEKD_INTERNAL_BEARER` and a live `control-authority-v1` checkpoint); `go/internal/shadow` reconciles `pythonDecisionDigest == goDecisionDigest`.
   - `stateless-mcp/` — standalone TypeScript + Redis MCP task plane on its own Compose stack; it does not replace the Python `POST /mcp` hub.
 - `/` serves the React + TypeScript + Vite build from `frontend/` exclusively. Generated assets are emitted into the gitignored `static/ui/`; build with `npm run build --prefix frontend` and never hand-edit that output. Startup and packaging require `static/ui/index.html`.
 - `android/` is an Android Studio project wrapping the Python backend into an APK; `scripts/build_exe.py` builds a single-file PyInstaller exe.
@@ -33,19 +33,20 @@ Before proposing or modifying cross-language architecture, read the correspondin
 | **Signed Federation & DR** | `docs/adr/ADR-0048-signed-federation-cross-fleet-dr.md` · `docs/runbooks/SIGNED_FEDERATION_DR.md` | Mutual Ed25519 trust, receiver-controlled ingress, offsite custody |
 | **Cross-Process Contracts** | `proto/{common,control,action,storage,federation,evidence,agent,browser}/v1` | Versioned Protobuf/gRPC message definitions |
 | **Toolchain Pins** | `release/native_runtime_toolchain_v1.json` · `release/native_runtime_command_codes_v1.json` | Checksum-pinned protoc, Go plugins, and error codes |
+| **Migration Progress & Checkpoints** | `tasks/native-runtime/migration-matrix.md` · `tasks/native-runtime/continuation.md` · `tasks/native-runtime/todo.md` | Per-domain parity audit, active slice logs, and cloud CI checkpoints |
 
 ## Architectural Invariants & Forbidden Practices
 
 These rules are machine-enforced and fail-closed:
 
 1. **One Table, One Authoritative Writer (`one_table_one_authoritative_writer`)**:
-   - Python alone writes `.dot-dirs` (`.local-rag/`, `.memory/`, `.projects/`, `.agent-runs/`, `.backups/`, `.traces/`, etc.).
+   - In the default Python-authoritative mode, Python alone writes `.dot-dirs` (`.local-rag/`, `.memory/`, `.projects/`, `.agent-runs/`, `.backups/`, `.traces/`, etc.); for domains in `RUST_DATA_DOMAINS`, write ownership flips to Rust only under `DEEPSEEK_RUNTIME_MODE=python_disabled` (serialized via `.workspace-mutation.lock`, never dual-written).
    - Go alone writes `go-control/` (SQLite control database).
    - Rust alone writes data plane effect journals and transfer checkpoints.
    - **Never share SQLite writes** between Python, Go, and Rust.
 2. **Mechanical Writer Denial**:
-   - `deepseek_infra/infra/native_runtime/authority.py` defines `GO_CONTROL_DOMAINS`. A Python write into a Go-owned domain raises `PythonWriterMechanicallyDeniedError`.
-   - Go shadow mode hardcodes `/internal/action/execute` to return HTTP 403 `ErrMutationDenied`.
+   - `deepseek_infra/infra/native_runtime/authority.py` defines `GO_CONTROL_DOMAINS` (denied in Python when `GO_AUTHORITATIVE` or `PYTHON_DISABLED`) and `RUST_DATA_DOMAINS` (denied in Python when `PYTHON_DISABLED`). Unauthorized Python writes raise `PythonWriterMechanicallyDeniedError`; conversely, Rust native store routes refuse writes with `409 NATIVE_*_WRITE_NOT_OWNED` unless `DEEPSEEK_RUNTIME_MODE=python_disabled`.
+   - Go `/internal/*` control routes require a loopback bearer (`DEEPSEEKD_INTERNAL_BEARER`); without `DEEPSEEKD_CONTROL_AUTHORITY` and a valid `control-authority-v1` domain cutover record, mutations fail closed (`ErrMutationDenied` / `CUTOVER_NOT_AUTHORIZED`).
    - Rust worker mutations fail closed with `MUTATION_DENIED` without valid authority.
 3. **`actionId + executionEpoch` Bound End-to-End**:
    - All state mutations require valid action ID and execution epoch.

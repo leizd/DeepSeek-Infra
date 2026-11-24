@@ -21,7 +21,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::file_text_route::{declared_content_length, read_multipart_upload};
-use crate::{PROJECT_METADATA_WRITE_NOT_OWNED, may_write_native_store};
+use crate::may_write_native_store;
 
 #[derive(Debug, Default, Deserialize)]
 pub(crate) struct ProjectFilesQuery {
@@ -34,8 +34,14 @@ pub(crate) async fn api_project_files(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    if !may_write_native_store("project_metadata_store") {
-        return not_owned();
+    let native_owner = may_write_native_store("project_metadata_store");
+    let ownership = projects::admit_project_metadata_write(native_owner);
+    if !ownership.allowed {
+        return app_error(AppError {
+            message: ownership.message,
+            code: ownership.code,
+            status: ownership.status,
+        });
     }
     let content_type = headers
         .get(header::CONTENT_TYPE)
@@ -60,6 +66,22 @@ pub(crate) async fn api_project_files(
             code: codes::INVALID_PAYLOAD,
             status: 400,
         });
+    }
+    for file in &files {
+        let decision = projects::admit_project_file_part(
+            native_owner,
+            &file.filename,
+            &file.content_type,
+            &file.data,
+            ocr_enabled,
+        );
+        if !decision.attach {
+            return app_error(AppError {
+                message: decision.message,
+                code: decision.code,
+                status: decision.status,
+            });
+        }
     }
     let root = root();
     let project_id = query.project_id;
@@ -86,17 +108,6 @@ fn root() -> PathBuf {
     std::env::var_os("DEEPSEEK_INFRA_ROOT")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))
-}
-
-fn not_owned() -> Response {
-    (
-        StatusCode::CONFLICT,
-        Json(json!({
-            "error": "The project metadata store is still written by the Python runtime, so this gateway refuses to mutate it.",
-            "code": PROJECT_METADATA_WRITE_NOT_OWNED,
-        })),
-    )
-        .into_response()
 }
 
 fn app_error(error: AppError) -> Response {

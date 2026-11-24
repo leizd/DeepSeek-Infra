@@ -19,7 +19,7 @@ import sys
 import tempfile
 import threading
 import time
-from typing import Any, Callable
+from typing import Any
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
@@ -28,39 +28,6 @@ if str(ROOT / "scripts") not in sys.path:
     sys.path.insert(0, str(ROOT / "scripts"))
 import verify_agent_signing_process as signing  # noqa: E402
 import verify_native_agent_public_driver as public  # noqa: E402
-
-RUNTIME_QUERY = "Apply the runtime revision to this retained write and review plan"
-RUNTIME_CREDENTIAL = "runtime-revision-api-fixture"
-
-
-def runtime_request_binding(control_path: Path, artifact_root: Path, run_id: str) -> dict[str, Any]:
-    """Inspect isolated outputs read-only; this never creates runtime state."""
-    with sqlite3.connect((control_path / "control.sqlite3").as_uri() + "?mode=ro", uri=True) as database:
-        row = database.execute("SELECT payload_json FROM agent_runs WHERE id=?", (run_id,)).fetchone()
-    if not row:
-        raise ValueError("Actual daemon runtime metadata is missing")
-    metadata = json.loads(row[0])
-    reference = metadata["requestRef"]
-    with sqlite3.connect((artifact_root / "objects-v1.sqlite").as_uri() + "?mode=ro", uri=True) as database:
-        row = database.execute("SELECT length,bytes FROM artifacts WHERE sha256=?", (reference["sha256"],)).fetchone()
-    if not row or row[0] != reference["length"] or hashlib.sha256(row[1]).hexdigest() != reference["sha256"]:
-        raise ValueError("Actual daemon runtime request binding differs")
-    return {"revision": metadata.get("runtimeRevision", 0) or 1, "reference": reference, "bytes": row[1]}
-
-
-def validate_runtime_update_result(result: dict[str, Any], exchanges: list[dict[str, Any]]) -> None:
-    validate_daemon_result(result, exchanges)
-    flags = ["runtimePayloadUpdatedAfterRestart", "currentRequestRevisionBoundByGo", "originalRuntimeRequestRetained",
-             "originalCredentialCiphertextRetained", "updatedContextReachedEveryRemainingPhase"]
-    if any(result.get(key) is not True for key in flags) or result.get("runtimeRevision") != 2 or result.get("metadataSchemaVersion") != 2 or \
-            result.get("initialRuntimeRevision") != 1 or result.get("encryptedCredentialObjectCount") != 2 or \
-            result.get("initialRequestSha256") == result.get("requestSha256") or \
-            len(str(result.get("initialRequestSha256", ""))) != 64:
-        raise ValueError("Actual daemon runtime update evidence is incomplete")
-    if len(exchanges) != 4 or exchanges[0].get("runtimeContextUsed") is not False or \
-            any(row.get("runtimeContextUsed") is not True or row.get("requestCredentialUsed") is not True for row in exchanges[1:]) or \
-            any(row.get("credentialInProviderBody") is not False for row in exchanges):
-        raise ValueError("Runtime changes did not reach the actual retained provider phases safely")
 
 
 def daemon_environment(source: dict[str, str], seed: dict[str, Any], address: str,
@@ -215,18 +182,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     if revision != os.environ.get("GITHUB_SHA"):
         raise ValueError("Daemon cloud source revision differs")
     exchanges: list[dict[str, Any]] = []
-    runtime_update = bool(getattr(args, "runtime_update", False))
-    browser_mode = bool(getattr(args, "browser", False))
-    browser_recovery = bool(getattr(args, "browser_recovery", False))
-    if browser_recovery and not browser_mode:
-        raise ValueError("Browser recovery requires the actual browser mode")
-    if browser_mode and runtime_update:
-        raise ValueError("Browser creation and restarted runtime revision are separate acceptance cases")
-    if browser_mode:
-        import verify_native_agent_browser as browser
-    if browser_recovery:
-        import verify_native_agent_browser_recovery as browser_recovery_probe
-
     plan = {"agents": [{"role": "coder", "task": "write", "dependsOn": []},
                         {"role": "critic", "task": "review", "dependsOn": ["coder"]}]}
     with tempfile.TemporaryDirectory(prefix="native-daemon-agent-") as temporary:
@@ -267,14 +222,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         fixture_environment.update(DEEPSEEK_AGENT_SIGNING_PROBE_DIR=case.as_posix(),
             DEEPSEEK_WORKER_AUTHORITY_SIGNER_PUBLIC_KEY=binding["signerPublicKey"], DEEPSEEK_TEST_HEAD_SHA=revision)
         fixture_environment["DEEPSEEK_TEST_AGENT_DAEMON_STAGE"] = "seed"
-        if browser_mode:
-            fixture_environment["DEEPSEEK_TEST_AGENT_DAEMON_BROWSER"] = "true"
         fixture_command = [fixture.as_posix(), "-test.run=^TestNativeAgentDaemonPublicProcess$", "-test.v", "-test.timeout=2m"]
         signing.record_command(fixture_command, ROOT / "go/internal/api", fixture_environment, output, "daemon-empty-ownership", timeout=150)
         seed = json.loads((case / "daemon-seed.json").read_text(encoding="utf-8"))
-        if seed.get("emptyAgentAndActionRecords") is not True or \
-                seed.get("emptyApplicationRecords") is not (not browser_mode) or \
-                seed.get("backupPolicyConfiguredByGoFixture") is not browser_mode:
+        if seed.get("emptyApplicationRecords") is not True:
             raise ValueError("Offline ownership fixture seeded an Agent")
 
         class ProviderFixture(BaseHTTPRequestHandler):
@@ -288,36 +239,16 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     return
                 body = json.loads(self.rfile.read(length))
                 prompt = json.dumps(body, ensure_ascii=False)
-                kind = "title" if browser_mode and not self.headers.get("X-DeepSeek-Action-Id") else "agent"
                 exchanges.append({"actionId": self.headers.get("X-DeepSeek-Action-Id"),
-                    "kind": kind,
                     "executionEpoch": self.headers.get("X-DeepSeek-Execution-Epoch"),
                     "operationId": self.headers.get("X-DeepSeek-Node-Operation-Id"), "stream": body.get("stream"),
-                    "requestCredentialUsed": self.headers.get("Authorization") == "Bearer " +
-                        (RUNTIME_CREDENTIAL if runtime_update and exchanges else "request-only-credential"),
-                    "runtimeContextUsed": RUNTIME_QUERY in prompt,
-                    "credentialInProviderBody": any(value in prompt for value in
-                        ["request-only-credential", "request-only-search-credential", RUNTIME_CREDENTIAL]),
+                    "requestCredentialUsed": self.headers.get("Authorization") == "Bearer request-only-credential",
                     "selectedTaskInPrompt": "write" in prompt, "dependentTaskInPrompt": "review" in prompt,
-                    "browserEditedTaskInPrompt": browser.BROWSER_TASK in prompt if browser_mode else False,
-                    "recoveredCriticSummaryInPrompt": "Controlled browser rerun task summary" in prompt,
                     "predecessorSummaryInPrompt": "Controlled public task summary" in prompt,
                     "privateReasoningInPrompt": "private-task-reasoning" in prompt,
                     "synthesisCoderInPrompt": "write" in prompt, "synthesisCriticInPrompt": "review" in prompt})
                 position = len(exchanges)
-                agent_position=sum(row["kind"]=="agent" for row in exchanges)
-                if browser_recovery and kind=="agent" and agent_position==5:
-                    signing.write_ready(case/"browser-rerun-arrived.json",{"agentPosition":agent_position})
-                    deadline=time.monotonic()+60
-                    while not (case/"browser-rerun-release.json").exists():
-                        if time.monotonic()>deadline:
-                            raise RuntimeError("Actual browser did not release the paused recovery task")
-                        time.sleep(0.05)
                 content = json.dumps(plan) if position == 1 else ("Controlled final answer" if position == 4 else "## 摘要\nControlled public task summary")
-                if browser_recovery and kind=="agent" and agent_position>=5:
-                    content=("## 摘要\n"+browser_recovery_probe.RERUN_SUMMARY) if agent_position==5 else browser_recovery_probe.RECOVERED_FINAL
-                if kind == "title":
-                    content = "Native browser conversation"
                 reply = json.dumps({"id": f"daemon-agent-{position}", "model": "deepseek-v4-pro",
                     "choices": [{"message": {"role": "assistant", "content": content,
                     "reasoning_content": "private-task-reasoning"}, "finish_reason": "stop"}],
@@ -338,6 +269,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             target = target_address
             control_origin = "http://" + control_address
             daemon_env = daemon_environment(dict(os.environ), seed, control_address, target, ca, bearer, expiry, binding["signerPublicKey"])
+
             def start_daemon(label: str) -> subprocess.Popen[bytes]:
                 environment = dict(daemon_env, DEEPSEEKD_OWNER="actual-agent-daemon-" + secrets.token_hex(12))
                 with (output / (label + ".log")).open("wb") as log:
@@ -370,89 +302,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             origin = "http://" + address
             edge_env = public.public_edge_environment(private_environment, address, ROOT / "static/ui", artifacts,
                                                       {"origin": control_origin, "internalBearer": seed["internalBearer"]},
-                public.credential_worker_transport(target, ca, bearer))
-            if browser_mode:
-                edge_env["DEEPSEEK_API_URL"] = f"http://127.0.0.1:{provider.server_port}/chat"
-                edge_env["DEEPSEEK_INFRA_ROOT"] = case.as_posix()
-                edge_env["DEEPSEEK_BACKUP_MIRROR_DIR"] = (case / ".backup-mirror").as_posix()
+                public.credential_worker_transport(target, ca, "localhost", bearer))
             with (output / "daemon-public-edge.log").open("wb") as log:
                 edge = subprocess.Popen([args.edge.resolve().as_posix()], cwd=ROOT, env=edge_env, stdout=log, stderr=subprocess.STDOUT)
             public.wait_edge(origin, edge)
             index_sha, asset_count = serve_built_frontend(origin)
-            if browser_mode:
-                recovery_before: dict[str,Any]={}
-
-                def inspect_before_recovery(run_id: str) -> None:
-                    nonlocal recovery_before
-                    initial=request_json(origin,"/api/agent-runs/"+run_id)["run"]
-                    recovery_before=browser_recovery_probe.capture_before_recovery(Path(seed["controlPath"]),state,initial)
-                    (output/"browser-before-rerun.json").write_text(json.dumps(recovery_before,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
-
-                def inspect_inflight_recovery(run_id: str) -> Callable[[],None]:
-                    if worker is None:
-                        raise ValueError("Actual browser recovery worker is not running")
-                    signing.wait_json(case/"browser-rerun-arrived.json",worker)
-                    during=request_json(origin,"/api/agent-runs/"+run_id)["run"]
-                    observation={"runId":run_id,"status":during.get("status"),"nextIndex":during.get("nextIndex"),
-                        "publicFields":sorted(during),"agentOutputsType":type(during.get("agentOutputs")).__name__,
-                        "oldFinalRetained":during.get("finalAnswer")=="Controlled final answer"}
-                    (output/"browser-rerun-inflight-observation.json").write_text(json.dumps(observation,indent=2)+"\n",encoding="utf-8")
-                    try:
-                        proof=browser_recovery_probe.inspect_inflight_public(during,recovery_before)
-                    except Exception:
-                        signing.write_ready(case/"browser-rerun-release.json",{"release":True,"inspectionFailed":True})
-                        raise
-                    (output/"browser-rerun-inflight.json").write_text(json.dumps({"runId":run_id,"nextIndex":12,**proof},indent=2)+"\n",encoding="utf-8")
-                    return lambda: signing.write_ready(case/"browser-rerun-release.json",{"release":True})
-
-                def inspect_waiting_confirmation(run_id: str) -> None:
-                    time.sleep(1.2)
-                    waiting = request_json(origin, "/api/agent-runs/" + run_id)["run"]
-                    if waiting.get("status") != "awaiting_plan" or len(exchanges) != 1 or exchanges[0].get("kind") != "agent":
-                        raise ValueError("Actual browser run executed tasks before UI confirmation")
-                    (output / "pre-confirmation.json").write_text(json.dumps({
-                        "runId": run_id, "status": "awaiting_plan", "providerCalls": 1,
-                        "noTasksBeforePublicConfirmation": True}) + "\n", encoding="utf-8")
-
-                try:
-                    observed = browser.run_browser_agent(origin, output, inspect_waiting_confirmation,
-                        recovery=browser_recovery,before_recovery=inspect_before_recovery if browser_recovery else None,
-                        inspect_inflight_recovery=inspect_inflight_recovery if browser_recovery else None)
-                finally:
-                    (output / "provider-exchanges.json").write_text(json.dumps(exchanges, indent=2) + "\n", encoding="utf-8")
-                run_id = observed["createdRunId"]
-                final = request_json(origin, "/api/agent-runs/" + run_id)["run"]
-                encoded_final = json.dumps(final, ensure_ascii=False).encode()
-                if len(encoded_final) > 2 * 1024**2 or any(secret in encoded_final for secret in
-                        [b"request-only-credential", b"request-only-search-credential", b"private-task-reasoning"]):
-                    raise ValueError("Public browser run projection exceeds its bound or exposes private material")
-                (output / "browser-public-run.json").write_bytes(encoded_final)
-                expected_final=browser_recovery_probe.RECOVERED_FINAL if browser_recovery else "Controlled final answer"
-                if final.get("status") != "done" or final.get("finalAnswer")!=expected_final:
-                    raise ValueError("Browser final answer differs from the native run projection")
-                stop_daemon(daemon)
-                signing.write_ready(case / "daemon-inspect-input.json", {"runId": run_id, "browser": True,"recovery":browser_recovery})
-                fixture_environment["DEEPSEEK_TEST_AGENT_DAEMON_STAGE"] = "inspect"
-                signing.record_command(fixture_command, ROOT / "go/internal/api", fixture_environment, output,
-                                       "daemon-browser-independent-inspection", timeout=150)
-                result = json.loads((case / "daemon-inspected.json").read_text(encoding="utf-8"))
-                result.update(browser=observed, actualDaemonCLIQualified=True, builtFrontendAssetsServed=True,
-                    frontendIndexSha256=index_sha, frontendAssetCount=asset_count,
-                    inputBodySeededByOfflineOracle=False, pythonMutatingPublicRequests=0,
-                    productionRuntimeProcesses=["Go", "Rust"], privateCustodyVariablesExportedToGo=False,
-                    productionProviderQualified=False, fullMigrationQualified=False,
-                    cloudOnlyNativeBuild=True, providerExchanges=exchanges, readiness="NOT_READY")
-                result.update(browser.inspect_browser_custody(artifacts, state, recovery=browser_recovery))
-                result.update(browser.inspect_browser_mirror(case, observed))
-                if browser_recovery:
-                    result.update(browser_recovery_probe.inspect_after_recovery(Path(seed["controlPath"]),state,final,recovery_before,result))
-                    browser_recovery_probe.validate_browser_recovery_result(result,exchanges)
-                    result["controlledNativeBrowserRecoveryQualified"]=True
-                else:
-                    browser.validate_browser_result(result, exchanges)
-                result["controlledNativeBrowserQualified"] = True
-                (output / "result.json").write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-                return result
             created = request_json(origin, "/api/agent-runs", {"payload": {"messages": [{"role": "user", "content": "Prepare an isolated verification plan"}],
                 "model": "deepseek-chat", "apiKey": "request-only-credential", "tavilyApiKey": "request-only-search-credential"}, "agentPreset": "auto", "confirmPlan": True})
             run_id = created.get("runId")
@@ -469,9 +323,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             time.sleep(1.2)
             if len(exchanges) != 1:
                 raise ValueError("Actual daemon dispatched tasks without confirmation")
-            initial_runtime = runtime_request_binding(Path(seed["controlPath"]), artifacts, run_id)
-            initial_ciphertexts = {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
-                                   for p in (artifacts / "agent-provider-credentials-v1").glob("*.json")}
             stop_daemon(daemon)
             signing.stop_child(worker)
             daemon = start_daemon("daemon-after-restart")
@@ -485,8 +336,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             time.sleep(1.2)
             if len(exchanges) != 1:
                 raise ValueError("Restart dispatched tasks without public confirmation")
-            runtime_payload = {"messages": [{"role": "user", "content": RUNTIME_QUERY}], "apiKey": RUNTIME_CREDENTIAL} if runtime_update else {}
-            confirmation = request_json(origin, "/api/agent-runs/" + run_id + "/plan", {"payload": runtime_payload})
+            confirmation = request_json(origin, "/api/agent-runs/" + run_id + "/plan", {"payload": {}})
             if confirmation.get("started") is not True:
                 raise ValueError("Actual daemon public plan confirmation failed")
             deadline = time.monotonic() + 120
@@ -513,8 +363,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             result = json.loads((case / "daemon-inspected.json").read_text(encoding="utf-8"))
             with sqlite3.connect((artifacts / "objects-v1.sqlite").as_uri() + "?mode=ro", uri=True) as database:
                 row = database.execute("SELECT length,bytes FROM artifacts WHERE sha256=?", (result["requestSha256"],)).fetchone()
-                if not row or row[0] != result["requestLength"] or hashlib.sha256(row[1]).hexdigest() != result["requestSha256"] or \
-                        any(value in row[1] for value in [b"request-only-credential", b"request-only-search-credential", RUNTIME_CREDENTIAL.encode()]):
+                if not row or row[0] != result["requestLength"] or hashlib.sha256(row[1]).hexdigest() != result["requestSha256"] or b"request-only-credential" in row[1]:
                     raise ValueError("Actual daemon Rust request custody differs or leaks a credential")
             with sqlite3.connect((state / "rust-worker/authority.sqlite3").as_uri() + "?mode=ro", uri=True) as database:
                 rows = database.execute("SELECT state,output,output_sha256 FROM agent_node_effects").fetchall()
@@ -535,30 +384,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             if not exchanges or not all(value.get("requestCredentialUsed") is True for value in exchanges):
                 raise ValueError("Actual provider did not use the request credential across restart")
             sealed = list((artifacts / "agent-provider-credentials-v1").glob("*.json"))
-            if len(sealed) != (2 if runtime_update else 1) or any(secret in p.read_bytes() for p in sealed for secret in
-                    (b"request-only-credential", b"request-only-search-credential", RUNTIME_CREDENTIAL.encode())):
+            if len(sealed) != 1 or any(secret in sealed[0].read_bytes() for secret in
+                    (b"request-only-credential", b"request-only-search-credential")):
                 raise ValueError("Actual request credential ciphertext custody differs")
             result.update(requestCredentialOverrideQualified=True, credentialCustodyReopenedAcrossWorkerRestart=True,
                 encryptedCredentialObjectCount=len(sealed), requestSearchCredentialEncrypted=True,
                 workerRestartWithoutServerProviderCredential=True)
             validate_daemon_result(result, exchanges)
-            if runtime_update:
-                current_runtime = runtime_request_binding(Path(seed["controlPath"]), artifacts, run_id)
-                with sqlite3.connect((artifacts / "objects-v1.sqlite").as_uri() + "?mode=ro", uri=True) as database:
-                    retained = database.execute("SELECT bytes FROM artifacts WHERE sha256=?", (initial_runtime["reference"]["sha256"],)).fetchone()
-                original_retained = bool(retained and retained[0] == initial_runtime["bytes"])
-                ciphertext_retained = len(initial_ciphertexts) == 1 and all(
-                    hashlib.sha256((artifacts / "agent-provider-credentials-v1" / name).read_bytes()).hexdigest() == digest
-                    for name, digest in initial_ciphertexts.items())
-                current_body = json.loads(current_runtime["bytes"])
-                if current_body["payload"]["messages"] != runtime_payload["messages"] or current_runtime["revision"] != 2 or \
-                        result["requestSha256"] != current_runtime["reference"]["sha256"]:
-                    raise ValueError("Updated runtime request differs from the actual Go metadata binding")
-                result.update(runtimePayloadUpdatedAfterRestart=True, currentRequestRevisionBoundByGo=True,
-                    initialRuntimeRevision=initial_runtime["revision"], initialRequestSha256=initial_runtime["reference"]["sha256"],
-                    originalRuntimeRequestRetained=original_retained, originalCredentialCiphertextRetained=ciphertext_retained,
-                    updatedContextReachedEveryRemainingPhase=all(row["runtimeContextUsed"] for row in exchanges[1:]))
-                validate_runtime_update_result(result, exchanges)
             (output / "result.json").write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             return result
         finally:
@@ -574,11 +406,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ["worker", "edge", "provisioner", "go-cache", "out"]:
         parser.add_argument("--" + name, required=True, type=Path)
-    parser.add_argument("--runtime-update", action="store_true")
-    parser.add_argument("--browser", action="store_true")
-    parser.add_argument("--browser-recovery", action="store_true")
     result = run(parser.parse_args())
-    print(json.dumps({key: result[key] for key in ["status", "sourceCommit", "actualDaemonCLIQualified", "actualDaemonProcessRestartQualified", "builtFrontendAssetsServed", "controlledNativeBrowserQualified", "readiness"] if key in result}))
+    print(json.dumps({key: result[key] for key in ["status", "sourceCommit", "actualDaemonCLIQualified", "actualDaemonProcessRestartQualified", "builtFrontendAssetsServed", "readiness"]}))
     return 0
 
 

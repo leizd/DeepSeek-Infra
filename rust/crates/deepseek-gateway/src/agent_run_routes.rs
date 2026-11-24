@@ -27,14 +27,9 @@ use tonic::{
     transport::Channel,
 };
 
-mod recovery;
-mod runtime;
-use runtime::{operator_event_with_runtime, prepare_runtime_update, request_credential};
-
 #[derive(Clone)]
 struct ReadConfig {
     origin: String,
-    endpoint: Option<tonic::transport::Endpoint>,
     bearer: String,
     artifacts: PathBuf,
     credentials: Option<crate::agent_credential_client::WorkerConfig>,
@@ -208,7 +203,6 @@ fn hydrate(store: &ArtifactStore, metadata: &AgentRunEventMetadata) -> Result<Va
 
 struct ReadSession {
     config: ReadConfig,
-    channel: Channel,
     client: AgentRunControlClient<Channel>,
     authorization: MetadataValue<Ascii>,
     epoch: u64,
@@ -239,12 +233,8 @@ impl ReadSession {
         let authorization = format!("Bearer {}", config.bearer.trim())
             .parse()
             .map_err(|_| control_unavailable())?;
-        let endpoint = match config.endpoint.clone() {
-            Some(endpoint) => endpoint,
-            None => tonic::transport::Endpoint::from_shared(config.origin.trim().to_string())
-                .map_err(|_| control_unavailable())?,
-        };
-        let channel = endpoint
+        let channel = tonic::transport::Endpoint::from_shared(config.origin.trim().to_string())
+            .map_err(|_| control_unavailable())?
             .connect_timeout(Duration::from_secs(3))
             .timeout(Duration::from_secs(10))
             .connect()
@@ -252,8 +242,7 @@ impl ReadSession {
             .map_err(|_| control_unavailable())?;
         let mut session = Self {
             config,
-            client: AgentRunControlClient::new(channel.clone()).max_decoding_message_size(1 << 20),
-            channel,
+            client: AgentRunControlClient::new(channel).max_decoding_message_size(1 << 20),
             authorization,
             epoch: 0,
             snapshot: AgentRunSnapshot {
@@ -368,6 +357,7 @@ impl ReadSession {
     }
 
     async fn bodies(&self, events: Vec<AgentRunEventMetadata>) -> Result<Vec<Value>, ReadError> {
+        materialize_node_effects(self, &events).await?;
         if events.is_empty() {
             return Ok(Vec::new());
         }
@@ -448,28 +438,19 @@ fn read_router(enabled: bool, config: Option<ReadConfig>) -> Router {
         .route("/api/agent-runs/:run_id", get(detail))
         .route("/api/agent-runs/:run_id/plan", post(confirm_plan))
         .route("/api/agent-runs/:run_id/cancel", post(cancel_run))
-        .route("/api/agent-runs/:run_id/resume", post(recovery::resume_run))
-        .route("/api/agent-runs/:run_id/rerun", post(recovery::rerun_run))
+        .route("/api/agent-runs/:run_id/resume", post(resume_run))
+        .route("/api/agent-runs/:run_id/rerun", post(rerun_run))
         .route("/api/agent-runs/:run_id/events", get(events))
         .route("/api/agent-runs/:run_id/stream", get(stream))
         .with_state(config)
 }
 
 pub fn router() -> Router {
-    let (origin, endpoint) =
-        match crate::control_rpc_client::private_endpoint_from_lookup(|key| std::env::var(key)) {
-            Ok(Some(endpoint)) => (Some(endpoint.uri().to_string()), Some(endpoint)),
-            Ok(None) => (
-                crate::backup_mirror_routes::GO_CONTROL_ADDR_ENV
-                    .iter()
-                    .find_map(|key| std::env::var(key).ok()),
-                None,
-            ),
-            Err(_) => (None, None),
-        };
+    let origin = crate::backup_mirror_routes::GO_CONTROL_ADDR_ENV
+        .iter()
+        .find_map(|key| std::env::var(key).ok());
     let config = origin.map(|origin| ReadConfig {
         origin,
-        endpoint,
         bearer: std::env::var(crate::backup_mirror_routes::INTERNAL_BEARER_ENV).unwrap_or_default(),
         credentials: crate::agent_credential_client::WorkerConfig::from_env(),
         artifacts: std::env::var_os("DEEPSEEK_AGENT_ARTIFACT_DIR")
@@ -566,8 +547,19 @@ async fn create(
     if crate::agent_credential_client::has_reserved_field(&input) {
         return Err(invalid_request());
     }
-    let api_key = request_credential(&input["payload"], "apiKey")?;
-    let tavily_api_key = request_credential(&input["payload"], "tavilyApiKey")?;
+    let credential = |name: &str| -> Result<Option<String>, ReadError> {
+        match input["payload"].get(name) {
+            None | Some(Value::Null) => Ok(None),
+            Some(Value::String(value))
+                if value.len() <= 4096 && !value.chars().any(char::is_control) =>
+            {
+                Ok((!value.trim().is_empty()).then(|| value.trim().to_string()))
+            }
+            _ => Err(invalid_request()),
+        }
+    };
+    let api_key = credential("apiKey")?.map(zeroize::Zeroizing::new);
+    let tavily_api_key = credential("tavilyApiKey")?.map(zeroize::Zeroizing::new);
     let mut sanitized = deepseek_policy::agent_run_data::sanitize(&input);
     let id = new_run_id()?;
     // Check the configured private control peer and actual domain authority before
@@ -592,19 +584,15 @@ async fn create(
                 .credentials
                 .as_ref()
                 .ok_or_else(control_unavailable)?,
-            crate::agent_credential_client::Preparation {
-                run_id: &id,
-                epoch: session.epoch,
-                reference: &request,
-                runtime_revision: 1,
-                api_key: api_key.as_ref().map(|value| value.as_str()),
-                tavily_api_key: tavily_api_key.as_ref().map(|value| value.as_str()),
-                runtime_update: None,
-            },
+            &id,
+            session.epoch,
+            1,
+            &request,
+            api_key.as_ref().map(|value| value.as_str()),
+            tavily_api_key.as_ref().map(|value| value.as_str()),
         )
         .await
-        .map_err(|_| control_unavailable())?
-        .ok_or_else(control_unavailable)?;
+        .map_err(|_| control_unavailable())?;
         sanitized
             .as_object_mut()
             .ok_or_else(invalid_request)?
@@ -647,7 +635,6 @@ async fn create(
             action_id: id.clone(),
             execution_epoch: session.epoch,
         }),
-        runtime_update: None,
     });
     session
         .client
@@ -712,19 +699,16 @@ fn confirmation_plan(value: &Value) -> Result<Option<Vec<AgentRunPlanNode>>, Rea
         if task.trim().is_empty() || task.len() > 32 * 1024 {
             return Err(invalid_request());
         }
-        let dependencies = entry
-            .get("depends_on")
-            .or_else(|| entry.get("dependsOn"))
-            .map_or(Ok(Vec::new()), |value| {
-                let values = value.as_array().ok_or_else(invalid_request)?;
-                if values.len() > 4 {
-                    return Err(invalid_request());
-                }
-                values
-                    .iter()
-                    .map(|v| v.as_str().map(str::to_string).ok_or_else(invalid_request))
-                    .collect::<Result<Vec<_>, _>>()
-            })?;
+        let dependencies = entry.get("dependsOn").map_or(Ok(Vec::new()), |value| {
+            let values = value.as_array().ok_or_else(invalid_request)?;
+            if values.len() > 4 {
+                return Err(invalid_request());
+            }
+            values
+                .iter()
+                .map(|v| v.as_str().map(str::to_string).ok_or_else(invalid_request))
+                .collect::<Result<Vec<_>, _>>()
+        })?;
         plan.push(AgentRunPlanNode {
             id: id.into(),
             task: task.into(),
@@ -751,10 +735,49 @@ fn confirmation_plan(value: &Value) -> Result<Option<Vec<AgentRunPlanNode>>, Rea
 
 async fn operator_event(
     session: &mut ReadSession,
-    event: AgentRunEventMetadata,
+    mut event: AgentRunEventMetadata,
     body: Value,
 ) -> Result<(), ReadError> {
-    operator_event_with_runtime(session, event, body, None).await
+    let root = session.config.artifacts.clone();
+    let reference = tokio::task::spawn_blocking(move || {
+        ArtifactStore::open_native(&root, "python_disabled")
+            .map_err(data_error)?
+            .put(&body)
+            .map_err(data_error)
+    })
+    .await
+    .map_err(|_| data_error(DataError::Unavailable))??;
+    let operation = Sha256::digest(format!(
+        "{}:{}:{}:{}:{}",
+        session.snapshot.run_id,
+        session.epoch,
+        session.snapshot.next_index,
+        event.r#type,
+        reference.sha256
+    ));
+    event.body = Some(AgentArtifactReference {
+        sha256: reference.sha256,
+        length: reference.length,
+    });
+    let request = session.request(AppendAgentRunEventRequest {
+        schema_version: 1,
+        operation_id: format!("agent-web-{operation:x}"),
+        actor: "operator:agent-web".into(),
+        run_id: session.snapshot.run_id.clone(),
+        expected_index: session.snapshot.next_index,
+        create: None,
+        event: Some(event),
+        fence: Some(ActionFence {
+            action_id: session.snapshot.run_id.clone(),
+            execution_epoch: session.epoch,
+        }),
+    });
+    session
+        .client
+        .append_event(request)
+        .await
+        .map_err(rpc_error)?;
+    session.refresh().await
 }
 
 async fn confirm_plan(
@@ -781,14 +804,12 @@ async fn confirm_plan(
     if session.snapshot.status != "awaiting_plan" {
         return Err(action_conflict());
     }
-    let runtime_update = prepare_runtime_update(&session, &input).await?;
     if let Some(plan) = plan {
         let body = json!({"type":"agent_plan","plan":plan_value(&plan)});
         operator_event(
             &mut session,
             AgentRunEventMetadata {
                 r#type: "agent_plan".into(),
-                has_plan: true,
                 plan,
                 ..Default::default()
             },
@@ -799,7 +820,7 @@ async fn confirm_plan(
     if session.snapshot.status != "awaiting_plan" || session.snapshot.plan.is_empty() {
         return Err(action_conflict());
     }
-    operator_event_with_runtime(
+    operator_event(
         &mut session,
         AgentRunEventMetadata {
             r#type: "run_status".into(),
@@ -807,7 +828,6 @@ async fn confirm_plan(
             ..Default::default()
         },
         json!({"type":"run_status","status":"running"}),
-        runtime_update,
     )
     .await?;
     Ok(Json(
@@ -843,6 +863,321 @@ async fn cancel_run(
     Ok(Json(
         json!({"cancelled":true,"run":session.public_run().await?}),
     ))
+}
+
+fn credential_value(input: &Value, name: &str) -> Result<Option<String>, ReadError> {
+    match input["payload"].get(name) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value))
+            if value.len() <= 4096 && !value.chars().any(char::is_control) =>
+        {
+            Ok((!value.trim().is_empty()).then(|| value.trim().to_string()))
+        }
+        Some(_) => Err(invalid_request()),
+    }
+}
+
+fn merged_request(stored: Value, patch: &Value) -> Result<Value, ReadError> {
+    let mut body = stored;
+    let payload = body
+        .as_object_mut()
+        .ok_or_else(invalid_request)?
+        .entry("payload")
+        .or_insert_with(|| json!({}));
+    if !payload.is_object() {
+        return Err(invalid_request());
+    }
+    if let Some(update) = patch.get("payload") {
+        let update = update.as_object().ok_or_else(invalid_request)?;
+        let payload = payload.as_object_mut().ok_or_else(invalid_request)?;
+        for (key, value) in update {
+            payload.insert(key.clone(), value.clone());
+        }
+    }
+    Ok(deepseek_policy::agent_run_data::sanitize(&body))
+}
+
+fn epoch_relation(body: &Value, live: u64) -> Result<&'static str, ReadError> {
+    match body.get("executionEpoch") {
+        None | Some(Value::Null) => Ok("match"),
+        Some(Value::Number(value)) => {
+            let presented = value.as_u64().ok_or_else(invalid_request)?;
+            if presented == 0 {
+                return Err(invalid_request());
+            }
+            if presented < live {
+                Ok("stale")
+            } else if presented == live {
+                Ok("match")
+            } else {
+                Ok("mismatch")
+            }
+        }
+        _ => Err(invalid_request()),
+    }
+}
+
+fn admission_error(
+    decision: &deepseek_policy::agent_runtime_admission::RuntimeDecision,
+) -> ReadError {
+    let status = match decision.http_status {
+        400 => StatusCode::BAD_REQUEST,
+        403 => StatusCode::FORBIDDEN,
+        _ => StatusCode::CONFLICT,
+    };
+    ReadError {
+        status,
+        code: decision.code,
+        message: decision.message,
+    }
+}
+
+async fn stored_request(session: &ReadSession) -> Result<Value, ReadError> {
+    let reference = reference(session.snapshot.request.as_ref())?;
+    let root = session.config.artifacts.clone();
+    tokio::task::spawn_blocking(move || {
+        ArtifactStore::open_readonly(&root)
+            .and_then(|store| store.get(&reference))
+            .map_err(data_error)
+    })
+    .await
+    .map_err(|_| data_error(DataError::Unavailable))?
+}
+
+/// Writes Rust artifact bytes for node_effect metadata the driver already appended.
+/// This does not query the worker SQL journal and does not invent an observation.
+async fn materialize_node_effects(
+    session: &ReadSession,
+    events: &[AgentRunEventMetadata],
+) -> Result<(), ReadError> {
+    let mut documents = Vec::new();
+    for event in events {
+        if event.r#type != "node_effect" {
+            continue;
+        }
+        let stored = event.body.as_ref().ok_or_else(corrupt)?;
+        let value = deepseek_policy::agent_runtime_admission::node_effect_value(
+            &event.phase,
+            &event.status,
+            &event.scope,
+        )
+        .map_err(|_| corrupt())?;
+        let (sha256, length) = deepseek_policy::agent_runtime_admission::node_effect_digest(
+            &event.phase,
+            &event.status,
+            &event.scope,
+        )
+        .map_err(|_| corrupt())?;
+        if stored.sha256 != sha256 || stored.length != length {
+            return Err(corrupt());
+        }
+        documents.push(value);
+    }
+    if documents.is_empty() {
+        return Ok(());
+    }
+    let root = session.config.artifacts.clone();
+    tokio::task::spawn_blocking(move || {
+        let mut store = ArtifactStore::open_native(&root, "python_disabled").map_err(data_error)?;
+        for document in documents {
+            store.put(&document).map_err(data_error)?;
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|_| data_error(DataError::Unavailable))?
+}
+
+async fn runtime_decision(
+    session: &mut ReadSession,
+    operation: &str,
+    input: &Value,
+) -> Result<deepseek_policy::agent_runtime_admission::RuntimeDecision, ReadError> {
+    let events = session.events(-1).await?;
+    materialize_node_effects(session, &events).await?;
+    let bodies = session.bodies(events).await?;
+    let current = deepseek_policy::agent_runtime_admission::current_runtime_revision(&bodies)
+        .map_err(|_| corrupt())?;
+    let requested = current.checked_add(1).ok_or_else(corrupt)?;
+    let nodes = session
+        .snapshot
+        .nodes
+        .iter()
+        .map(
+            |node| deepseek_policy::agent_runtime_admission::RuntimeNode {
+                id: node.id.clone(),
+                state: node.state.clone(),
+                failed: node.failed,
+            },
+        )
+        .collect::<Vec<_>>();
+    let plan = session
+        .snapshot
+        .plan
+        .iter()
+        .map(|node| node.id.clone())
+        .collect::<Vec<_>>();
+    let public = session.public_run().await?;
+    let has_final = public["finalAnswer"]
+        .as_str()
+        .is_some_and(|text| !text.trim().is_empty());
+    let retained = deepseek_policy::agent_runtime_admission::retained_effect(&bodies);
+    let agent_id = input
+        .get("agentId")
+        .map(|value| value.as_str().ok_or_else(invalid_request))
+        .transpose()?
+        .unwrap_or("");
+    let resynthesize = input
+        .get("resynthesize")
+        .map(|value| value.as_bool().ok_or_else(invalid_request))
+        .transpose()?
+        .unwrap_or(true);
+    Ok(
+        deepseek_policy::agent_runtime_admission::resume_stored_tools(
+            &deepseek_policy::agent_runtime_admission::RuntimeAdmission {
+                operation,
+                status: &session.snapshot.status,
+                identity_valid: true,
+                lease: "live",
+                epoch: epoch_relation(input, session.epoch)?,
+                effect: retained.effect,
+                runtime_revision: current,
+                requested_revision: requested,
+                agent_id,
+                resynthesize,
+                plan: &plan,
+                nodes: &nodes,
+                has_final_answer: has_final,
+                same_effect: retained.same_effect,
+            },
+            &bodies,
+        ),
+    )
+}
+
+async fn append_decision_event(session: &mut ReadSession, event: &Value) -> Result<(), ReadError> {
+    let kind = event["type"].as_str().ok_or_else(invalid_request)?;
+    let metadata = AgentRunEventMetadata {
+        r#type: kind.to_string(),
+        phase: event["phase"].as_str().unwrap_or("").to_string(),
+        status: event["status"].as_str().unwrap_or("").to_string(),
+        scope: event["scope"].as_str().unwrap_or("").to_string(),
+        ..Default::default()
+    };
+    let mut body = event.clone();
+    if kind == "runtime_payload" {
+        let object = body.as_object_mut().ok_or_else(invalid_request)?;
+        object.remove("phase");
+        object.remove("status");
+        object.remove("scope");
+    }
+    operator_event(session, metadata, body).await
+}
+
+async fn apply_runtime_action(
+    session: &mut ReadSession,
+    input: &Value,
+    decision: &deepseek_policy::agent_runtime_admission::RuntimeDecision,
+) -> Result<Json<Value>, ReadError> {
+    if !decision.admitted {
+        return Err(admission_error(decision));
+    }
+    if decision.bumps_revision {
+        let merged = merged_request(stored_request(session).await?, input)?;
+        let api_key = credential_value(input, "apiKey")?.map(zeroize::Zeroizing::new);
+        let tavily_api_key = credential_value(input, "tavilyApiKey")?.map(zeroize::Zeroizing::new);
+        let root = session.config.artifacts.clone();
+        let stored = merged.clone();
+        let mut reference = tokio::task::spawn_blocking(move || {
+            ArtifactStore::open_native(&root, "python_disabled")
+                .map_err(data_error)?
+                .put(&stored)
+                .map_err(data_error)
+        })
+        .await
+        .map_err(|_| data_error(DataError::Unavailable))??;
+        if api_key.is_some() || tavily_api_key.is_some() {
+            let private = crate::agent_credential_client::prepare(
+                session
+                    .config
+                    .credentials
+                    .as_ref()
+                    .ok_or_else(control_unavailable)?,
+                &session.snapshot.run_id,
+                session.epoch,
+                decision.requested_revision,
+                &reference,
+                api_key.as_ref().map(|value| value.as_str()),
+                tavily_api_key.as_ref().map(|value| value.as_str()),
+            )
+            .await
+            .map_err(|_| control_unavailable())?;
+            let mut sealed = merged;
+            sealed.as_object_mut().ok_or_else(invalid_request)?.insert(
+                crate::agent_credential_client::PRIVATE_FIELD.into(),
+                private,
+            );
+            let root = session.config.artifacts.clone();
+            reference = tokio::task::spawn_blocking(move || {
+                ArtifactStore::open_native(&root, "python_disabled")
+                    .map_err(data_error)?
+                    .put(&sealed)
+                    .map_err(data_error)
+            })
+            .await
+            .map_err(|_| data_error(DataError::Unavailable))??;
+        }
+        append_decision_event(
+            session,
+            &json!({
+                "type":"runtime_payload",
+                "runtimeRevision":decision.requested_revision,
+                "requestSha256":reference.sha256,
+                "requestLength":reference.length,
+                "phase":reference.sha256,
+                "status":reference.length.to_string(),
+                "scope":decision.requested_revision.to_string(),
+            }),
+        )
+        .await?;
+    }
+    for event in &decision.events {
+        append_decision_event(session, event).await?;
+    }
+    Ok(Json(json!({
+        "ok":true,
+        "started":decision.started,
+        "dispatch":decision.dispatch,
+        "run":session.public_run().await?,
+    })))
+}
+
+async fn resume_run(
+    State(config): State<Option<ReadConfig>>,
+    Path(id): Path<String>,
+    body: Bytes,
+) -> Result<Json<Value>, ReadError> {
+    let input = operator_input(&body)?;
+    if crate::agent_credential_client::has_reserved_field(&input) {
+        return Err(invalid_request());
+    }
+    let mut session = ReadSession::open(config, &id).await?;
+    let decision = runtime_decision(&mut session, "resume", &input).await?;
+    apply_runtime_action(&mut session, &input, &decision).await
+}
+
+async fn rerun_run(
+    State(config): State<Option<ReadConfig>>,
+    Path(id): Path<String>,
+    body: Bytes,
+) -> Result<Json<Value>, ReadError> {
+    let input = operator_input(&body)?;
+    if crate::agent_credential_client::has_reserved_field(&input) {
+        return Err(invalid_request());
+    }
+    let mut session = ReadSession::open(config, &id).await?;
+    let decision = runtime_decision(&mut session, "rerun", &input).await?;
+    apply_runtime_action(&mut session, &input, &decision).await
 }
 
 async fn detail(

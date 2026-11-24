@@ -18,7 +18,7 @@ execution stayed in Python, and Python fallback was retained. That was the right
 decision while the native paths were partial.
 
 By 4.8.0 the repository had seven initial Rust crates (subsequently expanded
-to 14 crates across worker, storage, transfer, federation, gateway, and sidecar planes)
+to 15 crates across worker, storage, transfer, federation, gateway, and sidecar planes)
 and production-grade backup, resilience, Evidence, and signed federation semantics,
 but production authority still resides in the Python package. Continuing to add
 Python-owned control and data paths increases migration cost and leaves the most
