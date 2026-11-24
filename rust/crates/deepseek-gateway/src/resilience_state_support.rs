@@ -7480,4 +7480,88 @@ mod unit_tests {
         let slo_dir = scratch.root.join(".resilience-slo");
         assert!(slo_dir.is_dir(), "the SLO ledger must exist");
     }
+    /// The DR-drill factor is scored from the newest successful drill's age:
+    /// under a week is full marks, under a month is a warning, and older than a
+    /// month is critical. A failed drill never counts.
+    #[test]
+    fn dr_drill_factor_follows_the_age_of_the_newest_success() {
+        // 1_700_000_000 is 2023-11-14T22:13:20Z.
+        let now = 1_700_000_000_u64;
+        let now_iso = "2023-11-14T22:13:20Z";
+        let seed_drill = |scratch: &Scratch, tag: &str, payload: Value| {
+            let dir = scratch.root.join(".restore-staging").join(tag);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("drill-result.json"), payload.to_string()).unwrap();
+        };
+
+        // A drill that finished two days ago is healthy and worth the full 25.
+        let fresh = Scratch::new("drill-fresh");
+        seed_drill(
+            &fresh,
+            "d1",
+            json!({"success": true, "finishedAt": "2023-11-12T22:13:20Z"}),
+        );
+        let score = calculate_resilience_score_readonly(&fresh.root, now, now_iso).unwrap();
+        assert_eq!(score["factorBreakdown"]["drDrill"]["score"], 25);
+        assert_eq!(score["factorBreakdown"]["drDrill"]["status"], "healthy");
+
+        // Three weeks old drops to 15 and names the weakness.
+        let stale = Scratch::new("drill-stale");
+        seed_drill(
+            &stale,
+            "d1",
+            json!({"success": true, "finishedAt": "2023-10-24T22:13:20Z"}),
+        );
+        let score = calculate_resilience_score_readonly(&stale.root, now, now_iso).unwrap();
+        assert_eq!(score["factorBreakdown"]["drDrill"]["score"], 15);
+        assert_eq!(score["factorBreakdown"]["drDrill"]["status"], "warning");
+        let weaknesses = score["weaknesses"].as_array().unwrap();
+        assert!(
+            weaknesses.iter().any(|w| w == "dr-drill-older-than-7-days"),
+            "{weaknesses:?}"
+        );
+
+        // Three months old drops to 5.
+        let ancient = Scratch::new("drill-ancient");
+        seed_drill(
+            &ancient,
+            "d1",
+            json!({"success": true, "finishedAt": "2023-08-14T22:13:20Z"}),
+        );
+        let score = calculate_resilience_score_readonly(&ancient.root, now, now_iso).unwrap();
+        assert_eq!(score["factorBreakdown"]["drDrill"]["score"], 5);
+        assert_eq!(score["factorBreakdown"]["drDrill"]["status"], "critical");
+        let weaknesses = score["weaknesses"].as_array().unwrap();
+        assert!(
+            weaknesses
+                .iter()
+                .any(|w| w == "dr-drill-stale-over-30-days"),
+            "{weaknesses:?}"
+        );
+
+        // `status: "pass"` counts the same as `success: true`.
+        let by_status = Scratch::new("drill-status");
+        seed_drill(
+            &by_status,
+            "d1",
+            json!({"status": "pass", "startedAt": "2023-11-12T22:13:20Z"}),
+        );
+        let score = calculate_resilience_score_readonly(&by_status.root, now, now_iso).unwrap();
+        assert_eq!(score["factorBreakdown"]["drDrill"]["score"], 25);
+
+        // A failed drill is not a success and leaves the factor at zero.
+        let failed = Scratch::new("drill-failed");
+        seed_drill(
+            &failed,
+            "d1",
+            json!({"success": false, "status": "fail", "finishedAt": "2023-11-12T22:13:20Z"}),
+        );
+        let score = calculate_resilience_score_readonly(&failed.root, now, now_iso).unwrap();
+        assert_eq!(score["factorBreakdown"]["drDrill"]["score"], 0);
+        let weaknesses = score["weaknesses"].as_array().unwrap();
+        assert!(
+            weaknesses.iter().any(|w| w == "no-successful-dr-drills"),
+            "{weaknesses:?}"
+        );
+    }
 }
