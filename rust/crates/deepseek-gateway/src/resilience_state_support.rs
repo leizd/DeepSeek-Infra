@@ -7002,4 +7002,157 @@ mod unit_tests {
         obj.insert("digest".to_string(), json!(sha256_compact(&envelope)));
         checkpoint
     }
+    /// `plan_coordinated_resilience_logic` wraps the action planner with a
+    /// coordination envelope: objectives, dependencies, conflicts, a budget and a
+    /// blast-radius simulation. It resolves registered targets through
+    /// `workspace_root`, so the root must be bound for the case.
+    #[test]
+    fn coordinated_plan_envelopes_the_action_plan() {
+        let scratch = Scratch::new("coord-plan");
+        seed_control(&scratch.root, &[]);
+        let guard = RootEnvGuard::bind(&scratch.root);
+
+        let snapshot = json!({
+            "riskDigest": HEAD_DIGEST,
+            "overallRisk": "healthy",
+            "risks": []
+        });
+        let plan = plan_coordinated_resilience_logic(
+            &scratch.root,
+            &snapshot,
+            false,
+            "2024-01-01T00:00:00Z",
+        )
+        .unwrap();
+        drop(guard);
+
+        assert_eq!(plan["coordinationPlanVersion"], 1);
+        assert_eq!(plan["status"], "PROPOSED");
+        assert_eq!(plan["generatedAt"], "2024-01-01T00:00:00Z");
+        assert_eq!(plan["riskDigest"], HEAD_DIGEST);
+        assert_eq!(plan["overallRisk"], "healthy");
+        // The id is `coord_` plus 16 hex characters, the digest 64.
+        let plan_id = plan["coordinationPlanId"].as_str().expect("plan id");
+        assert!(plan_id.starts_with("coord_"), "{plan_id}");
+        assert_eq!(plan_id.len(), "coord_".len() + 16);
+        assert_eq!(plan["planDigest"].as_str().unwrap().len(), 64);
+        // A healthy snapshot plans no actions and therefore no dependencies.
+        assert!(plan["actions"].as_array().unwrap().is_empty(), "{plan}");
+        assert!(
+            plan["dependencies"].as_array().unwrap().is_empty(),
+            "{plan}"
+        );
+        assert!(plan["conflicts"].as_array().unwrap().is_empty(), "{plan}");
+        assert!(plan["objectives"].as_array().unwrap().is_empty(), "{plan}");
+        // A healthy run targets healthy; nothing is blocked.
+        assert_eq!(plan["expectedRiskVector"]["targetSeverity"], "healthy");
+        assert_eq!(plan["expectedRiskVector"]["overallRiskTarget"], "healthy");
+        // The budget echoes the configured concurrency and the fixed reserves.
+        let budget = plan["budget"].as_object().expect("budget");
+        assert_eq!(budget["maxConcurrentActions"], 3);
+        assert_eq!(budget["maxConcurrentActionsPerTarget"], 2);
+        assert_eq!(budget["maxConcurrentActionsPerPolicy"], 2);
+        assert_eq!(budget["maxSimultaneousFailureDomainsTouched"], 1);
+        assert_eq!(budget["repairReserve"], 1);
+        assert_eq!(budget["drReserve"], 1);
+        // The blast-radius simulation always returns its own document, and with
+        // no proposed actions there is nothing for it to reject.
+        let wave = plan["blastRadiusSimulation"].as_object().expect("wave simulation");
+        assert_eq!(wave["passed"], true);
+        assert!(wave["proposedActionIds"].as_array().unwrap().is_empty());
+        assert!(wave["runningActionIds"].as_array().unwrap().is_empty());
+        assert!(wave["evaluations"].is_object());
+    }
+
+    /// A critical authority risk makes the coordination plan target `blocked`,
+    /// and the promotion action it plans comes back approval-gated.
+    #[test]
+    fn coordinated_plan_targets_blocked_on_authority_degradation() {
+        let scratch = Scratch::new("coord-blocked");
+        seed_control(&scratch.root, &[]);
+        let guard = RootEnvGuard::bind(&scratch.root);
+
+        let snapshot = json!({
+            "riskDigest": HEAD_DIGEST,
+            "overallRisk": "critical",
+            "risks": [{
+                "type": "AUTHORITY_DEGRADATION",
+                "severity": "critical",
+                "confidence": "verified"
+            }]
+        });
+        let plan = plan_coordinated_resilience_logic(
+            &scratch.root,
+            &snapshot,
+            false,
+            "2024-01-01T00:00:00Z",
+        )
+        .unwrap();
+        drop(guard);
+
+        assert_eq!(plan["expectedRiskVector"]["overallRiskTarget"], "blocked");
+        let actions = plan["actions"].as_array().expect("actions");
+        assert!(
+            !actions.is_empty(),
+            "a critical authority risk must plan an action"
+        );
+        // The authority plan raises PRIMARY_PROMOTION, which is never autonomous.
+        let promotion = actions
+            .iter()
+            .find(|a| a["type"] == "PRIMARY_PROMOTION")
+            .expect("a promotion action");
+        assert_eq!(promotion["requiresApproval"], true);
+        // Every action carries the blast-radius verdict the coordinator adds.
+        for action in actions {
+            assert!(
+                action.get("blastRadiusVerified").is_some(),
+                "missing verification on {action}"
+            );
+        }
+    }
+
+    /// The coordination digest covers the document it was computed from, so two
+    /// different plans never share one.
+    #[test]
+    fn coordinated_plan_digest_tracks_the_document() {
+        let scratch = Scratch::new("coord-digest");
+        seed_control(&scratch.root, &[]);
+        let guard = RootEnvGuard::bind(&scratch.root);
+
+        let healthy = plan_coordinated_resilience_logic(
+            &scratch.root,
+            &json!({"riskDigest": HEAD_DIGEST, "overallRisk": "healthy", "risks": []}),
+            false,
+            "2024-01-01T00:00:00Z",
+        )
+        .unwrap();
+        let critical = plan_coordinated_resilience_logic(
+            &scratch.root,
+            &json!({
+                "riskDigest": HEAD_DIGEST,
+                "overallRisk": "critical",
+                "risks": [{"type": "AUTHORITY_DEGRADATION", "severity": "critical"}]
+            }),
+            false,
+            "2024-01-01T00:00:00Z",
+        )
+        .unwrap();
+        drop(guard);
+
+        // Each digest matches a recomputation over its own document.
+        assert_eq!(
+            compute_coordination_plan_digest(&healthy),
+            healthy["planDigest"].as_str().unwrap()
+        );
+        assert_eq!(
+            compute_coordination_plan_digest(&critical),
+            critical["planDigest"].as_str().unwrap()
+        );
+        // Different content, different digest; and ids are not reused.
+        assert_ne!(healthy["planDigest"], critical["planDigest"]);
+        assert_ne!(
+            healthy["coordinationPlanId"],
+            critical["coordinationPlanId"]
+        );
+    }
 }
