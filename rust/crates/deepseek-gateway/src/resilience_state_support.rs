@@ -7639,8 +7639,15 @@ mod unit_tests {
         );
         assert!(has_open_required_jobs(&scratch.root, "p1", "b1"));
     }
-    /// Build the `.backup-dr/evidence.sqlite3` tables the capacity and replica
-    /// readers query, so a recovery point and its copies can be seeded.
+    /// Seed `.backup-dr/evidence.sqlite3` with the two tables the capacity and
+    /// replica readers select from.
+    ///
+    /// The column lists mirror `ensure_dr_ledger_schema` in
+    /// `backup_dr_audit_routes.rs`. That function is private to its module, so it
+    /// cannot be called from here - but getting the columns wrong is not
+    /// cosmetic: the capacity probe selects `object_set_digest` and
+    /// `metadata_json` by name, and a missing column there turns the probe into a
+    /// 500 instead of an empty fallback.
     fn seed_dr(
         root: &Path,
         recovery_points: &[(&str, &str, &str, &str)],
@@ -7655,39 +7662,55 @@ mod unit_tests {
                  policy_id TEXT NOT NULL,
                  backup_id TEXT NOT NULL,
                  committed_at TEXT NOT NULL,
-                 snapshot_kind TEXT,
+                 snapshot_kind TEXT NOT NULL DEFAULT 'full',
                  parent_backup_id TEXT,
                  chain_digest TEXT,
-                 chain_length INTEGER,
-                 ciphertext_bytes INTEGER,
-                 logical_bytes INTEGER,
-                 recoverable INTEGER,
-                 verified_at TEXT,
+                 chain_length INTEGER NOT NULL DEFAULT 1,
+                 ciphertext_bytes INTEGER NOT NULL DEFAULT 0,
+                 logical_bytes INTEGER NOT NULL DEFAULT 0,
+                 recoverable INTEGER NOT NULL DEFAULT 1,
+                 verified_at TEXT NOT NULL,
                  storage_protocol TEXT,
-                 metadata_json TEXT
+                 metadata_json TEXT,
+                 PRIMARY KEY (target_id, policy_id, backup_id)
              );
              CREATE TABLE IF NOT EXISTS recovery_point_copies (
                  target_id TEXT NOT NULL,
                  policy_id TEXT NOT NULL,
                  backup_id TEXT NOT NULL,
+                 logical_id TEXT NOT NULL,
+                 object_set_digest TEXT,
                  committed_at TEXT NOT NULL,
-                 recoverable INTEGER,
-                 state TEXT
+                 recoverable INTEGER NOT NULL DEFAULT 0,
+                 role TEXT NOT NULL DEFAULT 'primary',
+                 mode TEXT NOT NULL DEFAULT 'required',
+                 state TEXT NOT NULL DEFAULT 'healthy',
+                 last_verified_at TEXT,
+                 last_scrub_at TEXT,
+                 last_drill_at TEXT,
+                 last_repair_at TEXT,
+                 last_failure TEXT,
+                 verified_at TEXT,
+                 metadata_json TEXT,
+                 PRIMARY KEY (target_id, policy_id, backup_id)
              );",
         )
         .unwrap();
         for (target, policy, backup, committed) in recovery_points {
-            // `verified_at` is read as a non-null TEXT, so it cannot be NULL here.
             conn.execute(
-                "INSERT INTO recovery_points VALUES (?, ?, ?, ?, 'full', NULL, NULL, 1, 0, 0, 1, ?, NULL, '{}')",
+                "INSERT INTO recovery_points
+                    (target_id, policy_id, backup_id, committed_at, verified_at)
+                 VALUES (?, ?, ?, ?, ?)",
                 rusqlite::params![target, policy, backup, committed, committed],
             )
             .unwrap();
         }
         for (target, policy, backup) in copies {
             conn.execute(
-                "INSERT INTO recovery_point_copies VALUES (?, ?, ?, '2024-01-01T00:00:00Z', 1, 'healthy')",
-                rusqlite::params![target, policy, backup],
+                "INSERT INTO recovery_point_copies
+                    (target_id, policy_id, backup_id, logical_id, committed_at, state, role, mode)
+                 VALUES (?, ?, ?, ?, '2024-01-01T00:00:00Z', 'healthy', 'primary', 'required')",
+                rusqlite::params![target, policy, backup, format!("lrp_{policy}_{backup}")],
             )
             .unwrap();
         }
