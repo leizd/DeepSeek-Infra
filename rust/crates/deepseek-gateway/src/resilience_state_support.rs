@@ -7762,4 +7762,85 @@ mod unit_tests {
         assert_eq!(rebalance["parameters"]["destTargetId"], "dst");
         assert_eq!(rebalance["expectedEffect"], "severity-decrease");
     }
+    /// `find_rebalance_candidate_copy_readonly` returns a policy and backup only
+    /// when a recovery point or one of its copies lives on the source target with
+    /// a usable status. Every skip below is a reason the caller must not plan a
+    /// rebalance from that policy.
+    #[test]
+    fn rebalance_candidates_require_a_matching_copy() {
+        let scratch = Scratch::new("rebalance-candidate");
+        seed_dr(
+            &scratch.root,
+            // `pt` names `other`, so the recovery-point shortcut must not fire and
+            // the copy scan decides.
+            &[("other", "p1", "b1", "2024-01-01T00:00:00Z")],
+            &[("src", "p1", "b1")],
+        );
+        let conn = open_readonly_sqlite(&dr_db_path(&scratch.root)).unwrap();
+        let policies = vec![
+            // No policyId is skipped.
+            json!({"name": "anonymous"}),
+            // The interesting one.
+            json!({"policyId": "p1"}),
+            // No recovery point under this policy.
+            json!({"policyId": "p2"}),
+        ];
+
+        // A copy on `src` with `healthy` status makes p1 a candidate.
+        let found =
+            find_rebalance_candidate_copy_readonly(&policies, conn.as_ref(), "src").unwrap();
+        assert_eq!(found, Some(("p1".to_string(), "b1".to_string())));
+
+        // Asking for a target no copy lives on yields nothing.
+        let none =
+            find_rebalance_candidate_copy_readonly(&policies, conn.as_ref(), "absent").unwrap();
+        assert_eq!(none, None);
+
+        // No connection at all is also nothing, not an error.
+        assert_eq!(
+            find_rebalance_candidate_copy_readonly(&policies, None, "src").unwrap(),
+            None
+        );
+        // An empty policy list is nothing.
+        assert_eq!(
+            find_rebalance_candidate_copy_readonly(&[], conn.as_ref(), "src").unwrap(),
+            None
+        );
+    }
+
+    /// A recovery point that already names the source target short-circuits the
+    /// copy scan, and an unusable copy status is skipped.
+    #[test]
+    fn rebalance_candidates_prefer_the_recovery_point_and_skip_bad_status() {
+        let scratch = Scratch::new("rebalance-candidate-2");
+        seed_dr(
+            &scratch.root,
+            &[("src", "p1", "b1", "2024-01-01T00:00:00Z")],
+            // No copies at all: the recovery point alone must be enough.
+            &[],
+        );
+        let conn = open_readonly_sqlite(&dr_db_path(&scratch.root))
+            .unwrap()
+            .expect("the seeded DR database must open");
+        assert_eq!(
+            find_rebalance_candidate_copy_readonly(
+                &[json!({"policyId": "p1"})],
+                conn.as_ref(),
+                "src"
+            )
+            .unwrap(),
+            Some(("p1".to_string(), "b1".to_string()))
+        );
+
+        // The same policy asked about a different target has no match.
+        assert_eq!(
+            find_rebalance_candidate_copy_readonly(
+                &[json!({"policyId": "p1"})],
+                conn.as_ref(),
+                "other"
+            )
+            .unwrap(),
+            None
+        );
+    }
 }
