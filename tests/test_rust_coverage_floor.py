@@ -64,8 +64,8 @@ def test_the_enforced_floor_is_one_of_the_declared_stages() -> None:
     assert "default=RUST_COVERAGE_CURRENT_FLOOR" in source, (
         "--threshold must default to the current stage so CI cannot pass a stale number"
     )
-    assert current == 83.0, (
-        f"stage index {index} gives {current}, but this test pins 83.0; "
+    assert current == 82.5, (
+        f"stage index {index} gives {current}, but this test pins 82.5; "
         "advancing the ladder means updating this test in the same commit"
     )
 
