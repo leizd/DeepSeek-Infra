@@ -5564,7 +5564,9 @@ mod unit_tests {
 
     /// Binds `DEEPSEEK_INFRA_ROOT` to `root` for the guard's lifetime.
     struct RootEnvGuard {
-        saved: Vec<(&'static str, Option<std::ffi::OsString>)>,
+        // Keys are owned rather than `&'static str`, because `with` accepts a
+        // caller-supplied slice whose keys only live for the call.
+        saved: Vec<(String, Option<std::ffi::OsString>)>,
         _lock: RootEnvLock,
     }
 
@@ -5574,18 +5576,19 @@ mod unit_tests {
         }
 
         /// Bind several variables at once. The bootstrap-file variable is cleared
-        /// so a developer's shell cannot shadow the locators a case sets.
+        /// so a developer's shell cannot shadow the locators a case sets; a caller
+        /// may still bind it explicitly, and then its value wins.
         fn with(pairs: &[(&str, String)]) -> Self {
             let lock = RootEnvLock::acquire();
             let mut saved = Vec::new();
-            for (key, value) in [("DEEPSEEK_CONTROL_AUTHORITY_BOOTSTRAP", String::new())]
-                .iter()
-                .chain(pairs.iter())
-            {
-                saved.push((*key, std::env::var_os(key)));
+            // The bootstrap-file variable is cleared first, then the caller's
+            // pairs, which win if they name the same key.
+            let cleared = ("DEEPSEEK_CONTROL_AUTHORITY_BOOTSTRAP", String::new());
+            for (key, value) in std::iter::once(&cleared).chain(pairs.iter()) {
+                saved.push((key.to_string(), std::env::var_os(key.as_str())));
                 // SAFETY: `RootEnvLock` keeps every environment mutation in this
                 // module's tests on one thread at a time.
-                unsafe { std::env::set_var(key, value) };
+                unsafe { std::env::set_var(key.as_str(), value) };
             }
             Self { saved, _lock: lock }
         }
@@ -5597,8 +5600,8 @@ mod unit_tests {
             unsafe {
                 for (key, saved) in self.saved.drain(..) {
                     match saved {
-                        Some(value) => std::env::set_var(key, value),
-                        None => std::env::remove_var(key),
+                        Some(value) => std::env::set_var(&key, value),
+                        None => std::env::remove_var(&key),
                     }
                 }
             }
