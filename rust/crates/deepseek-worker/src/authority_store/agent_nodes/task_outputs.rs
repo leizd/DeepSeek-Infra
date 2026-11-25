@@ -44,15 +44,6 @@ impl AuthorityStore {
         Ok(())
     }
 
-    /// Ordinary execution admits bodies from its current request only. Recovery
-    /// must enter the separate path with independently retained source proofs.
-    pub(crate) fn agent_task_prior_outputs(
-        &self,
-        permit: &AgentNodeEffectPermit,
-    ) -> Result<Vec<Value>, Status> {
-        self.agent_task_outputs(permit, None)
-    }
-
     pub(crate) fn agent_recovery_task_prior_outputs(
         &self,
         permit: &AgentNodeEffectPermit,

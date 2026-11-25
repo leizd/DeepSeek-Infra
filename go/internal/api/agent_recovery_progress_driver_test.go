@@ -184,7 +184,7 @@ func TestDriverResumesTypedTaskCompletionBeforeAttemptingRerunProgress(t *testin
 		t.Fatal(err)
 	}
 	nodes := &agentNodeService{run: driver.service}
-	effect, err := driver.node(ctx, fixture, nodes, claim, grant, "critic")
+	effect, err := driver.node(ctx, fixture, nodes, claim, grant, "critic", "")
 	if err != nil {
 		t.Fatal(err)
 	}

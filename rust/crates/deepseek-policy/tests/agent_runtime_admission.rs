@@ -1,5 +1,5 @@
 use deepseek_policy::agent_runtime_admission::*;
-use serde_json::{Value, json};
+use serde_json::json;
 
 #[test]
 fn test_current_runtime_revision() {
@@ -177,31 +177,31 @@ fn test_admit_and_settlement() {
         same_effect: false,
     };
     let dec = admit(&adm);
-    assert!(dec.allowed);
+    assert!(dec.admitted);
 
     let invalid_op = RuntimeAdmission {
         operation: "unknown_op",
         ..adm
     };
-    assert!(!admit(&invalid_op).allowed);
+    assert!(!admit(&invalid_op).admitted);
 
     let invalid_id = RuntimeAdmission {
         identity_valid: false,
         ..adm
     };
-    assert!(!admit(&invalid_id).allowed);
+    assert!(!admit(&invalid_id).admitted);
 
     let dead_lease = RuntimeAdmission {
         lease: "dead",
         ..adm
     };
-    assert!(!admit(&dead_lease).allowed);
+    assert!(!admit(&dead_lease).admitted);
 
     let stale_epoch = RuntimeAdmission {
         epoch: "stale",
         ..adm
     };
-    assert!(!admit(&stale_epoch).allowed);
+    assert!(!admit(&stale_epoch).admitted);
 }
 
 #[test]

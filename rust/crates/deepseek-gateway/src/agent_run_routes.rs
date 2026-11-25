@@ -590,6 +590,7 @@ async fn create(
             &request,
             api_key.as_ref().map(|value| value.as_str()),
             tavily_api_key.as_ref().map(|value| value.as_str()),
+            None,
         )
         .await
         .map_err(|_| control_unavailable())?;
@@ -635,6 +636,7 @@ async fn create(
             action_id: id.clone(),
             execution_epoch: session.epoch,
         }),
+        runtime_update: None,
     });
     session
         .client
@@ -771,6 +773,7 @@ async fn operator_event(
             action_id: session.snapshot.run_id.clone(),
             execution_epoch: session.epoch,
         }),
+        runtime_update: None,
     });
     session
         .client
@@ -1109,6 +1112,12 @@ async fn apply_runtime_action(
                 &reference,
                 api_key.as_ref().map(|value| value.as_str()),
                 tavily_api_key.as_ref().map(|value| value.as_str()),
+                (decision.requested_revision > 1).then(|| AgentCredentialRuntimeUpdate {
+                    previous_request: session.snapshot.request.clone(),
+                    previous_runtime_revision: decision.requested_revision - 1,
+                    replace_api_key: api_key.is_some(),
+                    replace_tavily_api_key: tavily_api_key.is_some(),
+                }),
             )
             .await
             .map_err(|_| control_unavailable())?;

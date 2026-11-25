@@ -29,6 +29,39 @@ if str(ROOT / "scripts") not in sys.path:
 import verify_agent_signing_process as signing  # noqa: E402
 import verify_native_agent_public_driver as public  # noqa: E402
 
+RUNTIME_QUERY = "Apply the runtime revision to this retained write and review plan"
+RUNTIME_CREDENTIAL = "runtime-revision-api-fixture"
+
+
+def runtime_request_binding(control_path: Path, artifact_root: Path, run_id: str) -> dict[str, Any]:
+    """Inspect isolated outputs read-only; this never creates runtime state."""
+    with sqlite3.connect((control_path / "control.sqlite3").as_uri() + "?mode=ro", uri=True) as database:
+        row = database.execute("SELECT payload_json FROM agent_runs WHERE id=?", (run_id,)).fetchone()
+    if not row:
+        raise ValueError("Actual daemon runtime metadata is missing")
+    metadata = json.loads(row[0])
+    reference = metadata["requestRef"]
+    with sqlite3.connect((artifact_root / "objects-v1.sqlite").as_uri() + "?mode=ro", uri=True) as database:
+        row = database.execute("SELECT length,bytes FROM artifacts WHERE sha256=?", (reference["sha256"],)).fetchone()
+    if not row or row[0] != reference["length"] or hashlib.sha256(row[1]).hexdigest() != reference["sha256"]:
+        raise ValueError("Actual daemon runtime request binding differs")
+    return {"revision": metadata.get("runtimeRevision", 0) or 1, "reference": reference, "bytes": row[1]}
+
+
+def validate_runtime_update_result(result: dict[str, Any], exchanges: list[dict[str, Any]]) -> None:
+    flags = ["runtimePayloadUpdatedAfterRestart", "currentRequestRevisionBoundByGo", "originalRuntimeRequestRetained",
+             "originalCredentialCiphertextRetained", "updatedContextReachedEveryRemainingPhase"]
+    if any(result.get(key) is not True for key in flags) or result.get("runtimeRevision") != 2 or result.get("metadataSchemaVersion") != 2 or \
+            result.get("initialRuntimeRevision") != 1 or result.get("encryptedCredentialObjectCount") != 2 or \
+            result.get("initialRequestSha256") == result.get("requestSha256") or \
+            len(str(result.get("initialRequestSha256", ""))) != 64:
+        raise ValueError("Actual daemon runtime update evidence is incomplete")
+    if len(exchanges) != 4 or exchanges[0].get("runtimeContextUsed") is not False or \
+            any(row.get("runtimeContextUsed") is not True or row.get("requestCredentialUsed") is not True for row in exchanges[1:]) or \
+            any(row.get("credentialInProviderBody") is not False for row in exchanges):
+        raise ValueError("Runtime changes did not reach the actual retained provider phases safely")
+    validate_daemon_result(result, exchanges)
+
 
 def daemon_environment(source: dict[str, str], seed: dict[str, Any], address: str,
                        target: str, ca: Path, bearer: str, expiry: str, public_key: str) -> dict[str, str]:

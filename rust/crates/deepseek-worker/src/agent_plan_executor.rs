@@ -622,6 +622,18 @@ impl AgentPlanExecutor {
 
 #[tonic::async_trait]
 impl AgentNodeWorker for WorkerRpcService {
+    async fn prepare_recovery_progress(
+        &self,
+        request: Request<
+            deepseek_protocol::generated::deepseek::agent::v1::PrepareAgentRecoveryProgressRequest,
+        >,
+    ) -> Result<
+        Response<deepseek_protocol::generated::deepseek::agent::v1::AgentRecoveryProgressReceipt>,
+        Status,
+    > {
+        self.prepare_agent_recovery_progress(request).await
+    }
+
     async fn prepare_credentials(
         &self,
         request: Request<
@@ -663,6 +675,17 @@ impl AgentNodeWorker for WorkerRpcService {
         Status,
     > {
         self.project_agent_synthesis(request).await
+    }
+    async fn project_failure(
+        &self,
+        request: Request<
+            deepseek_protocol::generated::deepseek::agent::v1::ProjectAgentFailureRequest,
+        >,
+    ) -> Result<
+        Response<deepseek_protocol::generated::deepseek::agent::v1::AgentFailureProjectionReceipt>,
+        Status,
+    > {
+        self.project_agent_failure(request).await
     }
     async fn project_plan(
         &self,
@@ -820,6 +843,18 @@ impl AgentNodeWorker for WorkerRpcService {
         })
         .await
         .map(Response::new)
+    }
+
+    async fn read_retained_effect(
+        &self,
+        request: Request<QueryAgentNodeEffectRequest>,
+    ) -> Result<Response<QueryAgentNodeEffectResponse>, Status> {
+        if request.get_ref().expected_receipt_sha256.is_empty() {
+            return Err(Status::invalid_argument(
+                "AGENT_RECOVERY_RECEIPT_NOT_RETAINED",
+            ));
+        }
+        self.query_effect(request).await
     }
 
     async fn query_effect(

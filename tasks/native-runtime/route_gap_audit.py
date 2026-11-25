@@ -14,6 +14,7 @@ import re
 import sys
 from collections import Counter
 from pathlib import Path
+from typing import TypedDict
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -33,7 +34,13 @@ def normalize(path: str) -> str:
     return path
 
 
-def scan() -> dict[str, list[str]]:
+class RouteScan(TypedDict):
+    python: dict[str, list[str]]
+    native: list[str]
+    missing: list[str]
+
+
+def scan() -> RouteScan:
     python: dict[str, list[str]] = {}
     for source in sorted((ROOT / "deepseek_infra/web/routes").glob("*.py")):
         text = source.read_text(encoding="utf-8")

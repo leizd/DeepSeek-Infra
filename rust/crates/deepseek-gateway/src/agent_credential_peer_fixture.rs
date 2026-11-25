@@ -27,6 +27,13 @@ struct CustodyFixture {
 
 #[tonic::async_trait]
 impl AgentNodeWorker for CustodyFixture {
+    async fn prepare_recovery_progress(
+        &self,
+        _: Request<PrepareAgentRecoveryProgressRequest>,
+    ) -> Result<Response<AgentRecoveryProgressReceipt>, Status> {
+        Err(Status::unimplemented("NOT_A_RECOVERY_FIXTURE"))
+    }
+
     async fn prepare_credentials(
         &self,
         request: Request<PrepareAgentCredentialsRequest>,
@@ -70,6 +77,7 @@ impl AgentNodeWorker for CustodyFixture {
                 sha256: "b".repeat(64),
                 length: 300,
             }),
+            ..Default::default()
         }))
     }
 
@@ -95,6 +103,18 @@ impl AgentNodeWorker for CustodyFixture {
         &self,
         _: Request<QueryAgentNodeEffectRequest>,
     ) -> Result<Response<QueryAgentNodeEffectResponse>, Status> {
+        Err(Status::unimplemented("NOT_A_PROVIDER_FIXTURE"))
+    }
+    async fn read_retained_effect(
+        &self,
+        _: Request<QueryAgentNodeEffectRequest>,
+    ) -> Result<Response<QueryAgentNodeEffectResponse>, Status> {
+        Err(Status::unimplemented("NOT_A_PROVIDER_FIXTURE"))
+    }
+    async fn project_failure(
+        &self,
+        _: Request<ProjectAgentFailureRequest>,
+    ) -> Result<Response<AgentFailureProjectionReceipt>, Status> {
         Err(Status::unimplemented("NOT_A_PROVIDER_FIXTURE"))
     }
     async fn project_plan(
@@ -186,6 +206,7 @@ async fn credential_transport_refuses_foreign_hostname_and_bearer() {
                 1,
                 &reference,
                 Some("request-only-credential"),
+                None,
                 None
             )
             .await

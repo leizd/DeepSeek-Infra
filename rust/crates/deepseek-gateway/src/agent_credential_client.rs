@@ -3,7 +3,10 @@ use std::{net::SocketAddr, time::Duration};
 
 use deepseek_policy::agent_run_data::ArtifactReference;
 use deepseek_protocol::generated::deepseek::{
-    agent::v1::{PrepareAgentCredentialsRequest, agent_node_worker_client::AgentNodeWorkerClient},
+    agent::v1::{
+        AgentCredentialRuntimeUpdate, PrepareAgentCredentialsRequest,
+        agent_node_worker_client::AgentNodeWorkerClient,
+    },
     common::v1::ActionFence,
 };
 use serde_json::{Value, json};
@@ -14,6 +17,7 @@ use tonic::{
 };
 
 pub(crate) const PRIVATE_FIELD: &str = "_nativeProviderCredentials";
+pub(crate) const PREPARATION_FIELD: &str = "_nativeRuntimePreparation";
 
 #[derive(Clone)]
 pub(crate) struct WorkerConfig {
@@ -39,7 +43,10 @@ impl WorkerConfig {
 pub(crate) fn has_reserved_field(value: &Value) -> bool {
     match value {
         Value::Object(values) => {
-            values.contains_key(PRIVATE_FIELD) || values.values().any(has_reserved_field)
+            values.contains_key(PRIVATE_FIELD)
+                || values.contains_key(PREPARATION_FIELD)
+                || values.contains_key("_nativeRecoveryContext")
+                || values.values().any(has_reserved_field)
         }
         Value::Array(values) => values.iter().any(has_reserved_field),
         _ => false,
@@ -54,6 +61,7 @@ pub(crate) async fn prepare(
     reference: &ArtifactReference,
     api_key: Option<&str>,
     tavily_api_key: Option<&str>,
+    runtime_update: Option<AgentCredentialRuntimeUpdate>,
 ) -> Result<Value, ()> {
     if runtime_revision == 0 {
         return Err(());
@@ -112,6 +120,8 @@ pub(crate) async fn prepare(
         runtime_revision,
         api_key: api_key.unwrap_or_default().into(),
         tavily_api_key: tavily_api_key.unwrap_or_default().into(),
+        runtime_update,
+        recovery_context: None,
     });
     let mut authorization: MetadataValue<_> = format!("Bearer {}", bearer.as_str())
         .parse()
@@ -164,6 +174,10 @@ mod tests {
             json!({PRIVATE_FIELD:{}}),
             json!({"payload":{PRIVATE_FIELD:{}}}),
             json!({"messages":[{"content":{PRIVATE_FIELD:{}}}]}),
+            json!({PREPARATION_FIELD:"caller-cannot-select-custody-scope"}),
+            json!({"payload":{PREPARATION_FIELD:"caller-cannot-select-custody-scope"}}),
+            json!({"_nativeRecoveryContext":{}}),
+            json!({"messages":[{"_nativeRecoveryContext":{}}]}),
         ] {
             assert!(has_reserved_field(&value));
         }
