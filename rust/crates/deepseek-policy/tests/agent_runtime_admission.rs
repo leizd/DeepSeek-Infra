@@ -139,45 +139,76 @@ fn test_agent_node_send_deadline() {
 
 #[test]
 fn test_dispatch_allowed() {
-    let (reason, allowed) = dispatch_allowed("live", "same", "none");
+    // The effect vocabulary is the uppercase wire form; "same"/"none" belong to
+    // the older epoch and effect spellings and are refused as unknown.
+    let (reason, allowed) = dispatch_allowed("live", "match", "CONFIRMED");
     assert!(allowed);
     assert_eq!(reason, "");
 
-    let (reason, allowed) = dispatch_allowed("expired", "same", "none");
-    assert!(!allowed);
-    assert_eq!(reason, "lease not live");
+    let (reason, allowed) = dispatch_allowed("live", "match", "SETTLED_FAILURE");
+    assert!(allowed);
+    assert_eq!(reason, "");
 
-    let (reason, allowed) = dispatch_allowed("live", "stale", "none");
-    assert!(!allowed);
-    assert_eq!(reason, "stale execution epoch");
+    let (reason, allowed) = dispatch_allowed("live", "match", "NONE");
+    assert!(allowed);
+    assert_eq!(reason, "");
 
-    let (reason, allowed) = dispatch_allowed("live", "same", "unknown");
+    let (reason, allowed) = dispatch_allowed("expired", "match", "CONFIRMED");
     assert!(!allowed);
-    assert_eq!(reason, "effect unknown");
+    assert_eq!(reason, "LEASE_NOT_HELD");
+
+    let (reason, allowed) = dispatch_allowed("live", "stale", "CONFIRMED");
+    assert!(!allowed);
+    assert_eq!(reason, "STALE_EXECUTION_EPOCH");
+
+    let (reason, allowed) = dispatch_allowed("live", "mismatch", "CONFIRMED");
+    assert!(!allowed);
+    assert_eq!(reason, "FENCE_MISMATCH");
+
+    let (reason, allowed) = dispatch_allowed("live", "match", "EFFECT_UNKNOWN");
+    assert!(!allowed);
+    assert_eq!(reason, "EFFECT_UNKNOWN");
+
+    let (reason, allowed) = dispatch_allowed("live", "match", "");
+    assert!(!allowed);
+    assert_eq!(reason, "EFFECT_UNKNOWN");
+
+    let (reason, allowed) = dispatch_allowed("live", "match", "AWAITING_TOOLS");
+    assert!(!allowed);
+    assert_eq!(reason, "AGENT_DRIVER_TOOLS_PENDING");
+
+    let (reason, allowed) = dispatch_allowed("live", "match", "DISPATCHING");
+    assert!(!allowed);
+    assert_eq!(reason, "EFFECT_UNKNOWN");
 }
 
 #[test]
 fn test_admit_and_settlement() {
+    // The admitted contract takes only resume, rerun, runtime_update and
+    // tool_continuation; a request that bumps the runtime revision must name the
+    // next revision, and only a resumable status can pass the active gate.
     let empty_nodes = vec![];
     let empty_plan = vec![];
     let adm = RuntimeAdmission {
-        operation: "agent_reset",
-        status: "running",
+        operation: "runtime_update",
+        status: "done",
         identity_valid: true,
         lease: "live",
-        epoch: "same",
-        effect: "none",
+        epoch: "match",
+        effect: "",
         runtime_revision: 1,
-        requested_revision: 1,
-        agent_id: "agent-1",
+        requested_revision: 2,
+        agent_id: "",
         resynthesize: false,
         plan: &empty_plan,
         nodes: &empty_nodes,
-        has_final_answer: false,
+        has_final_answer: true,
         same_effect: false,
     };
     let dec = admit(&adm);
     assert!(dec.admitted);
+    assert_eq!(dec.http_status, 200);
+    assert_eq!(dec.code, "");
 
     let invalid_op = RuntimeAdmission {
         operation: "unknown_op",
@@ -202,10 +233,32 @@ fn test_admit_and_settlement() {
         ..adm
     };
     assert!(!admit(&stale_epoch).admitted);
+
+    // A revision that does not advance, or skips a number, is refused.
+    let same_revision = RuntimeAdmission {
+        requested_revision: 1,
+        ..adm
+    };
+    assert!(!admit(&same_revision).admitted);
+
+    let skipped_revision = RuntimeAdmission {
+        requested_revision: 3,
+        ..adm
+    };
+    assert!(!admit(&skipped_revision).admitted);
+
+    // An active run cannot take a resume-style action.
+    let still_running = RuntimeAdmission {
+        status: "running",
+        ..adm
+    };
+    assert!(!admit(&still_running).admitted);
 }
 
 #[test]
 fn test_published_model_answer_and_dependency() {
+    // A tool request with pending calls leaves the node waiting, so a saved
+    // answer for that same phase is the published continuation.
     let events = vec![json!({
         "type": "agent_tool_request",
         "phase": "task-1",
@@ -213,11 +266,33 @@ fn test_published_model_answer_and_dependency() {
     })];
     let saved = json!({
         "type": "agent_output",
-        "output": {"id": "task-1", "task": "task-1", "latencyMs": 100}
+        "phase": "task-1",
+        "output": {"id": "task-1", "content": "retained answer", "latencyMs": 100}
     });
     let ans = published_model_answer(&events, &saved);
     assert!(ans.published);
     assert_eq!(ans.code, "");
+
+    // A saved envelope that still asks for tools is not a final answer.
+    let with_calls = json!({
+        "type": "agent_output",
+        "phase": "task-1",
+        "output": {"id": "task-1", "content": "partial", "latencyMs": 100},
+        "toolContinuation": {"toolCalls": [{"id": "call-1", "name": "read_file"}]}
+    });
+    assert!(!published_model_answer(&events, &with_calls).published);
+
+    // An empty answer body does not publish.
+    let blank = json!({
+        "type": "agent_output",
+        "phase": "task-1",
+        "output": {"id": "task-1", "content": "   ", "latencyMs": 100}
+    });
+    assert!(!published_model_answer(&events, &blank).published);
+
+    // A settled effect is not awaiting tools, so nothing publishes.
+    let settled = vec![json!({"type": "agent_output", "phase": "task-1"})];
+    assert!(!published_model_answer(&settled, &saved).published);
 
     let dep = published_dependency_output(&saved, None, "task-1", "task-1", "run-1");
     assert!(dep.ready);
