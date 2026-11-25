@@ -24,8 +24,39 @@ from deepseek_infra.infra.gateway import context_taint
 from deepseek_infra.web.routes import status as status_routes
 
 ROOT = Path(__file__).resolve().parents[1]
-NATIVE_GATEWAY = Path(
-    r"D:\CodexNativeVerification\native-20261006\desktop-platform-next\bin\deepseek-gateway.exe"
+# The native gateway is a prebuilt Rust binary. A developer checkout and the
+# Linux CI runner do not share a path, so resolve it from an explicit override,
+# then the conventional build outputs, and skip the module when none exists. A
+# missing binary must never be reported as a product failure.
+GATEWAY_BINARY_ENV = "DEEPSEEK_GATEWAY_BINARY"
+GATEWAY_BINARY_CANDIDATES = (
+    ROOT / "bin" / "deepseek-gateway",
+    ROOT / "bin" / "deepseek-gateway.exe",
+    ROOT / "rust" / "target" / "release" / "deepseek-gateway",
+    ROOT / "rust" / "target" / "release" / "deepseek-gateway.exe",
+)
+
+
+def _resolve_native_gateway() -> Path | None:
+    override = os.environ.get(GATEWAY_BINARY_ENV, "").strip()
+    candidates = (Path(override),) if override else GATEWAY_BINARY_CANDIDATES
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+# Kept separate so the skip decision can test for absence while NATIVE_GATEWAY
+# stays a plain Path for the call sites and the type checker.
+_GATEWAY_BINARY = _resolve_native_gateway()
+NATIVE_GATEWAY = _GATEWAY_BINARY or Path("deepseek-gateway-not-built")
+
+pytestmark = pytest.mark.skipif(
+    _GATEWAY_BINARY is None,
+    reason=(
+        "prebuilt native gateway is required; set "
+        f"{GATEWAY_BINARY_ENV} or build rust/ -p deepseek-gateway --release"
+    ),
 )
 TOKEN = "taint-status-token"
 SOURCES = [
@@ -147,7 +178,6 @@ def test_taint_status_uses_the_native_gateway(
     def _refuse_python_taint(*_args: Any, **_kwargs: Any) -> Any:
         raise AssertionError("python taint status entered")
 
-    assert NATIVE_GATEWAY.is_file()
     monkeypatch.setattr(status_routes, "create_status_router", _refuse_python_status)
     monkeypatch.setattr(context_taint, "taint_status", _refuse_python_taint)
     port = _free_port()

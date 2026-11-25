@@ -28,8 +28,39 @@ from deepseek_infra.infra.automation import registry as automation_registry
 from deepseek_infra.web.routes import automation as automation_routes
 
 ROOT = Path(__file__).resolve().parents[1]
-NATIVE_GATEWAY = Path(
-    r"D:\CodexNativeVerification\native-20261006\desktop-platform-next\bin\deepseek-gateway.exe"
+# The native gateway is a prebuilt Rust binary. A developer checkout and the
+# Linux CI runner do not share a path, so resolve it from an explicit override,
+# then the conventional build outputs, and skip the module when none exists. A
+# missing binary must never be reported as a product failure.
+GATEWAY_BINARY_ENV = "DEEPSEEK_GATEWAY_BINARY"
+GATEWAY_BINARY_CANDIDATES = (
+    ROOT / "bin" / "deepseek-gateway",
+    ROOT / "bin" / "deepseek-gateway.exe",
+    ROOT / "rust" / "target" / "release" / "deepseek-gateway",
+    ROOT / "rust" / "target" / "release" / "deepseek-gateway.exe",
+)
+
+
+def _resolve_native_gateway() -> Path | None:
+    override = os.environ.get(GATEWAY_BINARY_ENV, "").strip()
+    candidates = (Path(override),) if override else GATEWAY_BINARY_CANDIDATES
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+# Kept separate so the skip decision can test for absence while NATIVE_GATEWAY
+# stays a plain Path for the call sites and the type checker.
+_GATEWAY_BINARY = _resolve_native_gateway()
+NATIVE_GATEWAY = _GATEWAY_BINARY or Path("deepseek-gateway-not-built")
+
+pytestmark = pytest.mark.skipif(
+    _GATEWAY_BINARY is None,
+    reason=(
+        "prebuilt native gateway is required; set "
+        f"{GATEWAY_BINARY_ENV} or build rust/ -p deepseek-gateway --release"
+    ),
 )
 TOKEN = "automation-template-owner-token"
 CREATE_PATH = "/api/automation/templates/daily_project_summary"
@@ -134,7 +165,6 @@ def test_automation_template_create_is_owned_by_the_native_gateway(
     def _refuse_python_router(*_args: Any, **_kwargs: Any) -> Any:
         raise AssertionError("python create_automation_router entered")
 
-    assert NATIVE_GATEWAY.is_file()
     monkeypatch.setattr(automation_registry, "create_from_template", _refuse_python_template)
     monkeypatch.setattr(automation_registry, "create_automation", _refuse_python_create)
     monkeypatch.setattr(automation_routes, "create_automation_router", _refuse_python_router)

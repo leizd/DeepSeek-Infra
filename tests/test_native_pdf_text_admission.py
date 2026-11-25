@@ -33,8 +33,41 @@ from deepseek_infra.infra.native_runtime.project_file_admission import (
 from deepseek_infra.infra.rag import files as rag_files
 from deepseek_infra.infra.rag.files import extract_pdf_text, render_pdf_page_layout
 
-NATIVE_GATEWAY = Path(
-    r"D:\CodexNativeVerification\native-20261006\desktop-platform-next\bin\deepseek-gateway.exe"
+ROOT = Path(__file__).resolve().parents[1]
+
+# The native gateway is a prebuilt Rust binary. A developer checkout and the
+# Linux CI runner do not share a path, so resolve it from an explicit override,
+# then the conventional build outputs, and skip the module when none exists. A
+# missing binary must never be reported as a product failure.
+GATEWAY_BINARY_ENV = "DEEPSEEK_GATEWAY_BINARY"
+GATEWAY_BINARY_CANDIDATES = (
+    ROOT / "bin" / "deepseek-gateway",
+    ROOT / "bin" / "deepseek-gateway.exe",
+    ROOT / "rust" / "target" / "release" / "deepseek-gateway",
+    ROOT / "rust" / "target" / "release" / "deepseek-gateway.exe",
+)
+
+
+def _resolve_native_gateway() -> Path | None:
+    override = os.environ.get(GATEWAY_BINARY_ENV, "").strip()
+    candidates = (Path(override),) if override else GATEWAY_BINARY_CANDIDATES
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+# Kept separate so the skip decision can test for absence while NATIVE_GATEWAY
+# stays a plain Path for the call sites and the type checker.
+_GATEWAY_BINARY = _resolve_native_gateway()
+NATIVE_GATEWAY = _GATEWAY_BINARY or Path("deepseek-gateway-not-built")
+
+pytestmark = pytest.mark.skipif(
+    _GATEWAY_BINARY is None,
+    reason=(
+        "prebuilt native gateway is required; set "
+        f"{GATEWAY_BINARY_ENV} or build rust/ -p deepseek-gateway --release"
+    ),
 )
 
 OCR_REQUIRED_MESSAGE = (
@@ -42,7 +75,6 @@ OCR_REQUIRED_MESSAGE = (
     "or convert it to selectable text first."
 )
 
-ROOT = Path(__file__).resolve().parents[1]
 UPLOAD = ROOT / "rust/crates/deepseek-policy/src/file_upload.rs"
 PDF_TEXT = ROOT / "rust/crates/deepseek-policy/src/pdf_text.rs"
 
@@ -314,7 +346,6 @@ def test_cached_file_page_layout_uses_the_native_gateway(
     monkeypatch.setattr(rag_files, "file_page_layout", _refuse_python_layout)
     monkeypatch.setattr(rag_files, "render_pdf_page_layout", _refuse_python_layout)
     monkeypatch.setattr(rag_files, "render_pdf_page_png", _refuse_python_layout)
-    assert NATIVE_GATEWAY.is_file()
     text_bytes = b"not a pdf LAYOUTREFUSE"
     pdf_bytes = _native_layout_pdf()
     text_id = rag_files.cache_file_chunks(

@@ -23,8 +23,39 @@ from deepseek_infra.infra.data import projects as project_store
 from deepseek_infra.infra.native_runtime import project_file_admission
 
 ROOT = Path(__file__).resolve().parents[1]
-NATIVE_GATEWAY = Path(
-    r"D:\CodexNativeVerification\native-20261006\desktop-platform-next\bin\deepseek-gateway.exe"
+# The native gateway is a prebuilt Rust binary. A developer checkout and the
+# Linux CI runner do not share a path, so resolve it from an explicit override,
+# then the conventional build outputs, and skip the module when none exists. A
+# missing binary must never be reported as a product failure.
+GATEWAY_BINARY_ENV = "DEEPSEEK_GATEWAY_BINARY"
+GATEWAY_BINARY_CANDIDATES = (
+    ROOT / "bin" / "deepseek-gateway",
+    ROOT / "bin" / "deepseek-gateway.exe",
+    ROOT / "rust" / "target" / "release" / "deepseek-gateway",
+    ROOT / "rust" / "target" / "release" / "deepseek-gateway.exe",
+)
+
+
+def _resolve_native_gateway() -> Path | None:
+    override = os.environ.get(GATEWAY_BINARY_ENV, "").strip()
+    candidates = (Path(override),) if override else GATEWAY_BINARY_CANDIDATES
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+# Kept separate so the skip decision can test for absence while NATIVE_GATEWAY
+# stays a plain Path for the call sites and the type checker.
+_GATEWAY_BINARY = _resolve_native_gateway()
+NATIVE_GATEWAY = _GATEWAY_BINARY or Path("deepseek-gateway-not-built")
+
+pytestmark = pytest.mark.skipif(
+    _GATEWAY_BINARY is None,
+    reason=(
+        "prebuilt native gateway is required; set "
+        f"{GATEWAY_BINARY_ENV} or build rust/ -p deepseek-gateway --release"
+    ),
 )
 PROJECT_ID = "proj-demo"
 BOUNDARY = "DeepseekBoundary"
@@ -78,7 +109,6 @@ def test_empty_project_file_uses_the_native_gateway(
 
     monkeypatch.setattr(project_file_admission, "admit_project_file_part", _refuse_python_admit)
     monkeypatch.setattr(project_store, "write_project", _refuse_python_write)
-    assert NATIVE_GATEWAY.is_file()
     project_dir = tmp_settings / ".projects" / PROJECT_ID
     project_dir.mkdir(parents=True)
     project_path = project_dir / "project.json"

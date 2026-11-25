@@ -27,8 +27,39 @@ from deepseek_infra.infra.skills import registry as skill_registry
 from deepseek_infra.web.routes import skills as skills_routes
 
 ROOT = Path(__file__).resolve().parents[1]
-NATIVE_GATEWAY = Path(
-    r"D:\CodexNativeVerification\native-20261006\desktop-platform-next\bin\deepseek-gateway.exe"
+# The native gateway is a prebuilt Rust binary. A developer checkout and the
+# Linux CI runner do not share a path, so resolve it from an explicit override,
+# then the conventional build outputs, and skip the module when none exists. A
+# missing binary must never be reported as a product failure.
+GATEWAY_BINARY_ENV = "DEEPSEEK_GATEWAY_BINARY"
+GATEWAY_BINARY_CANDIDATES = (
+    ROOT / "bin" / "deepseek-gateway",
+    ROOT / "bin" / "deepseek-gateway.exe",
+    ROOT / "rust" / "target" / "release" / "deepseek-gateway",
+    ROOT / "rust" / "target" / "release" / "deepseek-gateway.exe",
+)
+
+
+def _resolve_native_gateway() -> Path | None:
+    override = os.environ.get(GATEWAY_BINARY_ENV, "").strip()
+    candidates = (Path(override),) if override else GATEWAY_BINARY_CANDIDATES
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+# Kept separate so the skip decision can test for absence while NATIVE_GATEWAY
+# stays a plain Path for the call sites and the type checker.
+_GATEWAY_BINARY = _resolve_native_gateway()
+NATIVE_GATEWAY = _GATEWAY_BINARY or Path("deepseek-gateway-not-built")
+
+pytestmark = pytest.mark.skipif(
+    _GATEWAY_BINARY is None,
+    reason=(
+        "prebuilt native gateway is required; set "
+        f"{GATEWAY_BINARY_ENV} or build rust/ -p deepseek-gateway --release"
+    ),
 )
 TOKEN = "skills-owner-token"
 UNAUTHORIZED = {"error": "Auth required", "code": "unauthorized"}
@@ -165,7 +196,6 @@ def test_skill_create_is_owned_by_the_native_gateway(
     def _refuse_python_delete(*_args: Any, **_kwargs: Any) -> Any:
         raise AssertionError("python delete_skill entered")
 
-    assert NATIVE_GATEWAY.is_file()
     monkeypatch.setattr(skills_routes, "create_skills_router", _refuse_python_router)
     monkeypatch.setattr(skill_registry, "create_custom_skill", _refuse_python_create)
     monkeypatch.setattr(skill_registry, "delete_skill", _refuse_python_delete)
