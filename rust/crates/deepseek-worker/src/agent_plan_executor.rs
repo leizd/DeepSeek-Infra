@@ -960,7 +960,7 @@ mod tests {
     use super::*;
     use crate::{CallerIdentity, StaticTokenAuthenticator, Worker};
     use deepseek_protocol::{ActionFence, generated::deepseek::agent::v1::AgentRunExecutionClaim};
-    use sha2::{Digest as _, Sha256};
+    use sha2::Sha256;
 
     fn executor(root: &std::path::Path) -> AgentPlanExecutor {
         AgentPlanExecutor {
