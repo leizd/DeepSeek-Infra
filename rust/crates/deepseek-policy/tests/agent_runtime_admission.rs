@@ -294,7 +294,28 @@ fn test_published_model_answer_and_dependency() {
     let settled = vec![json!({"type": "agent_output", "phase": "task-1"})];
     assert!(!published_model_answer(&settled, &saved).published);
 
-    let dep = published_dependency_output(&saved, None, "task-1", "task-1", "run-1");
+    // The dependency reader takes a run envelope, not a bare saved event, and
+    // needs the run id plus a public agent_output for the dependency node.
+    let envelope = json!({
+        "runId": "run-1",
+        "publicEvent": {
+            "type": "agent_output",
+            "phase": "task-1",
+            "output": {"id": "task-1", "task": "task-1", "content": "done"}
+        }
+    });
+    let dep = published_dependency_output(&envelope, None, "task-1", "task-1", "run-1");
     assert!(dep.ready);
     assert_eq!(dep.code, "");
+
+    // A mismatched run, node or task must not satisfy a dependency.
+    for (name, changed) in [
+        ("run", json!({"runId": "run-2", "publicEvent": envelope["publicEvent"].clone()})),
+        ("phase", json!({"runId": "run-1", "publicEvent": {
+            "type": "agent_output", "phase": "task-2",
+            "output": {"id": "task-2", "task": "task-1", "content": "done"}}})),
+    ] {
+        let refused = published_dependency_output(&changed, None, "task-1", "task-1", "run-1");
+        assert!(!refused.ready, "{name}");
+    }
 }

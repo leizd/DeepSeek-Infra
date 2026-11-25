@@ -12,15 +12,15 @@ import (
 
 func TestSuccessorAdmissionErrorMapsEveryCodeToItsTypedRefusal(t *testing.T) {
 	for code, want := range map[string]error{
-		"AGENT_DRIVER_TOOLS_PENDING":               errAgentDriverTools,
-		"EFFECT_UNKNOWN":                           errAgentDriverUnknown,
-		"AGENT_RUNTIME_RESET_REQUIRES_GENERATION":  errAgentDriverReset,
-		"AGENT_RUNTIME_SUCCESSOR_HELD":             errAgentDriverHeld,
-		"STALE_EXECUTION_EPOCH":                    errAgentDriverStale,
-		"FENCE_MISMATCH":                           errAgentDriverFence,
-		"AGENT_RUNTIME_GENERATION_CONFLICT":        errAgentDriverUnknown,
-		"":                                         errAgentDriverUnknown,
-		"UNRECOGNIZED_CODE_FROM_A_FUTURE_WORKER":   errAgentDriverUnknown,
+		"AGENT_DRIVER_TOOLS_PENDING":              errAgentDriverTools,
+		"EFFECT_UNKNOWN":                          errAgentDriverUnknown,
+		"AGENT_RUNTIME_RESET_REQUIRES_GENERATION": errAgentDriverReset,
+		"AGENT_RUNTIME_SUCCESSOR_HELD":            errAgentDriverHeld,
+		"STALE_EXECUTION_EPOCH":                   errAgentDriverStale,
+		"FENCE_MISMATCH":                          errAgentDriverFence,
+		"AGENT_RUNTIME_GENERATION_CONFLICT":       errAgentDriverUnknown,
+		"":                                        errAgentDriverUnknown,
+		"UNRECOGNIZED_CODE_FROM_A_FUTURE_WORKER":  errAgentDriverUnknown,
 	} {
 		got := successorAdmissionError(code)
 		if !errors.Is(got, want) {
