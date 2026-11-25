@@ -371,9 +371,7 @@ impl AgentPlanExecutor {
         let path = retained_tool_result_path(&self.artifact_root, operation_id)?;
         let bytes = std::fs::read(path).ok()?;
         let value: Value = serde_json::from_slice(&bytes).ok()?;
-        if value.as_array().is_none() {
-            return None;
-        }
+        value.as_array()?;
         Some(value)
     }
 

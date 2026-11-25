@@ -340,7 +340,6 @@ impl WorkerRpcService {
                     sha256: object.sha256,
                     length: object.length,
                 }),
-                ..Default::default()
             })
         })
         .await
