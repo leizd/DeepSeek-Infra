@@ -1162,9 +1162,9 @@ func (driver *agentRunDriver) recoverCancellation(ctx context.Context, run agent
 				return errAgentDriverCustody
 			}
 			effect, err := client.QueryAgentNodeEffect(ctx, &agentv1.QueryAgentNodeEffectRequest{OperationId: dispatch.Intent.OperationId, Fence: dispatch.Intent.Fence, RunId: run.RunID, NodeId: id})
-			if projectErr := driver.projectJournalObservation(run.RunID, id, effect, err); projectErr != nil {
-				return projectErr
-			}
+			// A cancellation must settle the original custody or refuse. Projecting
+			// a journal observation here would append a public event and advance the
+			// cursor, which is exactly the advance a refused cancellation forbids.
 			if err != nil {
 				return err
 			}
