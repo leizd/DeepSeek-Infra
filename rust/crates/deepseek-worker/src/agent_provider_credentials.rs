@@ -179,12 +179,43 @@ impl WorkerRpcService {
             length: reference.length,
         };
         let signer = Arc::clone(self.control_signer.as_ref().ok_or_else(denied)?);
+        let worker = Arc::clone(&self.worker);
         let response = tokio::task::spawn_blocking(move || {
-            let body = read_body(&root, &reference)?;
+            let mut body = read_body(&root, &reference)?;
             if body.get(PRIVATE_FIELD).is_some() {
                 return Err(denied());
             }
+            if body
+                .get(crate::agent_recovery_context::PRIVATE_FIELD)
+                .is_some()
+                && recovery_context.is_none()
+            {
+                return Err(crate::agent_recovery_context::denied());
+            }
+            // A recovery preparation must prove the original Rust custody before
+            // any new object is sealed. The Go preview alone is not proof.
+            if let Some(context) = recovery_context.as_ref() {
+                let worker = worker.blocking_lock();
+                let authority = worker.agent_node_authority()?;
+                worker
+                    .authority_store
+                    .as_ref()
+                    .ok_or_else(denied)?
+                    .verify_agent_recovery_context(context, &authority)?;
+            }
             let signer = signer.blocking_lock();
+            // Re-check every retained proof without minting successor signatures.
+            if let Some(context) = recovery_context.as_ref() {
+                for source in context
+                    .prior_effects
+                    .iter()
+                    .chain(&context.retained_outputs)
+                {
+                    signer.verify_retained_node_outcome(
+                        source.outcome.as_ref().ok_or_else(denied)?,
+                    )?;
+                }
+            }
             let (fleet_id, environment) = signer.agent_credential_binding()?;
             let sealed_max = deepseek_federation::AgentCredentialVault::open(&root)
                 .and_then(|vault| {
@@ -237,6 +268,17 @@ impl WorkerRpcService {
                 api_key.as_str(),
                 tavily_api_key.as_str(),
             )?;
+            let prepared = if let Some(context) = recovery_context.as_ref() {
+                Some(crate::agent_recovery_context::prepare(
+                    &root, &mut body, context,
+                )?)
+            } else {
+                None
+            };
+            let reference = prepared
+                .as_ref()
+                .map(|(_, reference)| reference.clone())
+                .unwrap_or(reference);
             let scope = AgentCredentialScope {
                 fleet_id,
                 environment,
@@ -250,7 +292,38 @@ impl WorkerRpcService {
                 .as_ref()
                 .map(|value| signer.prepare_agent_credentials(&root, &scope, value))
                 .transpose()?;
+            let (prepared_request, prepared_context, context_sha256, event_bodies) =
+                if let Some((prepared, _)) = prepared {
+                    if let Some(object) = object.as_ref() {
+                        body[PRIVATE_FIELD] = serde_json::json!({"scope":&scope,"object":object});
+                    }
+                    let mut artifacts = ArtifactStore::open_native(&root, "python_disabled")
+                        .map_err(|_| denied())?;
+                    let final_request = artifacts.put(&body).map_err(|_| denied())?;
+                    let events = crate::agent_recovery_context::initial_event_bodies(
+                        &mut artifacts,
+                        &prepared.context,
+                    )?;
+                    let protocol_ref = |r: ArtifactReference| {
+                        deepseek_protocol::generated::deepseek::agent::v1::AgentArtifactReference {
+                            sha256: r.sha256,
+                            length: r.length,
+                        }
+                    };
+                    (
+                        Some(protocol_ref(final_request)),
+                        Some(protocol_ref(prepared.reference)),
+                        prepared.digest,
+                        events,
+                    )
+                } else {
+                    (None, None, String::new(), vec![])
+                };
             Ok::<_, Status>(PrepareAgentCredentialsResponse {
+                prepared_request,
+                recovery_context: prepared_context,
+                recovery_context_sha256: context_sha256,
+                recovery_event_bodies: event_bodies,
                 scope: Some(
                     deepseek_protocol::generated::deepseek::agent::v1::AgentCredentialScope {
                         fleet_id: scope.fleet_id,

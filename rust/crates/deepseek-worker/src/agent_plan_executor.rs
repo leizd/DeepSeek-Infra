@@ -139,6 +139,17 @@ impl WorkerRpcService {
         outcome: AgentNodeEffectOutcome,
         run_id: &str,
     ) -> Result<AgentNodeEffectMetadata, Status> {
+        self.publish_node_from_custody(executor, outcome, run_id, None)
+            .await
+    }
+
+    async fn publish_node_from_custody(
+        &self,
+        executor: &AgentPlanExecutor,
+        outcome: AgentNodeEffectOutcome,
+        run_id: &str,
+        expected_receipt_sha256: Option<&str>,
+    ) -> Result<AgentNodeEffectMetadata, Status> {
         let query = QueryAgentNodeEffect {
             operation_id: outcome.operation_id.clone(),
             fence: outcome.fence.clone(),
@@ -170,13 +181,19 @@ impl WorkerRpcService {
                 metadata.public_event.clone().ok_or_else(unavailable)?,
                 &config,
             )?;
-        let receipt = self
-            .control_signer
-            .as_ref()
-            .ok_or_else(unavailable)?
-            .lock()
-            .await
-            .sign_node_outcome(evidence)?;
+        let receipt = {
+            let mut signer = self
+                .control_signer
+                .as_ref()
+                .ok_or_else(unavailable)?
+                .lock()
+                .await;
+            if let Some(expected) = expected_receipt_sha256 {
+                signer.retained_node_outcome(&evidence, expected)?
+            } else {
+                signer.sign_node_outcome(evidence)?
+            }
+        };
         metadata.outcome_receipt = Some(receipt);
         Ok(metadata)
     }
@@ -863,6 +880,15 @@ impl AgentNodeWorker for WorkerRpcService {
     ) -> Result<Response<QueryAgentNodeEffectResponse>, Status> {
         let metadata = request.metadata().clone();
         let input = request.into_inner();
+        let expected = input.expected_receipt_sha256;
+        if !expected.is_empty()
+            && (expected.len() != 64
+                || !expected
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
+        {
+            return Err(Status::invalid_argument("AGENT_NODE_OUTCOME_INVALID"));
+        }
         let selector = QueryAgentNodeEffect {
             operation_id: input.operation_id,
             fence: input
@@ -893,8 +919,15 @@ impl AgentNodeWorker for WorkerRpcService {
                 .agent_node_outcome(&selector)?
                 .ok_or_else(unavailable)?;
             let executor = self.agent_plan_executor.as_ref().ok_or_else(unavailable)?;
+            // A Go-retained proof pins the exact original document; losing it
+            // must fail rather than minting a second receipt for the same effect.
             let effect = self
-                .publish_attested_node(executor, outcome, &selector.run_id)
+                .publish_node_from_custody(
+                    executor,
+                    outcome,
+                    &selector.run_id,
+                    (!expected.is_empty()).then_some(expected.as_str()),
+                )
                 .await?;
             return Ok(Response::new(QueryAgentNodeEffectResponse {
                 found: true,

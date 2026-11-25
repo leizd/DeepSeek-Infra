@@ -508,6 +508,7 @@ impl AuthorityStore {
     /// Go admits dependency completion; Rust resolves the matching immutable
     /// provider bodies itself. Caller text and older plan generations are denied.
     /// A bare tool request has no saved answer, so it still cannot satisfy a dependency.
+    #[cfg(test)]
     pub(crate) fn agent_task_prior_outputs(
         &self,
         permit: &AgentNodeEffectPermit,
