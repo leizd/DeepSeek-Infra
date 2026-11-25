@@ -207,7 +207,6 @@ fn hydrate(store: &ArtifactStore, metadata: &AgentRunEventMetadata) -> Result<Va
 
 struct ReadSession {
     config: ReadConfig,
-    channel: Channel,
     client: AgentRunControlClient<Channel>,
     authorization: MetadataValue<Ascii>,
     epoch: u64,
@@ -250,8 +249,7 @@ impl ReadSession {
         .map_err(|_| control_unavailable())?;
         let mut session = Self {
             config,
-            client: AgentRunControlClient::new(channel.clone()).max_decoding_message_size(1 << 20),
-            channel,
+            client: AgentRunControlClient::new(channel).max_decoding_message_size(1 << 20),
             authorization,
             epoch: 0,
             snapshot: AgentRunSnapshot {
