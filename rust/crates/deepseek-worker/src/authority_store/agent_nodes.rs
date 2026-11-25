@@ -436,6 +436,8 @@ impl AuthorityStore {
                 latency_ms: decision.latency_ms,
                 failed: decision.failed,
             }),
+            // A published answer is never a conclusive planner/synthesis rejection.
+            failure: None,
             fleet_id: config.fleet_id.clone(),
             environment: config.environment.clone(),
         };

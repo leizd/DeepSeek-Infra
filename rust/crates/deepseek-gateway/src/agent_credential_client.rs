@@ -53,19 +53,19 @@ pub(crate) fn has_reserved_field(value: &Value) -> bool {
     }
 }
 
-pub(crate) async fn prepare(
+pub(crate) struct Preparation<'a> {
+    pub(crate) run_id: &'a str,
+    pub(crate) epoch: u64,
+    pub(crate) reference: &'a ArtifactReference,
+    pub(crate) runtime_revision: u64,
+    pub(crate) api_key: Option<&'a str>,
+    pub(crate) tavily_api_key: Option<&'a str>,
+    pub(crate) runtime_update: Option<AgentCredentialRuntimeUpdate>,
+}
+
+async fn connect(
     config: &WorkerConfig,
-    run_id: &str,
-    epoch: u64,
-    runtime_revision: u64,
-    reference: &ArtifactReference,
-    api_key: Option<&str>,
-    tavily_api_key: Option<&str>,
-    runtime_update: Option<AgentCredentialRuntimeUpdate>,
-) -> Result<Value, ()> {
-    if runtime_revision == 0 {
-        return Err(());
-    }
+) -> Result<AgentNodeWorkerClient<tonic::transport::Channel>, ()> {
     let origin = &config.origin;
     let address: SocketAddr = origin
         .strip_prefix("https://")
@@ -103,7 +103,30 @@ pub(crate) async fn prepare(
         .connect()
         .await
         .map_err(|_| ())?;
-    let mut client = AgentNodeWorkerClient::new(channel).max_decoding_message_size(16 * 1024);
+    Ok(AgentNodeWorkerClient::new(channel).max_decoding_message_size(16 * 1024))
+}
+
+pub(crate) async fn prepare(
+    config: &WorkerConfig,
+    input: Preparation<'_>,
+) -> Result<Option<Value>, ()> {
+    let Preparation {
+        run_id,
+        epoch,
+        reference,
+        runtime_revision,
+        api_key,
+        tavily_api_key,
+        runtime_update,
+    } = input;
+    if runtime_revision == 0 {
+        return Err(());
+    }
+    let updating = runtime_update.is_some();
+    let supplied_key = api_key.is_some_and(|key| !key.is_empty())
+        || tavily_api_key.is_some_and(|key| !key.is_empty());
+    let bearer = &config.bearer;
+    let mut client = connect(config).await?;
     let mut request = Request::new(PrepareAgentCredentialsRequest {
         schema_version: 1,
         fence: Some(ActionFence {
@@ -136,7 +159,6 @@ pub(crate) async fn prepare(
         .map_err(|_| ())?
         .into_inner();
     let scope = response.scope.ok_or(())?;
-    let object = response.object.ok_or(())?;
     let hex64 = |value: &str| {
         value.len() == 64
             && value
@@ -150,18 +172,26 @@ pub(crate) async fn prepare(
         || scope.request_length != reference.length
         || scope.fleet_id.is_empty()
         || scope.environment.is_empty()
-        || !hex64(&object.id)
-        || !hex64(&object.sha256)
-        || !(1..=65536).contains(&object.length)
     {
         return Err(());
     }
-    Ok(
+    // An inherited-only update seals no new object; the caller keeps the prior one.
+    let Some(object) = response.object else {
+        return if updating && !supplied_key {
+            Ok(None)
+        } else {
+            Err(())
+        };
+    };
+    if !hex64(&object.id) || !hex64(&object.sha256) || !(1..=65536).contains(&object.length) {
+        return Err(());
+    }
+    Ok(Some(
         json!({"scope":{"fleetId":scope.fleet_id,"environment":scope.environment,
         "runId":scope.run_id,"metadataEpoch":scope.metadata_epoch,"runtimeRevision":scope.runtime_revision,
         "requestSha256":scope.request_sha256,"requestLength":scope.request_length},
         "object":{"id":object.id,"sha256":object.sha256,"length":object.length}}),
-    )
+    ))
 }
 
 #[cfg(test)]
