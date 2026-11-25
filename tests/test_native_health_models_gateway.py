@@ -24,6 +24,7 @@ from deepseek_infra.infra.observability import health
 from deepseek_infra.web.routes import chat as chat_routes
 
 ROOT = Path(__file__).resolve().parents[1]
+VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 # The native gateway is a prebuilt Rust binary. A developer checkout and the
 # Linux CI runner do not share a path, so resolve it from an explicit override,
 # then the conventional build outputs, and skip the module when none exists. A
@@ -175,7 +176,7 @@ def test_health_ready_and_models_use_the_native_gateway(
             "ok": True,
             "service": "deepseek-gateway-rs",
             "status": "ok",
-            "version": "4.8.0",
+            "version": VERSION,
             "runtime": "local",
             "provider": "deepseek",
             "auth_enabled": True,
@@ -184,7 +185,7 @@ def test_health_ready_and_models_use_the_native_gateway(
         assert ready_status == 200
         assert ready_body == {
             "status": "ready",
-            "version": "4.8.0",
+            "version": VERSION,
             "checks": {"tracing": "disabled", "model_provider": "unconfigured"},
         }
         missing_status, missing = _get(port, "/v1/models")

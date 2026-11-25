@@ -310,10 +310,16 @@ fn test_published_model_answer_and_dependency() {
 
     // A mismatched run, node or task must not satisfy a dependency.
     for (name, changed) in [
-        ("run", json!({"runId": "run-2", "publicEvent": envelope["publicEvent"].clone()})),
-        ("phase", json!({"runId": "run-1", "publicEvent": {
+        (
+            "run",
+            json!({"runId": "run-2", "publicEvent": envelope["publicEvent"].clone()}),
+        ),
+        (
+            "phase",
+            json!({"runId": "run-1", "publicEvent": {
             "type": "agent_output", "phase": "task-2",
-            "output": {"id": "task-2", "task": "task-1", "content": "done"}}})),
+            "output": {"id": "task-2", "task": "task-1", "content": "done"}}}),
+        ),
     ] {
         let refused = published_dependency_output(&changed, None, "task-1", "task-1", "run-1");
         assert!(!refused.ready, "{name}");

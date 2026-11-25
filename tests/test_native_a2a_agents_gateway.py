@@ -25,6 +25,7 @@ from deepseek_infra.infra.agent_runtime import a2a as a2a_runtime
 from deepseek_infra.web.routes import a2a as a2a_routes
 
 ROOT = Path(__file__).resolve().parents[1]
+VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 # The native gateway is a prebuilt Rust binary. A developer checkout and the
 # Linux CI runner do not share a path, so resolve it from an explicit override,
 # then the conventional build outputs, and skip the module when none exists. A
@@ -148,7 +149,7 @@ def _assert_agents(body: dict[str, Any]) -> None:
     for agent, (agent_id, name) in zip(agents, AGENTS, strict=True):
         assert agent["name"] == name
         assert agent["protocolVersion"] == "0.3.0"
-        assert agent["version"] == "4.8.0"
+        assert agent["version"] == VERSION
         assert agent["url"] == f"http://127.0.0.1:8000/a2a/agents/{agent_id}"
         assert agent["preferredTransport"] == "JSONRPC"
 

@@ -27,6 +27,7 @@ import pytest
 from deepseek_infra.web.routes import status as status_routes
 
 ROOT = Path(__file__).resolve().parents[1]
+VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 # The native gateway is a prebuilt Rust binary. A developer checkout and the
 # Linux CI runner do not share a path, so resolve it from an explicit override,
 # then the conventional build outputs, and skip the module when none exists. A
@@ -63,7 +64,7 @@ pytestmark = pytest.mark.skipif(
 )
 TOKEN = "config-auth-token"
 EXPECTED = {
-    "version": "4.8.0",
+    "version": VERSION,
     "hasServerKey": False,
     "hasSearch": False,
     "defaultModel": "deepseek-v4-pro",

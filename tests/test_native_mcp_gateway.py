@@ -26,6 +26,7 @@ from deepseek_infra.infra.tool_runtime import tools as tool_runtime
 from deepseek_infra.web.routes import mcp as mcp_routes
 
 ROOT = Path(__file__).resolve().parents[1]
+VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 # The native gateway is a prebuilt Rust binary. A developer checkout and the
 # Linux CI runner do not share a path, so resolve it from an explicit override,
 # then the conventional build outputs, and skip the module when none exists. A
@@ -193,7 +194,7 @@ def test_mcp_uses_the_native_gateway(
         assert "error" not in init
         assert init["result"]["protocolVersion"] == "2025-06-18"
         assert init["result"]["serverInfo"]["name"] == "deepseek-infra"
-        assert init["result"]["serverInfo"]["version"] == "4.8.0"
+        assert init["result"]["serverInfo"]["version"] == VERSION
         assert "Tool Hub" in init["result"]["instructions"]
 
         ping_status, ping = _post(port, PING, TOKEN)
