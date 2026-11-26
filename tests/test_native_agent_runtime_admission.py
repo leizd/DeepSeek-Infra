@@ -2787,3 +2787,62 @@ def test_send_budget_uses_only_the_live_minimum(monkeypatch: pytest.MonkeyPatch)
     assert "NOT_APPLIED" not in py_budget
     assert "CONFIRMED" not in py_budget
 
+
+
+# Every effect state either language can observe. Rust maps these in
+# `apply_effect_state`; the oracle maps them in `_apply_effect_state`. The table
+# below is the shared contract: a state added on one side only would make the
+# two disagree about whether an effect is settled, which is the decision that
+# authorizes a retry.
+_EFFECT_STATE_VERDICTS = {
+    # settled: the effect is done and may be replaced
+    "CONFIRMED": "none",
+    "SETTLED_FAILURE": "none",
+    "NONE": "none",
+    "none": "none",
+    # open: a tool call is waiting, so the node stays on its original effect
+    "AWAITING_TOOLS": "awaiting_tools",
+    "awaiting_tools": "awaiting_tools",
+    # unresolved: never treated as not-applied, never re-dispatched
+    "EFFECT_UNKNOWN": "effect_unknown",
+    "effect_unknown": "effect_unknown",
+    "NOT_APPLIED": "effect_unknown",
+    "not_applied": "effect_unknown",
+    "DISPATCHING": "effect_unknown",
+    "dispatching": "effect_unknown",
+    "": "effect_unknown",
+}
+
+
+def test_every_effect_state_classifies_the_same_way_as_rust() -> None:
+    """Walk the full state vocabulary through the oracle and pin each verdict.
+
+    The Rust table and this one are written separately, so the risk is a state
+    that exists in both but is classified differently -- for example treating
+    ``DISPATCHING`` as settled would authorize a second provider call for an
+    effect that may already be in flight. The expected values are the Rust
+    verdicts.
+    """
+    for state, want in _EFFECT_STATE_VERDICTS.items():
+        events = [{"type": "node_effect", "phase": "coder", "state": state}]
+        got = retained_effect(events)["effect"]
+        assert got == want, f"state {state!r}: oracle says {got!r}, Rust says {want!r}"
+        # `sameEffect` is exactly "still waiting on the original effect".
+        assert retained_effect(events)["sameEffect"] is (want == "awaiting_tools"), state
+
+
+def test_an_unrecognised_effect_state_is_unresolved_in_both_languages() -> None:
+    """Rust's fallback arm is `sticky`; the oracle must not settle either."""
+    for state in ("PROVIDER_5XX", "CONFIRMED ", "confirmed", "NONE\n", "settled"):
+        events = [{"type": "node_effect", "phase": "coder", "state": state}]
+        assert retained_effect(events)["effect"] == "effect_unknown", state
+
+
+def test_the_effect_field_is_read_before_the_state_field() -> None:
+    """Rust prefers ``effect`` over ``state`` on the same event; so must the oracle."""
+    both = [{"type": "node_effect", "phase": "coder", "effect": "CONFIRMED", "state": "EFFECT_UNKNOWN"}]
+    assert retained_effect(both)["effect"] == "none"
+    reversed_fields = [
+        {"type": "node_effect", "phase": "coder", "effect": "EFFECT_UNKNOWN", "state": "CONFIRMED"}
+    ]
+    assert retained_effect(reversed_fields)["effect"] == "effect_unknown"
