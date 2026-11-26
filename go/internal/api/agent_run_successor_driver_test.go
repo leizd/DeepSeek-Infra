@@ -9,6 +9,7 @@ import (
 	"github.com/leizd/DeepSeek-Infra/go/internal/agent"
 	agentv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/agentv1"
 	commonv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/commonv1"
+	"github.com/leizd/DeepSeek-Infra/go/internal/store"
 )
 
 // These cases drive the two successor entry points directly. Both guard the
@@ -406,6 +407,69 @@ func TestSuccessorExecuteRunsTheStoredGenerationOnTheTakeoverEpoch(t *testing.T)
 	if effect.OperationId == operation {
 		t.Fatal("the original operation was re-executed")
 	}
+}
+
+// This pins the successor settlement gap by observation rather than assertion.
+// A generation admitted on a takeover epoch really does reach the worker and
+// come back with a signed receipt, and that receipt really is refused by the
+// outcome writer. The test asserts exactly what happens today, so it keeps
+// holding whether the gap is fixed (record succeeds, case above gets enabled)
+// or not (record is refused, this log line stays).
+func TestSuccessorOutcomeIsRefusedByTheOutcomeWriter(t *testing.T) {
+	if testing.Short() {
+		t.Skip("drives a real dispatch, claim and takeover")
+	}
+	fixture, setup := newSuccessorFixture(t).claimTasks(t)
+	operation := bindOriginal(t, fixture, setup.claim, "coder", "successor-begin")
+	fixture = appendReset(t, fixture, "coder")
+	minted := mintGeneration(t, fixture, setup.claim, "coder", operation)
+	takeover, _ := takeOver(t, fixture, setup.claim)
+
+	index, resetAdmitted, err := resetSharingFence(fixture.driver.service.control, takeover.RunId, "coder", takeover.Fence.ActionId, takeover.Fence.ExecutionEpoch)
+	if err != nil || !resetAdmitted {
+		t.Fatalf("reset fence: index=%d admitted=%v err=%v", index, resetAdmitted, err)
+	}
+	admitted, err := fixture.driver.service.control.AdmitSuccessorDispatch(store.AgentSuccessorEpochRequest{
+		OperationID: "gap-admit", Actor: "go-control-plane", ActionID: takeover.Fence.ActionId,
+		Epoch: takeover.Fence.ExecutionEpoch, RunID: takeover.RunId, NodeID: "coder",
+		Owner: takeover.Owner, ClaimToken: takeover.ClaimToken, Effect: "CONFIRMED",
+		ResetAdmitted: resetAdmitted, ResetFenceMatches: resetAdmitted, ResetIndex: index,
+	})
+	if err != nil {
+		t.Fatalf("the takeover epoch could not admit the generation: %v", err)
+	}
+	claim, grant, err := fixture.driver.grant(context.Background(), takeover)
+	if err != nil {
+		t.Fatalf("grant: %v", err)
+	}
+	effect, err := fixture.worker.ExecuteAgentTask(context.Background(), &agentv1.ExecuteAgentTaskRequest{
+		SchemaVersion: 1, OperationId: minted, Actor: "rust-agent-worker",
+		Claim: claim, SignedPhaseGrant: grant, Fence: claim.Fence, NodeId: "coder"})
+	if err != nil {
+		t.Fatalf("the worker refused the admitted generation: %v", err)
+	}
+	if effect == nil || effect.OutcomeReceipt == nil || effect.OutcomeReceipt.Evidence == nil {
+		t.Fatal("the generation produced no signed receipt")
+	}
+	// The generation ran under its own id and the takeover epoch, which is the
+	// whole point of admitting it.
+	if effect.OutcomeReceipt.Evidence.OperationId != minted {
+		t.Fatalf("the receipt names %q, want the generation %q", effect.OutcomeReceipt.Evidence.OperationId, minted)
+	}
+	if effect.OutcomeReceipt.Evidence.Fence.ExecutionEpoch != takeover.Fence.ExecutionEpoch {
+		t.Fatalf("the receipt names epoch %d, want the takeover epoch %d",
+			effect.OutcomeReceipt.Evidence.Fence.ExecutionEpoch, takeover.Fence.ExecutionEpoch)
+	}
+	// Recording it is refused. When this starts succeeding, the skip on
+	// TestSuccessorExecuteRunsTheStoredGenerationOnTheTakeoverEpoch can go.
+	_, recordErr := fixture.driver.service.control.RecordAgentNodeOutcome(store.AgentNodeOutcomeRequest{
+		OperationID: "gap-outcome", Actor: "go-control-plane", ActionID: admitted.Record.ID,
+		RunID: takeover.RunId, NodeID: "coder", Epoch: takeover.Fence.ExecutionEpoch,
+		Receipt: effect.OutcomeReceipt})
+	if recordErr == nil {
+		t.Fatal("a successor outcome was recorded, so the skipped case above can be enabled")
+	}
+	t.Logf("successor outcome is refused by the outcome writer: %v", recordErr)
 }
 
 // The successor path must at least refuse before the worker when the epoch it
