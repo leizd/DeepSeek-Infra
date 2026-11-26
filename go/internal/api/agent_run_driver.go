@@ -539,7 +539,7 @@ func (driver *agentRunDriver) node(ctx context.Context, client agentDriverWorker
 			query.ExpectedReceiptSha256 = digest
 		}
 		effect, err = client.QueryAgentNodeEffect(ctx, query)
-		if projectErr := driver.projectJournalObservation(claim.RunId, id, effect, err); projectErr != nil {
+		if projectErr := driver.projectJournalObservation(claim.RunId, id, effect, err, true); projectErr != nil {
 			return nil, projectErr
 		}
 		if err != nil {
@@ -713,10 +713,16 @@ func (driver *agentRunDriver) retainedPublicEvents(runID string) ([]agent.RunEve
 // projectJournalObservation records a journal read on the public stream.
 // A missing row, a timeout, and an absent log stay observations. A settled
 // read is not appended. Absent control keeps the caller's error.
+// projectJournalObservation classifies one journal read. publish decides whether
+// an unresolved read becomes a public node_effect event. Ordinary dispatch
+// publishes it so a stuck row is observable. A cancellation must not publish:
+// appending there advances the cursor, which is exactly the advance a refused
+// cancellation is forbidden to make.
 func (driver *agentRunDriver) projectJournalObservation(
 	runID, nodeID string,
 	effect *agentv1.AgentNodeEffectMetadata,
 	queryErr error,
+	publish bool,
 ) error {
 	if driver == nil || driver.service == nil || driver.service.control == nil {
 		return nil
@@ -727,7 +733,7 @@ func (driver *agentRunDriver) projectJournalObservation(
 		state = effect.State
 	}
 	decision := agent.ProjectJournalObservation(nodeID, found, state, queryErr)
-	if !decision.Append {
+	if !decision.Append || !publish {
 		return nil
 	}
 	return driver.appendJournalObservation(runID, decision)
@@ -1162,9 +1168,11 @@ func (driver *agentRunDriver) recoverCancellation(ctx context.Context, run agent
 				return errAgentDriverCustody
 			}
 			effect, err := client.QueryAgentNodeEffect(ctx, &agentv1.QueryAgentNodeEffectRequest{OperationId: dispatch.Intent.OperationId, Fence: dispatch.Intent.Fence, RunId: run.RunID, NodeId: id})
-			// A cancellation must settle the original custody or refuse. Projecting
-			// a journal observation here would append a public event and advance the
-			// cursor, which is exactly the advance a refused cancellation forbids.
+			// Classify the read so an unknown custody state is diagnosable, but do
+			// not publish it: a refused cancellation must not advance the cursor.
+			if projectErr := driver.projectJournalObservation(run.RunID, id, effect, err, false); projectErr != nil {
+				return projectErr
+			}
 			if err != nil {
 				return err
 			}

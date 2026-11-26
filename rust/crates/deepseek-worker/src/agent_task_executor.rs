@@ -338,16 +338,27 @@ impl WorkerRpcService {
                 let outputs = {
                     let worker = service.worker.lock().await;
                     let store = worker.authority_store.as_ref().ok_or_else(denied)?;
-                    if let Some(recovery) = recovery.as_ref() {
+                    let resolved = if let Some(recovery) = recovery.as_ref() {
                         store.agent_recovery_task_prior_outputs(
                             &permit,
                             &recovery.context,
                             &worker.agent_node_authority()?,
-                        )?
+                        )
                     } else {
                         store.agent_task_prior_outputs_for(&permit, |operation_id| {
                             executor.read_model_turn(operation_id)
-                        })?
+                        })
+                    };
+                    // A dependency that cannot be resolved from retained custody
+                    // is unpublished: refuse before any provider call rather than
+                    // send a body the original plan never authorized.
+                    match resolved {
+                        Ok(outputs) => outputs,
+                        Err(_) => {
+                            return Err(Status::failed_precondition(
+                                "AGENT_DEPENDENCY_UNPUBLISHED",
+                            ));
+                        }
                     }
                 };
                 let intent = &permit.intent;
