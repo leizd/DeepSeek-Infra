@@ -228,6 +228,39 @@ fn successor_operation_id_is_stable_and_distinguishes_its_material() {
     assert_ne!(a, "op");
 }
 
+/// The golden vectors are the cross-language contract.
+///
+/// Go, Rust and the Python oracle each hash the same material independently. A
+/// change to the separator, the field order or the hex casing in any one of them
+/// would silently produce ids the other two never mint, so the value itself is
+/// pinned here and in `go/internal/agent/runtime_admission_test.go`. The Python
+/// side asserts the same constants in
+/// `tests/test_native_agent_runtime_admission.py`.
+#[test]
+fn successor_operation_id_matches_the_cross_language_golden_vectors() {
+    let old = format!("agent-node-{}", "ab".repeat(32));
+    let vectors = [
+        (
+            "baseline",
+            successor_operation_id(&old, "action-1", 7, "coder", 4),
+            "agent-successor-1c2e2a7fa327557053b894374bbd0972955fd5194ea704ee4766e872bdc6941e",
+        ),
+        (
+            "later-epoch",
+            successor_operation_id(&old, "action-1", 8, "coder", 4),
+            "agent-successor-6f9a8ec251f4282b5f6a392b53e4f4d84da5ff1abcef26bc3760b4c75d37c365",
+        ),
+        (
+            "other-node",
+            successor_operation_id(&old, "action-1", 7, "critic", 4),
+            "agent-successor-e354a150e0826ae98e8ac89427e773d164bcf57cb79761846decc54d45a63fe7",
+        ),
+    ];
+    for (label, got, want) in vectors {
+        assert_eq!(got, want, "{label} drifted from the shared material");
+    }
+}
+
 #[test]
 fn successor_binding_persists_beside_the_original_and_never_replaces_it() {
     let input = base_input();

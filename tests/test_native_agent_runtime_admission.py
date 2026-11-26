@@ -473,6 +473,39 @@ def test_a_different_reset_or_epoch_mints_a_different_successor() -> None:
     assert other_epoch["retainedOperationId"] == original["retainedOperationId"]
 
 
+def test_the_oracle_matches_the_cross_language_golden_vectors() -> None:
+    """The golden vectors are the shared contract, not just this module's output.
+
+    Go and Rust each hash the same material independently, so a change to the
+    separator, the field order or the hex casing in any one implementation would
+    silently mint ids the others never produce. The identical constants are
+    asserted in ``go/internal/agent/runtime_admission_test.go`` and
+    ``rust/crates/deepseek-policy/tests/agent_runtime_successor.rs``; changing the
+    material must update all three in the same commit.
+    """
+    old = "agent-node-" + ("ab" * 32)
+    vectors = [
+        (
+            "baseline",
+            ("action-1", 7, "coder", 4),
+            "agent-successor-1c2e2a7fa327557053b894374bbd0972955fd5194ea704ee4766e872bdc6941e",
+        ),
+        (
+            "later-epoch",
+            ("action-1", 8, "coder", 4),
+            "agent-successor-6f9a8ec251f4282b5f6a392b53e4f4d84da5ff1abcef26bc3760b4c75d37c365",
+        ),
+        (
+            "other-node",
+            ("action-1", 7, "critic", 4),
+            "agent-successor-e354a150e0826ae98e8ac89427e773d164bcf57cb79761846decc54d45a63fe7",
+        ),
+    ]
+    for label, (action_id, epoch, node_id, reset_index), want in vectors:
+        got = successor_operation_id(old, action_id, epoch, node_id, reset_index)
+        assert got == want, f"{label} drifted from the shared material"
+
+
 @pytest.mark.parametrize(
     ("overrides", "code"),
     [

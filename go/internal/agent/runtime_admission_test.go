@@ -109,6 +109,42 @@ func TestSuccessorOperationIDNeverCollidesWithTheOperationItReplaces(t *testing.
 	}
 }
 
+// The golden vectors are the cross-language contract.
+//
+// Go, Rust and the Python oracle each hash the same material independently. A
+// change to the separator, the field order or the hex casing in any one of them
+// would silently produce ids the other two never mint, so the value itself is
+// pinned here and in `rust/crates/deepseek-policy/tests/agent_runtime_successor.rs`.
+func TestSuccessorOperationIDMatchesTheCrossLanguageGoldenVectors(t *testing.T) {
+	old := "agent-node-" + strings.Repeat("ab", 32)
+	vectors := []struct {
+		label string
+		got   string
+		want  string
+	}{
+		{
+			"baseline",
+			SuccessorOperationID(old, "action-1", 7, "coder", 4),
+			"agent-successor-1c2e2a7fa327557053b894374bbd0972955fd5194ea704ee4766e872bdc6941e",
+		},
+		{
+			"later-epoch",
+			SuccessorOperationID(old, "action-1", 8, "coder", 4),
+			"agent-successor-6f9a8ec251f4282b5f6a392b53e4f4d84da5ff1abcef26bc3760b4c75d37c365",
+		},
+		{
+			"other-node",
+			SuccessorOperationID(old, "action-1", 7, "critic", 4),
+			"agent-successor-e354a150e0826ae98e8ac89427e773d164bcf57cb79761846decc54d45a63fe7",
+		},
+	}
+	for _, row := range vectors {
+		if row.got != row.want {
+			t.Fatalf("%s drifted from the shared material: got %q, want %q", row.label, row.got, row.want)
+		}
+	}
+}
+
 func TestSuccessorBindingKeepsTheOriginalBesideTheMintedID(t *testing.T) {
 	input := successorInput()
 	bound := SuccessorBinding(input)
