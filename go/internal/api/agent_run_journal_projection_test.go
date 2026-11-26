@@ -5,9 +5,9 @@ import (
 	"testing"
 
 	"github.com/leizd/DeepSeek-Infra/go/internal/agent"
-	"github.com/leizd/DeepSeek-Infra/go/internal/store"
 	agentv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/agentv1"
 	commonv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/commonv1"
+	"github.com/leizd/DeepSeek-Infra/go/internal/store"
 )
 
 // projectJournalObservation classifies a journal read and only appends when the

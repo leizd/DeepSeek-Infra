@@ -98,4 +98,3 @@ func TestNodeRetryingExecutesOnlyAfterATakeoverEpoch(t *testing.T) {
 		t.Fatal("an unissued epoch ran the stored successor")
 	}
 }
-
