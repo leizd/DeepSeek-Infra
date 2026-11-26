@@ -388,6 +388,47 @@ def test_the_go_dispatch_table_agrees_with_the_oracle_row_by_row() -> None:
         assert dispatch_allowed("live", "match", effect) == ("", True), effect
 
 
+def test_the_vault_revision_rule_matches_the_rust_implementation() -> None:
+    """The seal rule exists in Rust and here, and nowhere else.
+
+    Rust guards the increment with ``current < u64::MAX`` so a saturated counter
+    cannot wrap to a legal-looking revision; this oracle compares plain Python
+    integers, which never wrap. Exercise the boundary explicitly, because a
+    missing overflow guard would only show up at revision ``2**64 - 1``.
+    """
+    # The first seal may use the metadata revision.
+    assert vault_revision_allowed(None, 1) is True
+    assert vault_revision_allowed(None, 0) is False
+    # A later seal may replay the current revision or advance by exactly one.
+    assert vault_revision_allowed(1, 2) is True
+    assert vault_revision_allowed(2, 2) is True
+    assert vault_revision_allowed(2, 1) is False
+    assert vault_revision_allowed(2, 4) is False
+    # A zero or negative "current" is not a sealed object.
+    assert vault_revision_allowed(0, 1) is False
+    # The saturation boundary. Rust takes `requested: u64`, so a request beyond
+    # `u64::MAX` cannot even be expressed there; the `current < u64::MAX` guard
+    # exists so the *increment* at the ceiling is refused rather than wrapping.
+    # The oracle compares unbounded Python integers, so the only shared,
+    # reachable statement is the replay at the ceiling.
+    u64_max = 2**64 - 1
+    assert vault_revision_allowed(u64_max, u64_max) is True
+    # Inside the representable range the two agree on every step.
+    for current in (1, 2, 63, 2**31, 2**63, u64_max - 1):
+        assert vault_revision_allowed(current, current) is True, current
+        assert vault_revision_allowed(current, current + 1) is True, current
+        assert vault_revision_allowed(current, current + 2) is False, current
+        assert vault_revision_allowed(current, current - 1) is False, current
+    # Booleans are not revisions, in either implementation's intent.
+    assert vault_revision_allowed(None, True) is False
+    assert vault_revision_allowed(True, 2) is False
+    # Documented divergence: beyond `u64::MAX` the oracle keeps counting, because
+    # Python integers do not wrap. Rust cannot reach this input at all (its
+    # parameter is a u64), so nothing depends on the answer here. Assert it so a
+    # later reader does not mistake the two functions for literally identical.
+    assert vault_revision_allowed(u64_max, u64_max + 1) is True
+
+
 def test_rust_and_go_sources_name_the_same_refusal_and_the_real_entry() -> None:
     rust = RUST_ADMISSION.read_text(encoding="utf-8")
     routes = ROUTES.read_text(encoding="utf-8")
