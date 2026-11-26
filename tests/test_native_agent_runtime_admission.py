@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -53,6 +54,7 @@ ROUTES = ROOT / "rust/crates/deepseek-gateway/src/agent_run_routes.rs"
 WORKER = ROOT / "rust/crates/deepseek-worker/src/agent_provider_credentials.rs"
 GO_DISPATCH = ROOT / "go/internal/agent/runtime_admission.go"
 GO_DRIVER = ROOT / "go/internal/api/agent_run_driver.go"
+GO_DISPATCH_TEST = ROOT / "go/internal/agent/runtime_admission_test.go"
 GO_SCHEMA = ROOT / "go/internal/store/schema.go"
 GO_EVENTS = ROOT / "go/internal/store/agent_run_events.go"
 
@@ -355,6 +357,35 @@ def test_dispatch_refuses_a_dead_lease_a_bad_epoch_and_an_unknown_effect() -> No
     assert dispatch_allowed("live", "match", "SETTLED_FAILURE") == ("", True)
     assert dispatch_allowed("live", "match", "NONE") == ("", True)
     assert dispatch_allowed("live", "match", "DISPATCHING") == ("EFFECT_UNKNOWN", False)
+
+
+_GO_DISPATCH_ROW = re.compile(
+    r'\{"(?P<lease>[^"]*)",\s*"(?P<epoch>[^"]*)",\s*"(?P<effect>[^"]*)",\s*"(?P<code>[^"]*)"\}'
+)
+
+
+def test_the_go_dispatch_table_agrees_with_the_oracle_row_by_row() -> None:
+    """Parse the table out of the Go test and compare it to this oracle.
+
+    The two implementations keep the refusal table in different shapes, so a
+    hand-kept copy drifts silently: one side can gain a row or change a code and
+    the other stays green. Read the Go rows out of its source and require the
+    oracle to return exactly the same verdict for every one.
+    """
+    go_test = GO_DISPATCH_TEST.read_text(encoding="utf-8")
+    table = go_test.split("func TestDispatchAllowedMatchesTheSharedRefusalTable(", 1)[1]
+    rows = _GO_DISPATCH_ROW.findall(table)
+    if len(rows) < 7:
+        raise AssertionError(f"expected the Go refusal table, parsed {len(rows)} rows")
+    for lease, epoch, effect, code in rows:
+        reason, allowed = dispatch_allowed(lease, epoch, effect)
+        assert (reason, allowed) == (code, False), (
+            f"Go refuses ({lease!r}, {epoch!r}, {effect!r}) with {code!r}, "
+            f"the oracle says {reason!r}/{allowed}"
+        )
+    # The allowed effects are asserted separately in the Go test.
+    for effect in ("CONFIRMED", "SETTLED_FAILURE", "NONE"):
+        assert dispatch_allowed("live", "match", effect) == ("", True), effect
 
 
 def test_rust_and_go_sources_name_the_same_refusal_and_the_real_entry() -> None:
@@ -2714,3 +2745,4 @@ def test_send_budget_uses_only_the_live_minimum(monkeypatch: pytest.MonkeyPatch)
     assert "execute_tool_call(" not in py_budget
     assert "NOT_APPLIED" not in py_budget
     assert "CONFIRMED" not in py_budget
+
