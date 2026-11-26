@@ -506,6 +506,28 @@ def test_the_oracle_matches_the_cross_language_golden_vectors() -> None:
         assert got == want, f"{label} drifted from the shared material"
 
 
+def test_the_oracle_matches_the_cross_language_journal_document_vectors() -> None:
+    """The node_effect document bytes are a second shared contract.
+
+    Rust, Go and this oracle each build the same canonical JSON and the artifact
+    store hashes it, so a template or field-order change in one implementation
+    would publish a different body under the same public phase. The same digest
+    and length are pinned in
+    ``go/internal/agent/runtime_admission_test.go`` and
+    ``rust/crates/deepseek-policy/tests/agent_runtime_successor.rs``.
+    """
+    vectors = [
+        ("state", ("coder", "CONFIRMED", ""),
+         "bc5e0883cfe0f23deeaa8fa27c80a0160df5c3cf4dc63b0ef7d662d517c4419d", 79),
+        ("observation", ("coder", "", "timeout"),
+         "3ecca5d30e026d59120c68cef043ba414cc6d5584b25c983d971cfffe7ae7efa", 80),
+    ]
+    for label, args, want_sha256, want_length in vectors:
+        document = journal_observation_bytes(*args)
+        assert len(document) == want_length, f"{label} document length drifted"
+        assert hashlib.sha256(document).hexdigest() == want_sha256, f"{label} document drifted"
+
+
 @pytest.mark.parametrize(
     ("overrides", "code"),
     [

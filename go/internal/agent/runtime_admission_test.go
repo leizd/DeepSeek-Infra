@@ -2,7 +2,9 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -334,6 +336,44 @@ func TestProjectJournalObservationNeverInventsAnUnappliedState(t *testing.T) {
 	}
 	if len(settled.SHA256) != 64 || settled.Length == 0 {
 		t.Fatal("settled observation has no digest")
+	}
+
+	// The document digest is the cross-language contract: Rust, Go and the
+	// Python oracle each build the same bytes and the artifact store hashes
+	// them. A change to the template or the field order in one implementation
+	// would produce a different event body under the same public phase, so the
+	// digest and length are pinned here, in
+	// rust/crates/deepseek-policy/tests/agent_runtime_successor.rs and in
+	// tests/test_native_agent_runtime_admission.py.
+	golden := []struct {
+		label  string
+		phase  string
+		status string
+		scope  string
+		sha256 string
+		length uint64
+	}{
+		{
+			"state",
+			"coder", "CONFIRMED", "",
+			"bc5e0883cfe0f23deeaa8fa27c80a0160df5c3cf4dc63b0ef7d662d517c4419d", 79,
+		},
+		{
+			"observation",
+			"coder", "", "timeout",
+			"3ecca5d30e026d59120c68cef043ba414cc6d5584b25c983d971cfffe7ae7efa", 80,
+		},
+	}
+	for _, row := range golden {
+		raw, ok := nodeEffectBytes(row.phase, row.status, row.scope)
+		if !ok {
+			t.Fatalf("%s document was refused", row.label)
+		}
+		digest := fmt.Sprintf("%x", sha256.Sum256(raw))
+		if digest != row.sha256 || uint64(len(raw)) != row.length {
+			t.Fatalf("%s document drifted: sha256=%s length=%d, want %s/%d",
+				row.label, digest, len(raw), row.sha256, row.length)
+		}
 	}
 
 	for name, row := range map[string]struct {

@@ -572,6 +572,37 @@ fn journal_documents_are_derived_from_one_shared_template() {
     let (digest, length) = node_effect_digest("coder", "CONFIRMED", "").unwrap();
     assert_eq!(digest.len(), 64);
     assert!(length > 0);
+
+    // The document digest is the cross-language contract: Rust, Go and the
+    // Python oracle each build the same bytes and the artifact store hashes
+    // them. A change to the template or the field order in one implementation
+    // would produce a different event body under the same public phase, so the
+    // digest and length are pinned here, in
+    // `go/internal/agent/runtime_admission_test.go` and in
+    // `tests/test_native_agent_runtime_admission.py`.
+    for (label, phase, status, scope, want_digest, want_length) in [
+        (
+            "state",
+            "coder",
+            "CONFIRMED",
+            "",
+            "bc5e0883cfe0f23deeaa8fa27c80a0160df5c3cf4dc63b0ef7d662d517c4419d",
+            79_u64,
+        ),
+        (
+            "observation",
+            "coder",
+            "",
+            "timeout",
+            "3ecca5d30e026d59120c68cef043ba414cc6d5584b25c983d971cfffe7ae7efa",
+            80_u64,
+        ),
+    ] {
+        let (got_digest, got_length) = node_effect_digest(phase, status, scope).unwrap();
+        assert_eq!(got_digest, want_digest, "{label} document drifted");
+        assert_eq!(got_length, want_length, "{label} document length drifted");
+    }
+
     let value = node_effect_value("coder", "CONFIRMED", "").unwrap();
     assert_eq!(value["type"], "node_effect");
     assert_eq!(value["phase"], "coder");
