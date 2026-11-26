@@ -4,8 +4,8 @@ import (
 	"errors"
 	"testing"
 
-	agentv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/agentv1"
 	internalprotocol "github.com/leizd/DeepSeek-Infra/go/internal/protocol"
+	agentv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/agentv1"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -78,5 +78,3 @@ func TestRecoveryProgressRefusesAForeignOrStaleEnvelope(t *testing.T) {
 		}
 	})
 }
-
-
