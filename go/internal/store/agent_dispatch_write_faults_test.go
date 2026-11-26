@@ -93,5 +93,3 @@ func TestAgentNodeDispatchSnapshotRefusesACorruptPayload(t *testing.T) {
 		t.Fatal("a dispatch payload without an intent was read as valid custody")
 	}
 }
-
-
