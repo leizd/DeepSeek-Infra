@@ -2846,3 +2846,55 @@ def test_the_effect_field_is_read_before_the_state_field() -> None:
         {"type": "node_effect", "phase": "coder", "effect": "EFFECT_UNKNOWN", "state": "CONFIRMED"}
     ]
     assert retained_effect(reversed_fields)["effect"] == "effect_unknown"
+
+
+# The refusal order is part of the contract, not an implementation detail: when
+# several conditions fail at once, both languages must report the same first
+# cause so a controller can branch on one stable code. Rust checks these in
+# order; the table below asserts the oracle checks them in the same order.
+_ADMIT_REFUSAL_PRECEDENCE = [
+    # (label, overrides that break several rules, expected first code)
+    ("unknown-operation-beats-everything", {"operation": "not_an_operation"}, "AGENT_RUN_REQUEST_INVALID"),
+    ("identity-beats-lease", {"identityValid": False, "lease": "expired"}, "INVALID_IDENTITY"),
+    ("lease-beats-epoch", {"lease": "expired", "epoch": "stale"}, "LEASE_NOT_HELD"),
+    ("stale-epoch-beats-mismatch", {"epoch": "stale"}, "STALE_EXECUTION_EPOCH"),
+    ("mismatch-epoch-beats-effect", {"epoch": "mismatch", "effect": "effect_unknown"}, "FENCE_MISMATCH"),
+    # Rust checks the unknown effect before the revision, so a stream that is
+    # both unknown and revision-stale reports EFFECT_UNKNOWN.
+    ("unknown-effect-beats-revision", {"effect": "effect_unknown", "requestedRevision": 9}, "EFFECT_UNKNOWN"),
+    # The revision check comes before the active-status check.
+    ("revision-beats-active-status", {"requestedRevision": 9, "status": "running"}, "AGENT_RUNTIME_REVISION_DENIED"),
+]
+
+
+def test_the_refusal_precedence_matches_the_rust_order() -> None:
+    """Assert which refusal wins when more than one rule is broken.
+
+    Without this, the two implementations can both reject an input while
+    disagreeing about why, and a controller that maps one code to a retry would
+    retry an input the other side considers permanently invalid.
+    """
+    base = {
+        "operation": "resume",
+        "status": "done",
+        "identityValid": True,
+        "lease": "live",
+        "epoch": "match",
+        "effect": "",
+        "runtimeRevision": 1,
+        "requestedRevision": 2,
+        "agentId": "",
+        "resynthesize": False,
+        "plan": [],
+        "nodes": [],
+        "hasFinalAnswer": True,
+        "sameEffect": False,
+    }
+    for label, overrides, want in _ADMIT_REFUSAL_PRECEDENCE:
+        body = dict(base)
+        body.update(overrides)
+        decision = admit(body)
+        assert decision["admitted"] is False, label
+        assert decision["code"] == want, f"{label}: got {decision['code']!r}, want {want!r}"
+        assert decision["dispatch"] == "none", label
+
