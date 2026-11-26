@@ -76,4 +76,3 @@ func TestMediaPatchReportsAMissingOperationIdentity(t *testing.T) {
 		t.Fatalf("refusal carried no code: %s", w.Body.String())
 	}
 }
-
