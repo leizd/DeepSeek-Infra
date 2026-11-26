@@ -3002,3 +3002,65 @@ def test_next_model_turn_forces_tool_choice_back_to_auto() -> None:
     assert decision["started"] is True, decision
     assert decision["body"]["tool_choice"] == "auto"
 
+
+# Every refusal branch of `successor_execution` and the exact code it returns.
+# A controller branches on these strings, so "some refusal" is not the contract;
+# the same table is pinned in `go/internal/agent/runtime_admission_test.go` and
+# `rust/crates/deepseek-policy/tests/agent_runtime_successor.rs`.
+_SUCCESSOR_EXECUTION_REFUSAL_CODES: dict[str, str] = {
+    "worker-promoted": "FENCE_MISMATCH",
+    "identity": "INVALID_IDENTITY",
+    "lease": "LEASE_NOT_HELD",
+    "stale": "STALE_EXECUTION_EPOCH",
+    "presented-older": "STALE_EXECUTION_EPOCH",
+    "mismatch": "FENCE_MISMATCH",
+    "no-authority": "FENCE_MISMATCH",
+    "presented-newer": "FENCE_MISMATCH",
+    "awaiting-tools": "AGENT_DRIVER_TOOLS_PENDING",
+    "unknown-effect": "EFFECT_UNKNOWN",
+    "unsettled-reset": "AGENT_RUNTIME_RESET_REQUIRES_GENERATION",
+    "foreign-fence": "AGENT_RUNTIME_RESET_REQUIRES_GENERATION",
+    "not-issued": "FENCE_MISMATCH",
+    "empty-operation": "AGENT_RUNTIME_RESET_REQUIRES_GENERATION",
+    "negative-index": "AGENT_RUNTIME_RESET_REQUIRES_GENERATION",
+    "foreign-original": "AGENT_RUNTIME_GENERATION_CONFLICT",
+    "same-epoch": "AGENT_RUNTIME_SUCCESSOR_HELD",
+    "no-successor": "AGENT_RUNTIME_SUCCESSOR_HELD",
+    "successor-is-old": "AGENT_RUNTIME_SUCCESSOR_HELD",
+}
+
+# The overrides that trigger each branch, keyed by the label above.
+_SUCCESSOR_EXECUTION_REFUSAL_CASES: dict[str, dict[str, object]] = {
+    "worker-promoted": {"workerPromoted": True},
+    "identity": {"identityValid": False},
+    "lease": {"lease": "expired"},
+    "stale": {"epoch": "stale"},
+    "presented-older": {"presentedEpoch": 6},
+    "mismatch": {"epoch": "mismatch"},
+    "no-authority": {"authorityEpoch": 0, "presentedEpoch": 0},
+    "presented-newer": {"presentedEpoch": 10},
+    "awaiting-tools": {"effect": "AWAITING_TOOLS"},
+    "unknown-effect": {"effect": "EFFECT_UNKNOWN"},
+    "unsettled-reset": {"resetAdmitted": False},
+    "foreign-fence": {"resetFenceMatches": False},
+    "not-issued": {"authorityIssued": False},
+    "empty-operation": {"operationId": ""},
+    "negative-index": {"resetIndex": -1},
+    "foreign-original": {"storedOperationId": "someone-else"},
+    "same-epoch": {"authorityEpoch": 7, "presentedEpoch": 7},
+    "no-successor": {"storedSuccessor": ""},
+    "successor-is-old": {"storedSuccessor": _old_operation()},
+}
+
+
+def test_every_successor_execution_refusal_keeps_its_exact_code() -> None:
+    """Walk each refusal branch and pin the code, not just "it refused"."""
+    assert set(_SUCCESSOR_EXECUTION_REFUSAL_CASES) == set(_SUCCESSOR_EXECUTION_REFUSAL_CODES)
+    for label, overrides in _SUCCESSOR_EXECUTION_REFUSAL_CASES.items():
+        decision = successor_execution(execution(**overrides))
+        assert decision["admitted"] is False, label
+        assert decision["execute"] is False, label
+        assert decision["operationId"] == "", label
+        assert decision["code"] == _SUCCESSOR_EXECUTION_REFUSAL_CODES[label], (
+            f"{label}: got {decision['code']!r}, want {_SUCCESSOR_EXECUTION_REFUSAL_CODES[label]!r}"
+        )

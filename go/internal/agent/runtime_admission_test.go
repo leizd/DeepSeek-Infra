@@ -195,6 +195,31 @@ func executionInput() SuccessorExecutionInput {
 	}
 }
 
+// executionRefusalCode pins the exact code for each refusal branch. A branch
+// that starts returning a different code is a contract change: a controller
+// branches on these strings, so "some refusal" is not enough.
+var executionRefusalCode = map[string]string{
+	"worker-promoted":  "FENCE_MISMATCH",
+	"identity":         "INVALID_IDENTITY",
+	"lease":            "LEASE_NOT_HELD",
+	"stale":            "STALE_EXECUTION_EPOCH",
+	"presented-older":  "STALE_EXECUTION_EPOCH",
+	"mismatch":         "FENCE_MISMATCH",
+	"no-authority":     "FENCE_MISMATCH",
+	"presented-newer":  "FENCE_MISMATCH",
+	"awaiting-tools":   "AGENT_DRIVER_TOOLS_PENDING",
+	"unknown-effect":   "EFFECT_UNKNOWN",
+	"unsettled-reset":  "AGENT_RUNTIME_RESET_REQUIRES_GENERATION",
+	"foreign-fence":    "AGENT_RUNTIME_RESET_REQUIRES_GENERATION",
+	"not-issued":       "FENCE_MISMATCH",
+	"empty-operation":  "AGENT_RUNTIME_RESET_REQUIRES_GENERATION",
+	"negative-index":   "AGENT_RUNTIME_RESET_REQUIRES_GENERATION",
+	"foreign-original": "AGENT_RUNTIME_GENERATION_CONFLICT",
+	"same-epoch":       "AGENT_RUNTIME_SUCCESSOR_HELD",
+	"no-successor":     "AGENT_RUNTIME_SUCCESSOR_HELD",
+	"successor-is-old": "AGENT_RUNTIME_SUCCESSOR_HELD",
+}
+
 func TestSuccessorExecutionRequiresAnIssuedNewerEpoch(t *testing.T) {
 	input := executionInput()
 	decision := SuccessorExecution(input)
@@ -241,6 +266,9 @@ func TestSuccessorExecutionRequiresAnIssuedNewerEpoch(t *testing.T) {
 			}
 			if refused.Code == "" || refused.Message == "" {
 				t.Fatalf("refusal is not typed: %+v", refused)
+			}
+			if want, pinned := executionRefusalCode[name]; pinned && refused.Code != want {
+				t.Fatalf("%s: got code %q, want %q", name, refused.Code, want)
 			}
 		})
 	}
@@ -550,3 +578,5 @@ func TestDriverBodyRefRejectsNonCanonicalDigests(t *testing.T) {
 		}
 	}
 }
+
+

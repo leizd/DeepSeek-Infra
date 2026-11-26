@@ -460,13 +460,43 @@ fn successor_execution_refuses_every_illegal_precondition() {
             },
         ),
     ];
+    // Each branch must keep its exact code: a controller branches on these
+    // strings, so "some refusal" is not the contract. The same table is pinned
+    // in `go/internal/agent/runtime_admission_test.go` and in
+    // `tests/test_native_agent_runtime_admission.py`.
+    let expected: [(&str, &str); 19] = [
+        ("worker-promoted", "FENCE_MISMATCH"),
+        ("identity", "INVALID_IDENTITY"),
+        ("lease", "LEASE_NOT_HELD"),
+        ("stale", "STALE_EXECUTION_EPOCH"),
+        ("presented-older", "STALE_EXECUTION_EPOCH"),
+        ("mismatch", "FENCE_MISMATCH"),
+        ("no-authority", "FENCE_MISMATCH"),
+        ("presented-newer", "FENCE_MISMATCH"),
+        ("awaiting-tools", "AGENT_DRIVER_TOOLS_PENDING"),
+        ("unknown-effect", "EFFECT_UNKNOWN"),
+        ("unsettled-reset", "AGENT_RUNTIME_RESET_REQUIRES_GENERATION"),
+        ("foreign-fence", "AGENT_RUNTIME_RESET_REQUIRES_GENERATION"),
+        ("not-issued", "FENCE_MISMATCH"),
+        ("empty-operation", "AGENT_RUNTIME_RESET_REQUIRES_GENERATION"),
+        ("negative-index", "AGENT_RUNTIME_RESET_REQUIRES_GENERATION"),
+        ("foreign-original", "AGENT_RUNTIME_GENERATION_CONFLICT"),
+        ("same-epoch", "AGENT_RUNTIME_SUCCESSOR_HELD"),
+        ("no-successor", "AGENT_RUNTIME_SUCCESSOR_HELD"),
+        ("successor-is-original", "AGENT_RUNTIME_SUCCESSOR_HELD"),
+    ];
     for (name, input) in cases {
         let decision = successor_execution(&input);
         assert!(!decision.admitted, "{name}");
         assert!(!decision.execute, "{name}");
         assert!(decision.operation_id.is_empty(), "{name}");
-        assert!(!decision.code.is_empty(), "{name}");
         assert!(!decision.message.is_empty(), "{name}");
+        let want = expected
+            .iter()
+            .find(|(label, _)| *label == name)
+            .map(|(_, code)| *code)
+            .unwrap_or_else(|| panic!("{name} has no pinned refusal code"));
+        assert_eq!(decision.code, want, "{name}");
     }
 }
 
