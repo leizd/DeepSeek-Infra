@@ -596,6 +596,7 @@ def test_the_oracle_matches_the_cross_language_journal_document_vectors() -> Non
     ]
     for label, args, want_sha256, want_length in vectors:
         document = journal_observation_bytes(*args)
+        assert document is not None, f"{label} document was refused"
         assert len(document) == want_length, f"{label} document length drifted"
         assert hashlib.sha256(document).hexdigest() == want_sha256, f"{label} document drifted"
 
@@ -2852,7 +2853,7 @@ def test_the_effect_field_is_read_before_the_state_field() -> None:
 # several conditions fail at once, both languages must report the same first
 # cause so a controller can branch on one stable code. Rust checks these in
 # order; the table below asserts the oracle checks them in the same order.
-_ADMIT_REFUSAL_PRECEDENCE = [
+_ADMIT_REFUSAL_PRECEDENCE: list[tuple[str, dict[str, object], str]] = [
     # (label, overrides that break several rules, expected first code)
     ("unknown-operation-beats-everything", {"operation": "not_an_operation"}, "AGENT_RUN_REQUEST_INVALID"),
     ("identity-beats-lease", {"identityValid": False, "lease": "expired"}, "INVALID_IDENTITY"),
@@ -2897,4 +2898,5 @@ def test_the_refusal_precedence_matches_the_rust_order() -> None:
         assert decision["admitted"] is False, label
         assert decision["code"] == want, f"{label}: got {decision['code']!r}, want {want!r}"
         assert decision["dispatch"] == "none", label
+
 
