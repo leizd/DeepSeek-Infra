@@ -464,7 +464,13 @@ fn successor_execution_refuses_every_illegal_precondition() {
     // strings, so "some refusal" is not the contract. The same table is pinned
     // in `go/internal/agent/runtime_admission_test.go` and in
     // `tests/test_native_agent_runtime_admission.py`.
-    let expected: [(&str, &str); 19] = [
+    // The labels must match the cases above exactly; the list is asserted against
+    // them below so a renamed case cannot silently stop being checked.
+    //
+    // The Go and Python suites pin one case more than this list: `negative-index`.
+    // `reset_index` is a `u64` here, so a negative index is unrepresentable rather
+    // than refused, and there is no branch to pin. Do not add a 19th case for it.
+    let expected: [(&str, &str); 18] = [
         ("worker-promoted", "FENCE_MISMATCH"),
         ("identity", "INVALID_IDENTITY"),
         ("lease", "LEASE_NOT_HELD"),
@@ -475,16 +481,32 @@ fn successor_execution_refuses_every_illegal_precondition() {
         ("presented-newer", "FENCE_MISMATCH"),
         ("awaiting-tools", "AGENT_DRIVER_TOOLS_PENDING"),
         ("unknown-effect", "EFFECT_UNKNOWN"),
-        ("unsettled-reset", "AGENT_RUNTIME_RESET_REQUIRES_GENERATION"),
+        (
+            "reset-not-admitted",
+            "AGENT_RUNTIME_RESET_REQUIRES_GENERATION",
+        ),
         ("foreign-fence", "AGENT_RUNTIME_RESET_REQUIRES_GENERATION"),
         ("not-issued", "FENCE_MISMATCH"),
         ("empty-operation", "AGENT_RUNTIME_RESET_REQUIRES_GENERATION"),
-        ("negative-index", "AGENT_RUNTIME_RESET_REQUIRES_GENERATION"),
         ("foreign-original", "AGENT_RUNTIME_GENERATION_CONFLICT"),
-        ("same-epoch", "AGENT_RUNTIME_SUCCESSOR_HELD"),
         ("no-successor", "AGENT_RUNTIME_SUCCESSOR_HELD"),
         ("successor-is-original", "AGENT_RUNTIME_SUCCESSOR_HELD"),
+        ("same-epoch", "AGENT_RUNTIME_SUCCESSOR_HELD"),
     ];
+    // The pinned list and the case list must describe the same set of branches.
+    // Without this, a renamed case would fall through the lookup below and its
+    // refusal code would silently stop being asserted.
+    let case_names: Vec<&str> = cases.iter().map(|(name, _)| *name).collect();
+    let pinned_names: Vec<&str> = expected.iter().map(|(name, _)| *name).collect();
+    let mut sorted_cases = case_names.clone();
+    let mut sorted_pinned = pinned_names.clone();
+    sorted_cases.sort_unstable();
+    sorted_pinned.sort_unstable();
+    assert_eq!(
+        sorted_cases, sorted_pinned,
+        "the pinned refusal codes must cover exactly the cases above"
+    );
+
     for (name, input) in cases {
         let decision = successor_execution(&input);
         assert!(!decision.admitted, "{name}");
