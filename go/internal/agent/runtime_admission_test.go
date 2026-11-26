@@ -578,5 +578,3 @@ func TestDriverBodyRefRejectsNonCanonicalDigests(t *testing.T) {
 		}
 	}
 }
-
-
