@@ -2900,3 +2900,105 @@ def test_the_refusal_precedence_matches_the_rust_order() -> None:
         assert decision["dispatch"] == "none", label
 
 
+
+
+
+# `next_model_turn` decides whether a stored tool result may become another
+# provider call. Rust and the oracle implement the same gates separately, so the
+# refusal conditions are pinned here: each one that drifts would either replay a
+# provider turn twice or drop a retained result on the floor.
+#
+# The retained shape matters: the assistant turn and the tool calls live inside
+# `toolContinuation`, and the stored outputs live in `toolResults` on the same
+# request event. A separate `agent_tool_result` event is not what this reads.
+def _continuation_request(
+    tool_calls: list[dict[str, Any]],
+    results: list[dict[str, Any]] | None = None,
+    assistant: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "type": "agent_tool_request",
+        "phase": "coder",
+        "toolContinuation": {
+            "toolCalls": tool_calls,
+            "assistant": assistant if assistant is not None else {"content": "calling a tool"},
+        },
+        "toolResults": results if results is not None else [],
+    }
+
+
+def _stored(tool_call_id: str) -> dict[str, Any]:
+    return {"type": "agent_tool_result", "toolCallId": tool_call_id, "output": {"ok": True}}
+
+
+def test_next_model_turn_refuses_without_a_stored_result_for_every_call() -> None:
+    """One missing result keeps the whole turn pending; partial progress is not a turn."""
+    body = {"messages": [{"role": "user", "content": "go"}]}
+    calls = [{"id": "call-1", "function": {"name": "read_file"}}, {"id": "call-2", "function": {"name": "search"}}]
+    both = next_model_turn(body, [_continuation_request(calls, [_stored("call-1"), _stored("call-2")])])
+    assert both["started"] is True, both
+    assert both["code"] == ""
+    one = next_model_turn(body, [_continuation_request(calls, [_stored("call-1")])])
+    assert one["started"] is False
+    assert one["code"] == "AGENT_DRIVER_TOOLS_PENDING"
+    assert one["body"] is None
+    none = next_model_turn(body, [_continuation_request(calls)])
+    assert none["started"] is False
+    assert none["code"] == "AGENT_DRIVER_TOOLS_PENDING"
+
+
+def test_next_model_turn_refuses_a_call_without_an_id() -> None:
+    """A call with no id cannot be matched to a result, so it stays pending."""
+    body = {"messages": [{"role": "user", "content": "go"}]}
+    request = _continuation_request([{"function": {"name": "read_file"}}], [_stored("")])
+    decision = next_model_turn(body, [request])
+    assert decision["started"] is False
+    assert decision["code"] == "AGENT_DRIVER_TOOLS_PENDING"
+
+
+def test_next_model_turn_refuses_when_the_effect_is_not_a_tool_wait() -> None:
+    """A settled or unknown effect never starts another provider turn."""
+    body = {"messages": [{"role": "user", "content": "go"}]}
+    settled = [{"type": "agent_output", "phase": "coder"}]
+    decision = next_model_turn(body, settled)
+    assert decision["started"] is False
+    assert decision["body"] is None
+    unknown = [{"type": "node_effect", "phase": "coder", "state": "EFFECT_UNKNOWN"}]
+    blocked = next_model_turn(body, unknown)
+    assert blocked["started"] is False
+    assert blocked["code"] == "EFFECT_UNKNOWN"
+
+
+def test_next_model_turn_appends_no_effect_and_caps_the_calls() -> None:
+    """The turn reuses stored results only: no new event, and the cap is honoured."""
+    from deepseek_infra.infra.tool_runtime.tools import MAX_TOOL_CALLS_PER_RESPONSE
+
+    body = {"messages": [{"role": "user", "content": "go"}]}
+    calls: list[dict[str, Any]] = [
+        {"id": f"call-{index}", "function": {"name": "read_file"}}
+        for index in range(MAX_TOOL_CALLS_PER_RESPONSE + 3)
+    ]
+    stored = [_stored(str(call["id"])) for call in calls]
+    request = _continuation_request(calls, stored)
+    decision = next_model_turn(body, [request])
+    assert decision["started"] is True, decision
+    assert decision["events"] == [], "a continuation must not append an effect"
+    messages = decision["body"]["messages"]
+    assistant = messages[-1 - MAX_TOOL_CALLS_PER_RESPONSE]
+    assert assistant["role"] == "assistant"
+    assert len(assistant["tool_calls"]) == MAX_TOOL_CALLS_PER_RESPONSE
+    # The retained request is not mutated in place.
+    assert body["messages"] == [{"role": "user", "content": "go"}]
+
+
+def test_next_model_turn_forces_tool_choice_back_to_auto() -> None:
+    """A retained forced tool_choice cannot pin the next turn to one function."""
+    body = {
+        "messages": [{"role": "user", "content": "go"}],
+        "tool_choice": {"type": "function", "function": {"name": "read_file"}},
+    }
+    request = _continuation_request([{"id": "call-1", "function": {"name": "read_file"}}], [_stored("call-1")])
+    decision = next_model_turn(body, [request])
+    assert decision["started"] is True, decision
+    assert decision["body"]["tool_choice"] == "auto"
+
