@@ -542,9 +542,9 @@ fn journal_documents_are_derived_from_one_shared_template() {
     let value = node_effect_value("coder", "CONFIRMED", "").unwrap();
     assert_eq!(value["type"], "node_effect");
     assert_eq!(value["phase"], "coder");
-    // A state document carries the state, not a status or a scope.
+    // A state document carries both status and state; it has no scope.
     assert_eq!(value["state"], "CONFIRMED");
-    assert!(value.get("status").is_none());
+    assert_eq!(value["status"], "CONFIRMED");
     assert!(value.get("scope").is_none());
 
     let observation = node_effect_value("coder", "", "timeout").unwrap();

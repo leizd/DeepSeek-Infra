@@ -142,9 +142,3 @@ func TestSuccessorHoldReportsTheMintedGenerationWithoutDispatching(t *testing.T)
 		t.Fatal("successor hold called the worker")
 	}
 }
-
-
-
-
-
-
