@@ -43,10 +43,10 @@ def test_store_partitions_retain_every_original_default_and_android_case() -> No
     assert baseline["sourceCommit"] == "95adf8c250f31cdb786be642e729bcc1bb4dc39a"
     assert baseline["runId"] == 39354290366
     assert baseline["artifactId"] == 12239309163
-    for variant, count in [("default", 716), ("android", 717)]:
+    for variant, count, shards in [("default", 716, 8), ("android", 717, 4)]:
         names = baseline["variants"][variant]["topLevelTests"][gate.STORE_PACKAGE]
         assert len(names) == count
-        groups = gate.partition_catalog(names, 4)
+        groups = gate.partition_catalog(names, shards)
         assert Counter(name for group in groups for name in group) == Counter(names)
         assert max(map(len, groups)) - min(map(len, groups)) <= 1
         for group in groups:

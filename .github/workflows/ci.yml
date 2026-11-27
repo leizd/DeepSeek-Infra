@@ -1468,12 +1468,12 @@ jobs:
           tar -xzf "$archive" -C "$install_dir"
           echo "$install_dir/go/bin" >> "$GITHUB_PATH"
       - run: test "$(go env GOVERSION)" = "go1.27.1"
-      # The full pure-Go SQLite race suite exceeded 30m while creating its final fixtures.
-      # Keep every test, bound each package at 60m, and preserve per-test timing evidence.
+      # The default SQLite race suite reached the 90m deadline with four shards.
+      # Split the same tests into eight shards without increasing parallelism.
       - name: Full Go race tests with timing reports
         run: |
           mkdir -p ../artifacts/go-race
-          python ../scripts/run_native_go_race.py --variant default --out ../artifacts/go-race/default --store-shards 4 --max-parallel 4
+          python ../scripts/run_native_go_race.py --variant default --out ../artifacts/go-race/default --store-shards 8 --max-parallel 4
       - uses: actions/upload-artifact@v4
         if: always()
         with:

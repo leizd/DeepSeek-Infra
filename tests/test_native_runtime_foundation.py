@@ -102,8 +102,8 @@ def test_ci_has_native_go_and_protocol_gates() -> None:
     # one per core, not oversubscription. It was 2 with no stated reason, which left
     # half the runner idle for the whole suite.
     assert set(race_commands) == {
-        f"python ../scripts/run_native_go_race.py --variant {variant} --out ../artifacts/go-race/{variant} --store-shards 4 --max-parallel 4"
-        for variant in ("default", "android")
+        f"python ../scripts/run_native_go_race.py --variant {variant} --out ../artifacts/go-race/{variant} --store-shards {shards} --max-parallel 4"
+        for variant, shards in (("default", 8), ("android", 4))
     }
     race_runner = _read("scripts/run_native_go_race.py")
     assert 'GO_TIMEOUT = "90m"' in race_runner
