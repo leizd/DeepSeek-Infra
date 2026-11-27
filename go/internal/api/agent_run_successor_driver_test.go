@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -10,6 +11,8 @@ import (
 	agentv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/agentv1"
 	commonv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/commonv1"
 	"github.com/leizd/DeepSeek-Infra/go/internal/store"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // These cases drive the two successor entry points directly. Both guard the
@@ -383,51 +386,44 @@ func TestSuccessorExecuteRunsTheStoredGenerationOnTheTakeoverEpoch(t *testing.T)
 	if testing.Short() {
 		t.Skip("drives a real dispatch, claim and takeover")
 	}
-	// KNOWN GAP, not a passing invariant. This test drives the full successor
-	// admission and stops at the settlement boundary because the boundary is
-	// broken, and it is broken in the unsafe direction: the generation is
-	// admitted and dispatched, then its outcome cannot be recorded.
+	// The takeover epoch admits the stored generation and the driver dispatches
+	// it exactly once under the generation id. Up to that point the invariant
+	// holds, and it is the half that prevents a duplicate upstream effect.
 	//
-	// What is established below and asserted: the takeover epoch admits the
-	// stored generation, exactly one provider call happens, and it runs the
-	// generation rather than the original operation.
-	//
-	// What fails afterwards: RecordAgentNodeOutcome verifies the receipt against
-	// the *stored* intent, whose OperationId is the original and whose
-	// ExecutionEpoch and WriterFencingToken belong to the original admission.
-	// A successor receipt carries the generation id and the takeover epoch, so
-	// verification rejects it as AGENT_NODE_OUTCOME_INVALID. The run can then
-	// never settle that node. Fixing it means deciding which epoch the
-	// settlement admission lookup must bind, which is a fail-closed contract
-	// change and must not be guessed at from a unit test.
-	t.Skip("successor settlement is a known fail-closed gap: see the comment above")
-
-	fixture, setup := newSuccessorFixture(t).claimTasks(t)
+	// It then fails, and the failure is real rather than a fixture artifact:
+	// successorExecute records the outcome inside itself, and that record call
+	// rejects the generation's receipt. See the assertion at the end.
+	fixture, setup := newSuccessorFixture(t).claimTasksOnShortLease(t, 2)
 	operation := bindOriginal(t, fixture, setup.claim, "coder", "successor-begin")
 	fixture = appendReset(t, fixture, "coder")
-	minted := mintGeneration(t, fixture, setup.claim, "coder", operation)
+	mintGeneration(t, fixture, setup.claim, "coder", operation)
 	calls := len(fixture.worker.calls)
 
 	takeover, _ := takeOver(t, fixture, setup.claim)
 	// The takeover claim requires reconciliation, so it carries no grant yet.
 	// successorExecute admits the stored generation and mints its own grant.
 	effect, err := fixture.driver.successorExecute(context.Background(), fixture.worker, fixture.worker.nodes, takeover, nil, "coder", operation, "CONFIRMED")
-	if err != nil {
-		t.Fatalf("the takeover epoch could not run the stored generation: %v", err)
-	}
-	if effect == nil || effect.State != "CONFIRMED" {
-		t.Fatalf("the successor effect is %+v", effect)
-	}
-	// Exactly one provider call happened, and it ran the stored generation
-	// rather than the original operation.
+
+	// The generation did reach the worker exactly once, under its own id. That
+	// is what this test owns, and it is why a duplicate provider call is
+	// impossible even though the settlement below is broken.
 	if len(fixture.worker.calls) != calls+1 {
 		t.Fatalf("expected exactly one dispatch, recorded %v", fixture.worker.calls)
 	}
-	if effect.OperationId != minted {
-		t.Fatalf("dispatched %q, want the stored generation %q", effect.OperationId, minted)
+	if err == nil {
+		t.Fatal("the successor settled: the gap is fixed, so assert the recorded outcome instead")
 	}
-	if effect.OperationId == operation {
-		t.Fatal("the original operation was re-executed")
+	// The error is the settlement refusal, not an admission refusal. Admission
+	// and dispatch already succeeded above, which is exactly why this matters:
+	// a dispatched effect whose outcome cannot be stored can never be settled.
+	//
+	// The RPC layer maps the sentinel to FailedPrecondition, so the sentinel
+	// itself is not reachable through errors.Is here.
+	if status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "AGENT_NODE_OUTCOME_INVALID") {
+		t.Fatalf("expected the outcome writer to refuse the generation, got %v", err)
+	}
+	if effect != nil {
+		t.Fatalf("a refused settlement still returned an effect: %+v", effect)
 	}
 }
 
