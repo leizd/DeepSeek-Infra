@@ -58,18 +58,19 @@ def test_rust_worker_rejects_stale_and_unknown() -> None:
 
 def test_ci_has_native_go_and_protocol_gates() -> None:
     workflow = _read(".github/workflows/ci.yml")
+    shard_workflow = _read(".github/workflows/native-go-race-shards.yml")
     assert "native-go:" in workflow
     assert "native-protocol:" in workflow
-    # Five jobs install the pinned toolchain: the fast Go gate, the two race suites
-    # that now run concurrently, and the two protocol/S3 jobs. Each copy must be
-    # accompanied by the checksum - a job that installs without verifying would be
-    # worse than one that does not install at all - so the two counts must agree.
-    go_jobs = ("native-go", "native-go-race", "native-go-android")
-    installs = workflow.count("https://go.dev/dl/go1.27.1.linux-amd64.tar.gz")
-    checksums = workflow.count("63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445")
+    # Every downloader uses the same pinned archive and verifies its checksum.
+    sources = workflow + shard_workflow
+    installs = sources.count("https://go.dev/dl/go1.27.1.linux-amd64.tar.gz")
+    checksums = sources.count("63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445")
     assert installs == checksums == 5
-    # And every Go job carries the no-implicit-upgrade setting.
-    assert workflow.count("GOTOOLCHAIN: local") >= len(go_jobs)
+    jobs = yaml.safe_load(workflow)["jobs"]
+    race_job = yaml.safe_load(shard_workflow)["jobs"]["race"]
+    android_coverage = jobs["native-go-android-coverage"]
+    for job in (jobs["native-go"], race_job, android_coverage):
+        assert job["env"]["GOTOOLCHAIN"] == "local"
     assert "python scripts/native_codegen.py --check" in workflow
     assert "--require-hashes" in workflow
     assert "-r requirements-native-protocol.txt" in workflow
@@ -87,36 +88,18 @@ def test_ci_has_native_go_and_protocol_gates() -> None:
     assert (ROOT / "go/pkg/protocol/canonical.go").is_file()
     assert (ROOT / "scripts/native_codegen.py").is_file()
     assert (ROOT / "scripts/check_native_contract_parity.py").is_file()
-    jobs = yaml.safe_load(workflow)["jobs"]
-    # The two race suites live in their own jobs so they run in parallel; each job
-    # carries exactly one variant, and together they still cover both.
-    race_commands = [
-        line.strip()
-        for name in go_jobs
-        for step in jobs[name]["steps"]
-        for line in step.get("run", "").splitlines()
-        if line.strip().startswith("python ../scripts/run_native_go_race.py ")
-    ]
-    assert len(race_commands) == 2
-    # --max-parallel 4 because the standard runner has 4 vCPU: four race processes is
-    # one per core, not oversubscription. It was 2 with no stated reason, which left
-    # half the runner idle for the whole suite.
-    assert set(race_commands) == {
-        f"python ../scripts/run_native_go_race.py --variant {variant} --out ../artifacts/go-race/{variant} --store-shards {shards} --max-parallel 4"
-        for variant, shards in (("default", 8), ("android", 4))
-    }
     race_runner = _read("scripts/run_native_go_race.py")
+    matrix_runner = _read("scripts/run_native_go_race_matrix.py")
     assert 'GO_TIMEOUT = "90m"' in race_runner
-    assert '"-test.count=1"' in race_runner
-    assert '"-test.paniconexit0"' in race_runner
-    assert '"go", "test", "-race", "-json", "-count=1"' in race_runner
+    assert '"-test.count=1"' in matrix_runner
+    assert '"-test.paniconexit0"' in matrix_runner
+    assert '"go", "test", "-race", "-json", "-count=1"' in matrix_runner
     assert "TEST_CORPUS_INCOMPLETE_OR_FILTER_LEAK" in race_runner
     assert "SUBTEST_TERMINAL_MISSING_OR_DUPLICATED" in race_runner
     assert "UNREVIEWED_TEST_SKIP" in race_runner
-    android_job = jobs["native-go-android"]
-    assert android_job["env"]["GOFLAGS"] == "-tags=deepseek_android,sqlite3_flock"
+    assert android_coverage["env"]["GOFLAGS"] == "-tags=deepseek_android,sqlite3_flock"
     android = next(
-        step for step in android_job["steps"] if step.get("name") == "Android Go SQLite compatibility checks"
+        step for step in android_coverage["steps"] if step.get("name") == "Android Go SQLite coverage"
     )
     assert "check_go_coverage.py --dir . --min 95.0 --profile android-coverage.out" in android["run"]
     assert "scripts/check_go_coverage.py" in workflow

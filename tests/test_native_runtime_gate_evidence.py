@@ -337,60 +337,52 @@ def test_the_fully_green_run_is_recorded_and_nothing_was_skipped() -> None:
 
 
 def test_the_go_race_suites_run_in_parallel_jobs_not_serially() -> None:
-    """The Go gate's cost is two independent race suites, and they run concurrently.
-
-    native-go used to take 183 minutes: 87 for the default race suite, 79 for the
-    Android one, and 16 for everything else. The two suites share no state - different
-    build tags, different store shards, different coverage profiles - so running them
-    back to back was pure wall-clock waste.
-
-    This pins the split so a later edit cannot quietly fold them back together, and
-    checks the two properties that make the split safe: each job runs the whole suite
-    with the original flags, and the evidence gate still depends on all three.
-    """
+    """The matrix and Android coverage start independently and gate both race verdicts."""
     import yaml
+    from scripts.run_native_go_race_matrix import RUNNER_GROUPS
 
     workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_bytes())
     jobs = workflow["jobs"]
+    path = ".github/workflows/native-go-race-shards.yml"
+    shards = yaml.safe_load((ROOT / path).read_bytes())["jobs"]["race"]
+    assert shards["runs-on"] == "ubuntu-latest"
+    assert shards["strategy"]["fail-fast"] is False
+    assert tuple(shards["strategy"]["matrix"]["group"]) == RUNNER_GROUPS
+    assert shards["timeout-minutes"] == 150
+    assert shards["env"]["GOFLAGS"] == "${{ inputs.variant == 'android' && '-tags=deepseek_android,sqlite3_flock' || '' }}"
+    shard_commands = " ".join(str(step.get("run", "")) for step in shards["steps"])
+    assert 'python -m scripts.run_native_go_race_matrix --variant "$GO_RACE_VARIANT" --group "$GO_RACE_GROUP"' in shard_commands
 
-    for name in ("native-go", "native-go-race", "native-go-android"):
-        assert name in jobs, f"{name} is missing; the split was undone"
-
-    # The race suites must not be back inside the fast job.
-    fast_steps = " ".join(
-        str(step.get("run", "")) + str(step.get("name", "")) for step in jobs["native-go"]["steps"]
-    )
-    assert "run_native_go_race.py" not in fast_steps, "a race suite was folded back into native-go"
-
-    # Both race jobs keep the same parallelism. More default shards fit the
-    # full corpus within the per-invocation deadline on slower runners.
-    expected = {
-        "native-go-race": ("--variant default", "", 8),
-        "native-go-android": ("--variant android", "-tags=deepseek_android,sqlite3_flock", 4),
-    }
-    for job_name, (variant, tags, shards) in expected.items():
-        job = jobs[job_name]
+    fast = " ".join(str(step.get("run", "")) for step in jobs["native-go"]["steps"])
+    assert "run_native_go_race" not in fast
+    for variant, verdict, artifact in (
+        ("default", "native-go-race", "go-race-timing-reports-1.27.1"),
+        ("android", "native-go-android", "go-race-timing-reports-android-1.27.1"),
+    ):
+        shard_job = f"native-go-{variant}-shards"
+        assert jobs[shard_job]["needs"] == "release-version"
+        assert jobs[shard_job]["uses"] == "./" + path
+        assert jobs[shard_job]["with"]["variant"] == variant
+        job = jobs[verdict]
+        assert set(job["needs"] if isinstance(job["needs"], list) else [job["needs"]]) == (
+            {shard_job, "native-go-android-coverage"} if variant == "android" else {shard_job}
+        )
         commands = " ".join(str(step.get("run", "")) for step in job["steps"])
-        assert variant in commands, (job_name, variant)
-        assert f"--store-shards {shards} " in commands, job_name
-        # 4, not 2: the shards and the non-store packages now share one pool sized to
-        # the runner's vCPU count, so half the machine is no longer idle.
-        assert "--max-parallel 4" in commands, job_name
-        if tags:
-            assert job["env"]["GOFLAGS"] == tags, job_name
-        # They are independent, so neither may need the other. YAML collapses a
-        # single-entry needs list to a bare string, so normalise before comparing.
-        needs = job.get("needs") or []
-        if isinstance(needs, str):
-            needs = [needs]
-        assert needs == ["release-version"], job_name
+        assert f"python -m scripts.run_native_go_race_matrix --variant {variant} --merge-from " in commands
+        assert 'test "$GO_RACE_RESULT" = success' in commands
+        download = next(step["with"] for step in job["steps"] if step.get("uses") == "actions/download-artifact@v4")
+        assert download["pattern"] == f"go-race-shard-{variant}-*"
+        upload = next(step["with"] for step in job["steps"] if step.get("uses") == "actions/upload-artifact@v4")
+        assert upload["name"] == artifact
+        if variant == "android":
+            assert 'test "$GO_COVERAGE_RESULT" = success' in commands
 
-    # The Android job keeps its own coverage floor at the same 95.0.
-    android = " ".join(str(step.get("run", "")) for step in jobs["native-go-android"]["steps"])
+    coverage = jobs["native-go-android-coverage"]
+    assert coverage["needs"] == "release-version"
+    android = " ".join(str(step.get("run", "")) for step in coverage["steps"])
     assert "check_go_coverage.py --dir . --min 95.0 --profile android-coverage.out" in android
+    assert "run_native_go_race" not in android
 
-    # And the evidence gate must still require all three, or splitting would have
-    # weakened the release gate rather than only its schedule.
     needs = jobs["evidence-assembly"]["needs"]
     for name in ("native-go", "native-go-race", "native-go-android"):
         assert name in needs, f"{name} no longer gates evidence assembly"
