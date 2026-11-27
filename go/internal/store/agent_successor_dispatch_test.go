@@ -1,6 +1,8 @@
 package store
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -159,4 +161,113 @@ func TestAdmitSuccessorDispatchHoldsUntilTakeoverIssuesTheEpoch(t *testing.T) {
 	}
 }
 
-var _ = agent.SuccessorInput{}
+func TestSuccessorOperationsRefuseInvalidCustodyWithoutWriting(t *testing.T) {
+	control, input, _ := successorReadyFixture(t)
+	bind := successorBindRequest(input)
+	bound, err := control.BindAgentNodeSuccessor(bind)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, stored, found, err := control.AgentNodeDispatchSnapshot(input.ActionID, input.NodeID)
+	if err != nil || !found {
+		t.Fatalf("read original custody: %v", err)
+	}
+	count := countControlEvents(t, control)
+	for _, tc := range []struct {
+		name string
+		edit func(*AgentNodeSuccessorBindRequest)
+		want error
+	}{
+		{"missing operation", func(r *AgentNodeSuccessorBindRequest) { r.OperationID = "" }, ErrMutationRequestInvalid},
+		{"foreign owner", func(r *AgentNodeSuccessorBindRequest) { r.Owner = "other-worker" }, ErrActionLeaseStale},
+		{"foreign token", func(r *AgentNodeSuccessorBindRequest) { r.ClaimToken = "wrong-token" }, ErrInvalidClaimToken},
+		{"foreign run", func(r *AgentNodeSuccessorBindRequest) { r.RunID = "run_other" }, ErrAgentRunExecutionRequired},
+		{"absent node", func(r *AgentNodeSuccessorBindRequest) { r.NodeID = "critic" }, ErrAgentNodeDispatchRequired},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			changed := bind
+			changed.OperationID = "bind-invalid-successor"
+			tc.edit(&changed)
+			if _, err := control.BindAgentNodeSuccessor(changed); !errors.Is(err, tc.want) {
+				t.Fatalf("bind returned %v, want %v", err, tc.want)
+			}
+			admit := AgentSuccessorEpochRequest{
+				OperationID: changed.OperationID, Actor: changed.Actor, ActionID: changed.ActionID,
+				Epoch: changed.Epoch, RunID: changed.RunID, NodeID: changed.NodeID, Owner: changed.Owner,
+				ClaimToken: changed.ClaimToken, Effect: changed.Effect, ResetAdmitted: changed.ResetAdmitted,
+				ResetFenceMatches: changed.ResetFenceMatches, ResetIndex: changed.ResetIndex,
+			}
+			if _, err := control.AdmitSuccessorDispatch(admit); !errors.Is(err, tc.want) {
+				t.Fatalf("admit returned %v, want %v", err, tc.want)
+			}
+		})
+	}
+	changed := bind
+	changed.Actor = "operator:other-agent"
+	if _, err := control.BindAgentNodeSuccessor(changed); !errors.Is(err, ErrMutationRequestReplayConflict) {
+		t.Fatalf("rebound binding operation returned %v", err)
+	}
+	replay, err := control.BindAgentNodeSuccessor(bind)
+	if err != nil || !replay.Replayed || replay.SuccessorOperationID != bound.SuccessorOperationID {
+		t.Fatalf("original binding no longer replays: %+v %v", replay, err)
+	}
+	after, intent, found, err := control.AgentNodeDispatchSnapshot(input.ActionID, input.NodeID)
+	if err != nil || !found || after.Revision != before.Revision || !bytes.Equal(after.Payload, before.Payload) ||
+		stored.OperationID != intent.OperationID || stored.SuccessorOperationID != intent.SuccessorOperationID ||
+		countControlEvents(t, control) != count {
+		t.Fatalf("refusal or replay changed the binding: %+v %v", after, err)
+	}
+}
+
+func TestSuccessorHistoryCannotRewriteTheOriginalDispatch(t *testing.T) {
+	control, input, begun := successorReadyFixture(t)
+	if _, err := control.BindAgentNodeSuccessor(successorBindRequest(input)); err != nil {
+		t.Fatal(err)
+	}
+	bound, intent, found, err := control.AgentNodeDispatchSnapshot(input.ActionID, input.NodeID)
+	if err != nil || !found || !nativeAgentSuccessorBindEdge(begun.Admission.Record, bound) {
+		t.Fatalf("valid binding was not recognized: %+v %v", bound, err)
+	}
+	for _, tc := range []struct {
+		name   string
+		before Record
+		edit   func(*AgentNodeDispatch)
+	}{
+		{"rewritten timestamp", begun.Admission.Record, func(node *AgentNodeDispatch) { node.RecordedAt++ }},
+		{"rebased operation", begun.Admission.Record, func(node *AgentNodeDispatch) {
+			node.Task += " changed"
+			node.OperationID = agentNodeOperationID(*node)
+			node.SuccessorOperationID = agent.SuccessorOperationID(node.OperationID, node.ActionID, node.ExecutionEpoch, node.NodeID, node.ResetIndex)
+		}},
+		{"replacement generation", bound, func(node *AgentNodeDispatch) {
+			node.ResetIndex++
+			node.SuccessorOperationID = agent.SuccessorOperationID(node.OperationID, node.ActionID, node.ExecutionEpoch, node.NodeID, node.ResetIndex)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			changed := intent
+			tc.edit(&changed)
+			var payload map[string]json.RawMessage
+			if err := json.Unmarshal(bound.Payload, &payload); err != nil {
+				t.Fatal(err)
+			}
+			dispatches, err := json.Marshal(map[string]AgentNodeDispatch{changed.NodeID: changed})
+			if err != nil {
+				t.Fatal(err)
+			}
+			payload[agentNodeDispatchField] = dispatches
+			after := bound
+			after.Revision = tc.before.Revision + 1
+			after.Payload, err = json.Marshal(payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := readAgentNodeDispatches(after); err != nil {
+				t.Fatalf("edited intent is invalid before checking the history edge: %v", err)
+			}
+			if nativeAgentSuccessorBindEdge(tc.before, after) {
+				t.Fatal("changed history accepted as a successor binding")
+			}
+		})
+	}
+}

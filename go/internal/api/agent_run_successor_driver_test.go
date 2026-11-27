@@ -386,9 +386,16 @@ func TestSuccessorExecuteRunsTheStoredGenerationOnTheTakeoverEpoch(t *testing.T)
 	calls := len(fixture.worker.calls)
 
 	takeover, _ := takeOver(t, fixture, setup.claim)
+	ctx := context.Background()
+	if _, err := fixture.driver.successorExecute(ctx, fixture.worker, fixture.worker.nodes, setup.claim, setup.grant, "coder", operation, "CONFIRMED"); !errors.Is(err, errAgentDriverStale) {
+		t.Fatalf("the superseded claim returned %v, want a stale epoch", err)
+	}
+	if len(fixture.worker.calls) != calls {
+		t.Fatal("the superseded claim reached the worker")
+	}
 	// The takeover claim requires reconciliation, so it carries no grant yet.
 	// successorExecute admits the stored generation and mints its own grant.
-	effect, err := fixture.driver.successorExecute(context.Background(), fixture.worker, fixture.worker.nodes, takeover, nil, "coder", operation, "CONFIRMED")
+	effect, err := fixture.driver.successorExecute(ctx, fixture.worker, fixture.worker.nodes, takeover, nil, "coder", operation, "CONFIRMED")
 
 	// The generation did reach the worker exactly once, under its own id. That
 	// is what this test owns, and it is why a duplicate provider call is
@@ -410,6 +417,54 @@ func TestSuccessorExecuteRunsTheStoredGenerationOnTheTakeoverEpoch(t *testing.T)
 	}
 	if effect != nil {
 		t.Fatalf("a refused settlement still returned an effect: %+v", effect)
+	}
+}
+
+func TestSuccessorDispatchRetainsCustodyOfIncompleteWorkerResponses(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		fail string
+		want error
+	}{
+		{"lost response", "", context.DeadlineExceeded},
+		{"absent response", "nil", errAgentDriverUnknown},
+		{"effect unknown", "unknown", errAgentDriverUnknown},
+		{"awaiting tools", "tools", errAgentDriverTools},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture, setup := newSuccessorFixture(t).claimTasks(t)
+			operation := bindOriginal(t, fixture, setup.claim, "coder", "successor-begin")
+			fixture = appendReset(t, fixture, "coder")
+			minted := mintGeneration(t, fixture, setup.claim, "coder", operation)
+			takeover, run := takeOver(t, fixture, setup.claim)
+			fixture.worker.fail = tc.fail
+			if tc.want == context.DeadlineExceeded {
+				fixture.worker.failAfter = "coder"
+			}
+			calls := len(fixture.worker.calls)
+			effect, err := fixture.driver.successorExecute(
+				context.Background(), fixture.worker, fixture.worker.nodes, takeover, nil, "coder", operation, "CONFIRMED",
+			)
+			if effect != nil || !errors.Is(err, tc.want) {
+				t.Fatalf("successor returned %+v, %v, want nil, %v", effect, err, tc.want)
+			}
+			if len(fixture.worker.calls) != calls+1 {
+				t.Fatalf("successor reached the worker %d times", len(fixture.worker.calls)-calls)
+			}
+			control := fixture.driver.service.control
+			record, stored, found, err := control.AgentNodeDispatchSnapshot(takeover.Fence.ActionId, "coder")
+			if err != nil || !found || record.State != "EXECUTING" || record.ExecutionEpoch != takeover.Fence.ExecutionEpoch ||
+				stored.OperationID != operation || stored.SuccessorOperationID != minted {
+				t.Fatalf("unresolved effect lost its dispatch: %+v %+v %v", record, stored, err)
+			}
+			reservations, err := control.GetResourceLeases(takeover.Fence.ActionId)
+			if err != nil || len(reservations) != 1 {
+				t.Fatalf("unresolved effect lost its reservation: %+v %v", reservations, err)
+			}
+			if persisted := driverFixtureRun(t, fixture.driver, run.RunID); persisted.NextIndex != run.NextIndex {
+				t.Fatalf("unresolved effect advanced the public cursor to %d", persisted.NextIndex)
+			}
+		})
 	}
 }
 

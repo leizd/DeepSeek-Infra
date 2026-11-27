@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/leizd/DeepSeek-Infra/go/internal/agent"
@@ -122,6 +123,29 @@ func TestJournalObservationDedupeMatchesThePublishedDocument(t *testing.T) {
 	// an error rather than silently reporting "already public".
 	if _, err := journalObservationAlreadyPublic(control, "run_without_history", decision); err == nil {
 		t.Fatal("an absent run was read as public")
+	}
+}
+
+func TestJournalObservationKeepsUnresolvableCustody(t *testing.T) {
+	state := &agentv1.AgentNodeEffectMetadata{State: "AWAITING_TOOLS"}
+	withoutStore := &agentRunDriver{}
+	if err := withoutStore.projectJournalObservation("run_missing", "coder", state, nil, true); err != nil {
+		t.Fatalf("observation without control storage returned %v", err)
+	}
+	if decision, err := withoutStore.retainedDriverToolResults(nil, state); err != nil || decision.Returned {
+		t.Fatalf("missing storage produced tool results: %+v %v", decision, err)
+	}
+
+	driver, _, _ := newDriverFixture(t, false)
+	claim := &agentv1.AgentRunExecutionClaim{RunId: "run_missing"}
+	if decision, err := driver.retainedDriverToolResults(claim, state); !errors.Is(err, store.ErrEmptyRecordID) || decision.Returned {
+		t.Fatalf("missing run produced tool results: %+v %v", decision, err)
+	}
+	if _, matched, err := resetSharingFence(driver.service.control, claim.RunId, "coder", "action_original", 1); !errors.Is(err, store.ErrEmptyRecordID) || matched {
+		t.Fatalf("missing reset history was treated as admitted: %v %v", matched, err)
+	}
+	if err := driver.projectJournalObservation(claim.RunId, "coder", state, nil, true); !errors.Is(err, errAgentDriverUnknown) {
+		t.Fatalf("missing run was treated as an applied observation: %v", err)
 	}
 }
 

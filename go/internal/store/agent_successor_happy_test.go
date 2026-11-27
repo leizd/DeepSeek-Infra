@@ -2,6 +2,7 @@ package store
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/leizd/DeepSeek-Infra/go/internal/agent"
@@ -91,6 +92,37 @@ func TestBindAgentNodeSuccessorRefusesASecondDifferentGeneration(t *testing.T) {
 	}
 }
 
+func TestBindingWithLostWriterFenceCanRetryWithoutLosingCustody(t *testing.T) {
+	control, input, before := successorReadyFixture(t)
+	originalClock := control.now
+	start := originalClock()
+	calls := 0
+	control.now = func() int64 {
+		calls++
+		if calls == 1 {
+			return start
+		}
+		return start - 1
+	}
+	bind := successorBindRequest(input)
+	_, err := control.BindAgentNodeSuccessor(bind)
+	control.now = originalClock
+	if !errors.Is(err, ErrWriterFenceHeld) {
+		t.Fatalf("writer fence loss returned %v", err)
+	}
+	record, stored, found, err := control.AgentNodeDispatchSnapshot(input.ActionID, input.NodeID)
+	if err != nil || !found || stored.OperationID != before.Intent.OperationID || stored.SuccessorOperationID != "" ||
+		record.Revision != before.Admission.Record.Revision {
+		t.Fatalf("failed binding changed the original intent: %+v %v", stored, err)
+	}
+	if _, applied, err := control.ReadOperatorMutation(bind.OperationID); err != nil || applied {
+		t.Fatalf("failed binding left an applied receipt: %v %v", applied, err)
+	}
+	if bound, err := control.BindAgentNodeSuccessor(bind); err != nil || bound.Replayed || bound.SuccessorOperationID == "" {
+		t.Fatalf("retry after rollback did not make the first binding: %+v %v", bound, err)
+	}
+}
+
 func TestAdmitSuccessorDispatchHoldsOnTheOriginalFenceAndRequiresTakeover(t *testing.T) {
 	control, input, begun := successorReadyFixture(t)
 	intent := begun.Intent
@@ -117,5 +149,91 @@ func TestAdmitSuccessorDispatchHoldsOnTheOriginalFenceAndRequiresTakeover(t *tes
 	if _, stored, found, snapshotErr := control.AgentNodeDispatchSnapshot(input.ActionID, input.NodeID); snapshotErr != nil || !found ||
 		stored.OperationID != intent.OperationID {
 		t.Fatalf("refusal changed the stored intent: %+v %v", stored, snapshotErr)
+	}
+}
+
+func TestSuccessorDispatchPreservesOriginalCustodyAcrossTakeoverAndWriteFailures(t *testing.T) {
+	control, input, begun := successorReadyFixture(t)
+	bound, err := control.BindAgentNodeSuccessor(successorBindRequest(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := agentExecutionRequest(t, control)
+	request.OperationID, request.Owner = "successor-takeover", "successor-worker"
+	now := begun.Admission.Lease.LeaseUntil + 1
+	options := OpenOptions{Path: control.path, Owner: "successor-control", Now: func() int64 { return now },
+		AuthorizeCutover: true, PromotionSignerPublicKey: control.promotionSignerKey, FleetID: control.fleetID, Environment: control.environment}
+	if err := control.Close(); err != nil {
+		t.Fatal(err)
+	}
+	successor, err := OpenControl(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = successor.Close() })
+	taken, err := successor.ClaimAgentRunExecution(request)
+	if err != nil || taken.Admission.Record.State != "RECONCILING" || taken.Admission.Lease.Epoch <= input.Epoch {
+		t.Fatalf("takeover did not preserve unresolved custody: %+v %v", taken.Admission.Record, err)
+	}
+	lease := taken.Admission.Lease
+	admit := AgentSuccessorEpochRequest{
+		OperationID: "admit-takeover-successor", Actor: input.Actor, ActionID: input.ActionID,
+		Epoch: lease.Epoch, RunID: input.RunID, NodeID: input.NodeID, Owner: lease.Owner,
+		ClaimToken: lease.ClaimToken, Effect: "CONFIRMED", ResetAdmitted: true,
+		ResetFenceMatches: true, ResetIndex: bound.ResetIndex,
+	}
+	input.Epoch, input.Owner, input.ClaimToken = lease.Epoch, lease.Owner, lease.ClaimToken
+	input.OperationID = bound.SuccessorOperationID
+
+	for _, step := range []struct {
+		name  string
+		state string
+		run   func() error
+	}{
+		{"admission", "RECONCILING", func() error { _, err := successor.AdmitSuccessorDispatch(admit); return err }},
+		{"dispatch", "CLAIMED", func() error { _, err := successor.BeginAgentNodeDispatch(input); return err }},
+	} {
+		t.Run(step.name, func(t *testing.T) {
+			before, intent, found, err := successor.AgentNodeDispatchSnapshot(input.ActionID, input.NodeID)
+			if err != nil || !found || before.State != step.state {
+				t.Fatalf("unexpected state before %s: %s, %v", step.name, before.State, err)
+			}
+			count := countControlEvents(t, successor)
+			if _, err := successor.db.Exec(`CREATE TEMP TRIGGER reject_successor_event BEFORE INSERT ON control_events
+				BEGIN SELECT RAISE(ABORT, 'injected successor event failure'); END`); err != nil {
+				t.Fatal(err)
+			}
+			err = step.run()
+			if _, dropErr := successor.db.Exec("DROP TRIGGER reject_successor_event"); dropErr != nil {
+				t.Fatal(dropErr)
+			}
+			if err == nil || !strings.Contains(err.Error(), "injected successor event failure") {
+				t.Fatalf("%s did not report the failing write: %v", step.name, err)
+			}
+			after, stored, found, err := successor.AgentNodeDispatchSnapshot(input.ActionID, input.NodeID)
+			if err != nil || !found || after.Revision != before.Revision || after.State != before.State ||
+				stored.OperationID != intent.OperationID || stored.SuccessorOperationID != intent.SuccessorOperationID ||
+				countControlEvents(t, successor) != count {
+				t.Fatalf("failed %s changed durable custody: %+v %v", step.name, after, err)
+			}
+			if err := step.run(); err != nil {
+				t.Fatalf("retry after rollback failed: %v", err)
+			}
+		})
+		if t.Failed() {
+			return
+		}
+	}
+
+	record, stored, found, err := successor.AgentNodeDispatchSnapshot(input.ActionID, input.NodeID)
+	if err != nil || !found || record.State != "EXECUTING" || record.ExecutionEpoch != lease.Epoch ||
+		stored.OperationID != begun.Intent.OperationID || stored.SuccessorOperationID != bound.SuccessorOperationID ||
+		stored.ExecutionEpoch != begun.Intent.ExecutionEpoch {
+		t.Fatalf("dispatch replaced the original intent or lost the takeover fence: %+v %+v %v", record, stored, err)
+	}
+	count := countControlEvents(t, successor)
+	if replay, err := successor.AdmitSuccessorDispatch(admit); err != nil || replay.Record.Revision != record.Revision ||
+		replay.Lease != lease || countControlEvents(t, successor) != count {
+		t.Fatalf("admission replay modified custody: %+v %v", replay, err)
 	}
 }
