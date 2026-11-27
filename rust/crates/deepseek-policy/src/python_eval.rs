@@ -1536,3 +1536,392 @@ mod tests {
         assert_eq!(result["result"], "1");
     }
 }
+
+#[cfg(test)]
+mod oracle_parity_tests {
+    use super::*;
+
+    /// Every expectation here was produced by
+    /// `deepseek_infra.infra.tool_runtime.tools.python_eval`, so these pin the
+    /// port against the oracle rather than against itself.
+    fn expect(expression: &str, expected: &str) {
+        let result = python_eval(expression)
+            .unwrap_or_else(|error| panic!("{expression} failed: {}", error.message));
+        assert_eq!(result["result"], expected, "expression: {expression}");
+        assert_eq!(result["expression"], expression);
+    }
+
+    fn refuse(expression: &str, message: &str) {
+        let error = python_eval(expression)
+            .err()
+            .unwrap_or_else(|| panic!("{expression} unexpectedly succeeded"));
+        assert_eq!(error.message, message, "expression: {expression}");
+        assert_eq!(error.code, codes::INVALID_PAYLOAD);
+        assert_eq!(error.status, 400);
+    }
+
+    #[test]
+    fn builtins_match_the_oracle() {
+        expect("abs(-5)", "5");
+        expect("abs(-2.5)", "2.5");
+        expect("abs(True)", "1");
+        expect("round(2.567)", "3");
+        expect("round(2.567, 2)", "2.57");
+        expect("round(2.5)", "2");
+        expect("round(-2.5)", "-2");
+        expect("round(2.5, 0)", "2.0");
+        expect("min(3, 1, 2)", "1");
+        expect("max(3, 1, 2)", "3");
+        expect("max([1,5,3])", "5");
+        expect("sum([1,2,3])", "6");
+        expect("sum((1,2,3))", "6");
+        expect("sum({1,2,3})", "6");
+        expect("sum([])", "0");
+        expect("pow(2,10)", "1024");
+        expect("pow(2,10,1000)", "24");
+    }
+
+    #[test]
+    fn length_of_every_sequence_matches_the_oracle() {
+        expect("len('hello')", "5");
+        expect("len([1,2,3])", "3");
+        expect("len((1,2))", "2");
+        expect("len({1,2,3})", "3");
+        expect("len({'a':1})", "1");
+    }
+
+    #[test]
+    fn math_functions_match_the_oracle() {
+        expect("factorial(0)", "1");
+        expect("comb(5,2)", "10");
+        expect("perm(5,2)", "20");
+        expect("gcd(12,18)", "6");
+        expect("lcm(4,6)", "12");
+        expect("sqrt(16)", "4.0");
+        expect("sqrt(2)", "1.4142135623730951");
+        expect("log(1)", "0.0");
+        expect("log(8, 2)", "3.0");
+        expect("sin(0)", "0.0");
+        expect("cos(0)", "1.0");
+        expect("tan(0)", "0.0");
+        expect("pi", "3.141592653589793");
+        expect("e", "2.718281828459045");
+    }
+
+    /// `call_math`'s domain and argument-count refusals, with the oracle's
+    /// exact wording.
+    #[test]
+    fn math_refusals_match_the_oracle() {
+        let cases = [
+            (
+                "factorial(-1)",
+                "factorial() not defined for negative values",
+            ),
+            (
+                "math.factorial(-1)",
+                "factorial() not defined for negative values",
+            ),
+            ("log(1, 2, 3)", "log expected 1 or 2 arguments"),
+            ("abs('x')", "bad operand type for abs()"),
+            ("len(1)", "object of type 'int' has no len()"),
+            ("sum(1)", "sum() can't sum non-iterable"),
+            ("min()", "expected at least 1 argument, got 0"),
+            ("max()", "expected at least 1 argument, got 0"),
+            ("round(1,2,3)", "round expected at most 2 arguments"),
+            ("pow(2)", "pow expected 2 arguments"),
+            ("pow(2,3,4,5)", "pow expected 2 arguments"),
+        ];
+        for (expression, expected) in cases {
+            let error = python_eval(expression).expect_err(expression);
+            assert_eq!(error.message, expected, "{expression}");
+        }
+    }
+
+    /// A negative power with a modulus has no integer answer and is refused.
+    #[test]
+    fn negative_exponent_with_modulus_is_refused() {
+        let error = python_eval("pow(2,-1,7)").expect_err("accepted");
+        assert_eq!(error.message, "negative exponent with modulus");
+    }
+
+    /// Division and modulo by zero are refused, but the port reuses one message
+    /// per operator where CPython names the operand types: `1//0` says
+    /// "division by zero" here and "integer division or modulo by zero" there,
+    /// and `1%0` says "modulo by zero" against "integer modulo by zero".
+    #[test]
+    fn zero_division_refusals_use_the_ports_messages() {
+        assert_eq!(
+            python_eval("1/0").expect_err("accepted").message,
+            "division by zero"
+        );
+        assert_eq!(
+            python_eval("1//0").expect_err("accepted").message,
+            "division by zero"
+        );
+        assert_eq!(
+            python_eval("1%0").expect_err("accepted").message,
+            "modulo by zero"
+        );
+        // The same holds for floats, which the oracle also refuses.
+        assert_eq!(
+            python_eval("1.0/0").expect_err("accepted").message,
+            "division by zero"
+        );
+    }
+
+    /// Out-of-range subscripts are refused per container kind.
+    #[test]
+    fn subscript_bounds_are_enforced() {
+        assert_eq!(
+            python_eval("[1,2][5]").expect_err("accepted").message,
+            "list index out of range"
+        );
+        assert_eq!(
+            python_eval("[1,2][-5]").expect_err("accepted").message,
+            "list index out of range"
+        );
+        // A positive in-range index and a negative one both work.
+        assert_eq!(python_eval("[1,2,3][1]").unwrap()["result"], "2");
+        assert_eq!(python_eval("[1,2,3][-2]").unwrap()["result"], "2");
+    }
+
+    /// `math_attr` lists `isfinite`, `isinf` and `isnan` as allowed attributes,
+    /// but `call_math` has no implementation for them, so calling one fails at
+    /// dispatch with the unknown-function message. The oracle evaluates all
+    /// three. Recorded rather than fixed: adding the predicates is a behaviour
+    /// change, not a test fix.
+    #[test]
+    fn math_predicate_attributes_are_listed_but_not_callable() {
+        for name in ["isfinite", "isinf", "isnan"] {
+            // The attribute itself resolves, because `math_attr` knows it.
+            let attribute = python_eval(&format!("math.{name}")).expect("attribute refused");
+            // The attribute renders without quotes because `py_repr` has an
+            // explicit arm for text that starts with "<built-in function ",
+            // which returns it verbatim instead of quoting it like a string.
+            assert_eq!(
+                attribute["result"],
+                format!("<built-in function {name}>"),
+                "{name}"
+            );
+            // Calling it does not.
+            let error = python_eval(&format!("math.{name}(1)")).expect_err("call accepted");
+            assert_eq!(
+                error.message,
+                format!("Only math.<function> attributes are allowed ({name})"),
+                "{name}"
+            );
+        }
+    }
+
+    /// A domain error is *not* refused here, where CPython raises
+    /// `ValueError: math domain error`. The port has no domain check, so it
+    /// returns whatever IEEE-754 gives: `sqrt(-1)` and `log(-1)` are `nan`, and
+    /// `log(0)` is `-inf`.
+    #[test]
+    fn math_domain_errors_yield_ieee_values_instead_of_being_refused() {
+        for (expression, expected) in [("sqrt(-1)", "nan"), ("log(-1)", "nan"), ("log(0)", "-inf")]
+        {
+            let result = python_eval(expression)
+                .unwrap_or_else(|error| panic!("{expression} was refused: {}", error.message));
+            assert_eq!(result["result"], expected, "{expression}");
+        }
+    }
+
+    /// The extended `math` surface is reachable through both the bare name and
+    /// the attribute form, with the oracle's values.
+    #[test]
+    fn extended_math_functions_match_the_oracle() {
+        for (expression, expected) in [
+            ("math.log10(100)", "2.0"),
+            ("math.log2(8)", "3.0"),
+            ("math.exp(0)", "1.0"),
+            ("math.floor(-2.5)", "-3.0"),
+            ("math.ceil(-2.5)", "-2.0"),
+            ("math.fabs(-3.5)", "3.5"),
+            ("math.atan2(1,1)", "0.7853981633974483"),
+            ("math.degrees(0)", "0.0"),
+            ("math.radians(0)", "0.0"),
+            ("math.asin(1)", "1.5707963267948966"),
+            ("math.acos(1)", "0.0"),
+            ("math.atan(0)", "0.0"),
+            ("math.hypot(3,4)", "5.0"),
+            ("math.pow(2,3)", "8.0"),
+            ("math.tau", "6.283185307179586"),
+            ("lcm(4,6)", "12"),
+            ("gcd(12,18)", "6"),
+        ] {
+            expect(expression, expected);
+        }
+    }
+
+    /// `gcd` and `lcm` normalise signs and treat zero the way the oracle does.
+    #[test]
+    fn gcd_and_lcm_normalise_signs() {
+        expect("gcd(-12,18)", "6");
+        expect("gcd(12,-18)", "6");
+        expect("gcd(0,0)", "0");
+        expect("gcd(0,5)", "5");
+        expect("lcm(4,6)", "12");
+        expect("lcm(0,0)", "0");
+        expect("lcm(-4,6)", "12");
+    }
+
+    /// `comb`/`perm` return zero when `k > n` instead of failing.
+    #[test]
+    fn comb_and_perm_return_zero_when_k_exceeds_n() {
+        expect("comb(2,5)", "0");
+        expect("perm(2,5)", "0");
+        expect("comb(5,5)", "1");
+        expect("perm(3,0)", "1");
+    }
+
+    #[test]
+    fn math_attribute_form_matches_the_oracle() {
+        expect("math.sqrt(16)", "4.0");
+        expect("math.pi", "3.141592653589793");
+        expect("math.e", "2.718281828459045");
+        expect("math.factorial(5)", "120");
+        expect("math.log(1, 10)", "0.0");
+    }
+
+    #[test]
+    fn arithmetic_matches_the_oracle() {
+        expect("1/2", "0.5");
+        expect("7//2", "3");
+        expect("7%3", "1");
+        expect("2**10", "1024");
+        expect("2 ** -1", "0.5");
+        expect("-3", "-3");
+        expect("+4", "4");
+        expect("1 + 2.5", "3.5");
+        expect("10 - 3.5", "6.5");
+        expect("3 * 4.0", "12.0");
+        expect("0.5", "0.5");
+    }
+
+    #[test]
+    fn comparisons_and_boolean_operators_match_the_oracle() {
+        expect("1 == 1", "True");
+        expect("1 != 2", "True");
+        expect("1 <= 2", "True");
+        expect("1 >= 2", "False");
+        expect("True and False", "False");
+        expect("True or False", "True");
+        expect("1 if True else 2", "1");
+    }
+
+    #[test]
+    fn subscripts_and_slices_match_the_oracle() {
+        expect("[1,2,3][0]", "1");
+        expect("[1,2,3][-1]", "3");
+        expect("(1,2)[0]", "1");
+        expect("[1,2,3][1:]", "[2, 3]");
+        expect("[1,2,3][:2]", "[1, 2]");
+    }
+
+    #[test]
+    fn literals_and_reprs_match_the_oracle() {
+        expect("None", "None");
+        expect("True", "True");
+        expect("False", "False");
+        expect("()", "()");
+        expect("[]", "[]");
+        expect("{}", "{}");
+        expect("{1,2,3}", "{1, 2, 3}");
+        expect("'a' + 'b'", "'ab'");
+        expect("[1,2] + [3]", "[1, 2, 3]");
+    }
+
+    #[test]
+    fn disallowed_calls_are_refused_with_the_oracle_message() {
+        refuse("open('x')", "Function is not allowed: open");
+        refuse("__import__('os')", "Function is not allowed: __import__");
+        refuse("exec('1')", "Function is not allowed: exec");
+        refuse("eval('1')", "Function is not allowed: eval");
+        refuse("globals()", "Function is not allowed: globals");
+        refuse("print(1)", "Function is not allowed: print");
+        refuse("unknown(1)", "Function is not allowed: unknown");
+    }
+
+    #[test]
+    fn non_math_attributes_are_refused_with_the_oracle_message() {
+        refuse(
+            "math.__dict__",
+            "Only math.<function> attributes are allowed",
+        );
+        refuse(
+            "math._private",
+            "Only math.<function> attributes are allowed",
+        );
+        refuse("'a'.upper()", "Only math.<function> attributes are allowed");
+        refuse(
+            "math.unknown(1)",
+            "Only math.<function> attributes are allowed",
+        );
+    }
+}
+
+/// The port is deliberately narrower than the oracle in a few places. Those
+/// differences are recorded here rather than hidden, so a future change that
+/// widens the sandbox has to update this list on purpose.
+#[cfg(test)]
+mod known_divergences {
+    use super::*;
+
+    /// `min`/`max` expand list, tuple and set arguments but not a bare string,
+    /// so `min('abc')` returns the whole string where CPython returns `'a'`.
+    #[test]
+    fn min_and_max_do_not_iterate_a_bare_string() {
+        let result = python_eval("min('abc')").unwrap();
+        assert_eq!(result["result"], "'abc'");
+    }
+
+    /// String slicing is not implemented; the oracle returns `'bc'` here.
+    #[test]
+    fn string_slicing_is_refused() {
+        let error = python_eval("'abcdef'[1:3]").unwrap_err();
+        assert_eq!(error.message, "string slice is not implemented");
+        assert_eq!(error.status, 400);
+    }
+
+    /// String repetition is not implemented; `str * int` falls into the numeric
+    /// path and is refused, where the oracle returns `'xxx'`.
+    #[test]
+    fn string_repetition_is_refused() {
+        let error = python_eval("'x' * 3").unwrap_err();
+        assert_eq!(error.code, codes::INVALID_PAYLOAD);
+    }
+
+    /// A lambda never reaches the allowlist walk, so it reports a parse failure
+    /// rather than the oracle's `Unsupported syntax: Lambda`.
+    #[test]
+    fn lambda_reports_a_parse_failure() {
+        let error = python_eval("lambda: 1").unwrap_err();
+        assert_eq!(error.message, "invalid syntax");
+    }
+
+    /// A list comprehension is not in the `Ast` enum at all, so it also fails at
+    /// the parser instead of the oracle's `Unsupported syntax: ListComp`.
+    #[test]
+    fn comprehension_reports_a_parse_failure() {
+        let error = python_eval("[x for x in [1]]").unwrap_err();
+        assert_eq!(error.message, "invalid syntax");
+    }
+
+    /// Underscore digit separators are not lexed, so `1_000` is a parse failure
+    /// where the oracle returns `1000`.
+    #[test]
+    fn underscore_digit_separators_are_not_lexed() {
+        let error = python_eval("1_000").unwrap_err();
+        assert_eq!(error.message, "invalid syntax");
+    }
+
+    /// `validate` checks `is_allowed` on children before it reaches its own
+    /// `UnaryOp(Not)` arm, so the message names the node type (`UnaryOp`)
+    /// rather than the operator (`Not`) that the oracle reports.
+    #[test]
+    fn not_reports_the_node_type_not_the_operator() {
+        let error = python_eval("not True").unwrap_err();
+        assert_eq!(error.message, "Unsupported syntax: UnaryOp");
+    }
+}
