@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/leizd/DeepSeek-Infra/go/internal/agent"
 	agentv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/agentv1"
-	commonv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/commonv1"
 	"github.com/leizd/DeepSeek-Infra/go/internal/store"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -35,12 +35,22 @@ type successorFixture struct {
 	driver *agentRunDriver
 	worker *driverFixtureWorker
 	run    agent.RunMetadata
+	// offset shifts the control clock forward once set. It stays 0 for setup so
+	// every admission and dispatch sees ordinary wall time, and takeOver sets it
+	// to jump past the retained lease instead of sleeping 120s. Jumping is safe
+	// here because the only thing after the jump is the takeover admission: the
+	// signed receipts were already minted at real wall time, inside the gate's
+	// 30s tolerance.
+	offset *atomic.Int64
 }
 
 func newSuccessorFixture(t *testing.T) successorFixture {
 	t.Helper()
-	driver, worker, run := newDriverFixture(t, false)
-	return successorFixture{driver: driver, worker: worker, run: run}
+	var offset atomic.Int64
+	driver, worker, run := newDriverFixture(t, false, func() int64 {
+		return time.Now().UTC().Unix() + offset.Load()
+	})
+	return successorFixture{driver: driver, worker: worker, run: run, offset: &offset}
 }
 
 // settlePlan drives the plan phase so the tasks phase becomes admissible.
@@ -72,37 +82,6 @@ func (fixture successorFixture) claimTasks(t *testing.T) (successorFixture, clai
 	// The grant is minted lazily by the caller that needs it. Holding one here
 	// would renew the lease and make a takeover unreachable in a unit test.
 	return fixture, claimSetup{claim: claim}
-}
-
-// claimTasksOnShortLease admits the tasks phase with a lease short enough to
-// expire inside the test. It goes through the same RPC the driver uses, with
-// the driver's own actor: a hand-built request with a different actor is
-// refused with AGENT_RUN_EXECUTION_INVALID, and a fixed operation id is
-// replayed as an idempotent retry of an earlier admission.
-func (fixture successorFixture) claimTasksOnShortLease(t *testing.T, leaseSeconds uint32) (successorFixture, claimSetup) {
-	t.Helper()
-	fixture = fixture.settlePlan(t)
-	ctx := context.Background()
-	authority, err := fixture.driver.service.GetAuthority(ctx, &agentv1.AgentRunAuthorityInput{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	claimed, err := fixture.driver.service.ClaimExecution(ctx, &agentv1.ClaimAgentRunExecutionRequest{
-		SchemaVersion: 1,
-		OperationId:   driverOperation("short-lease-claim:", fixture.run.RunID, ":", fixture.run.NextIndex, ":", leaseSeconds),
-		Actor:         agentDriverActor,
-		RunId:         fixture.run.RunID, Phase: agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_TASKS,
-		ExpectedIndex: fixture.run.NextIndex,
-		MetadataFence: &commonv1.ActionFence{ActionId: fixture.run.RunID, ExecutionEpoch: authority.MetadataEpoch},
-		Owner:         fixture.driver.owner, LeaseSeconds: leaseSeconds,
-	})
-	if err != nil {
-		t.Fatalf("fixture cannot admit the tasks phase on a short lease: %v", err)
-	}
-	if claimed.Claim == nil || claimed.Claim.Fence == nil {
-		t.Fatal("the short-lease claim carried no fence")
-	}
-	return fixture, claimSetup{claim: claimed.Claim}
 }
 
 // bindOriginal records the first dispatch for a node so a stored intent exists
@@ -159,9 +138,13 @@ func mintGeneration(t *testing.T, fixture successorFixture, claim *agentv1.Agent
 	return stored.SuccessorOperationID
 }
 
-// takeOver waits out the retained lease and re-admits the action from a
-// different owner. Only the resulting claim carries an epoch that may run a
-// stored generation.
+// takeOver jumps the control clock past the retained lease and re-admits the
+// action from a different owner. Only the resulting claim carries an epoch that
+// may run a stored generation.
+//
+// The jump replaces sleeping out the driver's 120s lease, which under -race is
+// both too slow and still racy. It is placed here, immediately before the
+// takeover admission, so everything earlier sees real wall time.
 func takeOver(t *testing.T, fixture successorFixture, claim *agentv1.AgentRunExecutionClaim) (*agentv1.AgentRunExecutionClaim, agent.RunMetadata) {
 	t.Helper()
 	ctx := context.Background()
@@ -169,11 +152,10 @@ func takeOver(t *testing.T, fixture successorFixture, claim *agentv1.AgentRunExe
 	if err != nil || !found {
 		t.Fatalf("fixture cannot read the action record: %v", err)
 	}
-	// Cross the returned lease boundary on the real clock. The wait is bounded by
-	// the short lease the takeover cases request, and it stays far inside the
-	// receipt gate's 30s wall-clock tolerance.
+	// Move past the lease deadline. A few seconds beyond is enough and keeps the
+	// already-signed receipts inside the 30s wall-clock tolerance.
 	if wait := time.Until(time.Unix(claim.LeaseUntil, 0)); wait > 0 {
-		time.Sleep(wait + 100*time.Millisecond)
+		fixture.offset.Store(int64(wait/time.Second) + 2)
 	}
 	fixture.driver.owner = "replacement-runtime"
 	recovered, err := fixture.driver.admission(ctx, fixture.run, agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_TASKS, &record)
@@ -393,7 +375,11 @@ func TestSuccessorExecuteRunsTheStoredGenerationOnTheTakeoverEpoch(t *testing.T)
 	// It then fails, and the failure is real rather than a fixture artifact:
 	// successorExecute records the outcome inside itself, and that record call
 	// rejects the generation's receipt. See the assertion at the end.
-	fixture, setup := newSuccessorFixture(t).claimTasksOnShortLease(t, 2)
+	//
+	// The setup runs on the driver's default lease and only the takeover claim
+	// uses a short one. Under -race this test takes ~11s, so a short lease taken
+	// at the top would expire during minting, before the takeover even starts.
+	fixture, setup := newSuccessorFixture(t).claimTasks(t)
 	operation := bindOriginal(t, fixture, setup.claim, "coder", "successor-begin")
 	fixture = appendReset(t, fixture, "coder")
 	mintGeneration(t, fixture, setup.claim, "coder", operation)
@@ -438,7 +424,7 @@ func TestSuccessorOutcomeIsRefusedByTheOutcomeWriter(t *testing.T) {
 		t.Skip("drives a real dispatch, claim and takeover")
 	}
 	// A short lease lets takeOver cross a real boundary quickly.
-	fixture, setup := newSuccessorFixture(t).claimTasksOnShortLease(t, 2)
+	fixture, setup := newSuccessorFixture(t).claimTasks(t)
 	operation := bindOriginal(t, fixture, setup.claim, "coder", "successor-begin")
 	fixture = appendReset(t, fixture, "coder")
 	minted := mintGeneration(t, fixture, setup.claim, "coder", operation)
@@ -521,7 +507,7 @@ func TestSuccessorExecuteNeverExecutesWithoutAPersistedGeneration(t *testing.T) 
 	// A takeover epoch is not enough on its own: without a generation persisted
 	// beside the original, there is nothing to run and the driver must refuse.
 	// A short lease lets takeOver cross a real boundary quickly.
-	fixture, setup := newSuccessorFixture(t).claimTasksOnShortLease(t, 2)
+	fixture, setup := newSuccessorFixture(t).claimTasks(t)
 	operation := bindOriginal(t, fixture, setup.claim, "coder", "successor-begin")
 	fixture = appendReset(t, fixture, "coder")
 	calls := len(fixture.worker.calls)
@@ -542,7 +528,7 @@ func TestSuccessorTakeoverIssuesANewerEpochAndReconciles(t *testing.T) {
 		t.Skip("drives a real claim and takeover")
 	}
 	// A short lease lets takeOver cross a real boundary quickly.
-	fixture, setup := newSuccessorFixture(t).claimTasksOnShortLease(t, 2)
+	fixture, setup := newSuccessorFixture(t).claimTasks(t)
 	takeover, _ := takeOver(t, fixture, setup.claim)
 	if takeover.Fence.ExecutionEpoch <= setup.claim.Fence.ExecutionEpoch {
 		t.Fatalf("takeover epoch %d did not exceed %d", takeover.Fence.ExecutionEpoch, setup.claim.Fence.ExecutionEpoch)
