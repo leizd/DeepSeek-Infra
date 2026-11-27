@@ -16,9 +16,6 @@ use tonic::{
     transport::{Certificate, ClientTlsConfig, Endpoint},
 };
 
-mod recovery;
-pub(crate) use recovery::{RecoveryPreparation, prepare_recovery};
-
 pub(crate) const PRIVATE_FIELD: &str = "_nativeProviderCredentials";
 pub(crate) const PREPARATION_FIELD: &str = "_nativeRuntimePreparation";
 
@@ -122,11 +119,14 @@ pub(crate) async fn prepare(
         tavily_api_key,
         runtime_update,
     } = input;
+    if runtime_revision == 0 {
+        return Err(());
+    }
     let updating = runtime_update.is_some();
     let supplied_key = api_key.is_some_and(|key| !key.is_empty())
         || tavily_api_key.is_some_and(|key| !key.is_empty());
-    let mut client = connect(config).await?;
     let bearer = &config.bearer;
+    let mut client = connect(config).await?;
     let mut request = Request::new(PrepareAgentCredentialsRequest {
         schema_version: 1,
         fence: Some(ActionFence {
@@ -175,6 +175,7 @@ pub(crate) async fn prepare(
     {
         return Err(());
     }
+    // An inherited-only update seals no new object; the caller keeps the prior one.
     let Some(object) = response.object else {
         return if updating && !supplied_key {
             Ok(None)

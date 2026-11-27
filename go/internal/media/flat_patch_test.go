@@ -92,6 +92,80 @@ func TestFlatPatchRejectsInvalidTypedTreesBeforeReturningJSON(t *testing.T) {
 	}
 }
 
+func TestFlatPatchJSONRejectsDamagedAndNoncanonicalWireRecords(t *testing.T) {
+	record := &mediav1.MediaFlatPatchRecord{Nodes: []*mediav1.MediaFlatPatchNode{
+		{Kind: &mediav1.MediaFlatPatchNode_BoolValue{BoolValue: true}},
+		flatObject(&mediav1.MediaFlatPatchMember{Key: "enabled", Child: 1}),
+	}}
+	encoded, err := (proto.MarshalOptions{Deterministic: true}).Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if actual, err := FlatPatchJSON(encoded); string(actual) != `{"enabled":true}` || err != nil {
+		t.Fatalf("canonical record returned %q, %v", actual, err)
+	}
+	// A non-minimal encoding of the same field tag decodes to the same record.
+	noncanonical := append([]byte{encoded[0] | 0x80, 0}, encoded[1:]...)
+	for _, wire := range [][]byte{encoded[:len(encoded)-1], noncanonical} {
+		if actual, err := FlatPatchJSON(wire); actual != nil || err != ErrInvalid {
+			t.Fatalf("bad wire record returned %q, %v", actual, err)
+		}
+	}
+}
+
+func TestFlatPatchValidatorRejectsInvalidTypedValuesAndInputFields(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		input  bool
+		change func(*mediav1.MediaFlatPatchRecord)
+	}{
+		{"false null", false, func(r *mediav1.MediaFlatPatchRecord) {
+			r.Nodes[0].Kind = &mediav1.MediaFlatPatchNode_NullValue{}
+		}},
+		{"invalid UTF-8 value", false, func(r *mediav1.MediaFlatPatchRecord) {
+			r.Nodes[0].Kind = &mediav1.MediaFlatPatchNode_TextValue{TextValue: string([]byte{0xff})}
+		}},
+		{"truncated UTF-16 value", true, func(r *mediav1.MediaFlatPatchRecord) {
+			r.Nodes[0].Kind = &mediav1.MediaFlatPatchNode_TextUtf16Le{TextUtf16Le: []byte{0xd8}}
+		}},
+		{"missing nested object", false, func(r *mediav1.MediaFlatPatchRecord) {
+			r.Nodes[0].Kind = &mediav1.MediaFlatPatchNode_ObjectValue{}
+		}},
+		{"missing nested array", false, func(r *mediav1.MediaFlatPatchRecord) {
+			r.Nodes[1].Kind = &mediav1.MediaFlatPatchNode_ArrayValue{}
+		}},
+		{"invalid array reference", false, func(r *mediav1.MediaFlatPatchRecord) {
+			r.Nodes[1].GetArrayValue().Children[0] = 2
+		}},
+		{"ambiguous object key", true, func(r *mediav1.MediaFlatPatchRecord) {
+			r.Nodes[2].GetObjectValue().Members[0].KeyUtf16Le = []byte{0, 0xd8}
+		}},
+		{"empty input", true, func(r *mediav1.MediaFlatPatchRecord) {
+			r.Nodes = []*mediav1.MediaFlatPatchNode{flatObject()}
+		}},
+		{"unsupported input field", true, func(r *mediav1.MediaFlatPatchRecord) {
+			r.Nodes[2].GetObjectValue().Members[0].Key = "ignored"
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			record := &mediav1.MediaFlatPatchRecord{Nodes: []*mediav1.MediaFlatPatchNode{
+				{Kind: &mediav1.MediaFlatPatchNode_TextValue{TextValue: "text"}},
+				{Kind: &mediav1.MediaFlatPatchNode_ArrayValue{
+					ArrayValue: &mediav1.MediaFlatPatchArray{Children: []uint32{1}},
+				}},
+				flatObject(&mediav1.MediaFlatPatchMember{Key: "metadata", Child: 2}),
+			}}
+			if err := validateFlatRecord(record, tc.input); err != nil {
+				t.Fatalf("fixture is invalid: %v", err)
+			}
+			tc.change(record)
+			if err := validateFlatRecord(record, tc.input); err != ErrInvalid {
+				t.Fatalf("invalid value returned %v", err)
+			}
+		})
+	}
+}
+
 func TestFlatPatchBindsCapabilityPreparationCodecAndSigningDomain(t *testing.T) {
 	for _, test := range []struct {
 		name                string

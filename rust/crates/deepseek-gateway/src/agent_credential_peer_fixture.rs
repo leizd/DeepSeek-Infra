@@ -209,7 +209,7 @@ async fn credential_transport_refuses_foreign_hostname_and_bearer() {
                     api_key: Some("request-only-credential"),
                     tavily_api_key: None,
                     runtime_update: None,
-                },
+                }
             )
             .await
             .is_err()

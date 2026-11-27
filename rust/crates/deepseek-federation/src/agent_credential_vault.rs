@@ -155,6 +155,52 @@ impl AgentCredentialVault {
         Ok(bytes)
     }
 
+    /// Highest sealed revision for one run epoch. A missing object is `None`,
+    /// not revision zero, so the next legal seal can still be the metadata revision.
+    pub fn max_runtime_revision(
+        &self,
+        fleet_id: &str,
+        environment: &str,
+        run_id: &str,
+        metadata_epoch: u64,
+    ) -> Result<Option<u64>, FederationIdentityError> {
+        let mut max = None;
+        for entry in fs::read_dir(&self.root).map_err(|_| unavailable())? {
+            let entry = entry.map_err(|_| unavailable())?;
+            let path = entry.path();
+            let metadata = fs::symlink_metadata(&path).map_err(|_| unavailable())?;
+            if metadata.file_type().is_symlink() || !metadata.is_file() {
+                return Err(unavailable());
+            }
+            let name = entry.file_name();
+            let name = name.to_str().ok_or_else(unavailable)?;
+            if !name.ends_with(".json") {
+                return Err(unavailable());
+            }
+            let value: serde_json::Value =
+                serde_json::from_slice(&self.read_bytes(&path)?).map_err(|_| unavailable())?;
+            let scope = value.get("scope").ok_or_else(unavailable)?;
+            let same = scope.get("fleetId").and_then(serde_json::Value::as_str) == Some(fleet_id)
+                && scope.get("environment").and_then(serde_json::Value::as_str)
+                    == Some(environment)
+                && scope.get("runId").and_then(serde_json::Value::as_str) == Some(run_id)
+                && scope
+                    .get("metadataEpoch")
+                    .and_then(serde_json::Value::as_u64)
+                    == Some(metadata_epoch);
+            if !same {
+                continue;
+            }
+            let revision = scope
+                .get("runtimeRevision")
+                .and_then(serde_json::Value::as_u64)
+                .filter(|revision| *revision > 0)
+                .ok_or_else(unavailable)?;
+            max = Some(max.map_or(revision, |current: u64| current.max(revision)));
+        }
+        Ok(max)
+    }
+
     pub fn get(
         &self,
         signer: &ControlSigningKey,

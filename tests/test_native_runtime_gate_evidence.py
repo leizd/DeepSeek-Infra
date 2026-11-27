@@ -362,16 +362,17 @@ def test_the_go_race_suites_run_in_parallel_jobs_not_serially() -> None:
     )
     assert "run_native_go_race.py" not in fast_steps, "a race suite was folded back into native-go"
 
-    # Each race job runs the full suite with the original shard and parallelism.
+    # Both race jobs keep the same parallelism. More default shards fit the
+    # full corpus within the per-invocation deadline on slower runners.
     expected = {
-        "native-go-race": ("--variant default", ""),
-        "native-go-android": ("--variant android", "-tags=deepseek_android,sqlite3_flock"),
+        "native-go-race": ("--variant default", "", 8),
+        "native-go-android": ("--variant android", "-tags=deepseek_android,sqlite3_flock", 4),
     }
-    for job_name, (variant, tags) in expected.items():
+    for job_name, (variant, tags, shards) in expected.items():
         job = jobs[job_name]
         commands = " ".join(str(step.get("run", "")) for step in job["steps"])
         assert variant in commands, (job_name, variant)
-        assert "--store-shards 4" in commands, job_name
+        assert f"--store-shards {shards} " in commands, job_name
         # 4, not 2: the shards and the non-store packages now share one pool sized to
         # the runner's vCPU count, so half the machine is no longer idle.
         assert "--max-parallel 4" in commands, job_name

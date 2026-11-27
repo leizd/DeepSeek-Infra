@@ -139,6 +139,35 @@ func TestFlatPatchInputRejectsInvalidBodyBeforeAdmittingAnOperation(t *testing.T
 	}
 }
 
+func TestFlatPatchInputRetainsSupplementaryCodePointBeforeAnUnpairedSurrogate(t *testing.T) {
+	patch, err := ParsePublicPatch([]byte(`{"metadata":{"value":"😀\ud800"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := patch.GetFlatValues()
+	nodes := record.GetNodes()
+	if len(nodes) == 0 {
+		t.Fatal("parsed patch has no record")
+	}
+	metadata := flatInputField(t, record, nodes[len(nodes)-1], "metadata")
+	value := flatInputField(t, record, metadata, "value")
+	want := []byte{0x3d, 0xd8, 0, 0xde, 0, 0xd8}
+	if got := value.GetTextUtf16Le(); !bytes.Equal(got, want) {
+		t.Fatalf("supplementary code point or unpaired surrogate changed: %x", got)
+	}
+}
+
+func TestFlatPatchSyntaxRecognizesCompleteValuesBeforeExtraData(t *testing.T) {
+	const document = `{"metadata":{"中文":[{},[],0.25e+2]}}`
+	patch, err := ParsePublicPatch([]byte(document + " null"))
+	diagnostic, ok := err.(*PatchJSONSyntaxError)
+	afterSpace := len([]rune(document)) + 1
+	if patch != nil || !ok || diagnostic.description != "Extra data" ||
+		diagnostic.line != 1 || diagnostic.character != afterSpace || diagnostic.column != afterSpace+1 {
+		t.Fatalf("complete value before extra data returned %v, %v", patch, err)
+	}
+}
+
 func TestFlatPatchSyntaxMatchesOriginalDiagnostics(t *testing.T) {
 	raw, err := os.ReadFile("../../../tests/fixtures/native_media_patch_json_errors_v1.json")
 	if err != nil {

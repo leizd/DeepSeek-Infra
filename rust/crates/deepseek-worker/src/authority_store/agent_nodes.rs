@@ -62,6 +62,45 @@ pub(super) fn migrate_v6(connection: &Connection) -> Result<(), AuthorityRequest
     Ok(())
 }
 
+pub(super) fn schema_v7() -> Vec<String> {
+    let mut schema = schema_v6();
+    // A takeover keeps the action and metadata index and advances the epoch.
+    // The second effect needs that epoch in the identity key. The old row
+    // remains valid because its epoch is part of the wider key.
+    schema[0] = schema[0].replace(
+        "UNIQUE(run_id,phase,metadata_index,node_id)",
+        "UNIQUE(run_id,phase,metadata_index,node_id,epoch)",
+    );
+    for sql in &mut schema {
+        *sql = sql.replace(
+            "(e.run_id=NEW.run_id AND e.phase=NEW.phase AND e.metadata_index=NEW.metadata_index AND e.node_id=NEW.node_id)",
+            "(e.run_id=NEW.run_id AND e.phase=NEW.phase AND e.metadata_index=NEW.metadata_index AND e.node_id=NEW.node_id AND e.epoch=NEW.epoch)",
+        );
+    }
+    schema
+}
+
+pub(super) fn migrate_v7(connection: &Connection) -> Result<(), AuthorityRequestError> {
+    // Called only inside AuthorityStore::open's IMMEDIATE transaction, after
+    // the v6 schema is current. Copy every historical effect before dropping
+    // the old table. Do not rewrite claim, intent, grant, or outcome bytes.
+    let sql = schema_v6()[0]
+        .replace(
+            "CREATE TABLE \"agent_node_effects\" ",
+            "CREATE TABLE agent_node_effects_v7 ",
+        )
+        .replace(
+            "UNIQUE(run_id,phase,metadata_index,node_id)",
+            "UNIQUE(run_id,phase,metadata_index,node_id,epoch)",
+        );
+    connection.execute_batch(&sql).map_err(|_| error())?;
+    connection.execute_batch("INSERT INTO agent_node_effects_v7(rowid,operation_id,action_id,epoch,fencing_token,run_id,phase,metadata_index,node_id,claim,intent,grant,claim_scope_digest,intent_digest,grant_digest,state,output,output_sha256,created_at,updated_at) SELECT rowid,operation_id,action_id,epoch,fencing_token,run_id,phase,metadata_index,node_id,claim,intent,grant,claim_scope_digest,intent_digest,grant_digest,state,output,output_sha256,created_at,updated_at FROM agent_node_effects; DROP TABLE agent_node_effects; ALTER TABLE agent_node_effects_v7 RENAME TO agent_node_effects;").map_err(|_| error())?;
+    for trigger in &schema_v7()[1..] {
+        connection.execute_batch(trigger).map_err(|_| error())?;
+    }
+    Ok(())
+}
+
 fn denied() -> Status {
     agent_node_effect::denied()
 }
@@ -290,6 +329,121 @@ impl AuthorityStore {
         })
     }
 
+    /// Read the immutable tool-request row and bind the already published answer.
+    /// This does not rewrite that row and does not install an epoch. A presented
+    /// fence above the stored epoch is refused before any signature.
+    pub(crate) fn published_answer_outcome_evidence(
+        &self,
+        query: &crate::QueryAgentNodeEffect,
+        public_event: &serde_json::Value,
+        saved: &serde_json::Value,
+        config: &WorkerAuthorityConfig,
+    ) -> Result<
+        (
+            deepseek_protocol::generated::deepseek::agent::v1::AgentNodeOutcomeEvidence,
+            serde_json::Value,
+        ),
+        Status,
+    > {
+        use deepseek_protocol::generated::deepseek::agent::v1::{
+            AgentArtifactReference, AgentNodeOutcomeEvidence, AgentTaskOutputMetadata,
+        };
+        let row = stored(&self.connection, &query.operation_id)?.ok_or_else(denied)?;
+        if row.state != "CONFIRMED"
+            || row.phase != 2
+            || row.node_id != query.node_id
+            || row.run_id != query.run_id
+        {
+            return Err(denied());
+        }
+        if deepseek_policy::multi_agent::profile(&row.node_id).is_none() {
+            return Err(denied());
+        }
+        let admitted = row.intent.fence.clone().ok_or_else(denied)?;
+        if admitted.action_id != query.fence.action_id || admitted.execution_epoch != row.epoch {
+            return Err(denied());
+        }
+        let output_bytes = row.output.clone().ok_or_else(denied)?;
+        let output_sha256 = row.output_digest.clone().ok_or_else(denied)?;
+        if output_bytes.is_empty()
+            || output_bytes.len() > crate::MAX_AGENT_NODE_OUTCOME_BYTES
+            || agent_node_effect::digest(&output_bytes) != output_sha256
+        {
+            return Err(denied());
+        }
+        let output: serde_json::Value =
+            serde_json::from_slice(&output_bytes).map_err(|_| denied())?;
+        if authority_request::canonical_json_bytes(&output).map_err(|_| denied())? != output_bytes {
+            return Err(denied());
+        }
+        if output["runId"] != query.run_id || output["publicEvent"]["type"] != "agent_tool_request"
+        {
+            return Err(denied());
+        }
+        let decision = deepseek_policy::agent_runtime_admission::settle_published_answer(
+            std::slice::from_ref(public_event),
+            saved,
+            query.fence.execution_epoch,
+            row.epoch,
+            &row.intent.task,
+        );
+        if !decision.settled {
+            return Err(denied());
+        }
+        let event = decision.event.ok_or_else(denied)?;
+        let same_node = event["phase"].as_str() == Some(row.node_id.as_str())
+            && event["output"]["id"].as_str() == Some(row.node_id.as_str());
+        if decision.task != row.intent.task || !same_node {
+            return Err(denied());
+        }
+        if query.fence.execution_epoch != row.epoch {
+            return Err(denied());
+        }
+        live(&self.connection, &query.fence, self.fencing_token)?;
+        let sanitized = deepseek_policy::agent_run_data::sanitize(&event);
+        let bytes = serde_json::to_vec(&sanitized).map_err(|_| denied())?;
+        use sha2::{Digest as _, Sha256};
+        let answer_sha = format!("{:x}", Sha256::digest(&bytes));
+        let answer_len = u64::try_from(bytes.len()).map_err(|_| denied())?;
+        if answer_len == 0 || answer_len > 128 * 1024 * 1024 {
+            return Err(denied());
+        }
+        let evidence = AgentNodeOutcomeEvidence {
+            schema_version: 1,
+            fence: Some(admitted),
+            operation_id: row.operation_id,
+            run_id: row.run_id,
+            node_id: row.node_id,
+            phase: row.phase,
+            request: row.intent.request,
+            plan_digest: row.intent.plan_digest,
+            metadata_index: row.metadata_index,
+            metadata_epoch: row.intent.metadata_epoch,
+            writer_fencing_token: row.token,
+            created_at: row.created_at,
+            confirmed_at: row.updated_at,
+            outcome_sha256: output_sha256,
+            outcome_length: u64::try_from(output_bytes.len()).map_err(|_| denied())?,
+            public_event: Some(AgentArtifactReference {
+                sha256: answer_sha,
+                length: answer_len,
+            }),
+            provider_plan: Vec::new(),
+            task_output: Some(AgentTaskOutputMetadata {
+                schema_version: 1,
+                prompt_tokens: decision.prompt_tokens,
+                completion_tokens: decision.completion_tokens,
+                latency_ms: decision.latency_ms,
+                failed: decision.failed,
+            }),
+            // A published answer is never a conclusive planner/synthesis rejection.
+            failure: None,
+            fleet_id: config.fleet_id.clone(),
+            environment: config.environment.clone(),
+        };
+        Ok((evidence, event))
+    }
+
     /// Historical reads do not spend a dispatch reservation or require a live
     /// lease. The complete outcome stays in Rust and is projected by its executor.
     pub(crate) fn agent_node_outcome(
@@ -342,7 +496,96 @@ impl AuthorityStore {
             authority_request::parse_utc_z_str(grant["expiresAt"].as_str().ok_or_else(denied)?)
                 .map_err(|_| denied())?;
         let claim = response.claim.as_ref().ok_or_else(denied)?;
-        Ok(expires.min(claim.lease_until).min(claim.writer_lease_until))
+        Ok(
+            deepseek_policy::agent_runtime_admission::agent_node_send_deadline(
+                expires,
+                claim.lease_until,
+                claim.writer_lease_until,
+            ),
+        )
+    }
+
+    /// Go admits dependency completion; Rust resolves the matching immutable
+    /// provider bodies itself. Caller text and older plan generations are denied.
+    /// A bare tool request has no saved answer, so it still cannot satisfy a dependency.
+    #[cfg(test)]
+    pub(crate) fn agent_task_prior_outputs(
+        &self,
+        permit: &AgentNodeEffectPermit,
+    ) -> Result<Vec<serde_json::Value>, Status> {
+        self.agent_task_prior_outputs_for(permit, |_| None)
+    }
+
+    pub(crate) fn agent_task_prior_outputs_for(
+        &self,
+        permit: &AgentNodeEffectPermit,
+        mut saved_for: impl FnMut(&str) -> Option<serde_json::Value>,
+    ) -> Result<Vec<serde_json::Value>, Status> {
+        live(&self.connection, &permit.fence, permit.fencing_token)?;
+        let current = stored(&self.connection, &permit.operation_id)?.ok_or_else(denied)?;
+        if self.fencing_token != permit.fencing_token
+            || current.state != "DISPATCHING"
+            || !matches!(current.intent.phase, 2 | 3)
+            || (current.intent.phase == 3
+                && (current.intent.node_id != "synthesizer"
+                    || current.intent.depends_on.is_empty()))
+            || current.intent_digest != permit.intent_digest
+            || current.grant_digest != permit.grant_digest
+            || agent_node_effect::digest(&permit.intent.encode_to_vec()) != permit.intent_digest
+            || permit.intent.depends_on.len() > 4
+        {
+            return Err(denied());
+        }
+        let mut outputs = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for dependency in &permit.intent.depends_on {
+            if dependency == &permit.intent.node_id
+                || !seen.insert(dependency)
+                || deepseek_policy::multi_agent::profile(dependency).is_none()
+            {
+                return Err(denied());
+            }
+            let operation: String = self.connection.query_row(
+                "SELECT operation_id FROM agent_node_effects WHERE run_id=?1 AND phase=2 AND node_id=?2 AND metadata_index<=?3 ORDER BY metadata_index DESC LIMIT 1",
+                params![permit.intent.run_id, dependency, permit.intent.metadata_index], |row| row.get(0))
+                .map_err(|_| denied())?;
+            let source = stored(&self.connection, &operation)?.ok_or_else(denied)?;
+            if source.intent.plan_digest != permit.intent.plan_digest
+                || source.intent.request != permit.intent.request
+                || source.intent.metadata_epoch > permit.intent.metadata_epoch
+                || (permit.intent.phase == 3
+                    && source.intent.metadata_epoch != permit.intent.metadata_epoch)
+                || source.token > permit.fencing_token
+                || source.intent.task.is_empty()
+            {
+                return Err(denied());
+            }
+            let source_task = source.intent.task.clone();
+            let known = outcome(source)?;
+            let envelope: serde_json::Value =
+                serde_json::from_slice(&known.output).map_err(|_| denied())?;
+            let kind = envelope
+                .get("publicEvent")
+                .and_then(|event| event.get("type"))
+                .and_then(serde_json::Value::as_str);
+            let saved = if kind == Some("agent_tool_request") {
+                saved_for(&operation)
+            } else {
+                None
+            };
+            let decision = deepseek_policy::agent_runtime_admission::published_dependency_output(
+                &envelope,
+                saved.as_ref(),
+                dependency,
+                &source_task,
+                &permit.intent.run_id,
+            );
+            if !decision.ready {
+                return Err(denied());
+            }
+            outputs.push(decision.output.ok_or_else(denied)?);
+        }
+        Ok(outputs)
     }
 
     pub(crate) fn agent_node_snapshot(

@@ -848,6 +848,146 @@ pub fn read_file_chunk(
 
 // --- the write path ---------------------------------------------------------------
 
+const PROJECT_METADATA_NOT_OWNED: &str = concat!(
+    "The project metadata store is still written by the Python runtime, ",
+    "so this gateway refuses to mutate it."
+);
+
+/// Whether this process may open a project-file upload.
+///
+/// `native_owner` is the route's `may_write_native_store("project_metadata_store")`
+/// result. A false value refuses before the multipart parser, the file cache,
+/// and `project.json`. Allowing the parse does not attach a document and does
+/// not write.
+pub struct ProjectMetadataAdmission {
+    pub allowed: bool,
+    pub attach: bool,
+    pub metadata_write: bool,
+    pub cache_write: bool,
+    pub code: &'static str,
+    pub status: u16,
+    pub message: String,
+}
+
+pub fn admit_project_metadata_write(native_owner: bool) -> ProjectMetadataAdmission {
+    if !native_owner {
+        return ProjectMetadataAdmission {
+            allowed: false,
+            attach: false,
+            metadata_write: false,
+            cache_write: false,
+            code: "NATIVE_PROJECT_METADATA_WRITE_NOT_OWNED",
+            status: 409,
+            message: PROJECT_METADATA_NOT_OWNED.to_string(),
+        };
+    }
+    ProjectMetadataAdmission {
+        allowed: true,
+        attach: false,
+        metadata_write: false,
+        cache_write: false,
+        code: "",
+        status: 200,
+        message: String::new(),
+    }
+}
+
+/// One uploaded part after the native writer owns `project_metadata_store`.
+///
+/// A false owner refuses before `admit_file_text_part`. Empty and unreadable
+/// text refuse before `write_cache` and before `write_project`. A legal text,
+/// HTML, DOCX, PPTX, XLSX, or EPUB part may be attached with both write
+/// flags. PDF and a magic-valid image continue to the existing extractor;
+/// this gate does not invent their text and does not write.
+pub struct ProjectFilePartAdmission {
+    pub attach: bool,
+    pub metadata_write: bool,
+    pub cache_write: bool,
+    pub code: &'static str,
+    pub status: u16,
+    pub message: String,
+    pub text: String,
+    pub kind: String,
+}
+
+fn project_part_not_owned() -> ProjectFilePartAdmission {
+    ProjectFilePartAdmission {
+        attach: false,
+        metadata_write: false,
+        cache_write: false,
+        code: "NATIVE_PROJECT_METADATA_WRITE_NOT_OWNED",
+        status: 409,
+        message: PROJECT_METADATA_NOT_OWNED.to_string(),
+        text: String::new(),
+        kind: String::new(),
+    }
+}
+
+fn project_part_refused(
+    message: String,
+    code: &'static str,
+    status: u16,
+) -> ProjectFilePartAdmission {
+    ProjectFilePartAdmission {
+        attach: false,
+        metadata_write: false,
+        cache_write: false,
+        code,
+        status,
+        message,
+        text: String::new(),
+        kind: String::new(),
+    }
+}
+
+pub fn admit_project_file_part(
+    native_owner: bool,
+    filename: &str,
+    content_type: &str,
+    data: &[u8],
+    ocr_enabled: bool,
+) -> ProjectFilePartAdmission {
+    if !native_owner {
+        return project_part_not_owned();
+    }
+    let part = crate::file_upload::admit_file_text_part(filename, content_type, data, ocr_enabled);
+    let cache_write = part.cache_write;
+    match part.action {
+        crate::file_upload::FileTextAction::Refuse(error) => {
+            project_part_refused(error.message, error.code, error.status)
+        }
+        crate::file_upload::FileTextAction::Text { text, kind }
+            if cache_write && !text.is_empty() =>
+        {
+            ProjectFilePartAdmission {
+                attach: true,
+                metadata_write: true,
+                cache_write: true,
+                code: "",
+                status: 200,
+                message: String::new(),
+                text,
+                kind,
+            }
+        }
+        crate::file_upload::FileTextAction::Text { .. } => project_part_refused(
+            "No readable text found in this file".to_string(),
+            crate::app_error::codes::INVALID_PAYLOAD,
+            422,
+        ),
+        crate::file_upload::FileTextAction::Continue => ProjectFilePartAdmission {
+            attach: true,
+            metadata_write: false,
+            cache_write: false,
+            code: "",
+            status: 200,
+            message: String::new(),
+            text: String::new(),
+            kind: String::new(),
+        },
+    }
+}
+
 /// Add uploaded files to an existing project, mirroring `add_project_files`.
 ///
 /// The caller is the production route, and it must already have decided that this
