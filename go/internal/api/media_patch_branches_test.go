@@ -3,7 +3,9 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/leizd/DeepSeek-Infra/go/internal/config"
@@ -74,5 +76,42 @@ func TestMediaPatchReportsAMissingOperationIdentity(t *testing.T) {
 	}
 	if code == "" {
 		t.Fatalf("refusal carried no code: %s", w.Body.String())
+	}
+}
+
+func TestMediaPatchRefusesFailedStoreOperationsBeforeDispatch(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		mediaID         string
+		closeControl    bool
+		wantOperationID bool
+	}{
+		{"unreadable pending state", "media_one", true, false},
+		{"refused admission", strings.Repeat("a", 513), false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			control, peer, _ := mediaWireFixture(t, tc.name)
+			if tc.closeControl {
+				if err := control.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			request := httptest.NewRequest(http.MethodPatch, "http://127.0.0.1/api/media/"+tc.mediaID, strings.NewReader(`{"title":"Changed"}`))
+			request.Header.Set("Authorization", "Bearer "+strings.Repeat("m", 32))
+			response := httptest.NewRecorder()
+			view := PublicView{Mode: config.ModeAuthoritative, MutationAuthority: config.MutationAuthorityGo}
+			mediaPatch(response, request, control, view)
+			if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), "EFFECT_UNKNOWN") {
+				t.Fatalf("storage failure returned %d %s", response.Code, response.Body.String())
+			}
+			if id := response.Header().Get("X-DeepSeek-Operation-Id"); (id != "") != tc.wantOperationID {
+				t.Fatalf("storage failure returned an unexpected operation ID %q", id)
+			}
+			peer.mu.Lock()
+			defer peer.mu.Unlock()
+			if peer.executed != 0 || peer.queried != 0 {
+				t.Fatalf("failed admission reached the worker: %d executions, %d queries", peer.executed, peer.queried)
+			}
+		})
 	}
 }

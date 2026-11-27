@@ -1,6 +1,8 @@
 package store
 
 import (
+	"errors"
+	"strings"
 	"testing"
 )
 
@@ -91,5 +93,37 @@ func TestAgentNodeDispatchSnapshotRefusesACorruptPayload(t *testing.T) {
 	}
 	if _, _, _, err := control.AgentNodeDispatchSnapshot(input.ActionID, input.NodeID); err == nil {
 		t.Fatal("a dispatch payload without an intent was read as valid custody")
+	}
+}
+
+func TestDispatchAndSuccessorRefuseCorruptActionRecords(t *testing.T) {
+	control, input, _ := successorReadyFixture(t)
+	bind := successorBindRequest(input)
+	admit := AgentSuccessorEpochRequest{
+		OperationID: "admit-corrupt-successor", Actor: bind.Actor, ActionID: bind.ActionID,
+		Epoch: bind.Epoch, RunID: bind.RunID, NodeID: bind.NodeID, Owner: bind.Owner,
+		ClaimToken: bind.ClaimToken, Effect: bind.Effect, ResetAdmitted: bind.ResetAdmitted,
+		ResetFenceMatches: bind.ResetFenceMatches, ResetIndex: bind.ResetIndex,
+	}
+	before := countControlEvents(t, control)
+	digest := strings.Repeat("0", 64)
+	if _, err := control.db.Exec("UPDATE action_journal SET record_digest=? WHERE id=?", digest, input.ActionID); err != nil {
+		t.Fatal(err)
+	}
+	dispatch := input
+	dispatch.OperationID = "dispatch-corrupt-successor"
+	if _, err := control.BeginAgentNodeDispatch(dispatch); !errors.Is(err, ErrCorruptRecord) {
+		t.Fatalf("dispatch accepted corrupt custody: %v", err)
+	}
+	if _, err := control.BindAgentNodeSuccessor(bind); !errors.Is(err, ErrCorruptRecord) {
+		t.Fatalf("binding accepted corrupt custody: %v", err)
+	}
+	if _, err := control.AdmitSuccessorDispatch(admit); !errors.Is(err, ErrCorruptRecord) {
+		t.Fatalf("admission accepted corrupt custody: %v", err)
+	}
+	var afterDigest string
+	if err := control.db.QueryRow("SELECT record_digest FROM action_journal WHERE id=?", input.ActionID).Scan(&afterDigest); err != nil ||
+		afterDigest != digest || countControlEvents(t, control) != before {
+		t.Fatalf("refusal changed the unreadable action or its history: %v", err)
 	}
 }

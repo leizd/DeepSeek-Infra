@@ -32,25 +32,44 @@ func (p *compactPatchWirePeer) ExecutePatch(_ context.Context, r *mediav1.Execut
 	if err != nil {
 		return nil, err
 	}
-	value, err := mediamodel.FromJSON(map[string]any{"mediaId": claim.Intent.MediaId, "title": "Changed", "metadata": map[string]any{"retained": strings.Repeat("x", 5*1024*1024)}})
-	if err != nil {
-		return nil, err
-	}
-	record := value.GetObjectValue()
-	if p.mode == "compact-invalid-record" {
-		record.ProtoReflect().SetUnknown([]byte{0xf8, 7, 1})
+	var record proto.Message
+	outcomeVersion, preparationVersion := uint32(mediamodel.CompactPatchOutcomeVersion), uint32(1)
+	signatureDomain := "deepseek-infra:media-patch-outcome-v2\x00"
+	if strings.HasPrefix(p.mode, "flat-") {
+		outcomeVersion, preparationVersion = mediamodel.FlatPatchOutcomeVersion, 2
+		signatureDomain = "deepseek-infra:media-patch-outcome-v4\x00"
+		title := &mediav1.MediaFlatPatchMember{Key: "title", Child: 1}
+		if p.mode == "flat-invalid-record" {
+			title.Child = 2
+		}
+		record = &mediav1.MediaFlatPatchRecord{Nodes: []*mediav1.MediaFlatPatchNode{
+			{Kind: &mediav1.MediaFlatPatchNode_TextValue{TextValue: "Changed"}},
+			{Kind: &mediav1.MediaFlatPatchNode_ObjectValue{ObjectValue: &mediav1.MediaFlatPatchObject{
+				Members: []*mediav1.MediaFlatPatchMember{title},
+			}}},
+		}}
+	} else {
+		value, err := mediamodel.FromJSON(map[string]any{"mediaId": claim.Intent.MediaId, "title": "Changed", "metadata": map[string]any{"retained": strings.Repeat("x", 5*1024*1024)}})
+		if err != nil {
+			return nil, err
+		}
+		object := value.GetObjectValue()
+		if p.mode == "compact-invalid-record" {
+			object.ProtoReflect().SetUnknown([]byte{0xf8, 7, 1})
+		}
+		record = object
 	}
 	p.record, err = (proto.MarshalOptions{Deterministic: true}).Marshal(record)
 	if err != nil {
 		return nil, err
 	}
 	digest := sha256.Sum256(p.record)
-	preparation, err := (proto.MarshalOptions{Deterministic: true}).Marshal(&mediav1.MediaPatchPreparation{SchemaVersion: 1, Claim: claim, RecordSha256: digest[:], RecordBytes: uint64(len(p.record))})
+	preparation, err := (proto.MarshalOptions{Deterministic: true}).Marshal(&mediav1.MediaPatchPreparation{SchemaVersion: preparationVersion, Claim: claim, RecordSha256: digest[:], RecordBytes: uint64(len(p.record))})
 	if err != nil {
 		return nil, err
 	}
 	prepared := sha256.Sum256(preparation)
-	outcome := &mediav1.MediaPatchOutcome{SchemaVersion: 2, OperationId: r.OperationId, OriginalFence: r.Fence, RequestSha256: claim.RequestSha256, State: mediav1.MediaPatchEffectState_MEDIA_PATCH_EFFECT_STATE_APPLIED, HttpStatus: 200, BeforeSha256: digest[:], AfterSha256: digest[:], FleetId: claim.FleetId, Environment: claim.Environment, WriterFencingToken: claim.WriterFencingToken, Patched: &mediav1.MediaPatchedResult{RecordSha256: digest[:], RecordBytes: uint64(len(p.record)), PreparationSha256: prepared[:], OriginalFence: r.Fence}}
+	outcome := &mediav1.MediaPatchOutcome{SchemaVersion: outcomeVersion, OperationId: r.OperationId, OriginalFence: r.Fence, RequestSha256: claim.RequestSha256, State: mediav1.MediaPatchEffectState_MEDIA_PATCH_EFFECT_STATE_APPLIED, HttpStatus: 200, BeforeSha256: digest[:], AfterSha256: digest[:], FleetId: claim.FleetId, Environment: claim.Environment, WriterFencingToken: claim.WriterFencingToken, Patched: &mediav1.MediaPatchedResult{RecordSha256: digest[:], RecordBytes: uint64(len(p.record)), PreparationSha256: prepared[:], OriginalFence: r.Fence}}
 	encoded, err := mediamodel.Encode(outcome)
 	if err != nil {
 		return nil, err
@@ -59,7 +78,7 @@ func (p *compactPatchWirePeer) ExecutePatch(_ context.Context, r *mediav1.Execut
 	if _, err = p.control.BeginMediaPatchDispatch(&mediav1.BeginMediaPatchDispatchRequest{SchemaVersion: 1, OperationId: r.OperationId, Fence: r.Fence, ClaimToken: claim.ClaimToken, WriterFencingToken: claim.WriterFencingToken, PreparationSha256: dispatch[:]}); err != nil {
 		return nil, err
 	}
-	outcome.Signature = ed25519.Sign(p.key, append([]byte("deepseek-infra:media-patch-outcome-v2\x00"), encoded...))
+	outcome.Signature = ed25519.Sign(p.key, append([]byte(signatureDomain), encoded...))
 	p.retained = outcome
 	if p.mode == "compact-lost-reply" {
 		return nil, status.Error(codes.Unavailable, "isolated execution reply loss")
@@ -89,7 +108,7 @@ func (p *compactPatchWirePeer) ReadPatchResult(r *mediav1.ReadMediaPatchResultRe
 		if err := s.Send(&mediav1.MediaPatchResultChunk{SchemaVersion: 1, Offset: uint64(offset), RecordChunk: p.record[offset:end]}); err != nil {
 			return err
 		}
-		if p.mode == "compact-interrupted-read" && p.reads == 1 {
+		if (p.mode == "compact-interrupted-read" || p.mode == "flat-interrupted-read") && p.reads == 1 {
 			return status.Error(codes.Unavailable, "isolated result stream loss")
 		}
 	}
@@ -141,6 +160,48 @@ func TestCompactPatchHTTPUsesTheOriginalAppliedRecordAfterFreshAndLostReplies(t 
 				if base.executed != 1 || compact.reads != 2 {
 					t.Fatal("reread executed mutation")
 				}
+			}
+		})
+	}
+}
+
+func TestFlatPatchHTTPPreservesSettlementWhenReadingTheSignedResult(t *testing.T) {
+	for _, tc := range []struct {
+		mode string
+		code int
+	}{
+		{"flat-success", http.StatusOK},
+		{"flat-interrupted-read", http.StatusServiceUnavailable},
+		{"flat-invalid-record", http.StatusServiceUnavailable},
+	} {
+		t.Run(tc.mode, func(t *testing.T) {
+			var peer *compactPatchWirePeer
+			control, _, server := mediaWireFixture(t, tc.mode, func(s *grpc.Server, base *mediaWirePeer) {
+				peer = &compactPatchWirePeer{mediaWirePeer: base}
+				mediav1.RegisterMediaMutationWorkerServer(s, peer)
+			})
+			code, body, operation := mediaWirePatch(t, server)
+			if code != tc.code {
+				t.Fatalf("HTTP %d, want %d: %v", code, tc.code, body)
+			}
+			if code == http.StatusOK {
+				value, ok := body["media"].(map[string]any)
+				if !ok || value["title"] != "Changed" {
+					t.Fatalf("signed record changed in the public response: %v", body)
+				}
+			} else if body["code"] != "EFFECT_UNKNOWN" {
+				t.Fatalf("unreadable record lost its unknown-effect code: %v", body)
+			}
+			peer.mu.Lock()
+			outcome := peer.retained
+			executed, reads := peer.executed, peer.reads
+			peer.mu.Unlock()
+			if outcome == nil || operation != outcome.OperationId || executed != 1 || reads != 1 {
+				t.Fatalf("operation identity or effect changed: %q, %d executions, %d reads", operation, executed, reads)
+			}
+			claim, err := control.GetMediaPatchClaim(operation, outcome.OriginalFence)
+			if err != nil || claim.State != "APPLIED" {
+				t.Fatalf("reading the result changed the settlement: %v %v", claim, err)
 			}
 		})
 	}

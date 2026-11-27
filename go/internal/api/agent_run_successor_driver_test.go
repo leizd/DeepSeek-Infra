@@ -13,6 +13,7 @@ import (
 	"github.com/leizd/DeepSeek-Infra/go/internal/store"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 // These cases drive the two successor entry points directly. Both guard the
@@ -417,6 +418,59 @@ func TestSuccessorExecuteRunsTheStoredGenerationOnTheTakeoverEpoch(t *testing.T)
 	}
 	if effect != nil {
 		t.Fatalf("a refused settlement still returned an effect: %+v", effect)
+	}
+}
+
+func TestSuccessorDispatchRequiresReadableCustodyAndASignedGrant(t *testing.T) {
+	ctx := context.Background()
+	fixture, setup := newSuccessorFixture(t).claimTasks(t)
+	operation := bindOriginal(t, fixture, setup.claim, "coder", "successor-begin")
+	fixture = appendReset(t, fixture, "coder")
+	driver, worker := fixture.driver, fixture.worker
+	calls := len(worker.calls)
+
+	wrongRun := proto.Clone(setup.claim).(*agentv1.AgentRunExecutionClaim)
+	wrongRun.RunId = "run_missing"
+	if err := driver.successorHold(worker.nodes, wrongRun, "coder", operation, "CONFIRMED"); !errors.Is(err, store.ErrEmptyRecordID) {
+		t.Fatalf("missing reset custody returned %v", err)
+	}
+	if _, err := driver.successorExecute(ctx, worker, worker.nodes, wrongRun, nil, "coder", operation, "CONFIRMED"); !errors.Is(err, store.ErrEmptyRecordID) {
+		t.Fatalf("missing execution custody returned %v", err)
+	}
+	if _, err := driver.successorExecute(ctx, worker, worker.nodes, setup.claim, nil, "critic", operation, "CONFIRMED"); !errors.Is(err, errAgentDriverUnknown) {
+		t.Fatalf("absent original intent returned %v", err)
+	}
+	foreign := proto.Clone(setup.claim).(*agentv1.AgentRunExecutionClaim)
+	foreign.Owner = "foreign-worker"
+	if err := driver.successorHold(worker.nodes, foreign, "coder", operation, "CONFIRMED"); !errors.Is(err, store.ErrActionLeaseStale) {
+		t.Fatalf("foreign owner reached generation binding: %v", err)
+	}
+	foreign.Owner, foreign.ClaimToken = setup.claim.Owner, ""
+	if err := driver.successorHold(worker.nodes, foreign, "coder", operation, "CONFIRMED"); !errors.Is(err, errAgentDriverReset) {
+		t.Fatalf("missing token reached generation binding: %v", err)
+	}
+
+	minted := mintGeneration(t, fixture, setup.claim, "coder", operation)
+	takeover, _ := takeOver(t, fixture, setup.claim)
+	foreign = proto.Clone(takeover).(*agentv1.AgentRunExecutionClaim)
+	foreign.ClaimToken = "foreign-token"
+	if _, err := driver.successorExecute(ctx, worker, worker.nodes, foreign, nil, "coder", operation, "CONFIRMED"); !errors.Is(err, store.ErrInvalidClaimToken) {
+		t.Fatalf("foreign token reached successor admission: %v", err)
+	}
+	signerErr := errors.New("fixture signer unavailable")
+	driver.service.executionSigner = func(*store.Control) (*agentExecutionSignerSession, error) {
+		return nil, signerErr
+	}
+	if effect, err := driver.successorExecute(ctx, worker, worker.nodes, takeover, nil, "coder", operation, "CONFIRMED"); effect != nil || !errors.Is(err, signerErr) {
+		t.Fatalf("signer failure returned %+v, %v", effect, err)
+	}
+	if len(worker.calls) != calls {
+		t.Fatal("a successor with unusable custody or a missing grant reached the worker")
+	}
+	record, intent, found, err := driver.service.control.AgentNodeDispatchSnapshot(takeover.Fence.ActionId, "coder")
+	if err != nil || !found || record.State != "CLAIMED" ||
+		intent.OperationID != operation || intent.SuccessorOperationID != minted {
+		t.Fatalf("signer failure changed the bound successor: %+v %+v %v", record, intent, err)
 	}
 }
 
