@@ -1431,49 +1431,42 @@ jobs:
       - run: python scripts/native_runtime_evidence.py
       - run: python scripts/control_plane_shadow.py --check --export-report artifacts/control-shadow-report.json
 
-  # The race suites are the entire cost of the Go gate: 87 minutes for the default
-  # variant and 79 for the Android one, against 16 minutes for everything else in
-  # native-go. They are independent - separate build tags, separate store shards,
-  # separate coverage profiles - so they run as their own jobs now instead of
-  # back-to-back inside one 183-minute job.
-  #
-  # Each job still runs the whole suite with the same shard and parallelism settings.
-  # Nothing was dropped, bounded shorter, or run without -race.
-  native-go-race:
+  # Run both build variants in parallel. Each variant's required check verifies
+  # the exhaustive race corpus from all of its runner groups.
+  native-go-default-shards:
     needs: release-version
+    uses: ./.github/workflows/native-go-race-shards.yml
+    with:
+      variant: default
+
+  native-go-android-shards:
+    needs: release-version
+    uses: ./.github/workflows/native-go-race-shards.yml
+    with:
+      variant: android
+
+  native-go-race:
+    needs: native-go-default-shards
+    if: ${{ always() && !cancelled() }}
     runs-on: ubuntu-latest
-    env:
-      GOTOOLCHAIN: local
-      GOSUMDB: sum.golang.org
-    defaults:
-      run:
-        working-directory: go
-    timeout-minutes: 150
+    timeout-minutes: 10
     steps:
+      - name: Require successful default race shards
+        env:
+          GO_RACE_RESULT: ${{ needs.native-go-default-shards.result }}
+        run: test "$GO_RACE_RESULT" = success
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install checksum-pinned Go 1.27.1
-        shell: bash
-        run: |
-          set -euo pipefail
-          archive="$RUNNER_TEMP/go1.27.1.linux-amd64.tar.gz"
-          install_dir="$RUNNER_TEMP/go-1.27.1"
-          curl --fail --location --silent --show-error \
-            --output "$archive" \
-            https://go.dev/dl/go1.27.1.linux-amd64.tar.gz
-          echo "63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445  $archive" | sha256sum --check --strict
-          mkdir -p "$install_dir"
-          tar -xzf "$archive" -C "$install_dir"
-          echo "$install_dir/go/bin" >> "$GITHUB_PATH"
-      - run: test "$(go env GOVERSION)" = "go1.27.1"
-      # The default SQLite race suite reached the 90m deadline with four shards.
-      # Split the same tests into eight shards without increasing parallelism.
-      - name: Full Go race tests with timing reports
-        run: |
-          mkdir -p ../artifacts/go-race
-          python ../scripts/run_native_go_race.py --variant default --out ../artifacts/go-race/default --store-shards 8 --max-parallel 4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: go-race-shard-default-*
+          path: artifacts/go-race/default-shards
+      - name: Verify the complete default Go race corpus
+        run: >-
+          python -m scripts.run_native_go_race_matrix --variant default
+          --merge-from artifacts/go-race/default-shards --out artifacts/go-race/default
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -1482,7 +1475,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-  native-go-android:
+  native-go-android-coverage:
     needs: release-version
     runs-on: ubuntu-latest
     env:
@@ -1514,17 +1507,41 @@ jobs:
           echo "$install_dir/go/bin" >> "$GITHUB_PATH"
       - run: test "$(go env GOVERSION)" = "go1.27.1"
       - run: go vet ./...
-      - name: Android Go SQLite compatibility checks
-        run: |
-          mkdir -p ../artifacts/go-race
-          python ../scripts/run_native_go_race.py --variant android --out ../artifacts/go-race/android --store-shards 4 --max-parallel 4
-          python ../scripts/check_go_coverage.py --dir . --min 95.0 --profile android-coverage.out
+      - name: Android Go SQLite coverage
+        run: python ../scripts/check_go_coverage.py --dir . --min 95.0 --profile android-coverage.out
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: go-android-coverage-profile-1.27.1
           path: go/android-coverage.out
           if-no-files-found: warn
+
+  native-go-android:
+    needs: [native-go-android-shards, native-go-android-coverage]
+    if: ${{ always() && !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Require successful Android race shards and coverage
+        shell: bash
+        env:
+          GO_RACE_RESULT: ${{ needs.native-go-android-shards.result }}
+          GO_COVERAGE_RESULT: ${{ needs.native-go-android-coverage.result }}
+        run: |
+          test "$GO_RACE_RESULT" = success
+          test "$GO_COVERAGE_RESULT" = success
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: go-race-shard-android-*
+          path: artifacts/go-race/android-shards
+      - name: Verify the complete Android Go race corpus
+        run: >-
+          python -m scripts.run_native_go_race_matrix --variant android
+          --merge-from artifacts/go-race/android-shards --out artifacts/go-race/android
       - uses: actions/upload-artifact@v4
         if: always()
         with:

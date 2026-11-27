@@ -26,6 +26,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 STORE_PACKAGE = "github.com/leizd/DeepSeek-Infra/go/internal/store"
 GO_TIMEOUT = "90m"
+VARIANT_BUDGET_SECONDS = 9000
 
 
 class RaceGateError(RuntimeError):
@@ -161,31 +162,50 @@ def execute(command: list[str], cwd: Path, output: Path, timeout: float) -> dict
     return result
 
 
-def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
+def require_cloud_execution() -> None:
     if os.environ.get("GITHUB_ACTIONS") != "true" or not sys.platform.startswith("linux"):
         raise RaceGateError("NATIVE_GO_RACE_EXECUTION_IS_CLOUD_ONLY")
-    deadline = time.monotonic() + 9000
+
+
+def cloud_identity(variant: str) -> tuple[dict[str, Any], dict[str, Any]]:
     revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True, timeout=30).strip()
     if revision != os.environ.get("GITHUB_SHA"):
         raise RaceGateError("EXACT_CLOUD_REVISION_REQUIRED")
     toolchain = json.loads((ROOT / "release/native_runtime_toolchain_v1.json").read_text())["go"]["version"]
-    if subprocess.check_output(["go", "env", "GOVERSION"], text=True, timeout=30).strip() != "go" + toolchain:
+    baseline_bytes = (ROOT / "tests/native/go_race_baseline_v1.json").read_bytes()
+    baseline = json.loads(baseline_bytes)["variants"][variant]
+    identity = dict(
+        variant=variant, sourceCommit=revision,
+        runId=os.environ.get("GITHUB_RUN_ID"), event=os.environ.get("GITHUB_EVENT_NAME"),
+        sourceTree=subprocess.check_output(["git", "rev-parse", "HEAD^{tree}"], cwd=ROOT, text=True, timeout=30).strip(),
+        goSourceTree=subprocess.check_output(["git", "rev-parse", "HEAD:go"], cwd=ROOT, text=True, timeout=30).strip(),
+        goVersion=toolchain, goFlags="" if variant == "default" else "-tags=deepseek_android,sqlite3_flock",
+        baselineSha256=hashlib.sha256(baseline_bytes).hexdigest(),
+        originalGoTimeoutPerInvocation=GO_TIMEOUT, variantWallClockBudgetSeconds=VARIANT_BUDGET_SECONDS,
+        originalBaselineStoreTests=len(baseline["topLevelTests"][STORE_PACKAGE]),
+    )
+    return identity, baseline
+
+
+def cloud_packages(identity: dict[str, Any], baseline: dict[str, Any]) -> list[str]:
+    if subprocess.check_output(["go", "env", "GOVERSION"], text=True, timeout=30).strip() != "go" + identity["goVersion"]:
         raise RaceGateError("GO_TOOLCHAIN_PIN_DIFFERS")
-    flags = os.environ.get("GOFLAGS", "")
-    expected_flags = "" if args.variant == "default" else "-tags=deepseek_android,sqlite3_flock"
-    if flags != expected_flags or subprocess.check_output(["go", "env", "CGO_ENABLED"], text=True, timeout=30).strip() != "1":
+    if os.environ.get("GOFLAGS", "") != identity["goFlags"] or subprocess.check_output(
+        ["go", "env", "CGO_ENABLED"], text=True, timeout=30
+    ).strip() != "1":
         raise RaceGateError("GO_RACE_VARIANT_CONFIGURATION_INVALID")
-    baseline_path = ROOT / "tests/native/go_race_baseline_v1.json"
-    baseline = json.loads(baseline_path.read_text())["variants"][args.variant]
     packages = subprocess.check_output(["go", "list", "./..."], cwd=ROOT / "go", text=True, timeout=120).splitlines()
     if len(packages) != len(set(packages)) or not set(baseline["packages"]) <= set(packages) or STORE_PACKAGE not in packages:
         raise RaceGateError("GO_PACKAGE_CORPUS_INCOMPLETE")
-    report.update(sourceCommit=revision, goVersion=toolchain, goFlags=flags,
-                  sourceTree=subprocess.check_output(["git", "rev-parse", "HEAD^{tree}"], cwd=ROOT, text=True, timeout=30).strip(),
-                  goSourceTree=subprocess.check_output(["git", "rev-parse", "HEAD:go"], cwd=ROOT, text=True, timeout=30).strip(),
-                  baselineSha256=hashlib.sha256(baseline_path.read_bytes()).hexdigest(), packages=packages,
-                  originalGoTimeoutPerInvocation=GO_TIMEOUT, variantWallClockBudgetSeconds=9000,
-                  originalBaselineStoreTests=len(baseline["topLevelTests"][STORE_PACKAGE]))
+    return packages
+
+
+def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
+    require_cloud_execution()
+    deadline = time.monotonic() + VARIANT_BUDGET_SECONDS
+    identity, baseline = cloud_identity(args.variant)
+    packages = cloud_packages(identity, baseline)
+    report.update(identity, packages=packages)
     with tempfile.TemporaryDirectory(prefix="native-go-race-", dir=os.environ["RUNNER_TEMP"]) as temporary:
         binary = Path(temporary) / "store-race.test"
         build = execute(["go", "test", "-race", "-c", "-o", str(binary), "./internal/store"],
