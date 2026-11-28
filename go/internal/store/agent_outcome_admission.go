@@ -11,6 +11,10 @@ func agentOutcomeRecordState(state string) bool {
 // signature must bind the original immutable admission, never a caller-supplied
 // fencing token or the successor's current lease. This grants no execution right.
 func readAgentOutcomeAdmissionTx(tx *sql.Tx, intent AgentNodeDispatch, currentManifest string) (ActionLease, error) {
+	return readAgentOutcomeAdmissionAtTx(tx, intent, currentManifest, intent.RecordedAt)
+}
+
+func readAgentOutcomeAdmissionAtTx(tx *sql.Tx, intent AgentNodeDispatch, currentManifest string, admissionAt int64) (ActionLease, error) {
 	var count int
 	if err := tx.QueryRow(`SELECT COUNT(*) FROM action_lease_events
 		WHERE action_id=? AND epoch=? AND event_type IN ('ADMITTED','TAKEOVER')`,
@@ -32,7 +36,7 @@ func readAgentOutcomeAdmissionTx(tx *sql.Tx, intent AgentNodeDispatch, currentMa
 	}
 	if original.Owner == "" || original.ClaimToken == "" || original.ClaimRevision <= 0 ||
 		original.WriterFencingToken <= 0 || original.AcquiredAt < 0 ||
-		original.AcquiredAt > intent.RecordedAt || original.LeaseUntil <= original.AcquiredAt ||
+		admissionAt < 0 || original.AcquiredAt > admissionAt || original.LeaseUntil <= original.AcquiredAt ||
 		manifest != currentManifest {
 		return ActionLease{}, ErrActionLeaseStale
 	}
@@ -57,10 +61,10 @@ func readAgentOutcomeAdmissionTx(tx *sql.Tx, intent AgentNodeDispatch, currentMa
 		return ActionLease{}, ErrAgentRunExecutionRequired
 	}
 	original.UpdatedAt = original.AcquiredAt
-	if err := readAgentOutcomeRenewalsTx(tx, intent, &original, currentManifest); err != nil {
+	if err := readAgentOutcomeRenewalsAtTx(tx, intent, &original, currentManifest, admissionAt); err != nil {
 		return ActionLease{}, err
 	}
-	if original.LeaseUntil <= intent.RecordedAt {
+	if original.LeaseUntil <= admissionAt {
 		return ActionLease{}, ErrActionLeaseStale
 	}
 	return original, nil
@@ -70,10 +74,14 @@ func readAgentOutcomeAdmissionTx(tx *sql.Tx, intent AgentNodeDispatch, currentMa
 // dispatch time. A later renewal cannot retroactively authorize a stale effect.
 // This is historical proof input, never a new execution or retry permission.
 func readAgentOutcomeRenewalsTx(tx *sql.Tx, intent AgentNodeDispatch, original *ActionLease, manifest string) error {
+	return readAgentOutcomeRenewalsAtTx(tx, intent, original, manifest, intent.RecordedAt)
+}
+
+func readAgentOutcomeRenewalsAtTx(tx *sql.Tx, intent AgentNodeDispatch, original *ActionLease, manifest string, admissionAt int64) error {
 	rows, err := tx.Query(`SELECT owner, claim_token, lease_until, claim_revision,
         writer_fencing_token, recorded_at, resource_keys_json FROM action_lease_events
         WHERE action_id=? AND epoch=? AND event_type='RENEWED' AND recorded_at<=?
-        ORDER BY event_id`, intent.ActionID, int64(intent.ExecutionEpoch), intent.RecordedAt)
+        ORDER BY event_id`, intent.ActionID, int64(intent.ExecutionEpoch), admissionAt)
 	if err != nil {
 		return err
 	}

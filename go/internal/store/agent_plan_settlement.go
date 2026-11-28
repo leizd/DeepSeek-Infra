@@ -60,7 +60,7 @@ func (store *Control) validateAgentPlanSettlementTx(tx *sql.Tx, action Record) e
 	if err != nil {
 		return err
 	}
-	outcomes, err := store.agentNodeOutcomes(action, nodes)
+	outcomes, err := store.agentNodeOutcomesTx(tx, action, nodes)
 	if err != nil {
 		return err
 	}
@@ -227,7 +227,7 @@ func (store *Control) SettleAgentPlan(input AgentPlanSettlementRequest) (AgentPl
 	if err != nil {
 		return AgentPlanSettlementResult{}, err
 	}
-	outcomes, err := store.agentNodeOutcomes(action, nodes)
+	outcomes, err := store.agentNodeOutcomesTx(tx, action, nodes)
 	if err != nil {
 		return AgentPlanSettlementResult{}, err
 	}
@@ -235,15 +235,15 @@ func (store *Control) SettleAgentPlan(input AgentPlanSettlementRequest) (AgentPl
 	if !exists {
 		return AgentPlanSettlementResult{}, ErrAgentNodeOutcomeRequired
 	}
-	original, err := readAgentOutcomeAdmissionTx(tx, nodes["leader"], manifest)
+	var source agentv1.AgentNodeOutcomeReceipt
+	if proto.Unmarshal(stored.Receipt, &source) != nil || source.Evidence == nil {
+		return AgentPlanSettlementResult{}, ErrCorruptRecord
+	}
+	_, original, err := store.readAgentOutcomeAdmissionForReceiptTx(tx, action, nodes["leader"], manifest, &source)
 	if err != nil {
 		return AgentPlanSettlementResult{}, err
 	}
 	if original.WriterFencingToken != stored.WriterFencingToken {
-		return AgentPlanSettlementResult{}, ErrCorruptRecord
-	}
-	var source agentv1.AgentNodeOutcomeReceipt
-	if proto.Unmarshal(stored.Receipt, &source) != nil || source.Evidence == nil {
 		return AgentPlanSettlementResult{}, ErrCorruptRecord
 	}
 	candidates := []agent.RunPlanNode{}

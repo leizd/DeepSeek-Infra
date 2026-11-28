@@ -117,7 +117,7 @@ func (store *Control) validatedAgentTaskSettlementsTx(tx *sql.Tx, action Record)
 	if err != nil {
 		return nil, err
 	}
-	outcomes, err := store.agentNodeOutcomes(action, nodes)
+	outcomes, err := store.agentNodeOutcomesTx(tx, action, nodes)
 	if err != nil {
 		return nil, err
 	}
@@ -143,12 +143,12 @@ func (store *Control) validatedAgentTaskSettlementsTx(tx *sql.Tx, action Record)
 		if marker.SourceReceiptSHA256 != hex.EncodeToString(digest[:]) {
 			return nil, ErrCorruptRecord
 		}
-		admission, err := readAgentOutcomeAdmissionTx(tx, intent, string(manifest))
-		if err != nil || admission.WriterFencingToken != source.WriterFencingToken {
-			return nil, ErrCorruptRecord
-		}
 		var receipt agentv1.AgentNodeOutcomeReceipt
 		if proto.Unmarshal(source.Receipt, &receipt) != nil || receipt.Evidence == nil || receipt.Evidence.TaskOutput == nil {
+			return nil, ErrCorruptRecord
+		}
+		effective, admission, err := store.readAgentOutcomeAdmissionForReceiptTx(tx, action, intent, string(manifest), &receipt)
+		if err != nil || admission.WriterFencingToken != source.WriterFencingToken || effective.ExecutionEpoch > marker.ExecutionEpoch {
 			return nil, ErrCorruptRecord
 		}
 		metadata, eventMeta, present, err := scanControlRecord(tx.QueryRow(`SELECT record_id,revision,execution_epoch,state,payload_json,record_digest,writer_fencing_token,recorded_at FROM control_events WHERE domain='agent_run' AND record_id=? AND revision=?`, binding.RunID, marker.MetadataIndex+1), "agent_run")
@@ -248,7 +248,7 @@ func (store *Control) SettleAgentTask(input AgentTaskSettlementRequest) (AgentTa
 	if err != nil {
 		return AgentTaskSettlementResult{}, err
 	}
-	outcomes, err := store.agentNodeOutcomes(action, nodes)
+	outcomes, err := store.agentNodeOutcomesTx(tx, action, nodes)
 	if err != nil {
 		return AgentTaskSettlementResult{}, err
 	}
@@ -261,12 +261,15 @@ func (store *Control) SettleAgentTask(input AgentTaskSettlementRequest) (AgentTa
 	if hex.EncodeToString(sourceHash[:]) != input.SourceReceiptSHA256 {
 		return AgentTaskSettlementResult{}, ErrAgentNodeOutcomeConflict
 	}
-	admission, err := readAgentOutcomeAdmissionTx(tx, intent, manifest)
+	var receipt agentv1.AgentNodeOutcomeReceipt
+	if proto.Unmarshal(source.Receipt, &receipt) != nil {
+		return AgentTaskSettlementResult{}, ErrCorruptRecord
+	}
+	_, admission, err := store.readAgentOutcomeAdmissionForReceiptTx(tx, action, intent, manifest, &receipt)
 	if err != nil || admission.WriterFencingToken != source.WriterFencingToken {
 		return AgentTaskSettlementResult{}, ErrCorruptRecord
 	}
-	var receipt agentv1.AgentNodeOutcomeReceipt
-	if proto.Unmarshal(source.Receipt, &receipt) != nil || receipt.Evidence == nil || receipt.Evidence.TaskOutput == nil {
+	if receipt.Evidence == nil || receipt.Evidence.TaskOutput == nil {
 		return AgentTaskSettlementResult{}, ErrAgentNodeOutcomeRequired
 	}
 	if action.Revision >= math.MaxInt64-1 {

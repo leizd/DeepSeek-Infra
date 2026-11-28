@@ -62,7 +62,7 @@ func (store *Control) validateAgentFailureSettlementTx(tx *sql.Tx, action Record
 	if err != nil {
 		return err
 	}
-	outcomes, err := store.agentNodeOutcomes(action, nodes)
+	outcomes, err := store.agentNodeOutcomesTx(tx, action, nodes)
 	if err != nil {
 		return err
 	}
@@ -91,7 +91,7 @@ func (store *Control) validateAgentFailureSettlementTx(tx *sql.Tx, action Record
 		return fmt.Errorf("%w: agent failure history source-kind", ErrCorruptRecord)
 	}
 	sourceManifest, _ := json.Marshal([]string{"agent-run:" + binding.RunID})
-	admission, err := readAgentOutcomeAdmissionTx(tx, nodes[sourceNode], string(sourceManifest))
+	_, admission, err := store.readAgentOutcomeAdmissionForReceiptTx(tx, action, nodes[sourceNode], string(sourceManifest), &sourceReceipt)
 	if err != nil || admission.WriterFencingToken != source.WriterFencingToken {
 		return fmt.Errorf("%w: agent failure history source-admission", ErrCorruptRecord)
 	}
@@ -269,7 +269,7 @@ func (store *Control) SettleAgentFailure(input AgentFailureSettlementRequest) (A
 	if err != nil {
 		return AgentFailureSettlementResult{}, err
 	}
-	outcomes, err := store.agentNodeOutcomes(action, nodes)
+	outcomes, err := store.agentNodeOutcomesTx(tx, action, nodes)
 	if err != nil {
 		return AgentFailureSettlementResult{}, err
 	}
@@ -278,15 +278,15 @@ func (store *Control) SettleAgentFailure(input AgentFailureSettlementRequest) (A
 	if !exists {
 		return AgentFailureSettlementResult{}, ErrAgentNodeOutcomeRequired
 	}
-	original, err := readAgentOutcomeAdmissionTx(tx, nodes[sourceNode], manifest)
+	var source agentv1.AgentNodeOutcomeReceipt
+	if proto.Unmarshal(stored.Receipt, &source) != nil || source.Evidence == nil {
+		return AgentFailureSettlementResult{}, ErrCorruptRecord
+	}
+	_, original, err := store.readAgentOutcomeAdmissionForReceiptTx(tx, action, nodes[sourceNode], manifest, &source)
 	if err != nil {
 		return AgentFailureSettlementResult{}, err
 	}
 	if original.WriterFencingToken != stored.WriterFencingToken {
-		return AgentFailureSettlementResult{}, ErrCorruptRecord
-	}
-	var source agentv1.AgentNodeOutcomeReceipt
-	if proto.Unmarshal(stored.Receipt, &source) != nil || source.Evidence == nil {
 		return AgentFailureSettlementResult{}, ErrCorruptRecord
 	}
 	if source.Evidence.NodeId != sourceNode || !agentproof.ValidTerminalFailure(source.Evidence) {

@@ -79,7 +79,7 @@ func (store *Control) agentRecoveryHistoryTx(tx *sql.Tx, run agent.RunMetadata, 
 		if err != nil {
 			return result, err
 		}
-		outcomes, err := store.agentNodeOutcomes(record, nodes)
+		outcomes, err := store.agentNodeOutcomesTx(tx, record, nodes)
 		if err != nil {
 			return result, err
 		}
@@ -103,7 +103,11 @@ func (store *Control) agentRecoveryHistoryTx(tx *sql.Tx, run agent.RunMetadata, 
 			if proto.Unmarshal(outcomes[role].Receipt, &receipt) != nil {
 				return result, ErrCorruptRecord
 			}
-			source := &agentv1.AgentRunRecoveryEffectSource{Dispatch: agentOutcomeIntent(nodes[role]), Outcome: &receipt}
+			effective, _, err := store.resolveAgentOutcomeTargetTx(tx, record, nodes[role], &receipt)
+			if err != nil {
+				return result, err
+			}
+			source := &agentv1.AgentRunRecoveryEffectSource{Dispatch: agentOutcomeIntent(effective), Outcome: &receipt}
 			if marker, present := markers[role]; present {
 				if marker.MetadataIndex >= run.NextIndex {
 					return result, ErrCorruptRecord

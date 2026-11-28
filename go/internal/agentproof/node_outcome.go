@@ -49,6 +49,17 @@ func ValidNodeOutcomeArtifact(reference *agentv1.AgentArtifactReference) bool {
 	return reference != nil && len(reference.ProtoReflect().GetUnknown()) == 0 && ValidNodeOutcomeDigest(reference.Sha256) && reference.Length > 0 && reference.Length <= 128*1024*1024
 }
 
+func validNodeOperationID(id string) bool {
+	switch {
+	case strings.HasPrefix(id, "agent-node-") && len(id) == 75:
+		return ValidNodeOutcomeDigest(id[len("agent-node-"):])
+	case strings.HasPrefix(id, "agent-successor-") && len(id) == 80:
+		return ValidNodeOutcomeDigest(id[len("agent-successor-"):])
+	default:
+		return false
+	}
+}
+
 // The expected intent and original writer token come from Go's durable admitted
 // scope. References, a CONFIRMED string, and a successful RPC are insufficient.
 func VerifyAgentNodeOutcome(receipt *agentv1.AgentNodeOutcomeReceipt, intent *agentv1.AgentNodeDispatchIntent,
@@ -59,11 +70,12 @@ func VerifyAgentNodeOutcome(receipt *agentv1.AgentNodeOutcomeReceipt, intent *ag
 		receipt.SignerPublicKey != binding.PublicKey || binding.FleetID == "" || binding.Environment == "" || writerFencingToken <= 0 {
 		return invalid()
 	}
+
 	evidence := receipt.Evidence
 	if evidence.SchemaVersion != 1 || len(evidence.ProtoReflect().GetUnknown()) != 0 || evidence.Fence == nil ||
 		len(evidence.Fence.ProtoReflect().GetUnknown()) != 0 || !proto.Equal(evidence.Fence, intent.Fence) ||
-		evidence.OperationId != intent.OperationId || !strings.HasPrefix(evidence.OperationId, "agent-node-") || len(evidence.OperationId) != 75 ||
-		!ValidNodeOutcomeDigest(evidence.OperationId[11:]) || evidence.RunId == "" || evidence.RunId != intent.RunId ||
+		evidence.OperationId != intent.OperationId || !validNodeOperationID(evidence.OperationId) ||
+		evidence.RunId == "" || evidence.RunId != intent.RunId ||
 		evidence.NodeId == "" || evidence.NodeId != intent.NodeId || evidence.Phase != intent.Phase ||
 		(evidence.Phase != agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_PLAN && evidence.Phase != agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_TASKS && evidence.Phase != agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_SYNTHESIS) ||
 		(evidence.Phase == agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_PLAN && evidence.NodeId != "leader") ||

@@ -61,7 +61,7 @@ func (store *Control) validateAgentSynthesisSettlementTx(tx *sql.Tx, action Reco
 	if err != nil {
 		return err
 	}
-	outcomes, err := store.agentNodeOutcomes(action, nodes)
+	outcomes, err := store.agentNodeOutcomesTx(tx, action, nodes)
 	if err != nil {
 		return err
 	}
@@ -269,7 +269,7 @@ func (store *Control) SettleAgentSynthesis(input AgentSynthesisSettlementRequest
 	if err != nil {
 		return AgentSynthesisSettlementResult{}, err
 	}
-	outcomes, err := store.agentNodeOutcomes(action, nodes)
+	outcomes, err := store.agentNodeOutcomesTx(tx, action, nodes)
 	if err != nil {
 		return AgentSynthesisSettlementResult{}, err
 	}
@@ -277,15 +277,15 @@ func (store *Control) SettleAgentSynthesis(input AgentSynthesisSettlementRequest
 	if !exists {
 		return AgentSynthesisSettlementResult{}, ErrAgentNodeOutcomeRequired
 	}
-	original, err := readAgentOutcomeAdmissionTx(tx, nodes["synthesizer"], manifest)
+	var source agentv1.AgentNodeOutcomeReceipt
+	if proto.Unmarshal(stored.Receipt, &source) != nil || source.Evidence == nil {
+		return AgentSynthesisSettlementResult{}, ErrCorruptRecord
+	}
+	_, original, err := store.readAgentOutcomeAdmissionForReceiptTx(tx, action, nodes["synthesizer"], manifest, &source)
 	if err != nil {
 		return AgentSynthesisSettlementResult{}, err
 	}
 	if original.WriterFencingToken != stored.WriterFencingToken {
-		return AgentSynthesisSettlementResult{}, ErrCorruptRecord
-	}
-	var source agentv1.AgentNodeOutcomeReceipt
-	if proto.Unmarshal(stored.Receipt, &source) != nil || source.Evidence == nil {
 		return AgentSynthesisSettlementResult{}, ErrCorruptRecord
 	}
 	if source.Evidence.Phase != agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_SYNTHESIS || source.Evidence.TaskOutput == nil || source.Evidence.TaskOutput.Failed {

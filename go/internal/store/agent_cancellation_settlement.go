@@ -49,11 +49,20 @@ func cancelledNodeOutcomesDigest(outcomes map[string]storedAgentNodeOutcome) str
 }
 
 func (store *Control) cancelledAgentNodeOutcomes(action Record) (map[string]storedAgentNodeOutcome, error) {
+	return store.cancelledAgentNodeOutcomesTx(nil, action)
+}
+
+func (store *Control) cancelledAgentNodeOutcomesTx(tx *sql.Tx, action Record) (map[string]storedAgentNodeOutcome, error) {
 	nodes, err := readAgentNodeDispatches(action)
 	if err != nil {
 		return nil, err
 	}
-	outcomes, err := store.agentNodeOutcomes(action, nodes)
+	var outcomes map[string]storedAgentNodeOutcome
+	if tx != nil {
+		outcomes, err = store.agentNodeOutcomesTx(tx, action, nodes)
+	} else {
+		outcomes, err = store.agentNodeOutcomes(action, nodes)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -125,7 +134,7 @@ func (store *Control) validateAgentCancellationSettlementTx(tx *sql.Tx, action R
 	if err != nil || completion.MetadataEpoch != binding.MetadataEpoch {
 		return ErrCorruptRecord
 	}
-	outcomes, err := store.cancelledAgentNodeOutcomes(action)
+	outcomes, err := store.cancelledAgentNodeOutcomesTx(tx, action)
 	if err != nil || cancelledNodeOutcomesDigest(outcomes) != completion.OutcomesSHA256 {
 		return ErrCorruptRecord
 	}
@@ -214,7 +223,7 @@ func (store *Control) SettleAgentCancellation(input SettleAgentCancellationReque
 	if !agentOutcomeRecordState(action.State) || run.NextIndex != input.ExpectedIndex || executionPlanDigest(run) != binding.PlanDigest || !cancelledAgentRun(run) || action.Revision >= math.MaxInt64-1 {
 		return SettleAgentCancellationResult{}, ErrRevisionConflict
 	}
-	outcomes, err := store.cancelledAgentNodeOutcomes(action)
+	outcomes, err := store.cancelledAgentNodeOutcomesTx(tx, action)
 	if err != nil {
 		return SettleAgentCancellationResult{}, err
 	}

@@ -3,7 +3,6 @@ package api
 import (
 	"context"
 	"errors"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -11,8 +10,6 @@ import (
 	"github.com/leizd/DeepSeek-Infra/go/internal/agent"
 	agentv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/agentv1"
 	"github.com/leizd/DeepSeek-Infra/go/internal/store"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -369,13 +366,9 @@ func TestSuccessorExecuteRunsTheStoredGenerationOnTheTakeoverEpoch(t *testing.T)
 	if testing.Short() {
 		t.Skip("drives a real dispatch, claim and takeover")
 	}
-	// The takeover epoch admits the stored generation and the driver dispatches
-	// it exactly once under the generation id. Up to that point the invariant
-	// holds, and it is the half that prevents a duplicate upstream effect.
-	//
-	// It then fails, and the failure is real rather than a fixture artifact:
-	// successorExecute records the outcome inside itself, and that record call
-	// rejects the generation's receipt. See the assertion at the end.
+	// The takeover epoch admits the stored generation, the driver dispatches it
+	// once under its own generation id, and settlement records its signed receipt
+	// while keeping the original dispatch custody untouched.
 	//
 	// The setup runs on the driver's default lease and only the takeover claim
 	// uses a short one. Under -race this test takes ~11s, so a short lease taken
@@ -383,7 +376,7 @@ func TestSuccessorExecuteRunsTheStoredGenerationOnTheTakeoverEpoch(t *testing.T)
 	fixture, setup := newSuccessorFixture(t).claimTasks(t)
 	operation := bindOriginal(t, fixture, setup.claim, "coder", "successor-begin")
 	fixture = appendReset(t, fixture, "coder")
-	mintGeneration(t, fixture, setup.claim, "coder", operation)
+	minted := mintGeneration(t, fixture, setup.claim, "coder", operation)
 	calls := len(fixture.worker.calls)
 
 	takeover, _ := takeOver(t, fixture, setup.claim)
@@ -395,29 +388,35 @@ func TestSuccessorExecuteRunsTheStoredGenerationOnTheTakeoverEpoch(t *testing.T)
 		t.Fatal("the superseded claim reached the worker")
 	}
 	// The takeover claim requires reconciliation, so it carries no grant yet.
-	// successorExecute admits the stored generation and mints its own grant.
+	// successorExecute admits the stored generation, mints its own grant,
+	// dispatches once to the worker, and durably records the signed outcome.
 	effect, err := fixture.driver.successorExecute(ctx, fixture.worker, fixture.worker.nodes, takeover, nil, "coder", operation, "CONFIRMED")
-
-	// The generation did reach the worker exactly once, under its own id. That
-	// is what this test owns, and it is why a duplicate provider call is
-	// impossible even though the settlement below is broken.
 	if len(fixture.worker.calls) != calls+1 {
 		t.Fatalf("expected exactly one dispatch, recorded %v", fixture.worker.calls)
 	}
-	if err == nil {
-		t.Fatal("the successor settled: the gap is fixed, so assert the recorded outcome instead")
+	if err != nil {
+		t.Fatalf("successor execution failed: %v", err)
 	}
-	// The error is the settlement refusal, not an admission refusal. Admission
-	// and dispatch already succeeded above, which is exactly why this matters:
-	// a dispatched effect whose outcome cannot be stored can never be settled.
-	//
-	// The RPC layer maps the sentinel to FailedPrecondition, so the sentinel
-	// itself is not reachable through errors.Is here.
-	if status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "AGENT_NODE_OUTCOME_INVALID") {
-		t.Fatalf("expected the outcome writer to refuse the generation, got %v", err)
+	if effect == nil || effect.State != "CONFIRMED" || effect.OutcomeReceipt == nil || effect.OutcomeReceipt.Evidence == nil {
+		t.Fatalf("missing recorded successor effect: %+v", effect)
 	}
-	if effect != nil {
-		t.Fatalf("a refused settlement still returned an effect: %+v", effect)
+	if effect.OutcomeReceipt.Evidence.OperationId != minted || effect.OutcomeReceipt.Evidence.Fence.ExecutionEpoch != takeover.Fence.ExecutionEpoch {
+		t.Fatalf("unexpected recorded effect evidence: %+v (want op %q epoch %d)", effect.OutcomeReceipt.Evidence, minted, takeover.Fence.ExecutionEpoch)
+	}
+	control := fixture.driver.service.control
+	record, intent, storedReceipt, found, err := control.AgentNodeOutcomeSnapshot(takeover.Fence.ActionId, "coder")
+	if err != nil || !found || record.State != "EXECUTING" || record.ExecutionEpoch != takeover.Fence.ExecutionEpoch {
+		t.Fatalf("successor outcome snapshot invalid: record=%+v found=%v err=%v", record, found, err)
+	}
+	if intent.OperationID != minted || intent.ExecutionEpoch != takeover.Fence.ExecutionEpoch || intent.SuccessorOperationID != minted {
+		t.Fatalf("outcome snapshot returned unexpected dispatch target: %+v", intent)
+	}
+	if !proto.Equal(storedReceipt, effect.OutcomeReceipt) {
+		t.Fatalf("stored receipt differs from returned effect: got %+v, want %+v", storedReceipt, effect.OutcomeReceipt)
+	}
+	_, dispatchIntent, found, err := control.AgentNodeDispatchSnapshot(takeover.Fence.ActionId, "coder")
+	if err != nil || !found || dispatchIntent.OperationID != operation || dispatchIntent.ExecutionEpoch != setup.claim.Fence.ExecutionEpoch || dispatchIntent.SuccessorOperationID != minted {
+		t.Fatalf("original dispatch custody changed after successor outcome: %+v found=%v err=%v", dispatchIntent, found, err)
 	}
 }
 
@@ -522,13 +521,12 @@ func TestSuccessorDispatchRetainsCustodyOfIncompleteWorkerResponses(t *testing.T
 	}
 }
 
-// This pins the successor settlement gap by observation rather than assertion.
-// A generation admitted on a takeover epoch really does reach the worker and
-// come back with a signed receipt, and that receipt really is refused by the
-// outcome writer. The test asserts exactly what happens today, so it keeps
-// holding whether the gap is fixed (record succeeds, case above gets enabled)
-// or not (record is refused, this log line stays).
-func TestSuccessorOutcomeIsRefusedByTheOutcomeWriter(t *testing.T) {
+// A generation admitted on a takeover epoch still cannot record an outcome
+// until BeginAgentNodeDispatch records dispatch provenance for that successor
+// operation id. Once dispatched on the takeover epoch, RecordAgentNodeOutcome
+// accepts and replays the signed receipt while keeping the original operation
+// id intact on the dispatch snapshot.
+func TestSuccessorOutcomeRequiresDispatchAndRecordsOnTakeoverEpoch(t *testing.T) {
 	if testing.Short() {
 		t.Skip("drives a real dispatch, claim and takeover")
 	}
@@ -539,11 +537,12 @@ func TestSuccessorOutcomeIsRefusedByTheOutcomeWriter(t *testing.T) {
 	minted := mintGeneration(t, fixture, setup.claim, "coder", operation)
 	takeover, _ := takeOver(t, fixture, setup.claim)
 
-	index, resetAdmitted, err := resetSharingFence(fixture.driver.service.control, takeover.RunId, "coder", takeover.Fence.ActionId, takeover.Fence.ExecutionEpoch)
+	control := fixture.driver.service.control
+	index, resetAdmitted, err := resetSharingFence(control, takeover.RunId, "coder", takeover.Fence.ActionId, takeover.Fence.ExecutionEpoch)
 	if err != nil || !resetAdmitted {
 		t.Fatalf("reset fence: index=%d admitted=%v err=%v", index, resetAdmitted, err)
 	}
-	admitted, err := fixture.driver.service.control.AdmitSuccessorDispatch(store.AgentSuccessorEpochRequest{
+	admitted, err := control.AdmitSuccessorDispatch(store.AgentSuccessorEpochRequest{
 		OperationID: "gap-admit", Actor: "go-control-plane", ActionID: takeover.Fence.ActionId,
 		Epoch: takeover.Fence.ExecutionEpoch, RunID: takeover.RunId, NodeID: "coder",
 		Owner: takeover.Owner, ClaimToken: takeover.ClaimToken, Effect: "CONFIRMED",
@@ -565,8 +564,6 @@ func TestSuccessorOutcomeIsRefusedByTheOutcomeWriter(t *testing.T) {
 	if effect == nil || effect.OutcomeReceipt == nil || effect.OutcomeReceipt.Evidence == nil {
 		t.Fatal("the generation produced no signed receipt")
 	}
-	// The generation ran under its own id and the takeover epoch, which is the
-	// whole point of admitting it.
 	if effect.OutcomeReceipt.Evidence.OperationId != minted {
 		t.Fatalf("the receipt names %q, want the generation %q", effect.OutcomeReceipt.Evidence.OperationId, minted)
 	}
@@ -574,16 +571,50 @@ func TestSuccessorOutcomeIsRefusedByTheOutcomeWriter(t *testing.T) {
 		t.Fatalf("the receipt names epoch %d, want the takeover epoch %d",
 			effect.OutcomeReceipt.Evidence.Fence.ExecutionEpoch, takeover.Fence.ExecutionEpoch)
 	}
-	// Recording it is refused. When this starts succeeding, the skip on
-	// TestSuccessorExecuteRunsTheStoredGenerationOnTheTakeoverEpoch can go.
-	_, recordErr := fixture.driver.service.control.RecordAgentNodeOutcome(store.AgentNodeOutcomeRequest{
+
+	outcomeReq := store.AgentNodeOutcomeRequest{
 		OperationID: "gap-outcome", Actor: "go-control-plane", ActionID: admitted.Record.ID,
 		RunID: takeover.RunId, NodeID: "coder", Epoch: takeover.Fence.ExecutionEpoch,
-		Receipt: effect.OutcomeReceipt})
-	if recordErr == nil {
-		t.Fatal("a successor outcome was recorded, so the skipped case above can be enabled")
+		Receipt: effect.OutcomeReceipt}
+	if _, recordErr := control.RecordAgentNodeOutcome(outcomeReq); !errors.Is(recordErr, store.ErrAgentNodeDispatchRequired) {
+		t.Fatalf("un-dispatched successor outcome returned %v, want %v", recordErr, store.ErrAgentNodeDispatchRequired)
 	}
-	t.Logf("successor outcome is refused by the outcome writer: %v", recordErr)
+
+	dispatched, err := control.BeginAgentNodeDispatch(store.AgentNodeDispatchRequest{
+		OperationID: minted, Actor: agentDriverActor, ActionID: admitted.Record.ID,
+		Epoch: claim.Fence.ExecutionEpoch, RunID: claim.RunId, NodeID: "coder",
+		Owner: claim.Owner, ClaimToken: claim.ClaimToken,
+	})
+	if err != nil || !dispatched.Fresh || dispatched.Intent.OperationID != minted ||
+		dispatched.Intent.ExecutionEpoch != claim.Fence.ExecutionEpoch || dispatched.Admission.Record.State != "EXECUTING" {
+		t.Fatalf("successor dispatch failed: %+v err=%v", dispatched, err)
+	}
+
+	staleReq := outcomeReq
+	staleReq.Epoch = setup.claim.Fence.ExecutionEpoch
+	if _, staleErr := control.RecordAgentNodeOutcome(staleReq); !errors.Is(staleErr, store.ErrActionLeaseStale) {
+		t.Fatalf("stale epoch outcome returned %v, want %v", staleErr, store.ErrActionLeaseStale)
+	}
+
+	recorded, err := control.RecordAgentNodeOutcome(outcomeReq)
+	if err != nil || recorded.AlreadyRecorded || recorded.ReceiptSHA256 == "" {
+		t.Fatalf("dispatched successor outcome was refused: %+v err=%v", recorded, err)
+	}
+	replay, err := control.RecordAgentNodeOutcome(outcomeReq)
+	if err != nil || !replay.AlreadyRecorded || replay.ReceiptSHA256 != recorded.ReceiptSHA256 {
+		t.Fatalf("replayed successor outcome drifted: %+v err=%v (want %s)", replay, err, recorded.ReceiptSHA256)
+	}
+	record, intent, storedReceipt, found, err := control.AgentNodeOutcomeSnapshot(admitted.Record.ID, "coder")
+	if err != nil || !found || record.ExecutionEpoch != takeover.Fence.ExecutionEpoch ||
+		intent.OperationID != minted || intent.ExecutionEpoch != takeover.Fence.ExecutionEpoch ||
+		!proto.Equal(storedReceipt, effect.OutcomeReceipt) {
+		t.Fatalf("unexpected successor snapshot: record=%+v intent=%+v found=%v err=%v", record, intent, found, err)
+	}
+	_, dispatchIntent, found, err := control.AgentNodeDispatchSnapshot(admitted.Record.ID, "coder")
+	if err != nil || !found || dispatchIntent.OperationID != operation ||
+		dispatchIntent.ExecutionEpoch != setup.claim.Fence.ExecutionEpoch || dispatchIntent.SuccessorOperationID != minted {
+		t.Fatalf("original dispatch custody drifted: %+v found=%v err=%v", dispatchIntent, found, err)
+	}
 }
 
 // The successor path must at least refuse before the worker when the epoch it

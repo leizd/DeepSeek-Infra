@@ -56,16 +56,20 @@ func (store *Control) verifiedAgentRecoveryOutputsTx(tx *sql.Tx, run agent.RunMe
 			return nil, err
 		}
 		dispatch, found := dispatches[source.Dispatch.NodeId]
-		if !found || !proto.Equal(agentOutcomeIntent(dispatch), source.Dispatch) {
+		if !found || (!proto.Equal(agentOutcomeIntent(dispatch), source.Dispatch) && dispatch.SuccessorOperationID == "") {
 			return nil, ErrAgentNodeDependencyUnverified
 		}
-		outcomes, err := store.agentNodeOutcomes(action, dispatches)
+		outcomes, err := store.agentNodeOutcomesTx(tx, action, dispatches)
 		if err != nil {
 			return nil, err
 		}
 		outcome, found := outcomes[source.Dispatch.NodeId]
 		var retained agentv1.AgentNodeOutcomeReceipt
 		if !found || proto.Unmarshal(outcome.Receipt, &retained) != nil || !proto.Equal(&retained, source.Outcome) {
+			return nil, ErrAgentNodeDependencyUnverified
+		}
+		effective, _, err := store.resolveAgentOutcomeTargetTx(tx, action, dispatch, &retained)
+		if err != nil || !proto.Equal(agentOutcomeIntent(effective), source.Dispatch) {
 			return nil, ErrAgentNodeDependencyUnverified
 		}
 		settlements, err := store.validatedAgentTaskSettlementsTx(tx, action)

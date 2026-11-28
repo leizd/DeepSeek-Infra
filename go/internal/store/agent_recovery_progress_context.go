@@ -66,7 +66,7 @@ func (store *Control) agentRecoveryProgressContextTx(tx *sql.Tx, run agent.RunMe
 	if err != nil {
 		return nil, err
 	}
-	outcomes, err := store.agentNodeOutcomes(source, nodes)
+	outcomes, err := store.agentNodeOutcomesTx(tx, source, nodes)
 	if err != nil {
 		return nil, err
 	}
@@ -85,11 +85,15 @@ func (store *Control) agentRecoveryProgressContextTx(tx *sql.Tx, run agent.RunMe
 	if proto.Unmarshal(outcome.Receipt, &receipt) != nil {
 		return nil, ErrCorruptRecord
 	}
+	effective, _, err := store.resolveAgentOutcomeTargetTx(tx, source, node, &receipt)
+	if err != nil {
+		return nil, ErrCorruptRecord
+	}
 	return &agentv1.AgentRecoveryProgressContext{SchemaVersion: 1, RunId: run.RunID, Generation: run.Recovery.Generation,
 		MetadataEpoch: epoch, ExpectedIndex: run.NextIndex, RuntimeRevision: run.RuntimeVersion(), Request: recoveryArtifact(run.Request),
 		RecoveryContextSha256: run.Recovery.ContextSHA256, TaskActionId: source.ID, TaskActionRevision: source.Revision,
 		TaskMetadataIndex: run.NextIndex, Role: role, Synthesize: run.Recovery.Metadata.Synthesize,
-		Outputs: []*agentv1.AgentRunRecoveryEffectSource{{Dispatch: agentOutcomeIntent(node), Outcome: &receipt, SettlementMetadataIndex: marker.MetadataIndex}}}, nil
+		Outputs: []*agentv1.AgentRunRecoveryEffectSource{{Dispatch: agentOutcomeIntent(effective), Outcome: &receipt, SettlementMetadataIndex: marker.MetadataIndex}}}, nil
 }
 
 func (store *Control) PreviewAgentRecoveryProgress(input AgentRecoveryProgressExpected) (*agentv1.AgentRecoveryProgressContext, error) {
