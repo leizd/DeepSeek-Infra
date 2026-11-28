@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"slices"
 
 	"github.com/leizd/DeepSeek-Infra/go/internal/agentproof"
 	agentv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/agentv1"
@@ -98,18 +99,6 @@ func agentOutcomeIntent(intent AgentNodeDispatch) *agentv1.AgentNodeDispatchInte
 		State: intent.State, RecordedAt: intent.RecordedAt}
 }
 
-func equalStringSlice(left, right []string) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for index := range left {
-		if left[index] != right[index] {
-			return false
-		}
-	}
-	return true
-}
-
 func sameSuccessorDispatchIntent(left, right AgentNodeDispatch) bool {
 	return left.SchemaVersion == right.SchemaVersion &&
 		left.OperationID == right.OperationID &&
@@ -119,7 +108,7 @@ func sameSuccessorDispatchIntent(left, right AgentNodeDispatch) bool {
 		left.NodeID == right.NodeID &&
 		left.Phase == right.Phase &&
 		left.Task == right.Task &&
-		equalStringSlice(left.DependsOn, right.DependsOn) &&
+		slices.Equal(left.DependsOn, right.DependsOn) &&
 		left.Request == right.Request &&
 		left.PlanDigest == right.PlanDigest &&
 		left.MetadataIndex == right.MetadataIndex &&
@@ -214,28 +203,17 @@ func (store *Control) resolveAgentOutcomeTargetTx(
 	if !present || !sameSuccessorDispatchIntent(dispatched, intent) {
 		return AgentNodeDispatch{}, 0, ErrCorruptRecord
 	}
+	var owner, claimToken string
 	var count int
 	if err := tx.QueryRow(
-		`SELECT COUNT(*) FROM action_lease_events
+		`SELECT COALESCE(MAX(owner), ''), COALESCE(MAX(claim_token), ''), COUNT(*) FROM action_lease_events
 		 WHERE action_id=? AND epoch=? AND event_type IN ('ADMITTED','TAKEOVER')`,
 		intent.ActionID, int64(succEpoch),
-	).Scan(&count); err != nil {
+	).Scan(&owner, &claimToken, &count); err != nil {
 		return AgentNodeDispatch{}, 0, err
 	}
 	if count != 1 {
 		return AgentNodeDispatch{}, 0, ErrActionLeaseStale
-	}
-	var owner, claimToken string
-	err = tx.QueryRow(
-		`SELECT owner, claim_token FROM action_lease_events
-		 WHERE action_id=? AND epoch=? AND event_type IN ('ADMITTED','TAKEOVER')`,
-		intent.ActionID, int64(succEpoch),
-	).Scan(&owner, &claimToken)
-	if errors.Is(err, sql.ErrNoRows) {
-		return AgentNodeDispatch{}, 0, ErrActionLeaseStale
-	}
-	if err != nil {
-		return AgentNodeDispatch{}, 0, err
 	}
 	expectedReq, _ := json.Marshal(AgentNodeDispatchRequest{
 		OperationID: intent.SuccessorOperationID,
