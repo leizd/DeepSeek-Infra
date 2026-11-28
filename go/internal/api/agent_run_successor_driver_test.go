@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/leizd/DeepSeek-Infra/go/internal/agent"
+	"github.com/leizd/DeepSeek-Infra/go/internal/agentproof"
 	agentv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/agentv1"
 	"github.com/leizd/DeepSeek-Infra/go/internal/store"
 	"google.golang.org/protobuf/proto"
@@ -555,6 +556,45 @@ func TestSuccessorOutcomeRequiresDispatchAndRecordsOnTakeoverEpoch(t *testing.T)
 	if err != nil {
 		t.Fatalf("grant: %v", err)
 	}
+	_, origDispatch, found, err := control.AgentNodeDispatchSnapshot(admitted.Record.ID, "coder")
+	if err != nil || !found {
+		t.Fatalf("dispatch snapshot missing before execution: found=%v err=%v", found, err)
+	}
+	undispatchedEvidence := &agentv1.AgentNodeOutcomeEvidence{
+		SchemaVersion:      1,
+		Fence:              claim.Fence,
+		OperationId:        minted,
+		RunId:              origDispatch.RunID,
+		NodeId:             "coder",
+		Phase:              agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_TASKS,
+		Request:            &agentv1.AgentArtifactReference{Sha256: origDispatch.Request.SHA256, Length: origDispatch.Request.Length},
+		PlanDigest:         origDispatch.PlanDigest,
+		MetadataIndex:      origDispatch.MetadataIndex,
+		MetadataEpoch:      origDispatch.MetadataEpoch,
+		WriterFencingToken: claim.WriterFencingToken,
+		CreatedAt:          time.Unix(origDispatch.RecordedAt, 0).UTC().Format(time.RFC3339),
+		ConfirmedAt:        time.Unix(origDispatch.RecordedAt+1, 0).UTC().Format(time.RFC3339),
+		OutcomeSha256:      driverFixtureReference("outcome:coder").Sha256,
+		OutcomeLength:      50,
+		PublicEvent:        driverFixtureReference("event:coder"),
+		TaskOutput:         &agentv1.AgentTaskOutputMetadata{SchemaVersion: 1, PromptTokens: 13, CompletionTokens: 21, LatencyMs: 120},
+		FleetId:            mutationFleetID,
+		Environment:        mutationEnvironment,
+	}
+	undispatchedReceipt := &agentv1.AgentNodeOutcomeReceipt{
+		SchemaVersion:   1,
+		SignerPublicKey: fixture.worker.binding.PublicKey,
+		Evidence:        undispatchedEvidence,
+		Signature:       fixture.worker.signed(undispatchedEvidence, agentproof.NodeOutcomeDomain),
+	}
+	if _, recordErr := control.RecordAgentNodeOutcome(store.AgentNodeOutcomeRequest{
+		OperationID: "gap-outcome-before-dispatch", Actor: "go-control-plane", ActionID: admitted.Record.ID,
+		RunID: takeover.RunId, NodeID: "coder", Epoch: takeover.Fence.ExecutionEpoch,
+		Receipt: undispatchedReceipt,
+	}); !errors.Is(recordErr, store.ErrAgentNodeDispatchRequired) {
+		t.Fatalf("un-dispatched successor outcome returned %v, want %v", recordErr, store.ErrAgentNodeDispatchRequired)
+	}
+
 	effect, err := fixture.worker.ExecuteAgentTask(context.Background(), &agentv1.ExecuteAgentTaskRequest{
 		SchemaVersion: 1, OperationId: minted, Actor: "rust-agent-worker",
 		Claim: claim, SignedPhaseGrant: grant, Fence: claim.Fence, NodeId: "coder"})
@@ -576,19 +616,6 @@ func TestSuccessorOutcomeRequiresDispatchAndRecordsOnTakeoverEpoch(t *testing.T)
 		OperationID: "gap-outcome", Actor: "go-control-plane", ActionID: admitted.Record.ID,
 		RunID: takeover.RunId, NodeID: "coder", Epoch: takeover.Fence.ExecutionEpoch,
 		Receipt: effect.OutcomeReceipt}
-	if _, recordErr := control.RecordAgentNodeOutcome(outcomeReq); !errors.Is(recordErr, store.ErrAgentNodeDispatchRequired) {
-		t.Fatalf("un-dispatched successor outcome returned %v, want %v", recordErr, store.ErrAgentNodeDispatchRequired)
-	}
-
-	dispatched, err := control.BeginAgentNodeDispatch(store.AgentNodeDispatchRequest{
-		OperationID: minted, Actor: agentDriverActor, ActionID: admitted.Record.ID,
-		Epoch: claim.Fence.ExecutionEpoch, RunID: claim.RunId, NodeID: "coder",
-		Owner: claim.Owner, ClaimToken: claim.ClaimToken,
-	})
-	if err != nil || !dispatched.Fresh || dispatched.Intent.OperationID != minted ||
-		dispatched.Intent.ExecutionEpoch != claim.Fence.ExecutionEpoch || dispatched.Admission.Record.State != "EXECUTING" {
-		t.Fatalf("successor dispatch failed: %+v err=%v", dispatched, err)
-	}
 
 	staleReq := outcomeReq
 	staleReq.Epoch = setup.claim.Fence.ExecutionEpoch

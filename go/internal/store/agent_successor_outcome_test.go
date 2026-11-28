@@ -68,7 +68,7 @@ func bindAndTakeOverSuccessor(
 	claimReq.OperationID = "successor-takeover-" + phase
 	claimReq.Owner = "successor-worker"
 	claimReq.RunID = input.RunID
-	claimReq.Fence.ActionId = input.ActionID
+	claimReq.Fence.ActionId = input.RunID
 	claimReq.Phase = phase
 	claimReq.ExpectedIndex = expectedIndex
 	taken, err := successor.ClaimAgentRunExecution(claimReq)
