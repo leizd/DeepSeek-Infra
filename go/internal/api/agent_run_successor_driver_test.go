@@ -619,8 +619,8 @@ func TestSuccessorOutcomeRequiresDispatchAndRecordsOnTakeoverEpoch(t *testing.T)
 
 	staleReq := outcomeReq
 	staleReq.Epoch = setup.claim.Fence.ExecutionEpoch
-	if _, staleErr := control.RecordAgentNodeOutcome(staleReq); !errors.Is(staleErr, store.ErrActionLeaseStale) {
-		t.Fatalf("stale epoch outcome returned %v, want %v", staleErr, store.ErrActionLeaseStale)
+	if _, staleErr := control.RecordAgentNodeOutcome(staleReq); !errors.Is(staleErr, store.ErrActionNotClaimable) {
+		t.Fatalf("stale epoch outcome returned %v, want %v", staleErr, store.ErrActionNotClaimable)
 	}
 
 	recorded, err := control.RecordAgentNodeOutcome(outcomeReq)
