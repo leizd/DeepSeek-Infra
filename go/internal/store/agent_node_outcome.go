@@ -197,9 +197,13 @@ func (store *Control) resolveAgentOutcomeTargetTx(
 		return AgentNodeDispatch{}, 0, err
 	}
 	if !found || dispatchRec.ExecutionEpoch != succEpoch || dispatchRec.State != "EXECUTING" ||
-		dispatchRec.Digest != mutPayloadDigest || dispatchMeta.writerToken <= 0 ||
-		dispatchMeta.writerToken > mutWriterToken || dispatchMeta.timestamp < 0 ||
-		dispatchMeta.timestamp > mutRecordedAt || !sameAgentExecutionIntent(dispatchRec, record) {
+		dispatchMeta.writerToken <= 0 || dispatchMeta.writerToken > mutWriterToken ||
+		dispatchMeta.timestamp < 0 || dispatchMeta.timestamp > mutRecordedAt ||
+		!sameAgentExecutionIntent(dispatchRec, record) {
+		return AgentNodeDispatch{}, 0, ErrCorruptRecord
+	}
+	payloadDigest, err := operatorPayloadDigest(dispatchRec.Payload)
+	if err != nil || payloadDigest != mutPayloadDigest {
 		return AgentNodeDispatch{}, 0, ErrCorruptRecord
 	}
 	dispatchNodes, err := readAgentNodeDispatches(dispatchRec)
